@@ -1,0 +1,19 @@
+[project]
+name = "llm-abm-marketing-sim"
+version = "0.1.0"
+description = "Lightweight LLM-supported ABM simulator for social-network marketing post diffusion"
+requires-python = ">=3.10"
+dependencies = [
+  "networkx>=3.0",
+  "pydantic>=2.0",
+  "pandas>=2.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+llm = ["openai>=1.0"]
+mesa = ["mesa>=3.0"]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"

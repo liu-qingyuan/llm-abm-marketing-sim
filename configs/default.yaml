@@ -1,0 +1,4 @@
+horizon: 30
+seed_user_ids: []
+base_exposure_probability: 0.15
+peer_exposure_boost: 0.10
