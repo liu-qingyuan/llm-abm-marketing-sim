@@ -1,0 +1,39 @@
+{
+  "iterations": [
+    {
+      "iteration": 1,
+      "startedAt": "2026-05-14T14:05:00.955Z",
+      "endedAt": "2026-05-14T14:08:48.840Z",
+      "durationMs": 227789,
+      "agent": "codex",
+      "model": "gpt-5.5",
+      "toolsUsed": {
+        "Ralph": 1,
+        "implementation": 1,
+        "phase": 1,
+        "config-relative": 1,
+        "content": 1
+      },
+      "filesModified": [],
+      "exitCode": 0,
+      "completionDetected": false,
+      "errors": [
+        "134: LLM_ABM_RUN_LIVE_LLM=1 pytest -q -m live_llm  # manual; allowed to skip/fail closed without credentials",
+        "@pytest_ar�\u0011_call_reprcompare�\f@py_builtins�\u0006locals�\u0018_should_repr_global_name�\t_saferepr�\u000eAssertionError�\u0013_format_explanation�\u0014requires_openai_auth�\u000eauth_available�\u0005xfail)\br\u0006\u0000\u0000\u0000�\u000b@py_assert2�\u000b@py_asse",
+        "\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000R\u0002J\u0000g\u0003\u0000\u0000\u001c\u0000Q\u0000h\u0001\\\u0002\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000P\f\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000!\u0000R\u00034\u0001\u0000\u0000\u0000\u0000\u0000\u0000\u001f\u0000R\u0001#\u0000)\u0004zSlive LLM gate requires LLM_ABM_RUN_LIVE_LLM=1 plus ready Codex auth/provider configNTzRprovider-backed live adapter ",
+        "pytest.xfail(\"provider-backed live adapter is intentionally not part of the offline scaffold yet\")"
+      ]
+    }
+  ],
+  "totalDurationMs": 227789,
+  "struggleIndicators": {
+    "repeatedErrors": {
+      "134: LLM_ABM_RUN_LIVE_LLM=1 pytest -q -m live_llm  # manual; allowed to skip/fail closed without cre": 1,
+      "@pytest_ar�\u0011_call_reprcompare�\f@py_builtins�\u0006locals�\u0018_should_repr_global_name�\t_saferepr�\u000eAssertionE": 1,
+      "\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000R\u0002J\u0000g\u0003\u0000\u0000\u001c\u0000Q\u0000h\u0001\\\u0002\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000P\f\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000!\u0000R\u00034\u0001\u0000\u0000\u0000\u0000\u0000\u0000\u001f\u0000R\u0001#\u0000)\u0004zSlive LLM gate re": 1,
+      "pytest.xfail(\"provider-backed live adapter is intentionally not part of the offline scaffold yet\")": 1
+    },
+    "noProgressIterations": 1,
+    "shortIterations": 0
+  }
+}
