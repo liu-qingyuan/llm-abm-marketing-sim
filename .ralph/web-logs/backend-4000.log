@@ -1,0 +1,6 @@
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.62s
+     Running `target/debug/ralph-api`
+[2m2026-05-14T15:41:50.438987Z[0m [32m INFO[0m [2mralph_api::transport[0m[2m:[0m starting ralph-api server [3maddress[0m[2m=[0m127.0.0.1:4000 [3mauth_mode[0m[2m=[0mtrusted_local
+[2m2026-05-14T15:41:50.439933Z[0m [32m INFO[0m [2mralph_api::transport[0m[2m:[0m ralph-api listening [3mlocal_addr[0m[2m=[0m127.0.0.1:4000
+[2m2026-05-14T15:42:03.257428Z[0m [33m WARN[0m [2mralph_api::preset_domain[0m[2m:[0m failed reading builtin preset index [3mpath[0m[2m=[0m/Users/lqy/work/llm-abm-marketing-sim/presets/index.json [3merror[0m[2m=[0mNo such file or directory (os error 2)
+[2m2026-05-14T15:48:45.988720Z[0m [33m WARN[0m [2mralph_api::preset_domain[0m[2m:[0m failed reading builtin preset index [3mpath[0m[2m=[0m/Users/lqy/work/llm-abm-marketing-sim/presets/index.json [3merror[0m[2m=[0mNo such file or directory (os error 2)
