@@ -9,4 +9,4 @@
 - [x] Update docs with dataset schema examples and path-resolution rules.
 - [x] Run required acceptance commands and read outputs.
 - [x] Create .omx/phase-handoffs/phase-01-dataset-ingestion.md with evidence and retention status.
-- [ ] Perform final prompt-to-artifact audit and confirm no Phase 2+ scope creep.
+- [x] Perform final prompt-to-artifact audit and confirm no Phase 2+ scope creep.

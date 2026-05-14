@@ -311,21 +311,65 @@
         "\"raise ValueError(f\\\"Dataset validation failed: {message}\\\")\",",
         "\"except json.JSONDecodeError:\""
       ]
+    },
+    {
+      "iteration": 10,
+      "startedAt": "2026-05-14T14:57:23.267Z",
+      "endedAt": "2026-05-14T15:02:49.540Z",
+      "durationMs": 326208,
+      "agent": "codex",
+      "model": "gpt-5.5",
+      "toolsUsed": {
+        "1": 2,
+        "Ralph": 3,
+        "tiered": 1,
+        "only": 1,
+        "the": 1,
+        "implementation": 1,
+        "phase": 1,
+        "Lore": 1,
+        "config-relative": 1
+      },
+      "filesModified": [
+        ".ralph/ralph-tasks.md"
+      ],
+      "exitCode": 0,
+      "completionDetected": false,
+      "errors": [
+        "Complex tasks often fail silently: partial implementations get declared \"done\", tests get skipped, edge cases get forgotten. Ralph prevents this by looping until work is genuinely complete, requiring ",
+        "1. Run: npm test           → Output: \"42 passed, 0 failed\"",
+        "79-- Validate provider output via `EngageDecision`; handle invalid output with explicit `fail_closed_action` enum (`raise`, `no_engage`, `skip_run`) and tests.",
+        "134-LLM_ABM_RUN_LIVE_LLM=1 pytest -q -m live_llm  # manual; allowed to skip/fail closed without credentials",
+        "Control note: the same Python test commands were also attempted once before activating `.venv`; those system-Python runs failed because `pydantic`/`networkx` were not installed in the global interpret",
+        "E   ModuleNotFoundError: No module named 'pydantic'",
+        "src/llm_abm_sim/runner.py:8: error: Library stubs not installed for \"yaml\"  [import-untyped]",
+        "if missing_profile_ids and dataset_config.missing_profile_policy is MissingProfilePolicy.ERROR:",
+        "if extra_profile_ids and dataset_config.extra_profile_policy is ExtraProfilePolicy.ERROR:",
+        "raise ValueError(f\"Dataset validation failed: {message}\")"
+      ]
     }
   ],
-  "totalDurationMs": 3131281,
+  "totalDurationMs": 3457489,
   "struggleIndicators": {
     "repeatedErrors": {
       "ERROR: Reconnecting... 1/20": 1,
-      "Complex tasks often fail silently: partial implementations get declared \"done\", tests get skipped, e": 1,
-      "1. Run: npm test           → Output: \"42 passed, 0 failed\"": 1,
+      "Complex tasks often fail silently: partial implementations get declared \"done\", tests get skipped, e": 2,
+      "1. Run: npm test           → Output: \"42 passed, 0 failed\"": 2,
       "\"src/llm_abm_sim/graph_loader.py:87:    if missing_profile_ids and dataset_config.missing_profile_po": 1,
       "\"src/llm_abm_sim/graph_loader.py:89:    if extra_profile_ids and dataset_config.extra_profile_policy": 1,
       "\"src/llm_abm_sim/graph_loader.py:136:        raise ValueError(f\\\"Dataset validation failed: {message": 1,
       "\"if missing_profile_ids and dataset_config.missing_profile_policy is MissingProfilePolicy.ERROR:\",": 1,
       "\"if extra_profile_ids and dataset_config.extra_profile_policy is ExtraProfilePolicy.ERROR:\",": 1,
       "\"raise ValueError(f\\\"Dataset validation failed: {message}\\\")\",": 1,
-      "\"except json.JSONDecodeError:\"": 1
+      "\"except json.JSONDecodeError:\"": 1,
+      "79-- Validate provider output via `EngageDecision`; handle invalid output with explicit `fail_closed": 1,
+      "134-LLM_ABM_RUN_LIVE_LLM=1 pytest -q -m live_llm  # manual; allowed to skip/fail closed without cred": 1,
+      "Control note: the same Python test commands were also attempted once before activating `.venv`; thos": 1,
+      "E   ModuleNotFoundError: No module named 'pydantic'": 1,
+      "src/llm_abm_sim/runner.py:8: error: Library stubs not installed for \"yaml\"  [import-untyped]": 1,
+      "if missing_profile_ids and dataset_config.missing_profile_policy is MissingProfilePolicy.ERROR:": 1,
+      "if extra_profile_ids and dataset_config.extra_profile_policy is ExtraProfilePolicy.ERROR:": 1,
+      "raise ValueError(f\"Dataset validation failed: {message}\")": 1
     },
     "noProgressIterations": 0,
     "shortIterations": 0
