@@ -23,3 +23,6 @@ npm-debug.log*
 _bmad/
 # OMX scratch phase workspaces (materialized clones; never commit)
 .omx/workspaces/
+
+# Ralph/ralph-orchestrator runtime artifacts
+.ralph/
