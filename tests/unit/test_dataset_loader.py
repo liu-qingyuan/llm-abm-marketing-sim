@@ -147,3 +147,48 @@ def test_load_network_dataset_errors_for_validation_policy_violations(tmp_path):
                 extra_profile_policy=ExtraProfilePolicy.ERROR,
             )
         )
+
+
+def test_load_network_dataset_reads_profile_object_json_and_comma_lists(tmp_path):
+    edges = tmp_path / "edges.csv"
+    edges.write_text("left,right\nu1,u2\n", encoding="utf-8")
+    profiles = tmp_path / "profiles.json"
+    profiles.write_text(
+        json.dumps(
+            {
+                "profiles": [
+                    {"user_id": "u1", "interest_tags": "eco, skincare", "activity_level": 0.9},
+                    {"user_id": "u2", "interest_tags": "gaming; wellness", "brand_attitude": -0.4},
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    dataset = load_network_dataset(
+        DatasetConfig(
+            edge_list_path=edges,
+            profile_path=profiles,
+            profile_format=ProfileFormat.JSON,
+            delimiter=",",
+            source_column="left",
+            target_column="right",
+        )
+    )
+
+    assert sorted(dataset.graph.edges) == [("u1", "u2")]
+    assert dataset.profiles["u1"].interest_tags == ["eco", "skincare"]
+    assert dataset.profiles["u2"].interest_tags == ["gaming", "wellness"]
+    assert dataset.validation_report.profile_format == "json"
+
+
+def test_load_network_dataset_rejects_duplicate_profile_ids(tmp_path):
+    edges = tmp_path / "edges.csv"
+    edges.write_text("u1 u2\n", encoding="utf-8")
+    profiles = tmp_path / "profiles.csv"
+    profiles.write_text("user_id,interest_tags\nu1,eco\nu1,skincare\nu2,eco\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="Duplicate profile.*u1"):
+        load_network_dataset(
+            DatasetConfig(edge_list_path=edges, profile_path=profiles, profile_format=ProfileFormat.CSV)
+        )
