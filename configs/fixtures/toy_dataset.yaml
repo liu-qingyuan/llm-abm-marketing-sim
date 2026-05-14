@@ -1,0 +1,36 @@
+run_id: toy-dataset
+random_seed: 123
+simulation:
+  horizon: 4
+  seed_user_ids: [u1]
+  base_exposure_probability: 1.0
+  peer_exposure_boost: 0.0
+  time_step_label: "day"
+  observation_window: "4 days"
+  hot_topic_exposure_boost: 0.0
+  share_exposure_boost: 0.0
+platform_context:
+  time_label: "fixture launch week"
+  hot_topics: [skincare, eco]
+  platform_mood: "deterministic fixture market"
+  feed_ranking_weight: 1.0
+  trace_visibility: 1.0
+post:
+  post_id: fixture-post
+  text: "Eco skincare launch for deterministic dataset ingestion tests"
+  media_summary: "Static product image with recyclable packaging"
+  topic_tags: [skincare, eco]
+dataset:
+  edge_list_path: ../../tests/fixtures/datasets/toy_edges.csv
+  profile_path: ../../tests/fixtures/datasets/toy_profiles.csv
+  profile_format: csv
+  delimiter: ","
+  directed: true
+  source_column: source
+  target_column: target
+  edge_weight_column: influence_weight
+  edge_attribute_columns: [relationship, touchpoint]
+  missing_profile_policy: error
+  extra_profile_policy: error
+report:
+  title: "LLM-ABM Toy Dataset Fixture Report"

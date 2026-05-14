@@ -4,7 +4,7 @@
 - [x] Implement dataset/profile config schema and config-relative path resolution.
 - [x] Implement dataset loader returning graph, profile mapping, and serializable validation report.
 - [x] Emit dataset_validation.json for dataset-backed runs.
-- [ ] Add deterministic fixture datasets and configs/fixtures/toy_dataset.yaml.
+- [x] Add deterministic fixture datasets and configs/fixtures/toy_dataset.yaml.
 - [ ] Add/update unit, integration, and E2E coverage for dataset/profile ingestion.
 - [ ] Update docs with dataset schema examples and path-resolution rules.
 - [ ] Run required acceptance commands and read outputs.

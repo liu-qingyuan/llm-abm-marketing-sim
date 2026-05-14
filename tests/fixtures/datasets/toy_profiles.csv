@@ -1,0 +1,5 @@
+user_id,interest_tags,brand_attitude,activity_level,like_tendency,comment_tendency,share_tendency
+u1,skincare|eco,0.8,0.9,0.8,0.3,0.6
+u2,skincare|wellness,0.5,0.8,0.7,0.2,0.4
+u3,gaming|eco,-0.2,0.5,0.3,0.1,0.2
+u4,eco|wellness,0.3,0.6,0.5,0.2,0.3

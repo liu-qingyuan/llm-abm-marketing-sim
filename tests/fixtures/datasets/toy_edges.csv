@@ -1,0 +1,5 @@
+source,target,influence_weight,relationship,touchpoint
+u1,u2,0.90,follows,organic
+u1,u3,0.60,follows,organic
+u2,u4,0.75,friend,share
+u3,u4,0.40,colleague,mention
