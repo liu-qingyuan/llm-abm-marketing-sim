@@ -53,6 +53,15 @@ Expected artifacts include:
 - `step_records.csv`
 - `report.html`
 
+Dataset-backed fixture run:
+
+```bash
+. .venv/bin/activate
+python -m llm_abm_sim.run --config configs/fixtures/toy_dataset.yaml --output runs/toy-dataset
+```
+
+Dataset-backed runs also write `dataset_validation.json`, which records resolved edge/profile paths, graph/profile counts, validation policies, and missing/extra profile diagnostics. Relative `dataset.edge_list_path` and `dataset.profile_path` values are resolved against the directory containing the config file; absolute paths are normalized and remain absolute. See `docs/dataset-ingestion.md` for CSV/JSON schema examples.
+
 ## Quality commands
 
 ```bash
@@ -100,5 +109,6 @@ See:
 - `docs/simulation-flow.md`
 - `docs/framework-analysis.md`
 - `docs/development-plan.md`
+- `docs/dataset-ingestion.md`
 - `docs/test-strategy.md`
 - `docs/provider-config.md`

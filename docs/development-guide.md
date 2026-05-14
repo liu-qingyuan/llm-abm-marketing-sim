@@ -94,6 +94,7 @@ The current scaffold validates explicit opt-in and Codex provider readiness. It 
 2. Add loader behavior in `graph_loader.py` and `runner.py`.
 3. Preserve explicit missing-profile behavior.
 4. Add a toy fixture and integration test.
+5. Update `docs/dataset-ingestion.md` with schema examples, validation policies, and path-resolution rules.
 
 ## Testing Strategy
 

@@ -6,7 +6,7 @@
 - [x] Emit dataset_validation.json for dataset-backed runs.
 - [x] Add deterministic fixture datasets and configs/fixtures/toy_dataset.yaml.
 - [x] Add/update unit, integration, and E2E coverage for dataset/profile ingestion.
-- [ ] Update docs with dataset schema examples and path-resolution rules.
+- [x] Update docs with dataset schema examples and path-resolution rules.
 - [ ] Run required acceptance commands and read outputs.
 - [ ] Create .omx/phase-handoffs/phase-01-dataset-ingestion.md with evidence and retention status.
 - [ ] Perform final prompt-to-artifact audit and confirm no Phase 2+ scope creep.

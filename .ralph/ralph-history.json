@@ -223,9 +223,45 @@
         "E       AssertionError: assert {'comment_cou...te': 1.0, ...} == {'comment_cou...te': 1.0, ...}",
         "FAILED tests/integration/test_runner_determinism.py::test_runner_loads_toy_dataset_fixture_with_config_relative_paths"
       ]
+    },
+    {
+      "iteration": 7,
+      "startedAt": "2026-05-14T14:39:59.401Z",
+      "endedAt": "2026-05-14T14:43:24.676Z",
+      "durationMs": 205248,
+      "agent": "codex",
+      "model": "gpt-5.5",
+      "toolsUsed": {
+        "Ralph": 2,
+        "the": 2,
+        "tiered": 1,
+        "only": 1,
+        "post": 1
+      },
+      "filesModified": [
+        ".ralph/ralph-tasks.md",
+        "README.md",
+        "docs/development-guide.md",
+        "docs/index.md",
+        "docs/dataset-ingestion.md"
+      ],
+      "exitCode": 0,
+      "completionDetected": false,
+      "errors": [
+        "Complex tasks often fail silently: partial implementations get declared \"done\", tests get skipped, edge cases get forgotten. Ralph prevents this by looping until work is genuinely complete, requiring ",
+        "1. Run: npm test           → Output: \"42 passed, 0 failed\"",
+        "docs/test-strategy.md:32:The live gate is allowed to skip/fail closed when provider config or credentials are missing.",
+        "if missing_profile_ids and dataset_config.missing_profile_policy is MissingProfilePolicy.ERROR:",
+        "if extra_profile_ids and dataset_config.extra_profile_policy is ExtraProfilePolicy.ERROR:",
+        "raise ValueError(f\"Dataset validation failed: {message}\")",
+        "src/llm_abm_sim/graph_loader.py:87:    if missing_profile_ids and dataset_config.missing_profile_policy is MissingProfilePolicy.ERROR:",
+        "src/llm_abm_sim/graph_loader.py:89:    if extra_profile_ids and dataset_config.extra_profile_policy is ExtraProfilePolicy.ERROR:",
+        "src/llm_abm_sim/graph_loader.py:136:        raise ValueError(f\"Dataset validation failed: {message}\")",
+        "except json.JSONDecodeError:"
+      ]
     }
   ],
-  "totalDurationMs": 2090926,
+  "totalDurationMs": 2296174,
   "struggleIndicators": {
     "repeatedErrors": {
       "134: LLM_ABM_RUN_LIVE_LLM=1 pytest -q -m live_llm  # manual; allowed to skip/fail closed without cre": 1,
@@ -237,23 +273,26 @@
       "79-- Validate provider output via `EngageDecision`; handle invalid output with explicit `fail_closed": 1,
       "134-LLM_ABM_RUN_LIVE_LLM=1 pytest -q -m live_llm  # manual; allowed to skip/fail closed without cred": 1,
       "ERROR: Reconnecting... 1/20": 1,
-      "if missing_profile_ids and dataset_config.missing_profile_policy is MissingProfilePolicy.ERROR:": 4,
-      "if extra_profile_ids and dataset_config.extra_profile_policy is ExtraProfilePolicy.ERROR:": 4,
+      "if missing_profile_ids and dataset_config.missing_profile_policy is MissingProfilePolicy.ERROR:": 5,
+      "if extra_profile_ids and dataset_config.extra_profile_policy is ExtraProfilePolicy.ERROR:": 5,
       "raise ValueError(f\\\"Dataset validation failed: {message}\\\")": 1,
-      "except json.JSONDecodeError:": 4,
-      "raise ValueError(f\"Dataset validation failed: {message}\")": 4,
+      "except json.JSONDecodeError:": 5,
+      "raise ValueError(f\"Dataset validation failed: {message}\")": 5,
       "87\t    if missing_profile_ids and dataset_config.missing_profile_policy is MissingProfilePolicy.ERRO": 1,
       "89\t    if extra_profile_ids and dataset_config.extra_profile_policy is ExtraProfilePolicy.ERROR:": 1,
-      "src/llm_abm_sim/graph_loader.py:87:    if missing_profile_ids and dataset_config.missing_profile_pol": 2,
-      "src/llm_abm_sim/graph_loader.py:89:    if extra_profile_ids and dataset_config.extra_profile_policy ": 2,
-      "src/llm_abm_sim/graph_loader.py:136:        raise ValueError(f\"Dataset validation failed: {message}\"": 1,
+      "src/llm_abm_sim/graph_loader.py:87:    if missing_profile_ids and dataset_config.missing_profile_pol": 3,
+      "src/llm_abm_sim/graph_loader.py:89:    if extra_profile_ids and dataset_config.extra_profile_policy ": 3,
+      "src/llm_abm_sim/graph_loader.py:136:        raise ValueError(f\"Dataset validation failed: {message}\"": 2,
       ".omx/plans/test-spec-full-implementation-roadmap-20260514T121201Z.md:26:- Schema validation: dataset": 2,
       "E   ModuleNotFoundError: No module named 'networkx'": 1,
       ".omx/plans/test-spec-full-implementation-roadmap-20260514T121201Z.md:28:- Provider adapter: prompt c": 1,
       ".omx/plans/test-spec-full-implementation-roadmap-20260514T121201Z.md:47:- Manual live LLM E2E runs o": 1,
       "KeyError: 'exposure_events'": 1,
       "E       AssertionError: assert {'comment_cou...te': 1.0, ...} == {'comment_cou...te': 1.0, ...}": 1,
-      "FAILED tests/integration/test_runner_determinism.py::test_runner_loads_toy_dataset_fixture_with_conf": 1
+      "FAILED tests/integration/test_runner_determinism.py::test_runner_loads_toy_dataset_fixture_with_conf": 1,
+      "Complex tasks often fail silently: partial implementations get declared \"done\", tests get skipped, e": 1,
+      "1. Run: npm test           → Output: \"42 passed, 0 failed\"": 1,
+      "docs/test-strategy.md:32:The live gate is allowed to skip/fail closed when provider config or creden": 1
     },
     "noProgressIterations": 0,
     "shortIterations": 0

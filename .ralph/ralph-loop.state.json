@@ -1,6 +1,6 @@
 {
   "active": true,
-  "iteration": 6,
+  "iteration": 7,
   "minIterations": 3,
   "maxIterations": 20,
   "completionPromise": "RALPH_PHASE1_GATE_APPROVED",

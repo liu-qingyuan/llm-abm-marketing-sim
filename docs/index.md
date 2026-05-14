@@ -26,6 +26,7 @@
 - [Source Tree Analysis](./source-tree-analysis.md) - Annotated directory structure
 - [Component Inventory](./component-inventory.md) - Catalog of major runtime/test components
 - [Development Guide](./development-guide.md) - Local setup and development workflow
+- [Dataset and Profile Ingestion](./dataset-ingestion.md) - Dataset schema examples, validation policies, and config-relative path rules
 - [Test Strategy](./test-strategy.md) - Test layers and acceptance coverage
 - [Provider Config](./provider-config.md) - Secret-safe Codex/sub2api manual live gate
 
@@ -78,6 +79,10 @@ Reference: `architecture.md`, `component-inventory.md`, `source-tree-analysis.md
 ### When changing outputs or metrics
 
 Reference: `component-inventory.md`, `test-strategy.md`, `tests/integration/test_obsidian_metrics_contract.py`.
+
+### When changing dataset/profile ingestion
+
+Reference: `dataset-ingestion.md`, `schemas.py`, `graph_loader.py`, `runner.py`, `configs/fixtures/toy_dataset.yaml`, `tests/unit/test_dataset_loader.py`, `tests/unit/test_dataset_config.py`, `tests/integration/test_runner_determinism.py`.
 
 ### When changing provider/LLM behavior
 
