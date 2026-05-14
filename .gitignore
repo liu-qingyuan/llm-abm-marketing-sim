@@ -1,5 +1,7 @@
 __pycache__/
 .pytest_cache/
+.mypy_cache/
+.ruff_cache/
 .venv/
 .gitnexus/
 data/raw/*
@@ -8,3 +10,16 @@ data/processed/*
 !data/processed/.gitkeep
 
 .claude/
+
+# Generated simulation/test artifacts
+runs/
+test-results/
+playwright-report/
+blob-report/
+node_modules/
+npm-debug.log*
+*.egg-info/
+.agents/
+_bmad/
+# OMX scratch phase workspaces (materialized clones; never commit)
+.omx/workspaces/

@@ -1,0 +1,13 @@
+{
+  "name": "llm-abm-marketing-sim",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Static report smoke tests for the LLM-ABM marketing simulator",
+  "scripts": {
+    "test:browser": "playwright test",
+    "test:browser:install": "playwright install chromium"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.56.0"
+  }
+}

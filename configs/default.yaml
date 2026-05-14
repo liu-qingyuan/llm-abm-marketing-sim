@@ -1,4 +1,49 @@
-horizon: 30
-seed_user_ids: []
-base_exposure_probability: 0.15
-peer_exposure_boost: 0.10
+run_id: sample-run
+random_seed: 42
+simulation:
+  horizon: 4
+  seed_user_ids: [u1]
+  base_exposure_probability: 1.0
+  peer_exposure_boost: 0.0
+  time_step_label: "day"
+  observation_window: "4 days"
+  hot_topic_exposure_boost: 0.0
+  share_exposure_boost: 0.0
+platform_context:
+  time_label: "launch week"
+  hot_topics: [skincare, eco]
+  platform_mood: "eco-conscious launch season"
+  feed_ranking_weight: 1.0
+  trace_visibility: 1.0
+post:
+  post_id: p1
+  text: "New skincare launch for eco-conscious users"
+  media_summary: "Short-form product image showing recyclable packaging"
+  topic_tags: [skincare, eco]
+profiles:
+  - user_id: u1
+    interest_tags: [skincare, eco]
+    brand_attitude: 0.8
+    activity_level: 0.9
+    like_tendency: 0.8
+    comment_tendency: 0.3
+    share_tendency: 0.6
+  - user_id: u2
+    interest_tags: [skincare]
+    brand_attitude: 0.4
+    activity_level: 0.8
+    like_tendency: 0.7
+    comment_tendency: 0.2
+    share_tendency: 0.3
+  - user_id: u3
+    interest_tags: [gaming]
+    brand_attitude: -0.2
+    activity_level: 0.4
+    like_tendency: 0.3
+    comment_tendency: 0.1
+    share_tendency: 0.1
+graph_edges:
+  - [u1, u2]
+  - [u2, u3]
+report:
+  title: "LLM-ABM Simulation Report"
