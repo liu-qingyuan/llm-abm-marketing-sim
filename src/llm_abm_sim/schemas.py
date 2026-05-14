@@ -119,6 +119,54 @@ class ReportConfig(BaseModel):
     title: str = "LLM-ABM Simulation Report"
 
 
+class FailClosedAction(str, Enum):
+    """Provider failure behavior for explicitly enabled LLM adapters."""
+
+    RAISE = "raise"
+    NO_ENGAGE = "no_engage"
+    SKIP_RUN = "skip_run"
+
+
+class ProviderLLMConfig(BaseModel):
+    """Optional provider-backed decision adapter configuration.
+
+    Default values keep the simulator offline and deterministic. Real provider
+    use requires ``enabled=true`` plus the live env gate unless tests inject a
+    mocked client path.
+    """
+
+    enabled: bool = False
+    provider: str = "openai_compatible"
+    model: str | None = None
+    base_url: str | None = None
+    wire_api: str = "responses"
+    use_codex_provider_config: bool = False
+    require_live_env: bool = True
+    api_key_env: str = "OPENAI_API_KEY"
+    timeout_seconds: float = Field(default=30.0, gt=0.0)
+    max_retries: int = Field(default=0, ge=0)
+    fail_closed_action: FailClosedAction = FailClosedAction.RAISE
+    prompt_version: str = "engage-provider-v1"
+
+    def safe_metadata(self) -> dict[str, object]:
+        """Return serialization-safe provider settings with no credentials."""
+
+        return {
+            "enabled": self.enabled,
+            "provider": self.provider,
+            "model": self.model,
+            "base_url": self.base_url,
+            "wire_api": self.wire_api,
+            "use_codex_provider_config": self.use_codex_provider_config,
+            "require_live_env": self.require_live_env,
+            "api_key_env": self.api_key_env,
+            "timeout_seconds": self.timeout_seconds,
+            "max_retries": self.max_retries,
+            "fail_closed_action": self.fail_closed_action.value,
+            "prompt_version": self.prompt_version,
+        }
+
+
 class SimulationInput(BaseModel):
     """Full experiment input loaded from config."""
 
@@ -137,3 +185,4 @@ class SimulationInput(BaseModel):
     graph_edges: list[tuple[str, str]] = Field(default_factory=list)
     dataset: DatasetConfig = Field(default_factory=DatasetConfig)
     report: ReportConfig = Field(default_factory=ReportConfig)
+    provider_llm: ProviderLLMConfig = Field(default_factory=ProviderLLMConfig)

@@ -9,6 +9,7 @@ from typing import Any
 import tomllib
 
 SECRET_KEYS = ("api_key", "token", "secret", "password", "credential", "auth", "bearer")
+SAFE_METADATA_KEYS = {"api_key_env", "requires_openai_auth", "auth_available"}
 
 
 @dataclass(frozen=True)
@@ -64,6 +65,8 @@ def should_run_live_llm(codex_home: str | Path | None = None) -> bool:
 
     if os.environ.get("LLM_ABM_RUN_LIVE_LLM") != "1":
         return False
+    if os.environ.get("OPENAI_API_KEY"):
+        return True
     config = load_codex_provider_config(codex_home)
     return bool(config and config.requires_openai_auth and config.auth_available)
 
@@ -74,7 +77,7 @@ def redact_secrets(value: Any) -> Any:
     if isinstance(value, dict):
         redacted: dict[str, Any] = {}
         for key, item in value.items():
-            if any(secret in key.lower() for secret in SECRET_KEYS):
+            if key.lower() not in SAFE_METADATA_KEYS and any(secret in key.lower() for secret in SECRET_KEYS):
                 redacted[key] = "<redacted>"
             else:
                 redacted[key] = redact_secrets(item)

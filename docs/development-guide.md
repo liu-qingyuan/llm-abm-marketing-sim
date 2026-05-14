@@ -60,7 +60,7 @@ Manual live-gate readiness check:
 LLM_ABM_RUN_LIVE_LLM=1 pytest -q -m live_llm
 ```
 
-The current scaffold validates explicit opt-in and Codex provider readiness. It does not perform mandatory live provider calls in default verification.
+The Phase 3 gate validates explicit opt-in and performs one provider decision only when live credentials are available. Without concrete credentials it skips/fails closed with a redacted reason; default verification never performs live network calls.
 
 ## Common Tasks
 
@@ -81,12 +81,14 @@ The current scaffold validates explicit opt-in and Codex provider readiness. It 
 
 ### Add a provider-backed LLM adapter
 
-1. Implement `LLMDecisionAdapter` in a new optional module.
-2. Keep the dependency under `[project.optional-dependencies].llm`.
-3. Validate provider output through `EngageDecision`.
-4. Wrap with `CachedDecisionAdapter`.
-5. Keep real network tests behind `live_llm` and explicit env opt-in.
-6. Never log or snapshot API keys, bearer tokens, cookies, or auth files.
+1. Implement `LLMDecisionAdapter` under `src/llm_abm_sim/providers/`.
+2. Keep provider SDKs under `[project.optional-dependencies].llm`.
+3. Build prompts with `DecisionInput`/`prompting.py` so post content, preference, peer influence, and platform context are explicit.
+4. Validate provider output through `EngageDecision`.
+5. Configure `provider_llm.fail_closed_action` as `raise`, `no_engage`, or `skip_run`; default is `raise`.
+6. Wrap provider adapters with `CachedDecisionAdapter` in runner code.
+7. Keep real network tests behind `live_llm` and `LLM_ABM_RUN_LIVE_LLM=1`.
+8. Never log or snapshot API keys, bearer tokens, cookies, headers, or auth files.
 
 ### Add dataset ingestion
 

@@ -8,14 +8,14 @@ from typing import Any
 import yaml
 
 from .agent import SocialUserAgent
-from .decision import CachedDecisionAdapter, InMemoryDecisionCache, RuleBasedDecisionAdapter
+from .decision import CachedDecisionAdapter, InMemoryDecisionCache, LLMDecisionAdapter, RuleBasedDecisionAdapter
 from .environment import PlatformEnvironment
 from .events import SimulationRunResult
 from .graph_loader import DatasetValidationReport, load_network_dataset
 from .metrics import MetricsCollector
 from .model import SimulationModel
 from .outputs import copy_config_source, write_run_outputs
-from .schemas import SimulationInput
+from .schemas import FailClosedAction, SimulationInput
 
 DATASET_PATH_FIELDS = ("edge_list_path", "profile_path")
 
@@ -23,8 +23,9 @@ DATASET_PATH_FIELDS = ("edge_list_path", "profile_path")
 class ExperimentRunner:
     """Build and run a reproducible simulation from a config file."""
 
-    def __init__(self, config: SimulationInput) -> None:
+    def __init__(self, config: SimulationInput, decision_adapter: LLMDecisionAdapter | None = None) -> None:
         self.config = config
+        self.decision_adapter_override = decision_adapter
         self.dataset_validation_report: DatasetValidationReport | None = None
 
     @classmethod
@@ -48,7 +49,7 @@ class ExperimentRunner:
             post=self.config.post,
             agents=agents,
             environment=environment,
-            decision_adapter=CachedDecisionAdapter(RuleBasedDecisionAdapter(), InMemoryDecisionCache()),
+            decision_adapter=self._build_decision_adapter(),
             metrics=MetricsCollector(),
             platform_context=self.config.platform_context,
             run_id=self.config.run_id,
@@ -62,6 +63,22 @@ class ExperimentRunner:
         if config_path is not None:
             copy_config_source(config_path, output_path)
         return output_path
+
+    def _build_decision_adapter(self) -> LLMDecisionAdapter:
+        if self.decision_adapter_override is not None:
+            return self.decision_adapter_override
+        provider_config = self.config.provider_llm
+        if not provider_config.enabled:
+            return CachedDecisionAdapter(RuleBasedDecisionAdapter(), InMemoryDecisionCache())
+        if provider_config.fail_closed_action == FailClosedAction.SKIP_RUN:
+            raise RuntimeError("provider_llm.fail_closed_action=skip_run prevents simulator run start")
+        from .providers.openai_compatible import OpenAICompatibleDecisionAdapter
+
+        return CachedDecisionAdapter(
+            OpenAICompatibleDecisionAdapter(provider_config),
+            InMemoryDecisionCache(),
+            prompt_version=provider_config.prompt_version,
+        )
 
     def _build_dataset(self):
         return load_network_dataset(

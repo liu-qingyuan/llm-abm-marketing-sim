@@ -2,13 +2,15 @@ from __future__ import annotations
 
 import csv
 import json
-import shutil
 from html import escape
 from pathlib import Path
 from typing import Any
 
+import yaml
+
 from .events import SimulationRunResult
 from .graph_loader import DatasetValidationReport
+from .provider_config import redact_secrets
 from .schemas import SimulationInput
 
 
@@ -24,11 +26,11 @@ def write_run_outputs(
     output_path.mkdir(parents=True, exist_ok=True)
 
     (output_path / "config.json").write_text(
-        json.dumps(config.model_dump(mode="json"), indent=2, sort_keys=True),
+        json.dumps(redact_secrets(config.model_dump(mode="json")), indent=2, sort_keys=True),
         encoding="utf-8",
     )
     (output_path / "run_result.json").write_text(
-        json.dumps(result.model_dump(mode="json"), indent=2, sort_keys=True),
+        json.dumps(redact_secrets(result.model_dump(mode="json")), indent=2, sort_keys=True),
         encoding="utf-8",
     )
     (output_path / "metrics_summary.json").write_text(
@@ -47,8 +49,34 @@ def copy_config_source(config_path: str | Path, output_dir: str | Path) -> None:
     """Copy the source config next to normalized config artifacts when available."""
 
     source = Path(config_path)
-    if source.exists():
-        shutil.copyfile(source, Path(output_dir) / source.name)
+    if not source.exists():
+        return
+    destination = Path(output_dir) / source.name
+    raw = source.read_text(encoding="utf-8")
+    try:
+        if source.suffix.lower() == ".json":
+            payload = json.loads(raw)
+            destination.write_text(json.dumps(redact_secrets(payload), indent=2, sort_keys=True), encoding="utf-8")
+        else:
+            payload = yaml.safe_load(raw)
+            destination.write_text(yaml.safe_dump(redact_secrets(payload), sort_keys=True), encoding="utf-8")
+    except Exception:
+        destination.write_text(_redact_source_text(raw), encoding="utf-8")
+
+
+def _redact_source_text(raw: str) -> str:
+    redacted_lines: list[str] = []
+    for line in raw.splitlines():
+        lowered = line.lower()
+        if any(
+            secret in lowered
+            for secret in ("api_key:", "token:", "secret:", "password:", "credential:", "authorization:", "cookie:")
+        ):
+            prefix = line.split(":", 1)[0]
+            redacted_lines.append(f"{prefix}: <redacted>")
+        else:
+            redacted_lines.append(line)
+    return "\n".join(redacted_lines) + ("\n" if raw.endswith("\n") else "")
 
 
 def write_report_html(result: SimulationRunResult, config: SimulationInput, path: str | Path) -> Path:
@@ -135,7 +163,7 @@ def _write_events_json(result: SimulationRunResult, path: Path) -> None:
         "decision_events": [event.model_dump(mode="json") for event in result.decision_events],
         "action_events": [event.model_dump(mode="json") for event in result.action_events],
     }
-    path.write_text(json.dumps(events, indent=2, sort_keys=True), encoding="utf-8")
+    path.write_text(json.dumps(redact_secrets(events), indent=2, sort_keys=True), encoding="utf-8")
 
 
 def _write_dataset_validation_json(report: DatasetValidationReport, path: Path) -> None:
