@@ -8,10 +8,16 @@ from pathlib import Path
 from typing import Any
 
 from .events import SimulationRunResult
+from .graph_loader import DatasetValidationReport
 from .schemas import SimulationInput
 
 
-def write_run_outputs(result: SimulationRunResult, config: SimulationInput, output_dir: str | Path) -> Path:
+def write_run_outputs(
+    result: SimulationRunResult,
+    config: SimulationInput,
+    output_dir: str | Path,
+    dataset_validation_report: DatasetValidationReport | None = None,
+) -> Path:
     """Write deterministic run artifacts and return the output directory."""
 
     output_path = Path(output_dir)
@@ -31,6 +37,8 @@ def write_run_outputs(result: SimulationRunResult, config: SimulationInput, outp
     )
     _write_step_records_csv(result, output_path / "step_records.csv")
     _write_events_json(result, output_path / "events.json")
+    if dataset_validation_report is not None and dataset_validation_report.dataset_used:
+        _write_dataset_validation_json(dataset_validation_report, output_path / "dataset_validation.json")
     write_report_html(result, config, output_path / "report.html")
     return output_path
 
@@ -128,3 +136,7 @@ def _write_events_json(result: SimulationRunResult, path: Path) -> None:
         "action_events": [event.model_dump(mode="json") for event in result.action_events],
     }
     path.write_text(json.dumps(events, indent=2, sort_keys=True), encoding="utf-8")
+
+
+def _write_dataset_validation_json(report: DatasetValidationReport, path: Path) -> None:
+    path.write_text(json.dumps(report.to_dict(), indent=2, sort_keys=True), encoding="utf-8")

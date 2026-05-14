@@ -58,7 +58,7 @@ class ExperimentRunner:
 
     def run_and_write(self, output_dir: str | Path, config_path: str | Path | None = None) -> Path:
         result = self.run()
-        output_path = write_run_outputs(result, self.config, output_dir)
+        output_path = write_run_outputs(result, self.config, output_dir, self.dataset_validation_report)
         if config_path is not None:
             copy_config_source(config_path, output_path)
         return output_path
