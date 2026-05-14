@@ -18,6 +18,8 @@ from .model import SimulationModel
 from .outputs import copy_config_source, write_run_outputs
 from .schemas import SimulationInput, UserProfile
 
+DATASET_PATH_FIELDS = ("edge_list_path", "profile_path")
+
 
 class ExperimentRunner:
     """Build and run a reproducible simulation from a config file."""
@@ -83,14 +85,14 @@ def load_simulation_input(path: str | Path) -> SimulationInput:
     else:
         loaded = yaml.safe_load(raw)
         data = loaded or {}
-    return _normalize_legacy_config(data)
+    return _normalize_legacy_config(data, config_path.parent)
 
 
-def _normalize_legacy_config(data: dict[str, Any]) -> SimulationInput:
+def _normalize_legacy_config(data: dict[str, Any], config_dir: Path | None = None) -> SimulationInput:
     """Support the original flat default.yaml while preferring the new nested schema."""
 
     if "simulation" in data:
-        return SimulationInput.model_validate(data)
+        return _resolve_dataset_paths(SimulationInput.model_validate(data), config_dir)
 
     simulation_keys = {
         "horizon",
@@ -101,4 +103,28 @@ def _normalize_legacy_config(data: dict[str, Any]) -> SimulationInput:
     simulation = {key: data.pop(key) for key in list(data) if key in simulation_keys}
     if simulation:
         data["simulation"] = simulation
-    return SimulationInput.model_validate(data)
+    return _resolve_dataset_paths(SimulationInput.model_validate(data), config_dir)
+
+
+def _resolve_dataset_paths(config: SimulationInput, config_dir: Path | None) -> SimulationInput:
+    """Resolve dataset file paths relative to the source config directory.
+
+    Absolute paths are normalized in place. When no config directory is known,
+    paths stay as authored so direct model validation remains side-effect free.
+    """
+
+    if config_dir is None:
+        return config
+
+    config_dir = config_dir.resolve()
+    dataset = config.dataset
+    updates: dict[str, Path] = {}
+    for field_name in DATASET_PATH_FIELDS:
+        raw_path = getattr(dataset, field_name)
+        if raw_path is None:
+            continue
+        updates[field_name] = raw_path.resolve() if raw_path.is_absolute() else (config_dir / raw_path).resolve()
+
+    if not updates:
+        return config
+    return config.model_copy(update={"dataset": dataset.model_copy(update=updates)})

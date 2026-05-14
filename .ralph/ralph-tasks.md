@@ -1,7 +1,7 @@
 # Ralph Tasks - Phase 1 Dataset/Profile Ingestion
 
 - [x] Intake: read Phase 1 sections from roadmap/PRD/test-spec and inspect current baseline code before editing.
-- [ ] Implement dataset/profile config schema and config-relative path resolution.
+- [x] Implement dataset/profile config schema and config-relative path resolution.
 - [ ] Implement dataset loader returning graph, profile mapping, and serializable validation report.
 - [ ] Emit dataset_validation.json for dataset-backed runs.
 - [ ] Add deterministic fixture datasets and configs/fixtures/toy_dataset.yaml.

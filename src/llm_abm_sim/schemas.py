@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from enum import Enum
+from pathlib import Path
+
 from pydantic import BaseModel, Field
 
 
@@ -64,11 +67,50 @@ class SimulationConfig(BaseModel):
     share_exposure_boost: float = Field(default=0.0, ge=0.0, le=1.0)
 
 
-class DatasetConfig(BaseModel):
-    """Dataset inputs for a simulation run."""
+class ProfileFormat(str, Enum):
+    """Supported profile file encodings for dataset-backed runs."""
 
-    edge_list_path: str | None = None
+    CSV = "csv"
+    JSON = "json"
+
+
+class MissingProfilePolicy(str, Enum):
+    """How dataset loading should handle graph nodes without profile rows."""
+
+    DEFAULT = "default"
+    ERROR = "error"
+
+
+class ExtraProfilePolicy(str, Enum):
+    """How dataset loading should handle profile rows for IDs absent from the graph."""
+
+    IGNORE = "ignore"
+    INCLUDE_AS_NODE = "include_as_node"
+    ERROR = "error"
+
+
+class DatasetConfig(BaseModel):
+    """Dataset inputs for a simulation run.
+
+    Relative paths are resolved by ``load_simulation_input()`` against the
+    directory containing the config file. Absolute paths are normalized.
+    """
+
+    edge_list_path: Path | None = None
+    profile_path: Path | None = None
+    profile_format: ProfileFormat | None = None
     delimiter: str | None = None
+    directed: bool = False
+    source_column: str | None = None
+    target_column: str | None = None
+    edge_weight_column: str | None = None
+    edge_attribute_columns: list[str] = Field(default_factory=list)
+    missing_profile_policy: MissingProfilePolicy = MissingProfilePolicy.DEFAULT
+    extra_profile_policy: ExtraProfilePolicy = ExtraProfilePolicy.IGNORE
+
+    @property
+    def uses_files(self) -> bool:
+        return self.edge_list_path is not None or self.profile_path is not None
 
 
 class ReportConfig(BaseModel):
