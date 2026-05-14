@@ -5,18 +5,17 @@ import random
 from pathlib import Path
 from typing import Any
 
-import networkx as nx
 import yaml
 
 from .agent import SocialUserAgent
 from .decision import CachedDecisionAdapter, InMemoryDecisionCache, RuleBasedDecisionAdapter
 from .environment import PlatformEnvironment
 from .events import SimulationRunResult
-from .graph_loader import load_edge_list
+from .graph_loader import DatasetValidationReport, load_network_dataset
 from .metrics import MetricsCollector
 from .model import SimulationModel
 from .outputs import copy_config_source, write_run_outputs
-from .schemas import SimulationInput, UserProfile
+from .schemas import SimulationInput
 
 DATASET_PATH_FIELDS = ("edge_list_path", "profile_path")
 
@@ -26,14 +25,17 @@ class ExperimentRunner:
 
     def __init__(self, config: SimulationInput) -> None:
         self.config = config
+        self.dataset_validation_report: DatasetValidationReport | None = None
 
     @classmethod
     def from_config_file(cls, path: str | Path) -> ExperimentRunner:
         return cls(load_simulation_input(path))
 
     def run(self) -> SimulationRunResult:
-        graph = self._build_graph()
-        profiles = self._build_profiles(graph)
+        dataset = self._build_dataset()
+        graph = dataset.graph
+        profiles = dataset.profiles
+        self.dataset_validation_report = dataset.validation_report
         agents = {user_id: SocialUserAgent(profile=profile) for user_id, profile in sorted(profiles.items())}
         environment = PlatformEnvironment(
             graph=graph,
@@ -61,20 +63,12 @@ class ExperimentRunner:
             copy_config_source(config_path, output_path)
         return output_path
 
-    def _build_graph(self) -> nx.Graph:
-        if self.config.dataset.edge_list_path:
-            return load_edge_list(self.config.dataset.edge_list_path, delimiter=self.config.dataset.delimiter)
-        graph = nx.Graph()
-        graph.add_edges_from((str(left), str(right)) for left, right in self.config.graph_edges)
-        for profile in self.config.profiles:
-            graph.add_node(profile.user_id)
-        return graph
-
-    def _build_profiles(self, graph: nx.Graph) -> dict[str, UserProfile]:
-        profiles = {profile.user_id: profile for profile in self.config.profiles}
-        for node in sorted(str(node) for node in graph.nodes):
-            profiles.setdefault(node, UserProfile(user_id=node))
-        return profiles
+    def _build_dataset(self):
+        return load_network_dataset(
+            self.config.dataset,
+            inline_edges=[(str(left), str(right)) for left, right in self.config.graph_edges],
+            inline_profiles=self.config.profiles,
+        )
 
 
 def load_simulation_input(path: str | Path) -> SimulationInput:
