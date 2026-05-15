@@ -36,10 +36,10 @@ Sanitized provider readiness observed in this run:
 
 Commands/proof:
 
-- `LLM_ABM_RUN_LIVE_LLM=1 pytest -q -m live_llm -rs` -> `1 passed, 42 deselected`.
+- `LLM_ABM_RUN_LIVE_LLM=1 pytest -q -m live_llm -rs` -> `1 passed, 43 deselected`.
 - `LLM_ABM_RUN_LIVE_LLM=1 python -m llm_abm_sim.run --config configs/live/provider_smoke.yaml --output runs/live-provider-smoke` -> wrote `runs/live-provider-smoke`.
 - `runs/live-provider-smoke/metrics_summary.json` includes `decision_source_summary: {"provider": 1}` and `provider_evidence.provider_decision_count: 1`.
-- First live smoke decision artifact: user `live_u1`, action `like`, probability `0.78`, confidence `0.86`; reason is provider text but no raw request/response or credentials are written.
+- First live smoke decision artifact: user `live_u1`, action `like`, probability `0.82`, confidence `0.86`; reason is provider text but no raw request/response or credentials are written.
 
 ## Final verification command evidence
 
@@ -49,14 +49,14 @@ All commands were run from `/Users/lqy/work/llm-abm-marketing-sim` with `. .venv
 |---|---|
 | `pytest -q` | `43 passed, 1 deselected in 1.33s` |
 | `pytest -q tests/e2e` | `3 passed, 1 deselected in 1.52s` |
-| `pytest -q -m live_llm -rs` | `1 skipped, 42 deselected`; skip is expected because live gate is not set |
-| `LLM_ABM_RUN_LIVE_LLM=1 pytest -q -m live_llm -rs` | `1 passed, 42 deselected in 5.24s` in final combined gate; earlier focused run also passed in 7.75s |
+| `pytest -q -m live_llm -rs` | `1 skipped, 43 deselected`; skip is expected because live gate is not set |
+| `LLM_ABM_RUN_LIVE_LLM=1 pytest -q -m live_llm -rs` | `1 passed, 43 deselected in 5.91s` |
 | `ruff check .` | `All checks passed!` |
 | `ruff format --check .` | `28 files already formatted` |
 | `mypy src` | `Success: no issues found in 16 source files` |
 | `python -m py_compile $(find src tests -name '*.py' -print)` | passed, no compiler output |
 | `python -m llm_abm_sim.run --config configs/fixtures/realistic_marketing_dataset.yaml --output runs/realistic-marketing-dataset` | wrote `runs/realistic-marketing-dataset`; `decision_source_summary: {"rule_based": 31}` |
-| `npx playwright test` | `1 passed (3.3s)`; report opens from disk and enriched sections are asserted |
+| `npx playwright test` | `1 passed (2.0s)`; report opens from disk and enriched sections are asserted |
 | `LLM_ABM_RUN_LIVE_LLM=1 python -m llm_abm_sim.run --config configs/live/provider_smoke.yaml --output runs/live-provider-smoke` | wrote `runs/live-provider-smoke`; `decision_source_summary: {"provider": 1}`, `provider_decision_count: 1` |
 
 Secret scan note: grep over retained run outputs and phase handoff/scorecard found no API-key/token-shaped values; matches were only safety prose such as “bearer tokens” in the privacy notice.

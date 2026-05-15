@@ -49,3 +49,14 @@ Prior `ralphy-omx`/Phase 4 evidence ended with live LLM skipped because the opti
 - Provider availability can still be intermittent; future runs should treat provider transport failures as environment evidence, not default-test failures.
 - The report is intentionally static HTML/CSS; if richer visual analysis is needed, use a later design/visual workflow rather than adding a frontend stack by default.
 - Recommended next mode: solo execute or `ralph-omx` for gated closure tasks; `ralplan` first only if adding non-static dashboards or changing dependency policy.
+
+
+## Fresh Iteration 2 verification refresh
+
+- `pytest -q` -> `43 passed, 1 deselected in 1.45s`.
+- `pytest -q tests/e2e` -> `3 passed, 1 deselected in 1.53s`.
+- `pytest -q -m live_llm -rs` -> `1 skipped, 43 deselected` with gate unset.
+- `LLM_ABM_RUN_LIVE_LLM=1 pytest -q -m live_llm -rs` -> `1 passed, 43 deselected in 5.91s`.
+- Live CLI smoke rewrote `runs/live-provider-smoke`; `provider_decision_count == 1`, first decision action `like`, probability `0.82`, confidence `0.86`.
+- `npx playwright test` -> `1 passed (2.0s)`.
+- Secret-shaped scan over retained run outputs plus this handoff/scorecard found no API-key/token-shaped values.
