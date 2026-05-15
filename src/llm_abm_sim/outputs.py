@@ -6,7 +6,7 @@ from html import escape
 from pathlib import Path
 from typing import Any
 
-import yaml
+import yaml  # type: ignore[import-untyped]
 
 from .events import SimulationRunResult
 from .graph_loader import DatasetValidationReport, load_network_dataset
