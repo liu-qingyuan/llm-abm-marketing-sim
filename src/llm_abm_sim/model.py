@@ -8,6 +8,7 @@ from .environment import PlatformEnvironment
 from .events import ActionEvent, DecisionEvent, ExposureEvent, SimulationRunResult, StepRecord
 from .metrics import MetricsCollector
 from .schemas import PlatformContext, PostContent
+from .trace import build_decision_trace_summary
 
 
 @dataclass
@@ -61,7 +62,24 @@ class SimulationModel:
             )
             if decision is None:
                 continue
-            decision_events.append(DecisionEvent(time_step=time_step, user_id=user_id, decision=decision))
+            prompt_version = getattr(self.decision_adapter, "prompt_version", "engage-v1")
+            decision_events.append(
+                DecisionEvent(
+                    time_step=time_step,
+                    user_id=user_id,
+                    decision=decision,
+                    trace_summary=build_decision_trace_summary(
+                        user_id=user_id,
+                        post=self.post,
+                        profile=agent.profile,
+                        peer_context=peer_context,
+                        platform_context=self.platform_context,
+                        time_step=time_step,
+                        decision=decision,
+                        prompt_version=str(prompt_version),
+                    ),
+                )
+            )
             self.environment.apply_action(user_id, decision.action)
             if decision.engage:
                 agent.engaged = True

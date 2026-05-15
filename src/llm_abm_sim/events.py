@@ -5,6 +5,7 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 from .decision import EngageDecision, EngagementAction
+from .trace import DecisionTraceSummary
 
 
 class ExposureEvent(BaseModel):
@@ -25,6 +26,7 @@ class DecisionEvent(BaseModel):
     time_step: int = Field(ge=0)
     user_id: str
     decision: EngageDecision
+    trace_summary: DecisionTraceSummary | None = None
     event_type: Literal["decision"] = "decision"
 
 

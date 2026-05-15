@@ -29,6 +29,8 @@
 - [Dataset and Profile Ingestion](./dataset-ingestion.md) - Dataset schema examples, validation policies, and config-relative path rules
 - [Test Strategy](./test-strategy.md) - Test layers and acceptance coverage
 - [Provider Config](./provider-config.md) - Secret-safe Codex/sub2api manual live gate
+- [Product Demo](./product-demo.md) - 90% local prototype demo flow and review checklist
+- [Requirements Alignment](./requirements-alignment.md) - Obsidian six-layer alignment and simplification notes
 
 ### Existing Planning/Analysis Docs
 
@@ -90,7 +92,7 @@ Reference: `provider-config.md`, `decision.py`, `provider_config.py`, `tests/uni
 
 ### When changing browser/report behavior
 
-Reference: `outputs.py`, `tests/playwright/report-smoke.spec.ts`, `playwright.config.ts`.
+Reference: `report_payload.py`, `report_i18n.py`, `input_builder.py`, `outputs.py`, `tests/playwright/report-smoke.spec.ts`, `playwright.config.ts`.
 
 ---
 

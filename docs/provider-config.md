@@ -50,7 +50,7 @@ Safety rules:
 - `fail_closed_action: no_engage` returns an `ignore` decision only when explicitly configured.
 - `fail_closed_action: skip_run` is a fail-closed run-level stop signal and is rejected before a normal runner starts partial simulation work.
 - Codex/sub2api reuse prefers Codex provider metadata and can read the minimum runtime credential from Codex auth at call time only for `requires_openai_auth=true`; otherwise use the configured API-key environment fallback.
-- Serialized provider metadata is allowlisted to provider name, base URL, wire API, model, auth-required/readiness booleans, and adapter version fields. Free-form provider dictionaries, headers, tokens, cookies, and auth file contents are never serialized.
+- Serialized provider metadata is allowlisted to provider name, sanitized base URL, wire API, model, adapter name/version, auth-required/readiness booleans, fail-closed action, prompt/schema version, provider decision count, and decision source summary. Free-form provider dictionaries, headers, tokens, cookies, auth file contents, raw prompts, raw responses, and credential paths are never serialized.
 
 
 Codex-config-backed live smoke:

@@ -52,12 +52,17 @@ Expected artifacts include:
 - `metrics_summary.json`
 - `step_records.csv`
 - `report.html`
+- `report_payload.json`
+- `graph_trace.json`
+- `input-builder.html`
+
+The report is bilingual (`en-US` / `zh-CN`) and includes explanatory sections, metric meanings, provider/decision-source evidence, and an Agent input/output inspector in the graph trace panel. `input-builder.html` is a static offline config builder/template that can be opened without a server.
 
 Dataset-backed fixture run:
 
 ```bash
 . .venv/bin/activate
-python -m llm_abm_sim.run --config configs/fixtures/toy_dataset.yaml --output runs/toy-dataset
+python -m llm_abm_sim.run --config configs/fixtures/realistic_marketing_dataset.yaml --output runs/realistic-sample
 ```
 
 Dataset-backed runs also write `dataset_validation.json`, which records resolved edge/profile paths, graph/profile counts, validation policies, and missing/extra profile diagnostics. Relative `dataset.edge_list_path` and `dataset.profile_path` values are resolved against the directory containing the config file; absolute paths are normalized and remain absolute. See `docs/dataset-ingestion.md` for CSV/JSON schema examples.
@@ -72,6 +77,7 @@ mypy src
 pytest -q
 python -m py_compile $(find src tests -name '*.py' -print)
 python -m llm_abm_sim.run --config configs/default.yaml --output runs/sample
+python -m llm_abm_sim.run --config configs/fixtures/realistic_marketing_dataset.yaml --output runs/realistic-sample
 npx playwright test
 ```
 
@@ -112,3 +118,5 @@ See:
 - `docs/dataset-ingestion.md`
 - `docs/test-strategy.md`
 - `docs/provider-config.md`
+- `docs/product-demo.md`
+- `docs/requirements-alignment.md`

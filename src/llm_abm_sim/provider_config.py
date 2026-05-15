@@ -11,6 +11,7 @@ import tomllib
 
 SECRET_KEYS = ("api_key", "token", "secret", "password", "credential", "auth", "bearer")
 SAFE_METADATA_KEYS = {"api_key_env", "requires_openai_auth", "auth_available"}
+SECRET_VALUE_PLACEHOLDER = "<redacted>"
 
 
 @dataclass(frozen=True)
@@ -161,14 +162,14 @@ def redact_secrets(value: Any) -> Any:
         redacted: dict[str, Any] = {}
         for key, item in value.items():
             if key.lower() not in SAFE_METADATA_KEYS and any(secret in key.lower() for secret in SECRET_KEYS):
-                redacted[key] = "<redacted>"
+                redacted[key] = SECRET_VALUE_PLACEHOLDER
             else:
                 redacted[key] = redact_secrets(item)
         return redacted
     if isinstance(value, list):
         return [redact_secrets(item) for item in value]
     if isinstance(value, str) and ("Bearer " in value or value.startswith("sk-")):
-        return "<redacted>"
+        return SECRET_VALUE_PLACEHOLDER
     return value
 
 

@@ -121,6 +121,8 @@ class CachedDecisionAdapter(LLMDecisionAdapter):
 class RuleBasedDecisionAdapter(LLMDecisionAdapter):
     """Deterministic baseline before adding real LLM calls."""
 
+    prompt_version = "engage-v1"
+
     def decide(
         self,
         post: PostContent,

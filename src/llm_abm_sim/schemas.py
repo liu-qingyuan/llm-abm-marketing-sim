@@ -2,10 +2,18 @@ from __future__ import annotations
 
 from enum import Enum
 from pathlib import Path
+from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from .provider_config import sanitize_url
+
+SupportedLanguage = Literal["en-US", "zh-CN"]
+SUPPORTED_LANGUAGES: tuple[SupportedLanguage, ...] = ("en-US", "zh-CN")
+
+
+def default_available_languages() -> list[SupportedLanguage]:
+    return ["en-US", "zh-CN"]
 
 
 class PostContent(BaseModel):
@@ -127,6 +135,19 @@ class ReportConfig(BaseModel):
     """Output/report generation options."""
 
     title: str = "LLM-ABM Simulation Report"
+    default_language: SupportedLanguage = "en-US"
+    available_languages: list[SupportedLanguage] = Field(default_factory=default_available_languages)
+
+    @field_validator("available_languages")
+    @classmethod
+    def _validate_languages(cls, value: list[SupportedLanguage]) -> list[SupportedLanguage]:
+        if not value:
+            raise ValueError("report.available_languages must not be empty")
+        deduped = list(dict.fromkeys(value))
+        for required in SUPPORTED_LANGUAGES:
+            if required not in deduped:
+                raise ValueError(f"report.available_languages must include {required}")
+        return deduped
 
 
 class FailClosedAction(str, Enum):
