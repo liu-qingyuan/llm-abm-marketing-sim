@@ -36,6 +36,7 @@ const I18N = {
     seedUsers:'Seed users',
     seedHelp:'Comma-separated user IDs that receive the initial campaign exposure. Validate again if you change files.',
     validate:'Validate dataset',
+    validateBusy:'Validating…',
     template:'Download template',
     scenarioKicker:'Campaign scenario',
     runTitle:'2. Scenario and run',
@@ -60,6 +61,8 @@ const I18N = {
     runSucceeded:'Run succeeded. Results dashboard is ready.',
     runPolling:'Run is still processing…',
     startRun:'Start run',
+    startRunBusy:'Starting run…',
+    startRunPolling:'Waiting for run…',
     resultsTitle:'3. Results dashboard',
     openReport:'Open generated report',
     trendTitle:'Trend chart',
@@ -106,6 +109,7 @@ const I18N = {
     seedUsers:'种子用户',
     seedHelp:'用英文逗号分隔初始曝光用户 ID。更换文件后请重新校验。',
     validate:'校验数据集',
+    validateBusy:'正在校验…',
     template:'下载模板',
     scenarioKicker:'营销场景',
     runTitle:'2. 场景与运行',
@@ -130,6 +134,8 @@ const I18N = {
     runSucceeded:'运行成功。结果仪表盘已就绪。',
     runPolling:'运行仍在处理中…',
     startRun:'开始运行',
+    startRunBusy:'正在启动运行…',
+    startRunPolling:'等待运行完成…',
     resultsTitle:'3. 结果仪表盘',
     openReport:'打开生成报告',
     trendTitle:'趋势图',
@@ -145,6 +151,9 @@ let validationId = null;
 let validationPayload = null;
 let lastReport = null;
 let lastReadiness = null;
+let isValidating = false;
+let isRunning = false;
+let runBusyKey = 'startRunBusy';
 
 function t(key){ return (I18N[currentLang]||I18N['en-US'])[key] || key; }
 function applyI18n(){
@@ -152,11 +161,31 @@ function applyI18n(){
   document.querySelectorAll('[data-i18n]').forEach(el=>{el.textContent=t(el.dataset.i18n)});
   if(lastReadiness) renderReadiness(lastReadiness);
   updateRunPrereqStatus();
+  updateActionStates();
   if(lastReport) renderReport(lastReport);
 }
 function announce(text){ document.getElementById('live-status').textContent = text; }
 function setPanel(id, text){ document.getElementById(id).textContent = text; if(text) announce(text.split('\n')[0]); }
 function safeJson(value){ return JSON.stringify(value, null, 2); }
+function setButtonState(button, { disabled, busy, labelKey }){
+  if(!button) return;
+  button.disabled = disabled;
+  button.setAttribute('aria-busy', busy ? 'true' : 'false');
+  button.classList.toggle('is-loading', Boolean(busy));
+  button.textContent = t(labelKey);
+}
+function updateActionStates(){
+  setButtonState(document.getElementById('validate-button'), {
+    disabled: isValidating,
+    busy: isValidating,
+    labelKey: isValidating ? 'validateBusy' : 'validate'
+  });
+  setButtonState(document.getElementById('run-button'), {
+    disabled: !validationId || isRunning,
+    busy: isRunning,
+    labelKey: isRunning ? runBusyKey : 'startRun'
+  });
+}
 
 async function refreshReadiness(){
   const mock = document.getElementById('mock-provider').checked;
@@ -212,27 +241,40 @@ document.getElementById('dataset-form').addEventListener('submit', async e => {
   e.preventDefault();
   const form = e.currentTarget;
   const fd = new FormData(form);
+  if(isValidating) return;
   validationId = null;
   validationPayload = null;
+  isValidating = true;
   updateRunPrereqStatus();
+  updateActionStates();
   setPanel('validation-output', t('validationWorking'));
-  const res = await fetch('/api/datasets/validate', { method:'POST', body: fd });
-  const data = await res.json();
-  if(!res.ok || !data.valid){
-    setPanel('validation-output', `${t('validationFailed')}\n${safeJson(data.error || data)}`);
+  try {
+    const res = await fetch('/api/datasets/validate', { method:'POST', body: fd });
+    const data = await res.json();
+    if(!res.ok || !data.valid){
+      setPanel('validation-output', `${t('validationFailed')}\n${safeJson(data.error || data)}`);
+      return;
+    }
+    validationId = data.validation_id;
+    validationPayload = data.dataset_validation;
+    setPanel('validation-output', `${t('validationReady')} validation_id=${validationId}\nprofiles=${data.preview.profile_count} edges=${data.preview.edge_count}\n` + safeJson(data.preview));
+  } catch (error) {
+    setPanel('validation-output', `${t('validationFailed')}\n${error.message || String(error)}`);
+  } finally {
+    isValidating = false;
     updateRunPrereqStatus();
-    return;
+    updateActionStates();
   }
-  validationId = data.validation_id;
-  validationPayload = data.dataset_validation;
-  setPanel('validation-output', `${t('validationReady')} validation_id=${validationId}\nprofiles=${data.preview.profile_count} edges=${data.preview.edge_count}\n` + safeJson(data.preview));
-  updateRunPrereqStatus();
 });
 
 document.getElementById('run-form').addEventListener('submit', async e => {
   e.preventDefault();
-  if(!validationId){ setPanel('run-output', t('validationFirst')); updateRunPrereqStatus(); return; }
+  if(isRunning) return;
+  if(!validationId){ setPanel('run-output', t('validationFirst')); updateRunPrereqStatus(); updateActionStates(); return; }
   const mock = document.getElementById('mock-provider').checked;
+  isRunning = true;
+  runBusyKey = 'startRunBusy';
+  updateActionStates();
   setPanel('run-output', t('runCreating'));
   const seedUsers = document.querySelector('[name="seed_user_ids"]').value;
   const payload = {
@@ -249,18 +291,29 @@ document.getElementById('run-form').addEventListener('submit', async e => {
       report_title: currentLang === 'zh-CN' ? 'LLM-ABM 本地 Web 控制台报告' : 'LLM-ABM Local Web Console Report'
     }
   };
-  const res = await fetch('/api/runs', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload) });
-  let job = await res.json();
-  setPanel('run-output', formatRunStatus(job));
-  if(job.run_id && (job.state === 'queued' || job.state === 'running')){
-    job = await pollRun(job.run_id);
-  }
-  if(job.state === 'blocked' || job.state === 'failed') setPanel('run-output', formatRunStatus(job));
-  if(job.state === 'succeeded'){
-    const report = await (await fetch(`/api/runs/${job.run_id}/report-payload`)).json();
-    lastReport = report;
-    document.getElementById('report-link').href = `/api/runs/${job.run_id}/artifact/report.html`;
-    renderReport(report);
+  try {
+    const res = await fetch('/api/runs', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload) });
+    let job = await res.json();
+    setPanel('run-output', formatRunStatus(job));
+    if(job.run_id && (job.state === 'queued' || job.state === 'running')){
+      runBusyKey = 'startRunPolling';
+      updateActionStates();
+      job = await pollRun(job.run_id);
+    }
+    if(job.state === 'blocked' || job.state === 'failed') setPanel('run-output', formatRunStatus(job));
+    if(job.state === 'succeeded'){
+      const report = await (await fetch(`/api/runs/${job.run_id}/report-payload`)).json();
+      lastReport = report;
+      document.getElementById('report-link').href = `/api/runs/${job.run_id}/artifact/report.html`;
+      renderReport(report);
+    }
+  } catch (error) {
+    setPanel('run-output', `${t('runFailed')}
+${error.message || String(error)}`);
+  } finally {
+    isRunning = false;
+    runBusyKey = 'startRunBusy';
+    updateActionStates();
   }
 });
 
@@ -337,4 +390,6 @@ function renderAgentIO(trace){
   }
 }
 
-applyI18n(); refreshReadiness();
+applyI18n();
+updateActionStates();
+refreshReadiness();

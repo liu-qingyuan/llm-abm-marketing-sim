@@ -65,7 +65,7 @@
           <input data-testid="seed-users-input" name="seed_user_ids" value="u1" placeholder="u1,u2" aria-describedby="seed-help">
           <p id="seed-help" class="helper-text" data-i18n="seedHelp">Comma-separated user IDs that receive the initial campaign exposure. Validate again if you change files.</p>
         </div>
-        <div class="actions"><button data-testid="validate-dataset" type="submit" data-i18n="validate">Validate dataset</button><a class="secondary-link" href="/api/templates/users.csv" data-i18n="template">Download template</a></div>
+        <div class="actions"><button id="validate-button" data-testid="validate-dataset" type="submit" data-i18n="validate" aria-describedby="validation-output">Validate dataset</button><a class="secondary-link" href="/api/templates/users.csv" data-i18n="template">Download template</a></div>
         <div id="validation-output" data-testid="validation-output" class="panel compact-panel" role="status" aria-live="polite" aria-atomic="true"></div>
       </form>
 
@@ -91,7 +91,7 @@
           <input data-testid="horizon" id="horizon" type="number" min="1" max="30" value="4" aria-describedby="horizon-help">
           <p id="horizon-help" class="helper-text" data-i18n="horizonHelp">Number of propagation steps to simulate. Keep small for fast local review; allowed range is 1–30.</p>
         </div>
-        <div class="actions"><button data-testid="start-run" type="submit" data-i18n="startRun">Start run</button></div>
+        <div class="actions"><button id="run-button" data-testid="start-run" type="submit" data-i18n="startRun" aria-describedby="run-prereq-status run-output">Start run</button></div>
         <p id="run-prereq-status" data-testid="run-prereq-status" class="helper-text status-detail" role="status" aria-live="polite" aria-atomic="true" data-i18n="runPrereq">Validate a dataset first, then choose product or mock provider mode before starting a run.</p>
         <div id="run-output" data-testid="run-output" class="panel compact-panel" role="status" aria-live="polite" aria-atomic="true"></div>
       </form>

@@ -509,6 +509,34 @@ button:disabled {
   cursor: not-allowed;
 }
 
+button.is-loading {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+}
+
+button.is-loading::before {
+  content: '';
+  inline-size: 0.9em;
+  block-size: 0.9em;
+  border: 2px solid rgb(255 255 255 / 48%);
+  border-top-color: white;
+  border-radius: 999px;
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  button.is-loading::before {
+    animation: none;
+  }
+}
+
 a {
   color: var(--color-primary);
   font-weight: 700;

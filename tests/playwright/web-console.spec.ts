@@ -53,6 +53,17 @@ test('local web console validates uploads, runs mock provider, renders rich bili
       { source: 'u2', target: 'u3', weight: 0.5, relationship: 'follow' },
     ] }));
 
+    await page.route('**/api/datasets/validate', async route => {
+      await new Promise(resolve => setTimeout(resolve, 350));
+      await route.continue();
+    });
+    await page.route('**/api/runs', async route => {
+      if (route.request().method() === 'POST') {
+        await new Promise(resolve => setTimeout(resolve, 350));
+      }
+      await route.continue();
+    });
+
     await page.goto(baseURL);
     await expect(page.getByTestId('web-console')).toBeVisible();
     await page.getByTestId('mock-provider-toggle').check();
@@ -60,13 +71,25 @@ test('local web console validates uploads, runs mock provider, renders rich bili
 
     await page.getByTestId('users-file').setInputFiles(usersPath);
     await page.getByTestId('edges-file').setInputFiles(edgesPath);
+    await expect(page.getByTestId('start-run')).toBeDisabled();
     await page.getByTestId('validate-dataset').click();
+    await expect(page.getByTestId('validate-dataset')).toBeDisabled();
+    await expect(page.getByTestId('validate-dataset')).toHaveAttribute('aria-busy', 'true');
     await expect(page.getByTestId('validation-output')).toContainText('profiles=3');
     await expect(page.getByTestId('validation-output')).toContainText('edges=2');
     await expect(page.getByTestId('validation-output')).not.toContainText('authorization');
+    await expect(page.getByTestId('validate-dataset')).toBeEnabled();
+    await expect(page.getByTestId('validate-dataset')).toHaveAttribute('aria-busy', 'false');
+    await expect(page.getByTestId('start-run')).toBeEnabled();
 
+    const runResponse = page.waitForResponse(response => response.url().endsWith('/api/runs') && response.request().method() === 'POST');
     await page.getByTestId('start-run').click();
+    await expect(page.getByTestId('start-run')).toBeDisabled();
+    await expect(page.getByTestId('start-run')).toHaveAttribute('aria-busy', 'true');
+    await expect((await runResponse).request().postDataJSON()).toMatchObject({ mock_provider: true });
     await expect(page.getByTestId('run-output')).toContainText('succeeded', { timeout: 20_000 });
+    await expect(page.getByTestId('start-run')).toBeEnabled();
+    await expect(page.getByTestId('start-run')).toHaveAttribute('aria-busy', 'false');
     await expect(page.getByTestId('results-section')).toBeVisible();
     await expect(page.getByTestId('metric-cards')).toContainText('final_engaged');
     await expect(page.getByTestId('trend-chart')).toBeVisible();
