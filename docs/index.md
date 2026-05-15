@@ -1,9 +1,9 @@
 # llm-abm-marketing-sim Documentation Index
 
-**Type:** Monolith Python library/CLI with Playwright report smoke tests  
+**Type:** Monolith Python library/CLI with local Web console and Playwright browser tests  
 **Primary Language:** Python  
 **Architecture:** Lightweight custom ABM core + NetworkX + Pydantic + adapter/cache boundaries  
-**Last Updated:** 2026-05-14T11:55:12Z
+**Last Updated:** 2026-05-16T00:00:00+08:00
 
 ## Project Overview
 
@@ -12,10 +12,11 @@
 ## Quick Reference
 
 - **Tech Stack:** Python 3.10+, Pydantic, NetworkX, PyYAML, pandas, pytest, ruff, mypy, Playwright
-- **Entry Point:** `python -m llm_abm_sim.run --config configs/default.yaml --output runs/sample`
+- **CLI Entry Point:** `python -m llm_abm_sim.run --config configs/default.yaml --output runs/sample`
+- **Web Console Entry Point:** `python -m llm_abm_sim.web --host 127.0.0.1 --port 8000 --artifact-root runs/web`
 - **Architecture Pattern:** Event-sourced custom ABM runtime with provider-agnostic decision adapter
 - **Database:** None in MVP; future DecisionCache persistence may use SQLite/DuckDB
-- **Deployment:** Local library/CLI scaffold; no production service or web app
+- **Deployment:** Local library/CLI plus single-user FastAPI Web console; no production multi-user service
 
 ## Generated Documentation
 
@@ -25,6 +26,7 @@
 - [Architecture](./architecture.md) - Technical architecture and Obsidian contract mapping
 - [Source Tree Analysis](./source-tree-analysis.md) - Annotated directory structure
 - [Component Inventory](./component-inventory.md) - Catalog of major runtime/test components
+- [Getting Started on macOS](./getting-started-macos.md) - Canonical from-zero macOS setup, CLI/Web console runs, mock provider, optional live LLM gate, artifacts, troubleshooting, and cleanup
 - [Development Guide](./development-guide.md) - Local setup and development workflow
 - [Dataset and Profile Ingestion](./dataset-ingestion.md) - Dataset schema examples, validation policies, and config-relative path rules
 - [Test Strategy](./test-strategy.md) - Test layers and acceptance coverage
@@ -42,14 +44,14 @@
 
 ### Prerequisites
 
-Python 3.10+, Node.js 18+, npm.
+Python 3.10+, Node.js 18+, npm. For a true fresh macOS setup, follow [Getting Started on macOS](./getting-started-macos.md).
 
 ### Setup
 
 ```bash
 . .venv/bin/activate
-python -m pip install -e ".[dev]"
-npm install
+python -m pip install -e ".[dev,web,llm]"
+npm ci
 npx playwright install chromium
 ```
 
@@ -57,7 +59,11 @@ npx playwright install chromium
 
 ```bash
 python -m llm_abm_sim.run --config configs/default.yaml --output runs/sample
+python -m llm_abm_sim.run --config configs/fixtures/realistic_marketing_dataset.yaml --output runs/realistic-sample
+python -m llm_abm_sim.web --host 127.0.0.1 --port 8000 --artifact-root runs/web
 ```
+
+Open the Web console at `http://127.0.0.1:8000`. The default CLI and Web mock-provider development paths are offline and deterministic. Product-mode Web runs fail closed unless the explicit live gate, provider readiness metadata, and credentials are present.
 
 ### Run Tests
 
@@ -92,7 +98,7 @@ Reference: `provider-config.md`, `decision.py`, `provider_config.py`, `tests/uni
 
 ### When changing browser/report behavior
 
-Reference: `report_payload.py`, `report_i18n.py`, `input_builder.py`, `outputs.py`, `tests/playwright/report-smoke.spec.ts`, `playwright.config.ts`.
+Reference: `web_app.py`, `web_static/`, `report_payload.py`, `report_i18n.py`, `input_builder.py`, `outputs.py`, `tests/web/test_web_api.py`, `tests/playwright/web-console.spec.ts`, `tests/playwright/report-smoke.spec.ts`, `playwright.config.ts`.
 
 ---
 
