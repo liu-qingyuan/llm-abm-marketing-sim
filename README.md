@@ -12,6 +12,26 @@ The design goal is not a generic autonomous agent framework. The core is a repro
 - **Simulation**: multi-step post diffusion process over a graph.
 - **Outputs**: structured event/run-result artifacts, metrics summary, and a static HTML report shell.
 
+## Quickstart on macOS
+
+For a true from-zero macOS walkthrough, use the canonical guide: [`docs/getting-started-macos.md`](docs/getting-started-macos.md). The short path for a fresh clone is:
+
+```bash
+python3 -m venv .venv
+. .venv/bin/activate
+python -m pip install -U pip
+python -m pip install -e ".[dev,web,llm]"
+npm ci
+npx playwright install chromium
+
+python -m llm_abm_sim.run --config configs/default.yaml --output runs/sample
+python -m llm_abm_sim.run --config configs/fixtures/realistic_marketing_dataset.yaml --output runs/realistic-sample
+python -m llm_abm_sim.web --host 127.0.0.1 --port 8000 --artifact-root runs/web
+```
+
+Open the Web console at `http://127.0.0.1:8000`. The default CLI and mock-provider development paths are offline and deterministic; live LLM calls require the explicit `LLM_ABM_RUN_LIVE_LLM=1` gate plus credentials.
+
+
 ## Recommended Stack
 
 - Python src-layout package under `src/llm_abm_sim`.
@@ -20,27 +40,24 @@ The design goal is not a generic autonomous agent framework. The core is a repro
 - Pandas for later analysis/export work.
 - Pytest for unit/integration/E2E tests.
 - Ruff and mypy for lint/format/type checks.
-- Playwright for a minimal static report smoke test only.
+- Playwright for browser validation of the Web console and generated report surfaces.
 
-## Setup
+## Setup variants
+
+The macOS quickstart above installs the full local stack. For a minimal CLI-only development install:
 
 ```bash
-python -m venv .venv
+python3 -m venv .venv
 . .venv/bin/activate
+python -m pip install -U pip
 python -m pip install -e ".[dev]"
 ```
 
-
-For the optional local Web console:
-
-```bash
-python -m pip install -e ".[dev,web]"
-```
-
-Browser smoke tests need Node dependencies and a browser install:
+Add `web` for the local FastAPI/Uvicorn Web console and `llm` for explicitly gated live-provider experiments:
 
 ```bash
-npm install
+python -m pip install -e ".[dev,web,llm]"
+npm ci
 npx playwright install chromium
 ```
 
@@ -131,6 +148,7 @@ This scaffold maps the Obsidian knowledge-base requirements into executable code
 
 See:
 
+- `docs/getting-started-macos.md`
 - `docs/architecture.md`
 - `docs/simulation-flow.md`
 - `docs/framework-analysis.md`
