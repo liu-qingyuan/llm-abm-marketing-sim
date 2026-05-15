@@ -63,10 +63,56 @@ const I18N = {
     startRun:'Start run',
     startRunBusy:'Starting run…',
     startRunPolling:'Waiting for run…',
+    resultsKicker:'Executive view',
     resultsTitle:'3. Results dashboard',
+    resultsHelp:'Start with the narrative, then inspect metrics, trends, and node-level evidence.',
     openReport:'Open generated report',
+    executiveSummaryTitle:'Executive summary',
+    executiveWhatHappened:'What happened',
+    executiveReach:'Reach',
+    executiveEngagement:'Engagement',
+    executiveSource:'Decision source',
+    executiveNext:'Inspect the trend, timeline, and Agent I/O cards next.',
+    metricsTitle:'Key metrics',
+    metricsHelp:'Each card explains what the metric means and how to read the value.',
     trendTitle:'Trend chart',
+    trendSummary:'Trend summary',
+    trendTableSummary:'Show accessible trend table',
     networkTitle:'Network propagation timeline',
+    selectedStepLabel:'Selected time step',
+    selectedStepSummary:'Step {step}: {exposed} exposed, {engaged} engaged, {newExposed} newly exposed, {newEngaged} newly engaged.',
+    selectedStepEmpty:'Step {step}: no recorded exposures or engagements yet.',
+    legendExposed:'Exposed',
+    legendEngaged:'Engaged',
+    legendUnseen:'Unseen',
+    legendSeed:'Seed',
+    metric_total_agents_label:'Total agents',
+    metric_total_agents_desc:'Users represented in the social graph.',
+    metric_final_exposed_label:'Final exposed',
+    metric_final_exposed_desc:'Unique users reached by the final step.',
+    metric_final_engaged_label:'Final engaged',
+    metric_final_engaged_desc:'Unique users who engaged by the final step.',
+    metric_reach_rate_label:'Reach rate',
+    metric_reach_rate_desc:'Final exposed users divided by total agents.',
+    metric_engagement_rate_label:'Engagement rate',
+    metric_engagement_rate_desc:'Final engaged users divided by final exposed users.',
+    metric_diffusion_depth_label:'Diffusion depth',
+    metric_diffusion_depth_desc:'Deepest social-hop depth reached by engaged users.',
+    metric_spread_speed_label:'Spread speed',
+    metric_spread_speed_desc:'Average new exposures per simulation step.',
+    metric_like_count_label:'Likes',
+    metric_like_count_desc:'Number of like actions observed.',
+    metric_comment_count_label:'Comments',
+    metric_comment_count_desc:'Number of comment actions observed.',
+    metric_share_count_label:'Shares',
+    metric_share_count_desc:'Number of share actions observed.',
+    metric_key_influencers_label:'Key influencers',
+    metric_key_influencers_desc:'Users with the strongest downstream influence signals.',
+    trendTableStep:'Step',
+    trendTableExposed:'Exposed',
+    trendTableEngaged:'Engaged',
+    trendTableNewExposed:'New exposed',
+    trendTableNewEngaged:'New engaged',
     datasetTitle:'Dataset validation',
     providerEvidence:'Provider evidence',
     agentIO:'Agent I/O inspector',
@@ -136,10 +182,56 @@ const I18N = {
     startRun:'开始运行',
     startRunBusy:'正在启动运行…',
     startRunPolling:'等待运行完成…',
+    resultsKicker:'执行视图',
     resultsTitle:'3. 结果仪表盘',
+    resultsHelp:'先阅读叙事摘要，再检查指标、趋势和节点级证据。',
     openReport:'打开生成报告',
+    executiveSummaryTitle:'执行摘要',
+    executiveWhatHappened:'发生了什么',
+    executiveReach:'覆盖',
+    executiveEngagement:'互动',
+    executiveSource:'决策来源',
+    executiveNext:'下一步查看趋势、时间线与 Agent 输入/输出卡片。',
+    metricsTitle:'核心指标',
+    metricsHelp:'每张卡片都会说明指标含义与数值解读方式。',
     trendTitle:'趋势图',
+    trendSummary:'趋势摘要',
+    trendTableSummary:'显示无障碍趋势表格',
     networkTitle:'网络传播时间线',
+    selectedStepLabel:'所选时间步',
+    selectedStepSummary:'第 {step} 步：{exposed} 个已曝光，{engaged} 个已互动，{newExposed} 个新增曝光，{newEngaged} 个新增互动。',
+    selectedStepEmpty:'第 {step} 步：尚无已记录曝光或互动。',
+    legendExposed:'已曝光',
+    legendEngaged:'已互动',
+    legendUnseen:'未触达',
+    legendSeed:'种子用户',
+    metric_total_agents_label:'Agent 总数',
+    metric_total_agents_desc:'社交图中建模的用户数。',
+    metric_final_exposed_label:'最终曝光',
+    metric_final_exposed_desc:'最终时间步已触达的唯一用户数。',
+    metric_final_engaged_label:'最终互动',
+    metric_final_engaged_desc:'最终时间步已发生互动的唯一用户数。',
+    metric_reach_rate_label:'覆盖率',
+    metric_reach_rate_desc:'最终曝光用户数除以总 Agent 数。',
+    metric_engagement_rate_label:'互动率',
+    metric_engagement_rate_desc:'最终互动用户数除以最终曝光用户数。',
+    metric_diffusion_depth_label:'传播深度',
+    metric_diffusion_depth_desc:'已互动用户达到的最深社交跳数。',
+    metric_spread_speed_label:'扩散速度',
+    metric_spread_speed_desc:'每个时间步平均新增曝光数。',
+    metric_like_count_label:'点赞数',
+    metric_like_count_desc:'观察到的点赞动作次数。',
+    metric_comment_count_label:'评论数',
+    metric_comment_count_desc:'观察到的评论动作次数。',
+    metric_share_count_label:'转发数',
+    metric_share_count_desc:'观察到的转发动作次数。',
+    metric_key_influencers_label:'关键影响者',
+    metric_key_influencers_desc:'具备最强下游影响信号的用户。',
+    trendTableStep:'时间步',
+    trendTableExposed:'已曝光',
+    trendTableEngaged:'已互动',
+    trendTableNewExposed:'新增曝光',
+    trendTableNewEngaged:'新增互动',
     datasetTitle:'数据集校验',
     providerEvidence:'Provider 证据',
     agentIO:'Agent 输入/输出检查器',
@@ -167,6 +259,21 @@ function applyI18n(){
 function announce(text){ document.getElementById('live-status').textContent = text; }
 function setPanel(id, text){ document.getElementById(id).textContent = text; if(text) announce(text.split('\n')[0]); }
 function safeJson(value){ return JSON.stringify(value, null, 2); }
+function formatTemplate(template, values){
+  return template.replace(/\{(\w+)\}/g, (_, key) => values[key] ?? '');
+}
+function formatValue(value){
+  if(Array.isArray(value)) return value.join(', ') || 'n/a';
+  if(value && typeof value === 'object') return JSON.stringify(value);
+  if(typeof value === 'number' && !Number.isInteger(value)) return String(Math.round(value * 1000) / 1000);
+  return String(value ?? 'n/a');
+}
+function metricLabel(key){ return t(`metric_${key}_label`) || key.replace(/_/g, ' '); }
+function metricDescription(key){ return t(`metric_${key}_desc`) || ''; }
+function metricValue(report, key, fallback = 0){
+  const metric = (report.metrics || []).find(item => item.key === key);
+  return metric ? metric.value : fallback;
+}
 function setButtonState(button, { disabled, busy, labelKey }){
   if(!button) return;
   button.disabled = disabled;
@@ -338,13 +445,8 @@ function formatRunStatus(job){
 
 function renderReport(report){
   document.getElementById('results').classList.remove('hidden');
-  const metrics = document.getElementById('metrics');
-  metrics.innerHTML = '';
-  for(const metric of report.metrics || []){
-    const div = document.createElement('div'); div.className='metric';
-    div.innerHTML = `<span>${metric.key}</span><strong>${Array.isArray(metric.value)?metric.value.join(', '):JSON.stringify(metric.value).replace(/^"|"$/g,'')}</strong>`;
-    metrics.appendChild(div);
-  }
+  renderExecutiveSummary(report);
+  renderMetrics(report.metrics || []);
   renderTrend(report.trend || []);
   renderNetwork(report.graph_trace || {});
   document.getElementById('dataset-summary').textContent = safeJson(report.dataset_validation || validationPayload || {});
@@ -354,27 +456,100 @@ function renderReport(report){
   const influencers = (report.graph_trace?.run?.key_influencers || influencerMetric || report.metrics?.find(m=>m.key==='share_count')?.value || []);
   document.getElementById('influencers').textContent = Array.isArray(influencers) ? (influencers.join(', ') || 'n/a') : String(influencers || 'n/a');
 }
-function renderTrend(trend){
-  const root = document.getElementById('trend'); root.innerHTML='';
-  const max = Math.max(1, ...trend.map(s=>Math.max(s.exposed_count||0, s.engaged_count||0)));
-  for(const step of trend){
-    const row=document.createElement('div'); row.className='bar-row';
-    row.innerHTML = `<span>Step ${step.time_step}</span><div><div class="bar-track"><div class="bar" style="width:${((step.exposed_count||0)/max)*100}%"></div></div><div class="bar-track"><div class="bar" style="width:${((step.engaged_count||0)/max)*100}%;background:linear-gradient(90deg,#11845b,#46c2a7)"></div></div></div><span>${step.exposed_count}/${step.engaged_count}</span>`;
-    root.appendChild(row);
+
+function renderExecutiveSummary(report){
+  const narrative = currentLang === 'zh-CN' ? report.narrative?.summary_zh : report.narrative?.summary_en;
+  const totalAgents = metricValue(report, 'total_agents');
+  const finalExposed = metricValue(report, 'final_exposed');
+  const finalEngaged = metricValue(report, 'final_engaged');
+  const shareCount = metricValue(report, 'share_count');
+  const reachRate = metricValue(report, 'reach_rate');
+  const engagementRate = metricValue(report, 'engagement_rate');
+  const source = report.inputs?.decision_mode || Object.entries(report.decision_source_summary || {}).map(([k,v]) => `${k}=${v}`).join(', ') || 'n/a';
+  const fallback = currentLang === 'zh-CN'
+    ? `本次模拟覆盖 ${finalExposed}/${totalAgents} 个用户，${finalEngaged} 个用户发生互动，转发数 ${shareCount}。`
+    : `This run reached ${finalExposed}/${totalAgents} users, with ${finalEngaged} engaged users and ${shareCount} shares.`;
+  const summary = document.getElementById('executive-summary');
+  summary.textContent = narrative || fallback;
+  const highlights = document.getElementById('executive-highlights');
+  highlights.innerHTML = '';
+  [
+    [t('executiveReach'), `${finalExposed}/${totalAgents} · ${metricLabel('reach_rate')} ${formatValue(reachRate)}`],
+    [t('executiveEngagement'), `${finalEngaged} · ${metricLabel('engagement_rate')} ${formatValue(engagementRate)} · ${metricLabel('share_count')} ${formatValue(shareCount)}`],
+    [t('executiveSource'), `${source}`],
+    [t('executiveWhatHappened'), t('executiveNext')]
+  ].forEach(([label, value]) => {
+    const item = document.createElement('li');
+    item.innerHTML = `<span>${label}</span><strong>${value}</strong>`;
+    highlights.appendChild(item);
+  });
+}
+
+function renderMetrics(metricList){
+  const metrics = document.getElementById('metrics');
+  metrics.innerHTML = '';
+  for(const metric of metricList){
+    const div = document.createElement('article');
+    div.className = 'metric';
+    div.setAttribute('aria-label', `${metricLabel(metric.key)}: ${formatValue(metric.value)}. ${metricDescription(metric.key)}`);
+    div.innerHTML = `<span class="sr-only">${metric.key}</span><span>${metricLabel(metric.key)}</span><strong>${formatValue(metric.value)}</strong><p>${metricDescription(metric.key)}</p>`;
+    metrics.appendChild(div);
   }
 }
+
+function renderTrend(trend){
+  const root = document.getElementById('trend'); root.innerHTML='';
+  const summary = document.getElementById('trend-summary');
+  const max = Math.max(1, ...trend.map(s=>Math.max(s.exposed_count||0, s.engaged_count||0)));
+  const finalStep = trend[trend.length - 1] || {};
+  const peakNewEngaged = trend.reduce((best, step) => (step.new_engaged_count || 0) > (best.new_engaged_count || 0) ? step : best, {});
+  summary.textContent = currentLang === 'zh-CN'
+    ? `${t('trendSummary')}：最终第 ${finalStep.time_step ?? 0} 步有 ${finalStep.exposed_count ?? 0} 个曝光、${finalStep.engaged_count ?? 0} 个互动；新增互动峰值在第 ${peakNewEngaged.time_step ?? 0} 步。`
+    : `${t('trendSummary')}: final step ${finalStep.time_step ?? 0} has ${finalStep.exposed_count ?? 0} exposed and ${finalStep.engaged_count ?? 0} engaged; peak new engagement occurs at step ${peakNewEngaged.time_step ?? 0}.`;
+  root.setAttribute('aria-label', summary.textContent);
+  for(const step of trend){
+    const row=document.createElement('div'); row.className='bar-row';
+    const label = currentLang === 'zh-CN' ? `第 ${step.time_step} 步` : `Step ${step.time_step}`;
+    row.innerHTML = `<span>${label}</span><div><div class="bar-track" aria-label="${t('legendExposed')} ${step.exposed_count||0}"><div class="bar" style="width:${((step.exposed_count||0)/max)*100}%"></div></div><div class="bar-track" aria-label="${t('legendEngaged')} ${step.engaged_count||0}"><div class="bar engaged" style="width:${((step.engaged_count||0)/max)*100}%"></div></div></div><span>${step.exposed_count}/${step.engaged_count}</span>`;
+    root.appendChild(row);
+  }
+  renderTrendTable(trend);
+}
+
+function renderTrendTable(trend){
+  const root = document.getElementById('trend-table');
+  const rows = trend.map(step => `<tr><td>${step.time_step}</td><td>${step.exposed_count||0}</td><td>${step.engaged_count||0}</td><td>${step.new_exposed_count||0}</td><td>${step.new_engaged_count||0}</td></tr>`).join('');
+  root.innerHTML = `<table><thead><tr><th>${t('trendTableStep')}</th><th>${t('trendTableExposed')}</th><th>${t('trendTableEngaged')}</th><th>${t('trendTableNewExposed')}</th><th>${t('trendTableNewEngaged')}</th></tr></thead><tbody>${rows}</tbody></table>`;
+}
+
 function renderNetwork(trace){
   const slider=document.getElementById('step-slider');
   const maxStep=Math.max(0, ...(trace.steps||[]).map(s=>s.time_step||0));
-  slider.max=String(maxStep); slider.oninput=()=>drawNetwork(trace, Number(slider.value));
+  slider.max=String(maxStep);
+  if(Number(slider.value) > maxStep) slider.value = String(maxStep);
+  slider.oninput=()=>drawNetwork(trace, Number(slider.value));
   drawNetwork(trace, Number(slider.value||0));
 }
 function drawNetwork(trace, step){
   const root=document.getElementById('network'); root.innerHTML='';
+  const stepRecord = (trace.steps || []).find(s => (s.time_step || 0) === step) || {};
+  const summaryText = ((stepRecord.exposed_count || 0) || (stepRecord.engaged_count || 0))
+    ? formatTemplate(t('selectedStepSummary'), {
+        step,
+        exposed: stepRecord.exposed_count || 0,
+        engaged: stepRecord.engaged_count || 0,
+        newExposed: stepRecord.new_exposed_count || 0,
+        newEngaged: stepRecord.new_engaged_count || 0
+      })
+    : formatTemplate(t('selectedStepEmpty'), { step });
+  document.getElementById('selected-step-summary').textContent = summaryText;
+  root.setAttribute('aria-label', summaryText);
   for(const node of trace.nodes || []){
     const entry=(node.timeline||[]).find(x=>x.time_step===step) || {};
-    const div=document.createElement('span'); div.className=`node ${entry.state||'unseen'} ${node.is_seed?'seed':''}`;
-    div.textContent=`${node.id}: ${entry.state||'unseen'}`;
+    const state = entry.state || 'unseen';
+    const div=document.createElement('span'); div.className=`node ${state} ${node.is_seed?'seed':''}`;
+    div.textContent=`${node.id}: ${state}${node.is_seed ? ' · seed' : ''}`;
+    div.setAttribute('aria-label', `${node.id}: ${state}${node.is_seed ? ', seed user' : ''}`);
     root.appendChild(div);
   }
 }
@@ -389,6 +564,7 @@ function renderAgentIO(trace){
     root.appendChild(card);
   }
 }
+
 
 applyI18n();
 updateActionStates();

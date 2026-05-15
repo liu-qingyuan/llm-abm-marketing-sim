@@ -99,19 +99,53 @@
 
     <section id="results" data-testid="results-section" class="card results-dashboard hidden">
       <div class="section-head">
-        <h2 data-i18n="resultsTitle">3. Results</h2>
+        <div>
+          <p class="section-kicker" data-i18n="resultsKicker">Executive view</p>
+          <h2 data-i18n="resultsTitle">3. Results dashboard</h2>
+          <p class="muted" data-i18n="resultsHelp">Start with the narrative, then inspect metrics, trends, and node-level evidence.</p>
+        </div>
         <a id="report-link" data-testid="report-link" target="_blank" rel="noreferrer" data-i18n="openReport">Open generated report</a>
       </div>
-      <div class="metrics" id="metrics" data-testid="metric-cards"></div>
+      <article class="executive-summary" aria-labelledby="executive-summary-title">
+        <div>
+          <h3 id="executive-summary-title" data-i18n="executiveSummaryTitle">Executive summary</h3>
+          <p id="executive-summary" data-testid="executive-summary"></p>
+        </div>
+        <ul id="executive-highlights" data-testid="executive-highlights" class="summary-highlights"></ul>
+      </article>
+      <section aria-labelledby="metrics-heading">
+        <div class="subsection-head">
+          <h3 id="metrics-heading" data-i18n="metricsTitle">Key metrics</h3>
+          <p class="muted" data-i18n="metricsHelp">Each card explains what the metric means and how to read the value.</p>
+        </div>
+        <div class="metrics" id="metrics" data-testid="metric-cards"></div>
+      </section>
       <div class="grid two">
-        <article>
-          <h3 data-i18n="trendTitle">Trend chart</h3>
-          <div id="trend" data-testid="trend-chart" class="trend"></div>
+        <article aria-labelledby="trend-heading">
+          <h3 id="trend-heading" data-i18n="trendTitle">Trend chart</h3>
+          <p id="trend-summary" data-testid="trend-summary" class="helper-text"></p>
+          <div class="chart-legend" aria-label="Trend legend">
+            <span><i class="legend-swatch exposed"></i><span data-i18n="legendExposed">Exposed</span></span>
+            <span><i class="legend-swatch engaged"></i><span data-i18n="legendEngaged">Engaged</span></span>
+          </div>
+          <div id="trend" data-testid="trend-chart" class="trend" role="img" aria-describedby="trend-summary"></div>
+          <details class="table-alt">
+            <summary data-i18n="trendTableSummary">Show accessible trend table</summary>
+            <div id="trend-table" data-testid="trend-table"></div>
+          </details>
         </article>
-        <article>
-          <h3 data-i18n="networkTitle">Network propagation timeline</h3>
-          <input data-testid="web-step-slider" id="step-slider" type="range" min="0" max="0" value="0">
-          <div id="network" data-testid="network-timeline" class="network"></div>
+        <article aria-labelledby="network-heading">
+          <h3 id="network-heading" data-i18n="networkTitle">Network propagation timeline</h3>
+          <p id="selected-step-summary" data-testid="selected-step-summary" class="helper-text" role="status" aria-live="polite" aria-atomic="true"></p>
+          <div class="chart-legend" aria-label="Node state legend">
+            <span><i class="legend-swatch unseen"></i><span data-i18n="legendUnseen">Unseen</span></span>
+            <span><i class="legend-swatch exposed"></i><span data-i18n="legendExposed">Exposed</span></span>
+            <span><i class="legend-swatch engaged"></i><span data-i18n="legendEngaged">Engaged</span></span>
+            <span><i class="legend-outline seed"></i><span data-i18n="legendSeed">Seed</span></span>
+          </div>
+          <label class="slider-label" for="step-slider" data-i18n="selectedStepLabel">Selected time step</label>
+          <input data-testid="web-step-slider" id="step-slider" type="range" min="0" max="0" value="0" aria-describedby="selected-step-summary">
+          <div id="network" data-testid="network-timeline" class="network" role="img" aria-describedby="selected-step-summary"></div>
         </article>
       </div>
       <div class="grid two">
