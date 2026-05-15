@@ -150,9 +150,21 @@
       </div>
       <div class="grid two">
         <article class="panel"><h3 data-i18n="datasetTitle">Dataset validation</h3><pre id="dataset-summary" data-testid="dataset-summary"></pre></article>
-        <article class="panel"><h3 data-i18n="providerEvidence">Provider evidence</h3><pre id="provider-summary" data-testid="provider-summary"></pre></article>
+        <article class="panel evidence-panel" aria-labelledby="provider-evidence-heading">
+          <h3 id="provider-evidence-heading" data-i18n="providerEvidence">Provider evidence</h3>
+          <p class="helper-text" data-i18n="providerEvidenceHelp">Safe summary cards are shown first. Sanitized JSON details are collapsed below.</p>
+          <div id="provider-summary" data-testid="provider-summary" class="evidence-card-grid"></div>
+          <details class="raw-disclosure">
+            <summary data-i18n="showProviderRaw">Show sanitized provider JSON</summary>
+            <pre id="provider-raw" data-testid="provider-raw"></pre>
+          </details>
+        </article>
       </div>
-      <article class="panel"><h3 data-i18n="agentIO">Agent I/O inspector</h3><div id="agent-io" data-testid="agent-io"></div></article>
+      <article class="panel evidence-panel" aria-labelledby="agent-io-heading">
+        <h3 id="agent-io-heading" data-i18n="agentIO">Agent I/O inspector</h3>
+        <p class="helper-text" data-i18n="agentIOHelp">Each decision is summarized first; open details only when sanitized input/output JSON is needed.</p>
+        <div id="agent-io" data-testid="agent-io"></div>
+      </article>
       <article class="panel"><h3 data-i18n="influencers">Key influencers</h3><div id="influencers" data-testid="key-influencers"></div></article>
     </section>
   </main>

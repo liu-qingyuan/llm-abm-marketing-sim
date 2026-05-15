@@ -115,7 +115,26 @@ const I18N = {
     trendTableNewEngaged:'New engaged',
     datasetTitle:'Dataset validation',
     providerEvidence:'Provider evidence',
+    providerEvidenceHelp:'Safe summary cards are shown first. Sanitized JSON details are collapsed below.',
+    showProviderRaw:'Show sanitized provider JSON',
+    providerSourceTitle:'Decision source',
+    providerSourceDesc:'Provider-backed decisions versus other decision paths.',
+    providerModeTitle:'Mode and readiness',
+    providerModeDesc:'Fail-closed product readiness or visibly labeled mock mode.',
+    providerConfigTitle:'Provider config',
+    providerConfigDesc:'Allowlisted provider, model, wire API, and prompt version only.',
+    providerFirstDecisionTitle:'First provider decision',
+    providerFirstDecisionDesc:'First sanitized provider-backed action without raw request or response payloads.',
+    providerNoEvidence:'No provider evidence was reported for this run.',
     agentIO:'Agent I/O inspector',
+    agentIOHelp:'Each decision is summarized first; open details only when sanitized input/output JSON is needed.',
+    agentIORawSummary:'Show sanitized Agent I/O JSON',
+    agentIOEmpty:'No Agent I/O trace summaries were recorded.',
+    agentDecision:'Decision',
+    agentInputs:'Inputs',
+    agentPeer:'Peer context',
+    agentPlatform:'Platform context',
+    agentReason:'Reason',
     influencers:'Key influencers'
   },
   'zh-CN': {
@@ -234,7 +253,26 @@ const I18N = {
     trendTableNewEngaged:'新增互动',
     datasetTitle:'数据集校验',
     providerEvidence:'Provider 证据',
+    providerEvidenceHelp:'优先展示安全摘要卡片；已清洗的 JSON 细节默认折叠在下方。',
+    showProviderRaw:'显示已清洗 Provider JSON',
+    providerSourceTitle:'决策来源',
+    providerSourceDesc:'Provider 驱动决策与其他决策路径的数量。',
+    providerModeTitle:'模式与就绪',
+    providerModeDesc:'产品模式 fail-closed 状态，或明确标记的 Mock 模式。',
+    providerConfigTitle:'Provider 配置',
+    providerConfigDesc:'仅展示白名单中的 provider、模型、wire API 与 prompt 版本。',
+    providerFirstDecisionTitle:'首个 Provider 决策',
+    providerFirstDecisionDesc:'首个已清洗的 Provider 动作，不包含原始请求或响应载荷。',
+    providerNoEvidence:'本次运行未报告 Provider 证据。',
     agentIO:'Agent 输入/输出检查器',
+    agentIOHelp:'每个决策先展示摘要；需要时再展开已清洗的输入/输出 JSON。',
+    agentIORawSummary:'显示已清洗 Agent 输入/输出 JSON',
+    agentIOEmpty:'未记录 Agent 输入/输出追踪摘要。',
+    agentDecision:'决策',
+    agentInputs:'输入',
+    agentPeer:'同伴语境',
+    agentPlatform:'平台语境',
+    agentReason:'理由',
     influencers:'关键影响者'
   }
 };
@@ -258,15 +296,45 @@ function applyI18n(){
 }
 function announce(text){ document.getElementById('live-status').textContent = text; }
 function setPanel(id, text){ document.getElementById(id).textContent = text; if(text) announce(text.split('\n')[0]); }
-function safeJson(value){ return JSON.stringify(value, null, 2); }
+function sanitizeForUi(value){
+  const forbidden = ['authorization','bearer','cookie','credential','header','password','raw_auth','raw_prompt','raw_provider','request_payload','response_payload','secret','token','access_token'];
+  const redactString = text => {
+    const source = String(text ?? '');
+    const lowered = source.toLowerCase();
+    if(forbidden.some(fragment => lowered.includes(fragment))) return '[redacted]';
+    if(/sk-[A-Za-z0-9_-]+/.test(source)) return '[redacted]';
+    if(/Bearer\s+\S+/i.test(source)) return '[redacted]';
+    return source;
+  };
+  const visit = item => {
+    if(Array.isArray(item)) return item.map(visit);
+    if(item && typeof item === 'object'){
+      const kept = {};
+      for(const [key, child] of Object.entries(item)){
+        const lowered = key.toLowerCase();
+        if(forbidden.some(fragment => lowered.includes(fragment))) continue;
+        kept[key] = visit(child);
+      }
+      return kept;
+    }
+    if(typeof item === 'string') return redactString(item);
+    return item;
+  };
+  return visit(value);
+}
+function safeJson(value){ return JSON.stringify(sanitizeForUi(value), null, 2); }
+function escapeHtml(value){
+  return String(value ?? '').replace(/[&<>"']/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;',"'":'&#39;'}[char]));
+}
 function formatTemplate(template, values){
   return template.replace(/\{(\w+)\}/g, (_, key) => values[key] ?? '');
 }
 function formatValue(value){
-  if(Array.isArray(value)) return value.join(', ') || 'n/a';
-  if(value && typeof value === 'object') return JSON.stringify(value);
-  if(typeof value === 'number' && !Number.isInteger(value)) return String(Math.round(value * 1000) / 1000);
-  return String(value ?? 'n/a');
+  const safeValue = sanitizeForUi(value);
+  if(Array.isArray(safeValue)) return safeValue.join(', ') || 'n/a';
+  if(safeValue && typeof safeValue === 'object') return JSON.stringify(safeValue);
+  if(typeof safeValue === 'number' && !Number.isInteger(safeValue)) return String(Math.round(safeValue * 1000) / 1000);
+  return String(safeValue ?? 'n/a');
 }
 function metricLabel(key){ return t(`metric_${key}_label`) || key.replace(/_/g, ' '); }
 function metricDescription(key){ return t(`metric_${key}_desc`) || ''; }
@@ -450,7 +518,7 @@ function renderReport(report){
   renderTrend(report.trend || []);
   renderNetwork(report.graph_trace || {});
   document.getElementById('dataset-summary').textContent = safeJson(report.dataset_validation || validationPayload || {});
-  document.getElementById('provider-summary').textContent = safeJson(report.provider_evidence || report.decision_source_summary || {});
+  renderProviderEvidence(report.provider_evidence || { decision_source_summary: report.decision_source_summary || {} });
   renderAgentIO(report.graph_trace || {});
   const influencerMetric = report.metrics?.find(m=>m.key==='key_influencers')?.value;
   const influencers = (report.graph_trace?.run?.key_influencers || influencerMetric || report.metrics?.find(m=>m.key==='share_count')?.value || []);
@@ -553,14 +621,95 @@ function drawNetwork(trace, step){
     root.appendChild(div);
   }
 }
+function renderProviderEvidence(evidence){
+  const safeEvidence = sanitizeForUi(evidence || {});
+  const root = document.getElementById('provider-summary');
+  const raw = document.getElementById('provider-raw');
+  root.innerHTML = '';
+  if(raw) raw.textContent = safeJson(safeEvidence);
+  if(!safeEvidence || Object.keys(safeEvidence).length === 0){
+    const empty = document.createElement('p');
+    empty.className = 'helper-text';
+    empty.textContent = t('providerNoEvidence');
+    root.appendChild(empty);
+    return;
+  }
+  const sourceSummary = safeEvidence.decision_source_summary || {};
+  const readiness = safeEvidence.provider_readiness || {};
+  const configured = readiness.provider?.configured || readiness.configured || safeEvidence.provider_metadata || {};
+  const firstDecision = safeEvidence.first_provider_decision || {};
+  const cards = [
+    {
+      title: t('providerSourceTitle'),
+      value: Object.entries(sourceSummary).map(([key, value]) => `${key}: ${value}`).join(' · ') || `${t('executiveSource')}: n/a`,
+      desc: t('providerSourceDesc'),
+      meta: [`provider decisions: ${safeEvidence.provider_decision_count ?? sourceSummary.provider ?? 0}`]
+    },
+    {
+      title: t('providerModeTitle'),
+      value: readiness.label || readiness.state || configured.provider || 'n/a',
+      desc: t('providerModeDesc'),
+      meta: [readiness.mock ? 'mock / test-dev' : (readiness.state || 'product'), ...(readiness.reasons || []).slice(0,2)]
+    },
+    {
+      title: t('providerConfigTitle'),
+      value: [configured.provider || safeEvidence.provider_metadata?.provider, configured.model || safeEvidence.provider_metadata?.model].filter(Boolean).join(' · ') || 'n/a',
+      desc: t('providerConfigDesc'),
+      meta: [configured.wire_api || safeEvidence.provider_metadata?.wire_api, configured.prompt_version || safeEvidence.provider_metadata?.prompt_version].filter(Boolean)
+    },
+    {
+      title: t('providerFirstDecisionTitle'),
+      value: firstDecision.user_id ? `${firstDecision.user_id} · ${firstDecision.action || 'decision'} · p=${formatValue(firstDecision.probability)}` : 'n/a',
+      desc: t('providerFirstDecisionDesc'),
+      meta: [firstDecision.reason, firstDecision.confidence !== undefined ? `confidence ${formatValue(firstDecision.confidence)}` : ''].filter(Boolean)
+    }
+  ];
+  for(const card of cards){
+    const article = document.createElement('article');
+    article.className = 'evidence-card';
+    const meta = card.meta.length ? `<ul>${card.meta.map(item => `<li>${escapeHtml(item)}</li>`).join('')}</ul>` : '';
+    article.innerHTML = `<span>${escapeHtml(card.title)}</span><strong>${escapeHtml(card.value)}</strong><p>${escapeHtml(card.desc)}</p>${meta}`;
+    root.appendChild(article);
+  }
+}
+
 function renderAgentIO(trace){
   const root=document.getElementById('agent-io'); root.innerHTML='';
   const events=[];
   for(const step of trace.steps || []) for(const event of step.decision_events || []) if(event.trace_summary) events.push(event);
+  if(!events.length){
+    const empty = document.createElement('p');
+    empty.className = 'helper-text';
+    empty.textContent = t('agentIOEmpty');
+    root.appendChild(empty);
+    return;
+  }
   for(const event of events.slice(0,8)){
-    const card=document.createElement('div'); card.className='io-card';
-    const summary=event.trace_summary;
-    card.innerHTML=`<strong>${summary.user_id} · step ${event.time_step}</strong><pre>${safeJson(summary)}</pre>`;
+    const card=document.createElement('article'); card.className='io-card';
+    const summary=sanitizeForUi(event.trace_summary);
+    const input = summary.input || {};
+    const output = summary.output || {};
+    const postTags = input.post?.topic_tags || [];
+    const visiblePeers = input.peer_context?.visible_engaged_neighbors ?? input.peer_context?.visible_neighbor_count ?? 0;
+    const stateLabel = output.engage ? 'engaged' : 'ignored';
+    card.innerHTML=`
+      <div class="io-summary">
+        <div>
+          <strong>${escapeHtml(summary.user_id || 'agent')} · step ${escapeHtml(event.time_step)}</strong>
+          <p>${escapeHtml(t('agentDecision'))}: ${escapeHtml(output.action || 'n/a')} · p=${escapeHtml(formatValue(output.probability))} · confidence=${escapeHtml(formatValue(output.confidence))}</p>
+        </div>
+        <span class="pill ${output.engage ? 'good' : 'bad'}">${escapeHtml(stateLabel)}</span>
+      </div>
+      <dl class="io-facts">
+        <div><dt>${escapeHtml(t('agentInputs'))}</dt><dd>${escapeHtml((postTags || []).join(', ') || 'n/a')}</dd></div>
+        <div><dt>${escapeHtml(t('agentPeer'))}</dt><dd>${escapeHtml(visiblePeers)} · ratio ${escapeHtml(formatValue(input.peer_context?.engagement_ratio))}</dd></div>
+        <div><dt>${escapeHtml(t('agentPlatform'))}</dt><dd>${escapeHtml(input.platform_context?.platform_name || input.platform_context?.platform || 'n/a')}</dd></div>
+        <div><dt>${escapeHtml(t('agentReason'))}</dt><dd>${escapeHtml(output.reason || 'n/a')}</dd></div>
+      </dl>
+      <details class="raw-disclosure">
+        <summary>${escapeHtml(t('agentIORawSummary'))}</summary>
+        <pre>${escapeHtml(safeJson(summary))}</pre>
+      </details>`;
     root.appendChild(card);
   }
 }
