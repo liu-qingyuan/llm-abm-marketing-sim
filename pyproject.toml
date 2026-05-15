@@ -18,10 +18,12 @@ dev = [
   "ruff>=0.6.0",
 ]
 llm = ["openai>=1.0"]
+web = ["fastapi>=0.115", "uvicorn>=0.30", "python-multipart>=0.0.9"]
 mesa = ["mesa>=3.0"]
 
 [project.scripts]
 llm-abm-sim = "llm_abm_sim.run:main"
+llm-abm-web = "llm_abm_sim.web.__main__:main"
 
 [build-system]
 requires = ["setuptools>=68"]
@@ -32,7 +34,7 @@ where = ["src"]
 
 
 [tool.setuptools.package-data]
-llm_abm_sim = ["vendor/*.js", "vendor/*.md"]
+llm_abm_sim = ["vendor/*.js", "vendor/*.md", "web_static/*"]
 
 [tool.ruff]
 line-length = 120

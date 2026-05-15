@@ -1,0 +1,5 @@
+source,target,weight,relationship
+u1,u2,1.0,follow
+u2,u3,0.6,follow
+u2,u4,0.9,friend
+u4,u1,0.7,follow

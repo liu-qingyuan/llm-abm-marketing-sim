@@ -30,6 +30,13 @@ python -m venv .venv
 python -m pip install -e ".[dev]"
 ```
 
+
+For the optional local Web console:
+
+```bash
+python -m pip install -e ".[dev,web]"
+```
+
 Browser smoke tests need Node dependencies and a browser install:
 
 ```bash
@@ -66,6 +73,19 @@ python -m llm_abm_sim.run --config configs/fixtures/realistic_marketing_dataset.
 ```
 
 Dataset-backed runs also write `dataset_validation.json`, which records resolved edge/profile paths, graph/profile counts, validation policies, and missing/extra profile diagnostics. Relative `dataset.edge_list_path` and `dataset.profile_path` values are resolved against the directory containing the config file; absolute paths are normalized and remain absolute. See `docs/dataset-ingestion.md` for CSV/JSON schema examples.
+
+
+## Local Web console
+
+Start the SaaS-like single-user console locally:
+
+```bash
+. .venv/bin/activate
+python -m llm_abm_sim.web --host 127.0.0.1 --port 8000 --artifact-root runs/web
+# or after install: llm-abm-web --host 127.0.0.1 --port 8000
+```
+
+The browser flow supports users CSV/JSON plus edges CSV/JSON upload, dataset validation, provider readiness preflight, POST-and-poll run contracts, bilingual result panels, and allowlisted artifact downloads. Product-mode Web runs require real provider readiness and block visibly when the live gate or credentials are missing; the explicit mock-provider mode is for tests/dev only and is labeled in the UI and payloads. See `docs/product-demo.md` for API contracts, templates, and safety notes.
 
 ## Quality commands
 

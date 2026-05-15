@@ -82,3 +82,53 @@ Provider artifacts expose only allowlisted evidence: provider name, sanitized ba
 - [ ] Agent I/O panel shows post/profile/peer/platform/time/prompt-version input and `EngageDecision` output.
 - [ ] `input-builder.html` provides bilingual field help and a runnable config template.
 - [ ] Default artifacts contain no secrets and require no API key/network.
+
+## Local Web Console MVP
+
+Start the single-user local Web console:
+
+```bash
+. .venv/bin/activate
+python -m pip install -e ".[dev,web]"
+python -m llm_abm_sim.web --host 127.0.0.1 --port 8000 --artifact-root runs/web
+# or: llm-abm-web --host 127.0.0.1 --port 8000
+```
+
+Open `http://127.0.0.1:8000`. The console exposes these stable local API contracts:
+
+- `GET /api/health`
+- `POST /api/datasets/validate`
+- `GET /api/provider/readiness`
+- `POST /api/runs`
+- `GET /api/runs/{run_id}`
+- `GET /api/runs/{run_id}/report-payload`
+- `GET /api/runs/{run_id}/artifact/{name}`
+
+Dataset uploads accept users CSV/JSON and edges CSV/JSON. Edge JSON supports both:
+
+```json
+{"edges":[{"source":"u1","target":"u2","weight":1.0}]}
+```
+
+and a bare list:
+
+```json
+[{"source":"u1","target":"u2","weight":1.0}]
+```
+
+The Web import boundary normalizes uploads into canonical local files and then validates through the existing `DatasetConfig` / `load_network_dataset` semantics. Template files are available under `configs/templates/` and through `/api/templates/users.csv`, `/api/templates/edges.csv`, `/api/templates/users.json`, and `/api/templates/edges.json`.
+
+### Provider modes
+
+Product-mode Web runs default to provider-backed LLM decisions and preflight `/api/provider/readiness`. If the live gate, SDK, credential, or Codex provider metadata is missing, the run is marked `blocked` instead of silently falling back to the offline rule-based adapter. For intentional local tests, check “Use mock provider for test/dev”; this mode is visibly labeled as mock and still emits provider-labeled decisions without network or secrets.
+
+Manual live validation remains opt-in only:
+
+```bash
+LLM_ABM_RUN_LIVE_LLM=1 pytest -q -m live_llm -rs
+```
+
+### Result experience and safety
+
+Successful Web runs write sanitized artifacts under `runs/web/<run-id>` by default, including `report.html`, `report_payload.json`, `graph_trace.json`, `metrics_summary.json`, `dataset_validation.json`, `events.json`, `run_result.json`, `config.json`, and `step_records.csv`. The UI shows metric cards, trend bars, network propagation timeline, dataset diagnostics, provider evidence, key influencer summary, and a safe Agent I/O inspector. Raw prompts, raw provider responses, headers, cookies, auth fields, tokens, secrets, credentials, and forbidden uploaded profile attributes are filtered from Web responses and generated artifacts.
+

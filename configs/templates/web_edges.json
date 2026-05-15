@@ -1,0 +1,6 @@
+{
+  "edges": [
+    {"source":"u1","target":"u2","weight":1.0,"relationship":"follow"},
+    {"source":"u2","target":"u3","weight":0.6,"relationship":"follow"}
+  ]
+}

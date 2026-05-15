@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="en-US">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>LLM-ABM Local Web Console</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <main data-testid="web-console" class="shell">
+    <header class="hero">
+      <div>
+        <p class="eyebrow" data-i18n="eyebrow">Local single-user SaaS-like console</p>
+        <h1 data-i18n="title">LLM-ABM Marketing Simulator</h1>
+        <p data-i18n="subtitle">Upload a social graph, validate it, run provider-backed diffusion, and inspect bilingual results locally.</p>
+      </div>
+      <label class="language">🌐 <select id="language" data-testid="web-language"><option value="en-US">English</option><option value="zh-CN">中文</option></select></label>
+    </header>
+
+    <section class="card status-card">
+      <h2 data-i18n="providerTitle">Provider readiness</h2>
+      <div class="status-row">
+        <span id="provider-state" data-testid="provider-state" class="pill">checking</span>
+        <label><input id="mock-provider" data-testid="mock-provider-toggle" type="checkbox"> <span data-i18n="mockLabel">Use mock provider for test/dev</span></label>
+      </div>
+      <p id="provider-reasons" data-testid="provider-reasons" class="muted"></p>
+    </section>
+
+    <section class="grid two">
+      <form id="dataset-form" class="card" data-testid="dataset-form">
+        <h2 data-i18n="dataTitle">1. Dataset validation</h2>
+        <p class="muted" data-i18n="dataHelp">Upload users and edges as CSV or JSON. Edge JSON accepts either {edges:[...]} or a bare list.</p>
+        <label data-i18n="usersFile">Users CSV/JSON</label>
+        <input data-testid="users-file" name="users_file" type="file" accept=".csv,.json" required>
+        <label data-i18n="edgesFile">Edges CSV/JSON</label>
+        <input data-testid="edges-file" name="edges_file" type="file" accept=".csv,.json" required>
+        <label data-i18n="seedUsers">Seed users</label>
+        <input data-testid="seed-users-input" name="seed_user_ids" value="u1" placeholder="u1,u2">
+        <div class="actions"><button data-testid="validate-dataset" type="submit" data-i18n="validate">Validate dataset</button><a href="/api/templates/users.csv" data-i18n="template">Download template</a></div>
+        <div id="validation-output" data-testid="validation-output" class="panel"></div>
+      </form>
+
+      <form id="run-form" class="card" data-testid="run-form">
+        <h2 data-i18n="runTitle">2. Scenario and run</h2>
+        <label data-i18n="postText">Marketing post</label>
+        <textarea data-testid="post-text" id="post-text" rows="5">Clean Glow launches a refillable eco skincare kit with limited community rewards.</textarea>
+        <label data-i18n="topics">Topic tags</label>
+        <input data-testid="topic-tags" id="topic-tags" value="eco,skincare,beauty">
+        <label data-i18n="mediaSummary">Media summary</label>
+        <input data-testid="media-summary" id="media-summary" value="Short video showing refillable package and before/after routine">
+        <label data-i18n="platformMood">Platform context</label>
+        <input data-testid="platform-mood" id="platform-mood" value="launch week with sustainability discussion">
+        <label data-i18n="horizon">Horizon</label>
+        <input data-testid="horizon" id="horizon" type="number" min="1" max="30" value="4">
+        <div class="actions"><button data-testid="start-run" type="submit" data-i18n="startRun">Start run</button></div>
+        <div id="run-output" data-testid="run-output" class="panel"></div>
+      </form>
+    </section>
+
+    <section id="results" data-testid="results-section" class="card hidden">
+      <div class="section-head">
+        <h2 data-i18n="resultsTitle">3. Results</h2>
+        <a id="report-link" data-testid="report-link" target="_blank" rel="noreferrer" data-i18n="openReport">Open generated report</a>
+      </div>
+      <div class="metrics" id="metrics" data-testid="metric-cards"></div>
+      <div class="grid two">
+        <article>
+          <h3 data-i18n="trendTitle">Trend chart</h3>
+          <div id="trend" data-testid="trend-chart" class="trend"></div>
+        </article>
+        <article>
+          <h3 data-i18n="networkTitle">Network propagation timeline</h3>
+          <input data-testid="web-step-slider" id="step-slider" type="range" min="0" max="0" value="0">
+          <div id="network" data-testid="network-timeline" class="network"></div>
+        </article>
+      </div>
+      <div class="grid two">
+        <article class="panel"><h3 data-i18n="datasetTitle">Dataset validation</h3><pre id="dataset-summary" data-testid="dataset-summary"></pre></article>
+        <article class="panel"><h3 data-i18n="providerEvidence">Provider evidence</h3><pre id="provider-summary" data-testid="provider-summary"></pre></article>
+      </div>
+      <article class="panel"><h3 data-i18n="agentIO">Agent I/O inspector</h3><div id="agent-io" data-testid="agent-io"></div></article>
+      <article class="panel"><h3 data-i18n="influencers">Key influencers</h3><div id="influencers" data-testid="key-influencers"></div></article>
+    </section>
+  </main>
+  <script src="/static/app.js"></script>
+</body>
+</html>

@@ -35,3 +35,5 @@ __all__ = [
     "SocialUserAgent",
     "StepRecord",
 ]
+
+__version__ = "0.1.0"
