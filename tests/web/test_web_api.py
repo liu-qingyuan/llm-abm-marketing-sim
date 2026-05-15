@@ -136,6 +136,21 @@ def test_product_run_blocks_when_provider_not_ready(tmp_path: Path, monkeypatch)
 
 def test_mock_provider_run_writes_artifacts_and_report_payload(tmp_path: Path):
     client = _client(tmp_path)
+    forbidden_fragments = [
+        "sk-hidden",
+        "authorization",
+        "cookie",
+        "access_token",
+        "token",
+        "secret",
+        "password",
+        "credential",
+        "raw_prompt",
+        "raw_provider",
+        "headers",
+        "bearer",
+        "sk-",
+    ]
     users = _write(
         tmp_path / "users.csv",
         "user_id,interest_tags,brand_attitude,access_token,segment\nu1,eco,0.8,sk-hidden,A\nu2,eco,0.5,sk-hidden,B\n",
@@ -166,11 +181,14 @@ def test_mock_provider_run_writes_artifacts_and_report_payload(tmp_path: Path):
     assert payload["decision_source_summary"]["provider"] > 0
     assert payload["provider_evidence"]["provider_metadata"]["provider"] == "mock"
     assert payload["dataset_validation"]["graph_edge_count"] == 1
+    serialized_payload = json.dumps(payload).lower()
+    for forbidden in forbidden_fragments:
+        assert forbidden not in serialized_payload
     artifact = client.get(f"/api/runs/{run['run_id']}/artifact/report.html")
     assert artifact.status_code == 200
     artifact_dir = Path(run["artifact_dir"])
     joined = "\n".join(path.read_text(errors="ignore") for path in artifact_dir.iterdir() if path.is_file()).lower()
-    for forbidden in ["sk-hidden", "authorization", "cookie", "access_token", "raw_prompt", "raw_provider", "headers"]:
+    for forbidden in forbidden_fragments:
         assert forbidden not in joined
 
 

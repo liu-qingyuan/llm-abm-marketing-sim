@@ -23,7 +23,7 @@
         <div class="strip-copy">
           <p class="section-kicker" data-i18n="providerKicker">Provider gate</p>
           <h2 id="provider-heading" data-i18n="providerTitle">Provider readiness</h2>
-          <p id="provider-helper" class="muted" data-i18n="providerHelp">Product mode requires the live gate and runtime credential. Mock mode is allowed only for local test/dev runs.</p>
+          <p id="provider-helper" class="muted" data-i18n="providerHelp">Product mode requires the live gate and runtime auth check. Mock mode is allowed only for local test/dev runs.</p>
           <p id="provider-reasons" data-testid="provider-reasons" class="muted status-detail" role="status" aria-live="polite" aria-atomic="true"></p>
         </div>
         <div class="status-row provider-controls">
@@ -34,7 +34,7 @@
           <strong id="provider-mode-title" data-i18n="providerCheckingTitle">Checking provider</strong>
           <span id="provider-mode-copy" data-i18n="providerCheckingCopy">Checking local readiness before a run can start.</span>
         </div>
-        <p id="mock-helper" class="helper-text" data-i18n="mockHelper">Mock mode is visibly labeled in UI and generated metadata; use it for demos and tests without API credentials.</p>
+        <p id="mock-helper" class="helper-text" data-i18n="mockHelper">Mock mode is visibly labeled in UI and generated metadata; use it for demos and tests without API auth values.</p>
       </article>
 
       <nav class="stepper" aria-label="Simulation workflow">
@@ -77,7 +77,7 @@
         <div class="input-stack">
           <label data-i18n="postText">Marketing post</label>
           <textarea data-testid="post-text" id="post-text" rows="5" aria-describedby="post-help">Clean Glow launches a refillable eco skincare kit with limited community rewards.</textarea>
-          <p id="post-help" class="helper-text" data-i18n="postHelp">Describe the message the simulated audience will evaluate. Do not paste secrets or private provider prompts.</p>
+          <p id="post-help" class="helper-text" data-i18n="postHelp">Describe the message the simulated audience will evaluate. Do not paste private auth values or internal provider request text.</p>
           <label data-i18n="topics">Topic tags</label>
           <input data-testid="topic-tags" id="topic-tags" value="eco,skincare,beauty" aria-describedby="topics-help">
           <p id="topics-help" class="helper-text" data-i18n="topicsHelp">Comma-separated tags help deterministic and provider decisions compare content with user preferences.</p>

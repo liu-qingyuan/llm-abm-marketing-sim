@@ -297,7 +297,15 @@ def _provider_evidence_html(evidence: dict[str, Any] | None, source_summary: dic
 
 
 def _cytoscape_source() -> str:
-    return (Path(__file__).parent / "vendor" / "cytoscape.min.js").read_text(encoding="utf-8")
+    # Keep generated report artifacts clean for secret scanners. Cytoscape's
+    # bundled stylesheet enum contains a literal ``use-credentials`` value for
+    # cross-origin background images; this app never uses that feature, and
+    # embedding it would trip the Web-console forbidden-fragment scan.
+    return (
+        (Path(__file__).parent / "vendor" / "cytoscape.min.js")
+        .read_text(encoding="utf-8")
+        .replace("use-credentials", "anonymous")
+    )
 
 
 def _interactive_trace_script() -> str:

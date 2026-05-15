@@ -1,7 +1,7 @@
 import { expect, test } from '@playwright/test';
 import { spawn, type ChildProcess } from 'node:child_process';
 import net from 'node:net';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 
 
@@ -97,9 +97,24 @@ test('local web console validates uploads, runs mock provider, renders rich bili
     await expect(page.getByTestId('dataset-summary')).toContainText('graph_edge_count');
     await expect(page.getByTestId('provider-summary')).toContainText('mock');
     await expect(page.getByTestId('agent-io')).toContainText('schema_version');
-    await expect(page.getByTestId('agent-io')).not.toContainText('authorization');
-    await expect(page.getByTestId('agent-io')).not.toContainText('sk-hidden');
+    const forbiddenFragments = ['authorization', 'cookie', 'access_token', 'token', 'secret', 'password', 'credential', 'raw_prompt', 'raw_provider', 'headers', 'bearer', 'sk-'];
+    for (const fragment of forbiddenFragments) {
+      await expect(page.getByTestId('validation-output')).not.toContainText(fragment);
+      await expect(page.getByTestId('provider-summary')).not.toContainText(fragment);
+      await expect(page.getByTestId('agent-io')).not.toContainText(fragment);
+    }
     await expect(page.getByTestId('key-influencers')).toBeVisible();
+
+    const runDirs = readdirSync(artifactRoot).filter((name) => name.startsWith('web-run-'));
+    expect(runDirs.length).toBeGreaterThan(0);
+    const latestRunDir = path.join(artifactRoot, runDirs.sort().at(-1)!);
+    const artifactText = readdirSync(latestRunDir)
+      .map((name) => readFileSync(path.join(latestRunDir, name), 'utf8'))
+      .join('\n')
+      .toLowerCase();
+    for (const fragment of forbiddenFragments) {
+      expect(artifactText).not.toContain(fragment);
+    }
 
     await page.getByTestId('web-language').selectOption('zh-CN');
     await expect(page.getByTestId('results-section')).toContainText('结果');

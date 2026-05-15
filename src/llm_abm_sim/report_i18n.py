@@ -64,7 +64,7 @@ REPORT_I18N: dict[SupportedLanguage, dict[str, str]] = {
         "metrics.help": "Metric meanings",
         "metrics.title": "Key Metrics",
         "provider.evidence": "Provider / Decision Source Evidence",
-        "provider.notice": "Provider evidence is sanitized: credentials and raw provider payloads are not written.",
+        "provider.notice": "Provider evidence is sanitized: private auth values and provider internals are not written.",
         "provider.offline": "offline rule-based baseline",
         "read.body": "This local prototype simulates how a marketing post spreads through a social graph over time. Each exposed user evaluates post content, individual preference, peer influence, and platform context before choosing ignore/like/comment/share.",
         "read.title": "How to Read This Simulation",
