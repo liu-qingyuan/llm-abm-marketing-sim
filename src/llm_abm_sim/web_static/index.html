@@ -8,6 +8,7 @@
 </head>
 <body>
   <main data-testid="web-console" class="shell">
+    <div id="live-status" data-testid="live-status" class="sr-only" role="status" aria-live="polite" aria-atomic="true"></div>
     <header class="hero">
       <div>
         <p class="eyebrow" data-i18n="eyebrow">Local single-user SaaS-like console</p>
@@ -22,12 +23,18 @@
         <div class="strip-copy">
           <p class="section-kicker" data-i18n="providerKicker">Provider gate</p>
           <h2 id="provider-heading" data-i18n="providerTitle">Provider readiness</h2>
-          <p id="provider-reasons" data-testid="provider-reasons" class="muted"></p>
+          <p id="provider-helper" class="muted" data-i18n="providerHelp">Product mode requires the live gate and runtime credential. Mock mode is allowed only for local test/dev runs.</p>
+          <p id="provider-reasons" data-testid="provider-reasons" class="muted status-detail" role="status" aria-live="polite" aria-atomic="true"></p>
         </div>
         <div class="status-row provider-controls">
           <span id="provider-state" data-testid="provider-state" class="pill">checking</span>
-          <label class="toggle-card"><input id="mock-provider" data-testid="mock-provider-toggle" type="checkbox"> <span data-i18n="mockLabel">Use mock provider for test/dev</span></label>
+          <label class="toggle-card"><input id="mock-provider" data-testid="mock-provider-toggle" type="checkbox" aria-describedby="mock-helper"> <span data-i18n="mockLabel">Use mock provider for test/dev</span></label>
         </div>
+        <div id="provider-mode-card" data-testid="provider-mode-card" class="mode-card" role="note">
+          <strong id="provider-mode-title" data-i18n="providerCheckingTitle">Checking provider</strong>
+          <span id="provider-mode-copy" data-i18n="providerCheckingCopy">Checking local readiness before a run can start.</span>
+        </div>
+        <p id="mock-helper" class="helper-text" data-i18n="mockHelper">Mock mode is visibly labeled in UI and generated metadata; use it for demos and tests without API credentials.</p>
       </article>
 
       <nav class="stepper" aria-label="Simulation workflow">
@@ -49,14 +56,17 @@
         </div>
         <div class="input-stack">
           <label data-i18n="usersFile">Users CSV/JSON</label>
-          <input data-testid="users-file" name="users_file" type="file" accept=".csv,.json" required>
+          <input data-testid="users-file" name="users_file" type="file" accept=".csv,.json" required aria-describedby="users-help">
+          <p id="users-help" class="helper-text" data-i18n="usersHelp">Required fields: user_id plus optional interest_tags, brand_attitude, activity_level. Sensitive columns are filtered from UI summaries.</p>
           <label data-i18n="edgesFile">Edges CSV/JSON</label>
-          <input data-testid="edges-file" name="edges_file" type="file" accept=".csv,.json" required>
+          <input data-testid="edges-file" name="edges_file" type="file" accept=".csv,.json" required aria-describedby="edges-help">
+          <p id="edges-help" class="helper-text" data-i18n="edgesHelp">Edges need source and target IDs that exist in the users file; weight and relationship are optional.</p>
           <label data-i18n="seedUsers">Seed users</label>
-          <input data-testid="seed-users-input" name="seed_user_ids" value="u1" placeholder="u1,u2">
+          <input data-testid="seed-users-input" name="seed_user_ids" value="u1" placeholder="u1,u2" aria-describedby="seed-help">
+          <p id="seed-help" class="helper-text" data-i18n="seedHelp">Comma-separated user IDs that receive the initial campaign exposure. Validate again if you change files.</p>
         </div>
         <div class="actions"><button data-testid="validate-dataset" type="submit" data-i18n="validate">Validate dataset</button><a class="secondary-link" href="/api/templates/users.csv" data-i18n="template">Download template</a></div>
-        <div id="validation-output" data-testid="validation-output" class="panel compact-panel"></div>
+        <div id="validation-output" data-testid="validation-output" class="panel compact-panel" role="status" aria-live="polite" aria-atomic="true"></div>
       </form>
 
       <form id="run-form" class="card workflow-card scenario-card" data-testid="run-form">
@@ -66,18 +76,24 @@
         </div>
         <div class="input-stack">
           <label data-i18n="postText">Marketing post</label>
-          <textarea data-testid="post-text" id="post-text" rows="5">Clean Glow launches a refillable eco skincare kit with limited community rewards.</textarea>
+          <textarea data-testid="post-text" id="post-text" rows="5" aria-describedby="post-help">Clean Glow launches a refillable eco skincare kit with limited community rewards.</textarea>
+          <p id="post-help" class="helper-text" data-i18n="postHelp">Describe the message the simulated audience will evaluate. Do not paste secrets or private provider prompts.</p>
           <label data-i18n="topics">Topic tags</label>
-          <input data-testid="topic-tags" id="topic-tags" value="eco,skincare,beauty">
+          <input data-testid="topic-tags" id="topic-tags" value="eco,skincare,beauty" aria-describedby="topics-help">
+          <p id="topics-help" class="helper-text" data-i18n="topicsHelp">Comma-separated tags help deterministic and provider decisions compare content with user preferences.</p>
           <label data-i18n="mediaSummary">Media summary</label>
-          <input data-testid="media-summary" id="media-summary" value="Short video showing refillable package and before/after routine">
+          <input data-testid="media-summary" id="media-summary" value="Short video showing refillable package and before/after routine" aria-describedby="media-help">
+          <p id="media-help" class="helper-text" data-i18n="mediaHelp">Short safe summary of attached creative; generated artifacts store summaries, not raw assets.</p>
           <label data-i18n="platformMood">Platform context</label>
-          <input data-testid="platform-mood" id="platform-mood" value="launch week with sustainability discussion">
+          <input data-testid="platform-mood" id="platform-mood" value="launch week with sustainability discussion" aria-describedby="platform-help">
+          <p id="platform-help" class="helper-text" data-i18n="platformHelp">Capture launch context, trend mood, or campaign constraints that influence engagement.</p>
           <label data-i18n="horizon">Horizon</label>
-          <input data-testid="horizon" id="horizon" type="number" min="1" max="30" value="4">
+          <input data-testid="horizon" id="horizon" type="number" min="1" max="30" value="4" aria-describedby="horizon-help">
+          <p id="horizon-help" class="helper-text" data-i18n="horizonHelp">Number of propagation steps to simulate. Keep small for fast local review; allowed range is 1–30.</p>
         </div>
         <div class="actions"><button data-testid="start-run" type="submit" data-i18n="startRun">Start run</button></div>
-        <div id="run-output" data-testid="run-output" class="panel compact-panel"></div>
+        <p id="run-prereq-status" data-testid="run-prereq-status" class="helper-text status-detail" role="status" aria-live="polite" aria-atomic="true" data-i18n="runPrereq">Validate a dataset first, then choose product or mock provider mode before starting a run.</p>
+        <div id="run-output" data-testid="run-output" class="panel compact-panel" role="status" aria-live="polite" aria-atomic="true"></div>
       </form>
     </section>
 
