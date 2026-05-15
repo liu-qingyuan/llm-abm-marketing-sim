@@ -54,20 +54,30 @@ test('local web console validates uploads, runs mock provider, renders rich bili
     ] }));
 
     await page.route('**/api/datasets/validate', async route => {
-      await new Promise(resolve => setTimeout(resolve, 350));
+      await new Promise(resolve => setTimeout(resolve, 1_500));
       await route.continue();
     });
     await page.route('**/api/runs', async route => {
       if (route.request().method() === 'POST') {
-        await new Promise(resolve => setTimeout(resolve, 350));
+        await new Promise(resolve => setTimeout(resolve, 1_500));
       }
       await route.continue();
     });
 
     await page.goto(baseURL);
     await expect(page.getByTestId('web-console')).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'LLM-ABM Marketing Simulator' })).toBeVisible();
+    await expect(page.getByText('Local single-user SaaS-like console')).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Provider readiness' })).toBeVisible();
+    await expect(page.getByLabel('Simulation workflow')).toContainText('Data');
+    await expect(page.getByLabel('Simulation workflow')).toContainText('Scenario');
+    await expect(page.getByLabel('Simulation workflow')).toContainText('Results');
+
     await page.getByTestId('mock-provider-toggle').check();
     await expect(page.getByTestId('provider-state')).toContainText('mock');
+    await expect(page.getByTestId('provider-mode-card')).toContainText('Mock provider active');
+    await expect(page.getByTestId('provider-mode-card')).toContainText('deterministic mock decisions');
+    await expect(page.getByTestId('run-prereq-status')).toContainText('Validate a dataset first');
 
     await page.getByTestId('users-file').setInputFiles(usersPath);
     await page.getByTestId('edges-file').setInputFiles(edgesPath);
@@ -81,6 +91,7 @@ test('local web console validates uploads, runs mock provider, renders rich bili
     await expect(page.getByTestId('validate-dataset')).toBeEnabled();
     await expect(page.getByTestId('validate-dataset')).toHaveAttribute('aria-busy', 'false');
     await expect(page.getByTestId('start-run')).toBeEnabled();
+    await expect(page.getByTestId('run-prereq-status')).toContainText('Test/dev mode is active');
 
     const runResponse = page.waitForResponse(response => response.url().endsWith('/api/runs') && response.request().method() === 'POST');
     await page.getByTestId('start-run').click();
@@ -91,11 +102,30 @@ test('local web console validates uploads, runs mock provider, renders rich bili
     await expect(page.getByTestId('start-run')).toBeEnabled();
     await expect(page.getByTestId('start-run')).toHaveAttribute('aria-busy', 'false');
     await expect(page.getByTestId('results-section')).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Results dashboard' })).toBeVisible();
+    await expect(page.getByTestId('executive-summary')).toContainText(/reached|users|engaged/i);
+    await expect(page.getByTestId('executive-highlights')).toContainText('Decision source');
     await expect(page.getByTestId('metric-cards')).toContainText('final_engaged');
+    await expect(page.getByTestId('metric-cards')).toContainText('Unique users who engaged');
+    await expect(page.getByTestId('trend-summary')).toContainText('Trend summary');
     await expect(page.getByTestId('trend-chart')).toBeVisible();
+    await expect(page.getByLabel('Trend legend')).toContainText('Exposed');
+    await expect(page.getByTestId('trend-table')).toContainText('New engaged');
+    await expect(page.getByTestId('selected-step-summary')).toContainText('Step 0');
+    await page.getByTestId('web-step-slider').fill('1');
+    await expect(page.getByTestId('selected-step-summary')).toContainText('Step 1');
+    await expect(page.getByLabel('Node state legend')).toContainText('Seed');
     await expect(page.getByTestId('network-timeline')).toContainText('u1');
     await expect(page.getByTestId('dataset-summary')).toContainText('graph_edge_count');
+    await expect(page.getByTestId('provider-summary')).toContainText('Decision source');
+    await expect(page.getByTestId('provider-summary')).toContainText('Mode and readiness');
     await expect(page.getByTestId('provider-summary')).toContainText('mock');
+    await expect(page.getByText('Show sanitized provider JSON')).toBeVisible();
+    await expect(page.getByTestId('provider-raw')).toBeHidden();
+    await page.getByText('Show sanitized provider JSON').click();
+    await expect(page.getByTestId('provider-raw')).toBeVisible();
+    await expect(page.getByTestId('agent-io')).toContainText('Decision');
+    await expect(page.getByTestId('agent-io')).toContainText('Show sanitized Agent I/O JSON');
     await expect(page.getByTestId('agent-io')).toContainText('schema_version');
     const forbiddenFragments = ['authorization', 'cookie', 'access_token', 'token', 'secret', 'password', 'credential', 'raw_prompt', 'raw_provider', 'headers', 'bearer', 'sk-'];
     for (const fragment of forbiddenFragments) {
@@ -117,7 +147,10 @@ test('local web console validates uploads, runs mock provider, renders rich bili
     }
 
     await page.getByTestId('web-language').selectOption('zh-CN');
+    await expect(page.getByRole('heading', { name: 'LLM-ABM 营销传播模拟器' })).toBeVisible();
     await expect(page.getByTestId('results-section')).toContainText('结果');
+    await expect(page.getByTestId('results-section')).toContainText('执行摘要');
+    await expect(page.getByTestId('provider-summary')).toContainText('模式与就绪');
     await expect(page.getByTestId('agent-io')).toBeVisible();
   } finally {
     server?.kill('SIGTERM');
@@ -137,7 +170,9 @@ test('local web console shows blocked product provider path without offline succ
     await waitForHealth(baseURL);
     await page.goto(baseURL);
     await expect(page.getByTestId('provider-state')).toContainText('blocked');
+    await expect(page.getByTestId('provider-mode-card')).toContainText('Product provider blocked');
     await expect(page.getByTestId('provider-reasons')).toContainText('LLM_ABM_RUN_LIVE_LLM');
+    await expect(page.getByTestId('run-prereq-status')).toContainText('fail-closed');
   } finally {
     server?.kill('SIGTERM');
   }
