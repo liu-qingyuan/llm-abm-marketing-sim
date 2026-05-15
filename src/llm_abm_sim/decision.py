@@ -4,7 +4,7 @@ import hashlib
 import json
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -21,6 +21,8 @@ class EngageDecision(BaseModel):
     reason: str = ""
     confidence: float = Field(default=1.0, ge=0.0, le=1.0)
     action: EngagementAction = "ignore"
+    decision_source: str = "rule_based"
+    provider_metadata: dict[str, Any] | None = None
 
 
 class DecisionInput(BaseModel):

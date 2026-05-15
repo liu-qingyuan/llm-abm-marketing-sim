@@ -145,3 +145,14 @@ Ignored by git:
 ---
 
 _Generated using BMAD Method `document-project` workflow._
+
+
+## Manual live provider smoke
+
+Default development and CI-style tests remain offline. After installing the optional LLM extra locally (`python -m pip install -e '.[llm]'`) and confirming provider readiness, run a single provider-backed smoke with:
+
+```bash
+LLM_ABM_RUN_LIVE_LLM=1 python -m llm_abm_sim.run --config configs/live/provider_smoke.yaml --output runs/live-provider-smoke
+```
+
+Inspect `runs/live-provider-smoke/metrics_summary.json` for `decision_source_summary` and sanitized `provider_evidence`. Never commit run outputs or credentials.

@@ -42,6 +42,33 @@ def test_load_codex_provider_config_metadata_without_secret_values(tmp_path):
     assert "secret" not in json.dumps(config.redacted())
 
 
+def test_provider_metadata_url_redaction_strips_userinfo_query_and_fragment(tmp_path):
+    tmp_path.mkdir(exist_ok=True)
+    (tmp_path / "config.toml").write_text(
+        """
+model = "gpt-5.5"
+model_provider = "sub2api"
+
+[model_providers.sub2api]
+name = "sub2api"
+base_url = "https://user:password@api.example.test/v1?api_key=secret#fragment"
+wire_api = "responses"
+requires_openai_auth = true
+""",
+        encoding="utf-8",
+    )
+    (tmp_path / "auth.json").write_text('{"tokens":{"access_token":"secret"}}')
+
+    config = load_codex_provider_config(tmp_path)
+
+    assert config is not None
+    assert config.redacted()["base_url"] == "https://api.example.test/v1"
+    serialized = json.dumps(config.redacted())
+    assert "password" not in serialized
+    assert "api_key=secret" not in serialized
+    assert "fragment" not in serialized
+
+
 def test_live_llm_gate_requires_explicit_opt_in_and_auth(monkeypatch, tmp_path):
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     write_codex_config(tmp_path)

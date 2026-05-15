@@ -5,6 +5,8 @@ from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from .provider_config import sanitize_url
+
 
 class PostContent(BaseModel):
     """Marketing post to diffuse through the social graph."""
@@ -163,7 +165,7 @@ class ProviderLLMConfig(BaseModel):
             "enabled": self.enabled,
             "provider": self.provider,
             "model": self.model,
-            "base_url": self.base_url,
+            "base_url": sanitize_url(self.base_url),
             "wire_api": self.wire_api,
             "use_codex_provider_config": self.use_codex_provider_config,
             "require_live_env": self.require_live_env,

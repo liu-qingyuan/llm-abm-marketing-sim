@@ -5,7 +5,7 @@ import json
 import pytest
 from pydantic import ValidationError
 
-from llm_abm_sim.decision import DecisionInput, EngageDecision
+from llm_abm_sim.decision import DecisionInput
 from llm_abm_sim.prompting import build_engagement_prompt
 from llm_abm_sim.provider_config import redact_secrets
 from llm_abm_sim.providers.openai_compatible import OpenAICompatibleDecisionAdapter, ProviderRunSkipped
@@ -64,7 +64,13 @@ def test_mocked_provider_success_validates_engage_decision():
 
     decision = adapter.decide(time_step=1, **sample_context())
 
-    assert decision == EngageDecision(engage=True, probability=0.8, reason="fit", confidence=0.9, action="like")
+    assert decision.engage is True
+    assert decision.probability == 0.8
+    assert decision.reason == "fit"
+    assert decision.confidence == 0.9
+    assert decision.action == "like"
+    assert decision.decision_source == "provider"
+    assert decision.provider_metadata is not None
     assert client.calls[0][1] == "mock-model"
 
 
@@ -87,6 +93,7 @@ def test_fail_closed_no_engage_returns_safe_ignore_decision():
     assert decision.engage is False
     assert decision.action == "ignore"
     assert decision.probability == 0.0
+    assert decision.decision_source == "provider_fail_closed"
     assert "sk-hidden" not in decision.reason
 
 
@@ -148,6 +155,7 @@ def test_provider_retries_timeout_before_success():
 
     assert client.calls == 2
     assert decision.action == "share"
+    assert decision.decision_source == "provider"
 
 
 def test_cached_provider_adapter_avoids_duplicate_provider_calls():
@@ -163,4 +171,5 @@ def test_cached_provider_adapter_avoids_duplicate_provider_calls():
     second = cached.decide(**sample_context())
 
     assert first == second
+    assert first.decision_source == "provider"
     assert len(client.calls) == 1

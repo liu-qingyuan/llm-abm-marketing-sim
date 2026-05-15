@@ -69,3 +69,18 @@ If Codex auth is absent, provider config is not OpenAI-auth scoped, the optional
 `openai` dependency is missing, or credentials are otherwise unavailable, the
 test skips/fails closed with a redacted reason. Default `pytest -q` remains
 offline because `live_llm` is excluded by pytest configuration.
+wire API, model, `requires_openai_auth`, auth availability, adapter name/version, and non-secret config switches. URL query strings, fragments, userinfo, raw prompts, raw responses, and credential values are not serialized.
+
+## Live provider smoke config
+
+`configs/live/provider_smoke.yaml` is a committed provider-enabled fixture for the manual gate. It contains no secrets and uses `use_codex_provider_config: true`, so provider host/model/auth readiness are resolved at runtime from Codex config or `OPENAI_API_KEY`.
+
+Manual smoke command:
+
+```bash
+LLM_ABM_RUN_LIVE_LLM=1 python -m llm_abm_sim.run \
+  --config configs/live/provider_smoke.yaml \
+  --output runs/live-provider-smoke
+```
+
+The generated `metrics_summary.json`, `events.json`, `run_result.json`, and `report.html` include sanitized decision-source/provider evidence such as `decision_source_summary.provider == 1` when a provider-backed decision is observed. These artifacts must not include raw provider request/response payloads or secrets.

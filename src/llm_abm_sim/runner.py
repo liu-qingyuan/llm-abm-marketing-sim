@@ -15,6 +15,7 @@ from .graph_loader import DatasetValidationReport, load_network_dataset
 from .metrics import MetricsCollector
 from .model import SimulationModel
 from .outputs import copy_config_source, write_run_outputs
+from .provider_config import load_codex_provider_config
 from .schemas import FailClosedAction, SimulationInput
 
 DATASET_PATH_FIELDS = ("edge_list_path", "profile_path")
@@ -59,7 +60,13 @@ class ExperimentRunner:
 
     def run_and_write(self, output_dir: str | Path, config_path: str | Path | None = None) -> Path:
         result = self.run()
-        output_path = write_run_outputs(result, self.config, output_dir, self.dataset_validation_report)
+        output_path = write_run_outputs(
+            result,
+            self.config,
+            output_dir,
+            self.dataset_validation_report,
+            provider_readiness=self._provider_readiness_metadata(),
+        )
         if config_path is not None:
             copy_config_source(config_path, output_path)
         return output_path
@@ -79,6 +86,17 @@ class ExperimentRunner:
             InMemoryDecisionCache(),
             prompt_version=provider_config.prompt_version,
         )
+
+    def _provider_readiness_metadata(self) -> dict[str, Any] | None:
+        if not self.config.provider_llm.enabled:
+            return None
+        metadata: dict[str, Any] = {"configured": self.config.provider_llm.safe_metadata()}
+        if self.config.provider_llm.use_codex_provider_config:
+            codex_config = load_codex_provider_config()
+            metadata["codex_provider"] = codex_config.redacted() if codex_config is not None else None
+        else:
+            metadata["codex_provider"] = None
+        return metadata
 
     def _build_dataset(self):
         return load_network_dataset(

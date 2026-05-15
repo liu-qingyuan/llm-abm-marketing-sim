@@ -18,7 +18,15 @@ class AlwaysLikeAdapter(LLMDecisionAdapter):
         platform_context: PlatformContext | None = None,
         time_step: int = 0,
     ) -> EngageDecision:
-        return EngageDecision(engage=True, probability=0.99, reason="mocked_provider", confidence=1.0, action="like")
+        return EngageDecision(
+            engage=True,
+            probability=0.99,
+            reason="mocked_provider",
+            confidence=1.0,
+            action="like",
+            decision_source="provider",
+            provider_metadata={"provider": "mock"},
+        )
 
 
 def test_mocked_provider_adapter_runs_through_experiment_runner():

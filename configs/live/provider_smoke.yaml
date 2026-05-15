@@ -1,0 +1,39 @@
+run_id: live-provider-smoke
+random_seed: 20260515
+simulation:
+  horizon: 1
+  seed_user_ids: [live_u1]
+  base_exposure_probability: 0.0
+  peer_exposure_boost: 0.0
+  time_step_label: "step"
+  observation_window: "single live provider smoke decision"
+platform_context:
+  time_label: "manual live smoke"
+  hot_topics: [skincare, eco]
+  platform_mood: "sanitized provider-backed smoke run"
+  feed_ranking_weight: 1.0
+  trace_visibility: 1.0
+post:
+  post_id: live-smoke-post
+  text: "Tiny eco skincare launch for a refillable moisturizer."
+  media_summary: "Short product image with recyclable refill packaging."
+  topic_tags: [skincare, eco]
+profiles:
+  - user_id: live_u1
+    interest_tags: [skincare, eco]
+    brand_attitude: 0.7
+    activity_level: 0.8
+    like_tendency: 0.7
+    comment_tendency: 0.2
+    share_tendency: 0.3
+graph_edges: []
+provider_llm:
+  enabled: true
+  provider: openai_compatible
+  use_codex_provider_config: true
+  require_live_env: true
+  fail_closed_action: raise
+  max_retries: 0
+  timeout_seconds: 45.0
+report:
+  title: "LLM-ABM Live Provider Smoke Report"

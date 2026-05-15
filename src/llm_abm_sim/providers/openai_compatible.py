@@ -84,7 +84,13 @@ class OpenAICompatibleDecisionAdapter(LLMDecisionAdapter):
         for _attempt in range(self.config.max_retries + 1):
             try:
                 raw = client.create_response(messages, cast(str, self.model))
-                return _parse_provider_decision(raw)
+                decision = _parse_provider_decision(raw)
+                return decision.model_copy(
+                    update={
+                        "decision_source": "provider",
+                        "provider_metadata": self.safe_metadata,
+                    }
+                )
             except Exception as exc:
                 last_error = exc
         if last_error is None:  # defensive; max_retries validation keeps this unreachable.
@@ -109,7 +115,15 @@ class OpenAICompatibleDecisionAdapter(LLMDecisionAdapter):
                 f"missing runtime credential from Codex auth or API key env {self.config.api_key_env}"
             )
         base_url = self.config.base_url or (self.codex_provider_config.base_url if self.codex_provider_config else None)
-        return _OpenAISDKClient(api_key=credential.value, base_url=base_url, timeout=self.config.timeout_seconds)
+        wire_api = self.config.wire_api or (
+            self.codex_provider_config.wire_api if self.codex_provider_config else "responses"
+        )
+        return _OpenAISDKClient(
+            api_key=credential.value,
+            base_url=base_url,
+            timeout=self.config.timeout_seconds,
+            wire_api=wire_api,
+        )
 
     def _handle_failure(self, exc: Exception) -> EngageDecision:
         action = self.config.fail_closed_action
@@ -120,6 +134,8 @@ class OpenAICompatibleDecisionAdapter(LLMDecisionAdapter):
                 reason=f"provider failed closed: {exc.__class__.__name__}",
                 confidence=0.0,
                 action="ignore",
+                decision_source="provider_fail_closed",
+                provider_metadata=self.safe_metadata,
             )
         if action == FailClosedAction.SKIP_RUN:
             raise ProviderRunSkipped("provider failure configured to skip run") from exc
@@ -127,16 +143,25 @@ class OpenAICompatibleDecisionAdapter(LLMDecisionAdapter):
 
 
 class _OpenAISDKClient:
-    def __init__(self, *, api_key: str, base_url: str | None, timeout: float) -> None:
+    def __init__(self, *, api_key: str, base_url: str | None, timeout: float, wire_api: str = "responses") -> None:
         from openai import OpenAI  # type: ignore[import-not-found]
 
         kwargs: dict[str, Any] = {"api_key": api_key, "timeout": timeout}
         if base_url:
             kwargs["base_url"] = base_url
         self._client = OpenAI(**kwargs)
+        self._wire_api = wire_api
 
     def create_response(self, messages: list[dict[str, str]], model: str) -> str:
-        response = self._client.responses.create(
+        if self._wire_api == "chat":
+            response = self._client.chat.completions.create(  # type: ignore[call-overload]
+                model=model,
+                messages=messages,
+                response_format={"type": "json_object"},
+            )
+            content = response.choices[0].message.content
+            return content or ""
+        response = self._client.responses.create(  # type: ignore[call-overload]
             model=model,
             input=messages,
             text={"format": _engage_decision_json_schema()},

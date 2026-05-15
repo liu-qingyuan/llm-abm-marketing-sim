@@ -5,6 +5,7 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit, urlunsplit
 
 import tomllib
 
@@ -26,7 +27,7 @@ class CodexProviderConfig:
     def redacted(self) -> dict[str, Any]:
         return {
             "provider_name": self.provider_name,
-            "base_url": self.base_url,
+            "base_url": sanitize_url(self.base_url),
             "wire_api": self.wire_api,
             "model": self.model,
             "requires_openai_auth": self.requires_openai_auth,
@@ -137,6 +138,20 @@ def _read_codex_auth_token(home: Path) -> str | None:
         if isinstance(candidate, str) and candidate.strip():
             return candidate.strip()
     return None
+
+
+def sanitize_url(value: str | None) -> str | None:
+    """Return URL scheme/host/path only, stripping query, fragment, and userinfo."""
+
+    if not value:
+        return value
+    parsed = urlsplit(value)
+    if not parsed.scheme or not parsed.netloc:
+        return value.split("?", 1)[0].split("#", 1)[0]
+    host = parsed.hostname or ""
+    if parsed.port is not None:
+        host = f"{host}:{parsed.port}"
+    return urlunsplit((parsed.scheme, host, parsed.path.rstrip("/"), "", ""))
 
 
 def redact_secrets(value: Any) -> Any:
