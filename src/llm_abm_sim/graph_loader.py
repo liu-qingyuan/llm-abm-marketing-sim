@@ -36,6 +36,11 @@ class DatasetValidationReport:
     extra_profile_policy: str
     edge_weight_column: str | None
     edge_attribute_columns: list[str]
+    available_edge_columns: list[str]
+    preserved_profile_attribute_columns: list[str]
+    seed_user_ids: list[str]
+    missing_seed_user_ids: list[str]
+    covered_seed_user_ids: list[str]
     errors: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
@@ -57,7 +62,7 @@ class NetworkDataset:
 def load_edge_list(path: str | Path, delimiter: str | None = None) -> nx.Graph:
     """Load an undirected social-network edge-list file."""
 
-    return _load_graph_from_edge_list(
+    graph, _available_columns = _load_graph_from_edge_list(
         Path(path),
         delimiter=delimiter,
         directed=False,
@@ -66,24 +71,32 @@ def load_edge_list(path: str | Path, delimiter: str | None = None) -> nx.Graph:
         edge_weight_column=None,
         edge_attribute_columns=[],
     )
+    return graph
 
 
 def load_network_dataset(
     dataset_config: DatasetConfig,
     inline_edges: list[tuple[str, str]] | None = None,
     inline_profiles: list[UserProfile] | None = None,
+    seed_user_ids: list[str] | None = None,
 ) -> NetworkDataset:
     """Load graph and profile records, then apply graph/profile validation policies."""
 
-    graph = _load_graph(dataset_config, inline_edges or [], inline_profiles or [])
+    graph, available_edge_columns = _load_graph(dataset_config, inline_edges or [], inline_profiles or [])
     profile_records = _load_profile_records(dataset_config, inline_profiles or [])
     profile_ids = set(profile_records)
     graph_ids = {str(node) for node in graph.nodes}
 
     missing_profile_ids = sorted(graph_ids - profile_ids)
     extra_profile_ids = sorted(profile_ids - graph_ids)
+    seed_ids = sorted(str(user_id) for user_id in (seed_user_ids or []))
+    missing_seed_user_ids = sorted(set(seed_ids) - graph_ids)
+    covered_seed_user_ids = sorted(set(seed_ids) & graph_ids)
+    preserved_profile_attribute_columns = _profile_attribute_columns(profile_records)
     errors: list[str] = []
 
+    if missing_seed_user_ids:
+        errors.append(f"seed users absent from graph: {', '.join(missing_seed_user_ids)}")
     if missing_profile_ids and dataset_config.missing_profile_policy is MissingProfilePolicy.ERROR:
         errors.append(f"missing profiles for graph nodes: {', '.join(missing_profile_ids)}")
     if extra_profile_ids and dataset_config.extra_profile_policy is ExtraProfilePolicy.ERROR:
@@ -129,6 +142,11 @@ def load_network_dataset(
         extra_profile_policy=dataset_config.extra_profile_policy.value,
         edge_weight_column=dataset_config.edge_weight_column,
         edge_attribute_columns=list(dataset_config.edge_attribute_columns),
+        available_edge_columns=available_edge_columns,
+        preserved_profile_attribute_columns=preserved_profile_attribute_columns,
+        seed_user_ids=seed_ids,
+        missing_seed_user_ids=missing_seed_user_ids,
+        covered_seed_user_ids=covered_seed_user_ids,
         errors=errors,
     )
     if errors:
@@ -141,7 +159,7 @@ def _load_graph(
     dataset_config: DatasetConfig,
     inline_edges: list[tuple[str, str]],
     inline_profiles: list[UserProfile],
-) -> nx.Graph:
+) -> tuple[nx.Graph, list[str]]:
     if dataset_config.edge_list_path is not None:
         return _load_graph_from_edge_list(
             dataset_config.edge_list_path,
@@ -157,7 +175,7 @@ def _load_graph(
     graph.add_edges_from((str(left), str(right)) for left, right in inline_edges)
     for profile in inline_profiles:
         graph.add_node(profile.user_id)
-    return graph
+    return graph, []
 
 
 def _load_graph_from_edge_list(
@@ -169,12 +187,13 @@ def _load_graph_from_edge_list(
     target_column: str | None,
     edge_weight_column: str | None,
     edge_attribute_columns: list[str],
-) -> nx.Graph:
+) -> tuple[nx.Graph, list[str]]:
     graph: nx.Graph = nx.DiGraph() if directed else nx.Graph()
+    available_columns: list[str] = []
     if source_column or target_column:
         if not source_column or not target_column:
             raise ValueError("Both source_column and target_column are required for column-based edge loading")
-        _load_column_edges(
+        available_columns = _load_column_edges(
             graph,
             Path(path),
             delimiter=_csv_delimiter(Path(path), delimiter),
@@ -183,10 +202,10 @@ def _load_graph_from_edge_list(
             edge_weight_column=edge_weight_column,
             edge_attribute_columns=edge_attribute_columns,
         )
-        return graph
+        return graph, available_columns
 
     _load_positional_edges(graph, Path(path), delimiter=delimiter)
-    return graph
+    return graph, []
 
 
 def _load_column_edges(
@@ -198,12 +217,19 @@ def _load_column_edges(
     target_column: str,
     edge_weight_column: str | None,
     edge_attribute_columns: list[str],
-) -> None:
+) -> list[str]:
     with path.open(newline="", encoding="utf-8") as handle:
         reader = csv.DictReader(handle, delimiter=delimiter)
         if reader.fieldnames is None:
             raise ValueError(f"Edge file has no header row: {path}")
-        missing_columns = [column for column in [source_column, target_column] if column not in reader.fieldnames]
+        fieldnames = list(reader.fieldnames)
+        required_columns = [
+            source_column,
+            target_column,
+            *([edge_weight_column] if edge_weight_column else []),
+            *edge_attribute_columns,
+        ]
+        missing_columns = [column for column in required_columns if column not in fieldnames]
         if missing_columns:
             raise ValueError(f"Edge file is missing required columns: {', '.join(missing_columns)}")
         for row_number, row in enumerate(reader, start=2):
@@ -219,9 +245,10 @@ def _load_column_edges(
                 if attribute_value is not None:
                     attributes[column] = _parse_scalar(attribute_value)
             graph.add_edge(source, target, **attributes)
+        return fieldnames
 
 
-def _load_positional_edges(graph: nx.Graph, path: Path, delimiter: str | None) -> None:
+def _load_positional_edges(graph: nx.Graph, path: Path, delimiter: str | None) -> list[str]:
     with path.open(newline="", encoding="utf-8") as handle:
         if delimiter is None:
             for row_number, line in enumerate(handle, start=1):
@@ -232,7 +259,7 @@ def _load_positional_edges(graph: nx.Graph, path: Path, delimiter: str | None) -
                 if len(values) < 2:
                     raise ValueError(f"Edge row {row_number} in {path} must contain at least two columns")
                 graph.add_edge(values[0], values[1])
-            return
+            return []
 
         reader = csv.reader(handle, delimiter=delimiter)
         for row_number, row in enumerate(reader, start=1):
@@ -242,6 +269,7 @@ def _load_positional_edges(graph: nx.Graph, path: Path, delimiter: str | None) -
             if len(values) < 2:
                 raise ValueError(f"Edge row {row_number} in {path} must contain at least two columns")
             graph.add_edge(values[0], values[1])
+    return []
 
 
 def _load_profile_records(
@@ -292,6 +320,16 @@ def _normalize_profile_record(record: dict[str, Any]) -> dict[str, Any]:
         else:
             normalized[key] = value
     return normalized
+
+
+def _profile_attribute_columns(profile_records: dict[str, UserProfile]) -> list[str]:
+    columns: set[str] = set()
+    base_fields = set(UserProfile.model_fields)
+    for profile in profile_records.values():
+        for key in profile.model_extra or {}:
+            if key not in base_fields:
+                columns.add(key)
+    return sorted(columns)
 
 
 def _dedupe_profiles(profiles: list[UserProfile]) -> dict[str, UserProfile]:

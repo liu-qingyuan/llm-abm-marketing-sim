@@ -26,3 +26,7 @@ _bmad/
 
 # Ralph/ralph-orchestrator runtime artifacts
 .ralph/
+# Ralph/Ralphy runtime artifacts
+.ralphy/
+.ralphy-worktrees/
+.ralphy-sandboxes/

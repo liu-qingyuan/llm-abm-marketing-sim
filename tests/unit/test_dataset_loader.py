@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 
 import networkx as nx
 import pytest
@@ -192,3 +193,65 @@ def test_load_network_dataset_rejects_duplicate_profile_ids(tmp_path):
         load_network_dataset(
             DatasetConfig(edge_list_path=edges, profile_path=profiles, profile_format=ProfileFormat.CSV)
         )
+
+
+def test_realistic_marketing_fixture_preserves_real_data_attributes():
+    dataset = load_network_dataset(
+        DatasetConfig(
+            edge_list_path=Path("tests/fixtures/datasets/realistic_marketing_edges.csv"),
+            profile_path=Path("tests/fixtures/datasets/realistic_marketing_profiles.csv"),
+            profile_format=ProfileFormat.CSV,
+            delimiter=",",
+            directed=True,
+            source_column="source",
+            target_column="target",
+            edge_weight_column="influence_weight",
+            edge_attribute_columns=[
+                "relationship",
+                "touchpoint",
+                "frequency_per_week",
+                "recency_days",
+                "community_bridge",
+            ],
+            missing_profile_policy=MissingProfilePolicy.ERROR,
+            extra_profile_policy=ExtraProfilePolicy.ERROR,
+        ),
+        seed_user_ids=["u01", "u11", "u19", "u29"],
+    )
+
+    assert isinstance(dataset.graph, nx.DiGraph)
+    assert dataset.graph.number_of_nodes() == 36
+    assert dataset.graph.number_of_edges() == 45
+    edge = dataset.graph["u01"]["u02"]
+    assert edge["weight"] == 0.92
+    assert edge["relationship"] == "follows"
+    assert edge["touchpoint"] == "organic_feed"
+    assert edge["frequency_per_week"] == 5
+    assert edge["recency_days"] == 1
+    assert edge["community_bridge"] is False
+    assert dataset.profiles["u01"].interest_tags == ["skincare", "eco", "sustainability"]
+    assert dataset.profiles["u01"].model_extra["community"] == "eco_beauty"
+    assert dataset.profiles["u01"].model_extra["segment"] == "koc_seed"
+    assert dataset.profiles["u01"].model_extra["follower_count"] == "18500"
+
+    report = dataset.validation_report.to_dict()
+    assert report["dataset_used"] is True
+    assert report["available_edge_columns"] == [
+        "source",
+        "target",
+        "influence_weight",
+        "relationship",
+        "touchpoint",
+        "frequency_per_week",
+        "recency_days",
+        "community_bridge",
+    ]
+    assert report["covered_seed_user_ids"] == ["u01", "u11", "u19", "u29"]
+    assert report["missing_seed_user_ids"] == []
+    assert set(report["preserved_profile_attribute_columns"]) >= {
+        "community",
+        "segment",
+        "follower_count",
+        "locale",
+        "lifecycle_stage",
+    }

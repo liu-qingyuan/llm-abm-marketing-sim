@@ -2,22 +2,25 @@
 
 The simulator keeps live provider checks out of default tests. Default runs use the deterministic rule-based adapter and require no API key or network.
 
-## Codex/sub2api compatibility
+## Codex-compatible provider resolution
 
-A manual live gate may reuse local Codex-compatible provider metadata at runtime. On this workstation the inspected, redacted shape is:
+A manual live gate may reuse local Codex-compatible provider metadata at runtime. The simulator reads `CODEX_HOME/config.toml` when `CODEX_HOME` is set, otherwise `~/.codex/config.toml`, and derives only secret-free metadata from the selected `model_provider`:
 
-- provider name: `sub2api`
-- base URL: `https://api.q1ngyuan.top`
-- wire API: `responses`
+- provider name
+- `base_url`
+- `wire_api`
+- selected `model`
+- `requires_openai_auth`
+- whether a usable Codex runtime credential appears available
 
-The implementation must never copy auth files, bearer tokens, API keys, cookies, or other secrets into repository files, logs, docs, fixtures, or snapshots.
+Do not hardcode a host in configs or tests; the current provider URL is read from Codex config. The implementation must never copy auth files, bearer tokens, API keys, cookies, raw headers, or other secrets into repository files, logs, docs, fixtures, pytest output, run artifacts, caches, or handoffs.
 
-Codex auth fallback is allowed only when the selected provider config explicitly declares that OpenAI auth is required. Otherwise the gate fails closed or requires explicit provider credentials.
+Codex auth reuse is allowed only when the selected provider config explicitly declares `requires_openai_auth = true`. Otherwise the gate fails closed or requires explicit provider credentials. `OPENAI_API_KEY` remains the fallback for OpenAI-compatible/sub2api API keys.
 
 ## Required behavior
 
 - `pytest -q` excludes `live_llm` by default.
-- `LLM_ABM_RUN_LIVE_LLM=1 pytest -q -m live_llm` is the explicit manual gate shape; until a provider-backed adapter is implemented, the gate validates runtime readiness and xfails rather than making a real network call.
+- `LLM_ABM_RUN_LIVE_LLM=1 pytest -q -m live_llm -rs` is the explicit manual gate shape; it makes one real provider decision only when Codex config/auth or `OPENAI_API_KEY` and the optional SDK are available.
 - Provider-shaped responses must validate through `EngageDecision`; default unit coverage uses a mocked/provider-shaped payload so no network or API key is needed.
 - Redaction tests must prove secrets are not emitted.
 
@@ -46,13 +49,23 @@ Safety rules:
 - `fail_closed_action: raise` is the default and the manual live smoke policy.
 - `fail_closed_action: no_engage` returns an `ignore` decision only when explicitly configured.
 - `fail_closed_action: skip_run` is a fail-closed run-level stop signal and is rejected before a normal runner starts partial simulation work.
-- Codex/sub2api reuse is metadata-only unless the caller supplies concrete provider credentials through the configured environment variable. The implementation does not read `auth.json` contents.
+- Codex/sub2api reuse prefers Codex provider metadata and can read the minimum runtime credential from Codex auth at call time only for `requires_openai_auth=true`; otherwise use the configured API-key environment fallback.
 - Serialized provider metadata is allowlisted to provider name, base URL, wire API, model, auth-required/readiness booleans, and adapter version fields. Free-form provider dictionaries, headers, tokens, cookies, and auth file contents are never serialized.
 
-Manual live smoke:
+
+Codex-config-backed live smoke:
 
 ```bash
-LLM_ABM_RUN_LIVE_LLM=1 pytest -q -m live_llm
+LLM_ABM_RUN_LIVE_LLM=1 pytest -q -m live_llm -rs
 ```
 
-If `OPENAI_API_KEY` or a compatible live client credential is not present, the test skips with a redacted readiness reason. Default `pytest -q` remains offline because `live_llm` is excluded by pytest configuration.
+API-key fallback smoke:
+
+```bash
+OPENAI_API_KEY=... LLM_ABM_RUN_LIVE_LLM=1 pytest -q -m live_llm -rs
+```
+
+If Codex auth is absent, provider config is not OpenAI-auth scoped, the optional
+`openai` dependency is missing, or credentials are otherwise unavailable, the
+test skips/fails closed with a redacted reason. Default `pytest -q` remains
+offline because `live_llm` is excluded by pytest configuration.

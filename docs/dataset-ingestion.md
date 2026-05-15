@@ -54,6 +54,56 @@ For example, in `configs/fixtures/toy_dataset.yaml`, `../../tests/fixtures/datas
 
 Absolute paths are normalized with `Path.resolve()` and stay absolute in the loaded config and in `dataset_validation.json`. Direct `SimulationInput.model_validate(...)` calls intentionally do not resolve paths, so schema validation remains side-effect free when no source config path is known.
 
+
+## Real social-network ABM data contract
+
+"Real ABM data" means a local social-network dataset that can replace the
+small fixture without changing simulator code. Keep raw/private exports out of
+git under ignored `data/raw/` or `data/processed/`, then reference cleaned local
+files from a config `dataset` block. Commit only tiny synthetic or anonymized
+samples such as the fixture below.
+
+A production-shaped input bundle has these parts:
+
+| Input | Required shape | Notes |
+|---|---|---|
+| Edge list | `source`, `target` columns | Directed follow/friend/influence edges; set `directed: true` for asymmetric social feeds. |
+| Edge weight | Optional numeric column such as `influence_weight` | Copied to NetworkX edge attribute `weight`; used as preserved graph metadata for downstream phases. |
+| Relationship attributes | Optional columns listed in `edge_attribute_columns` | Examples: `relationship`, `touchpoint`, `frequency_per_week`, `recency_days`, `community_bridge`. |
+| Profiles | One row per `user_id` | Required decision fields are validated; extra public columns are preserved on `UserProfile.model_extra`. |
+| Profile attributes | Optional non-secret columns | Examples: `community`, `segment`, `follower_count`, `locale`, `lifecycle_stage`. Do not include names, emails, handles, tokens, or private notes in committed fixtures. |
+| Seed users | `simulation.seed_user_ids` | Must exist in the graph; `dataset_validation.json` reports covered and missing seed IDs. |
+| Platform context | `platform_context` block | Hot topics, feed ranking weight, trace visibility, and platform mood. |
+| Marketing post | `post` block | Text, media summary, and topic tags used by the deterministic or provider-backed decision adapter. |
+| Time settings | `simulation.horizon`, `time_step_label`, `observation_window` | Preserve longitudinal diffusion records across steps. |
+
+The loader validates and reports real-data diagnostics in
+`dataset_validation.json`: source filenames, directedness, graph/profile counts,
+profile coverage gaps, extra profile IDs, edge weight column, preserved edge
+attribute columns, available edge columns, preserved extra profile columns, seed
+coverage, and errors. The report is metadata-only and must not contain secrets
+or raw private records.
+
+## Realistic marketing fixture
+
+A commit-safe real-like sample is included for integration and E2E coverage:
+
+- Config: `configs/fixtures/realistic_marketing_dataset.yaml`
+- Edges: `tests/fixtures/datasets/realistic_marketing_edges.csv`
+- Profiles: `tests/fixtures/datasets/realistic_marketing_profiles.csv`
+
+It contains 36 users, 45 directed weighted relationships, four communities,
+seed KOC users, user interests, brand attitude/activity/tendencies, and
+relationship/touchpoint attributes. Run it offline with:
+
+```bash
+python -m llm_abm_sim.run --config configs/fixtures/realistic_marketing_dataset.yaml --output runs/realistic-marketing-dataset
+```
+
+Expected artifacts include `config.json`, `dataset_validation.json`,
+`run_result.json`, `events.json`, `metrics_summary.json`, `step_records.csv`,
+and `report.html`.
+
 ## Edge-list schema
 
 Two edge-list styles are supported.
@@ -95,7 +145,7 @@ Profiles are validated as `UserProfile` records. Required field:
 
 - `user_id`
 
-Supported preference fields:
+Supported preference fields (validated by the core schema):
 
 - `interest_tags`
 - `brand_attitude` from `-1.0` to `1.0`
@@ -134,7 +184,7 @@ Both a top-level list and an object with a `profiles` list are accepted:
 }
 ```
 
-Duplicate `user_id` values fail validation.
+Duplicate `user_id` values fail validation. Extra non-secret columns are preserved for real-data diagnostics and future feature work; current deterministic decisions use the validated preference fields only.
 
 ## Graph/profile validation policies
 
@@ -166,6 +216,9 @@ The validation file is JSON-serializable and includes:
 - missing/extra profile diagnostics;
 - validation policy names;
 - edge weight and attribute column names;
+- available edge file columns;
+- preserved extra profile attribute columns;
+- seed user IDs, covered seed IDs, and missing seed IDs;
 - `errors`, which is empty for successful runs.
 
 This artifact is intentionally metadata-only. It should not contain API keys, provider credentials, cookies, or raw secret-bearing records.

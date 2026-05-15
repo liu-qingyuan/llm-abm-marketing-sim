@@ -1,0 +1,41 @@
+run_id: realistic-marketing-dataset
+random_seed: 20260515
+simulation:
+  horizon: 6
+  seed_user_ids: [u01, u11, u19, u29]
+  base_exposure_probability: 0.35
+  peer_exposure_boost: 0.18
+  time_step_label: "day"
+  observation_window: "6 days after seeded creator launch"
+  hot_topic_exposure_boost: 0.12
+  share_exposure_boost: 0.04
+platform_context:
+  time_label: "spring clean-beauty launch week"
+  hot_topics: [skincare, eco, sustainability, clean_beauty]
+  platform_mood: "creator-led launch with visible friend interactions and sustainability discussion"
+  feed_ranking_weight: 1.15
+  trace_visibility: 0.85
+post:
+  post_id: clean-glow-refill-launch
+  text: "Clean Glow refillable moisturizer launch: dermatologist-tested skincare with lower-waste packaging and campus creator bundles."
+  media_summary: "Short video showing refill pods, before-after texture shots, creator testimonials, and a limited launch discount."
+  topic_tags: [skincare, eco, sustainability, clean_beauty]
+dataset:
+  edge_list_path: ../../tests/fixtures/datasets/realistic_marketing_edges.csv
+  profile_path: ../../tests/fixtures/datasets/realistic_marketing_profiles.csv
+  profile_format: csv
+  delimiter: ","
+  directed: true
+  source_column: source
+  target_column: target
+  edge_weight_column: influence_weight
+  edge_attribute_columns:
+    - relationship
+    - touchpoint
+    - frequency_per_week
+    - recency_days
+    - community_bridge
+  missing_profile_policy: error
+  extra_profile_policy: error
+report:
+  title: "LLM-ABM Realistic Marketing Dataset Fixture Report"

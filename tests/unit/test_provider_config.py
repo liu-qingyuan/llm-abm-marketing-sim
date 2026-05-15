@@ -3,7 +3,12 @@ from pathlib import Path
 
 from llm_abm_sim.decision import EngageDecision
 from llm_abm_sim.outputs import copy_config_source
-from llm_abm_sim.provider_config import load_codex_provider_config, redact_secrets, should_run_live_llm
+from llm_abm_sim.provider_config import (
+    load_codex_provider_config,
+    redact_secrets,
+    resolve_runtime_credential,
+    should_run_live_llm,
+)
 
 
 def write_codex_config(home: Path, requires_auth: bool = True) -> None:
@@ -15,7 +20,7 @@ model_provider = "sub2api"
 
 [model_providers.sub2api]
 name = "sub2api"
-base_url = "https://api.q1ngyuan.top"
+base_url = "https://api.example.test"
 wire_api = "responses"
 requires_openai_auth = {str(requires_auth).lower()}
 """
@@ -30,7 +35,7 @@ def test_load_codex_provider_config_metadata_without_secret_values(tmp_path):
 
     assert config is not None
     assert config.provider_name == "sub2api"
-    assert config.base_url == "https://api.q1ngyuan.top"
+    assert config.base_url == "https://api.example.test"
     assert config.wire_api == "responses"
     assert config.requires_openai_auth is True
     assert config.auth_available is True
@@ -40,7 +45,7 @@ def test_load_codex_provider_config_metadata_without_secret_values(tmp_path):
 def test_live_llm_gate_requires_explicit_opt_in_and_auth(monkeypatch, tmp_path):
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     write_codex_config(tmp_path)
-    (tmp_path / "auth.json").write_text("{}")
+    (tmp_path / "auth.json").write_text('{"OPENAI_API_KEY":"codex-secret"}', encoding="utf-8")
 
     monkeypatch.delenv("LLM_ABM_RUN_LIVE_LLM", raising=False)
     assert should_run_live_llm(tmp_path) is False
@@ -52,7 +57,7 @@ def test_live_llm_gate_requires_explicit_opt_in_and_auth(monkeypatch, tmp_path):
 def test_codex_auth_fallback_requires_provider_flag(monkeypatch, tmp_path):
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     write_codex_config(tmp_path, requires_auth=False)
-    (tmp_path / "auth.json").write_text("{}")
+    (tmp_path / "auth.json").write_text('{"OPENAI_API_KEY":"codex-secret"}', encoding="utf-8")
     monkeypatch.setenv("LLM_ABM_RUN_LIVE_LLM", "1")
 
     assert should_run_live_llm(tmp_path) is False
@@ -109,3 +114,37 @@ def test_redact_preserves_allowlisted_provider_metadata_keys():
     payload = {"requires_openai_auth": True, "auth_available": False, "api_key_env": "OPENAI_API_KEY"}
 
     assert redact_secrets(payload) == payload
+
+
+def test_resolve_runtime_credential_prefers_env_without_reading_codex(monkeypatch, tmp_path):
+    write_codex_config(tmp_path)
+    (tmp_path / "auth.json").write_text('{"OPENAI_API_KEY":"codex-secret"}', encoding="utf-8")
+    monkeypatch.setenv("OPENAI_API_KEY", "env-secret")
+
+    credential = resolve_runtime_credential(codex_home=tmp_path)
+
+    assert credential is not None
+    assert credential.value == "env-secret"
+    assert credential.source == "env:OPENAI_API_KEY"
+    assert "env-secret" not in repr(credential)
+
+
+def test_resolve_runtime_credential_uses_codex_auth_only_for_openai_auth_provider(monkeypatch, tmp_path):
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    write_codex_config(tmp_path, requires_auth=True)
+    (tmp_path / "auth.json").write_text('{"OPENAI_API_KEY":"codex-secret"}', encoding="utf-8")
+
+    credential = resolve_runtime_credential(codex_home=tmp_path)
+
+    assert credential is not None
+    assert credential.value == "codex-secret"
+    assert credential.source == "codex_auth"
+    assert "codex-secret" not in repr(credential)
+
+
+def test_resolve_runtime_credential_does_not_use_codex_auth_for_unscoped_provider(monkeypatch, tmp_path):
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    write_codex_config(tmp_path, requires_auth=False)
+    (tmp_path / "auth.json").write_text('{"OPENAI_API_KEY":"codex-secret"}', encoding="utf-8")
+
+    assert resolve_runtime_credential(codex_home=tmp_path) is None

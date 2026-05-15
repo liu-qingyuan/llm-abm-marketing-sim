@@ -54,3 +54,27 @@ def test_runner_loads_toy_dataset_fixture_with_config_relative_paths():
     assert report.profile_path is not None
     assert Path(report.profile_path).is_absolute()
     assert Path(report.profile_path).name == "toy_profiles.csv"
+
+
+def test_runner_loads_realistic_marketing_dataset_deterministically():
+    config = Path("configs/fixtures/realistic_marketing_dataset.yaml")
+    first_runner = ExperimentRunner.from_config_file(config)
+    first = first_runner.run()
+    second_runner = ExperimentRunner.from_config_file(config)
+    second = second_runner.run()
+
+    assert first.model_dump(mode="json") == second.model_dump(mode="json")
+    assert first.run_id == "realistic-marketing-dataset"
+    assert first.metrics_summary["total_agents"] == 36
+    assert first.metrics_summary["final_exposed"] >= 20
+    assert first.metrics_summary["final_engaged"] >= 10
+    assert first.metrics_summary["diffusion_depth"] >= 3
+    report = first_runner.dataset_validation_report
+    assert report is not None
+    assert report.graph_node_count == 36
+    assert report.graph_edge_count == 45
+    assert report.profile_record_count == 36
+    assert report.covered_seed_user_ids == ["u01", "u11", "u19", "u29"]
+    assert report.missing_seed_user_ids == []
+    assert "community" in report.preserved_profile_attribute_columns
+    assert "touchpoint" in report.edge_attribute_columns

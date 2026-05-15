@@ -39,6 +39,22 @@ runs/sample/run_result.json
 runs/sample/step_records.csv
 ```
 
+
+### Run the realistic dataset fixture
+
+```bash
+. .venv/bin/activate
+python -m llm_abm_sim.run --config configs/fixtures/realistic_marketing_dataset.yaml --output runs/realistic-marketing-dataset
+```
+
+This uses a commit-safe real-like social-network sample with directed weighted
+edges, relationship/touchpoint metadata, communities, seed users, platform
+context, time settings, and marketing content. Replace it with local private
+data by placing cleaned files under ignored `data/raw/` or `data/processed/`
+and updating `dataset.edge_list_path` / `dataset.profile_path` in a local config.
+Do not commit raw/private exports, handles, emails, tokens, cookies, API keys,
+or secret-bearing headers.
+
 ## Quality Gates
 
 Run all default checks:
@@ -54,13 +70,15 @@ python -m llm_abm_sim.run --config configs/default.yaml --output runs/sample
 npx playwright test
 ```
 
-Manual live-gate readiness check:
+Manual live-gate checks:
 
 ```bash
-LLM_ABM_RUN_LIVE_LLM=1 pytest -q -m live_llm
+pytest -q -m live_llm -rs
+LLM_ABM_RUN_LIVE_LLM=1 pytest -q -m live_llm -rs
+OPENAI_API_KEY=... LLM_ABM_RUN_LIVE_LLM=1 pytest -q -m live_llm -rs
 ```
 
-The Phase 3 gate validates explicit opt-in and performs one provider decision only when live credentials are available. Without concrete credentials it skips/fails closed with a redacted reason; default verification never performs live network calls.
+The live gate performs one provider decision only when explicitly opted in and when either Codex provider config/auth or `OPENAI_API_KEY` is available with the optional `openai` dependency. Codex config is read from `CODEX_HOME/config.toml` or `~/.codex/config.toml`; auth reuse is runtime-only and allowed only when the selected provider has `requires_openai_auth=true`. Default verification never performs live network calls.
 
 ## Common Tasks
 
@@ -95,8 +113,8 @@ The Phase 3 gate validates explicit opt-in and performs one provider decision on
 1. Extend `DatasetConfig` in `schemas.py`.
 2. Add loader behavior in `graph_loader.py` and `runner.py`.
 3. Preserve explicit missing-profile behavior.
-4. Add a toy fixture and integration test.
-5. Update `docs/dataset-ingestion.md` with schema examples, validation policies, and path-resolution rules.
+4. Add a commit-safe fixture and integration test. Use a toy fixture for small contracts and a richer real-like fixture when exercising real dataset shape.
+5. Update `docs/dataset-ingestion.md` with schema examples, validation policies, seed/platform/time configuration, privacy rules, and path-resolution rules.
 
 ## Testing Strategy
 

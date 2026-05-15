@@ -3,7 +3,7 @@ from __future__ import annotations
 from enum import Enum
 from pathlib import Path
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class PostContent(BaseModel):
@@ -26,7 +26,15 @@ class PlatformContext(BaseModel):
 
 
 class UserProfile(BaseModel):
-    """Individual preference state for one social-media user agent."""
+    """Individual preference state for one social-media user agent.
+
+    Real dataset ingestion preserves additional public, non-secret profile
+    attributes such as community, segment, locale, lifecycle stage, or follower
+    counts so experiments can use richer local social-network datasets without
+    expanding the simulator core schema for every column.
+    """
+
+    model_config = ConfigDict(extra="allow")
 
     user_id: str
     interest_tags: list[str] = Field(default_factory=list)

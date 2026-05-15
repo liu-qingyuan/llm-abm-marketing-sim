@@ -85,6 +85,7 @@ class ExperimentRunner:
             self.config.dataset,
             inline_edges=[(str(left), str(right)) for left, right in self.config.graph_edges],
             inline_profiles=self.config.profiles,
+            seed_user_ids=self.config.simulation.seed_user_ids,
         )
 
 

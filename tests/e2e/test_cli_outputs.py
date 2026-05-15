@@ -94,3 +94,55 @@ def test_cli_writes_dataset_validation_for_toy_dataset_fixture(tmp_path):
     assert events["exposure_events"][1]["source_user_id"] == "u1"
     assert events["exposure_events"][-1]["source_user_id"] == "u2"
     assert "LLM-ABM Toy Dataset Fixture Report" in (output_dir / "report.html").read_text()
+
+
+def test_cli_writes_realistic_marketing_dataset_artifacts(tmp_path):
+    output_dir = tmp_path / "realistic-marketing-dataset"
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "llm_abm_sim.run",
+            "--config",
+            "configs/fixtures/realistic_marketing_dataset.yaml",
+            "--output",
+            str(output_dir),
+        ],
+        check=True,
+        text=True,
+        capture_output=True,
+    )
+
+    assert str(output_dir) in completed.stdout
+    expected = {
+        "config.json",
+        "realistic_marketing_dataset.yaml",
+        "dataset_validation.json",
+        "run_result.json",
+        "events.json",
+        "metrics_summary.json",
+        "step_records.csv",
+        "report.html",
+    }
+    assert expected.issubset({path.name for path in output_dir.iterdir()})
+
+    validation = json.loads((output_dir / "dataset_validation.json").read_text())
+    assert validation["graph_node_count"] == 36
+    assert validation["graph_edge_count"] == 45
+    assert validation["profile_record_count"] == 36
+    assert validation["directed"] is True
+    assert validation["covered_seed_user_ids"] == ["u01", "u11", "u19", "u29"]
+    assert validation["missing_seed_user_ids"] == []
+    assert validation["edge_weight_column"] == "influence_weight"
+    assert "touchpoint" in validation["edge_attribute_columns"]
+    assert "community" in validation["preserved_profile_attribute_columns"]
+    assert validation["edge_list_path"].endswith("realistic_marketing_edges.csv")
+    assert validation["profile_path"].endswith("realistic_marketing_profiles.csv")
+
+    result = json.loads((output_dir / "run_result.json").read_text())
+    metrics = json.loads((output_dir / "metrics_summary.json").read_text())
+    events = json.loads((output_dir / "events.json").read_text())
+    assert result["run_id"] == "realistic-marketing-dataset"
+    assert metrics["total_agents"] == 36
+    assert len(events["exposure_events"]) >= 20
+    assert "LLM-ABM Realistic Marketing Dataset Fixture Report" in (output_dir / "report.html").read_text()

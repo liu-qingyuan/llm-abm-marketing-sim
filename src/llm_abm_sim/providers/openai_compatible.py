@@ -2,13 +2,12 @@ from __future__ import annotations
 
 import importlib.util
 import json
-import os
 from pathlib import Path
 from typing import Any, Protocol, cast
 
 from llm_abm_sim.decision import DecisionInput, EngageDecision, LLMDecisionAdapter
 from llm_abm_sim.prompting import build_engagement_prompt
-from llm_abm_sim.provider_config import load_codex_provider_config, should_run_live_llm
+from llm_abm_sim.provider_config import load_codex_provider_config, resolve_runtime_credential, should_run_live_llm
 from llm_abm_sim.schemas import (
     FailClosedAction,
     PeerContext,
@@ -100,15 +99,17 @@ class OpenAICompatibleDecisionAdapter(LLMDecisionAdapter):
         if importlib.util.find_spec("openai") is None:
             raise ProviderConfigurationError("optional openai dependency is not installed")
 
-        api_key = os.environ.get(self.config.api_key_env)
-        if not api_key and self.codex_provider_config and self.codex_provider_config.requires_openai_auth:
-            # Deliberately do not read auth.json. Codex auth reuse is limited to
-            # metadata readiness unless a caller supplies a concrete secret via env.
-            raise ProviderConfigurationError("provider auth metadata is ready but no API key env is supplied")
-        if not api_key:
-            raise ProviderConfigurationError(f"missing API key env {self.config.api_key_env}")
+        credential = resolve_runtime_credential(
+            api_key_env=self.config.api_key_env,
+            codex_home=self.codex_home,
+            codex_provider=self.codex_provider_config,
+        )
+        if credential is None:
+            raise ProviderConfigurationError(
+                f"missing runtime credential from Codex auth or API key env {self.config.api_key_env}"
+            )
         base_url = self.config.base_url or (self.codex_provider_config.base_url if self.codex_provider_config else None)
-        return _OpenAISDKClient(api_key=api_key, base_url=base_url, timeout=self.config.timeout_seconds)
+        return _OpenAISDKClient(api_key=credential.value, base_url=base_url, timeout=self.config.timeout_seconds)
 
     def _handle_failure(self, exc: Exception) -> EngageDecision:
         action = self.config.fail_closed_action
