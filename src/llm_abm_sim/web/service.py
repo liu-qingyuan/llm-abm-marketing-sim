@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import threading
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -175,11 +176,28 @@ class WebRunStore:
             self._mark_blocked(job, "ProviderReadinessBlocked", "; ".join(readiness.get("reasons", [])))
             return job
 
+        thread = threading.Thread(
+            target=self._run_job_thread,
+            args=(job, payload),
+            kwargs={"mock_provider": mock_provider, "provider_readiness": readiness},
+            name=f"llm-abm-web-run-{run_id}",
+            daemon=True,
+        )
+        thread.start()
+        return job
+
+    def _run_job_thread(
+        self,
+        job: RunJob,
+        payload: dict[str, Any],
+        *,
+        mock_provider: bool,
+        provider_readiness: dict[str, Any],
+    ) -> None:
         try:
-            self._run_now(job, payload, mock_provider=mock_provider, provider_readiness=readiness)
+            self._run_now(job, payload, mock_provider=mock_provider, provider_readiness=provider_readiness)
         except Exception as exc:  # noqa: BLE001 - local Web API returns safe structured failures.
             self._mark_failed(job, exc.__class__.__name__, _safe_error_message(exc))
-        return job
 
     def get_job(self, run_id: str) -> RunJob | None:
         return self.jobs.get(run_id)

@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import json
+import time
 from pathlib import Path
 
 from fastapi.testclient import TestClient
 
 from llm_abm_sim.web import create_app
+from llm_abm_sim.web.service import MockProviderDecisionAdapter
 
 
 def _client(tmp_path: Path) -> TestClient:
@@ -15,6 +17,15 @@ def _client(tmp_path: Path) -> TestClient:
 def _write(path: Path, text: str) -> Path:
     path.write_text(text, encoding="utf-8")
     return path
+
+
+def _wait_for_terminal(client: TestClient, run_id: str) -> dict[str, object]:
+    for _ in range(100):
+        job = client.get(f"/api/runs/{run_id}").json()
+        if job["state"] not in {"queued", "running"}:
+            return job
+        time.sleep(0.02)
+    raise AssertionError(f"run did not finish: {job}")
 
 
 def test_health_endpoint(tmp_path: Path):
@@ -149,6 +160,7 @@ def test_mock_provider_run_writes_artifacts_and_report_payload(tmp_path: Path):
         },
     ).json()
 
+    run = _wait_for_terminal(client, str(run["run_id"]))
     assert run["state"] == "succeeded", run
     payload = client.get(f"/api/runs/{run['run_id']}/report-payload").json()
     assert payload["decision_source_summary"]["provider"] > 0
@@ -160,3 +172,39 @@ def test_mock_provider_run_writes_artifacts_and_report_payload(tmp_path: Path):
     joined = "\n".join(path.read_text(errors="ignore") for path in artifact_dir.iterdir() if path.is_file()).lower()
     for forbidden in ["sk-hidden", "authorization", "cookie", "access_token", "raw_prompt", "raw_provider", "headers"]:
         assert forbidden not in joined
+
+
+def test_run_api_uses_polling_job_contract(tmp_path: Path, monkeypatch):
+    original_decide = MockProviderDecisionAdapter.decide
+
+    def slow_decide(self, *args, **kwargs):  # type: ignore[no-untyped-def]
+        time.sleep(0.05)
+        return original_decide(self, *args, **kwargs)
+
+    monkeypatch.setattr(MockProviderDecisionAdapter, "decide", slow_decide)
+    client = _client(tmp_path)
+    users = _write(tmp_path / "users.csv", "user_id,interest_tags,brand_attitude\nu1,eco,0.8\nu2,eco,0.5\n")
+    edges = _write(tmp_path / "edges.csv", "source,target,weight\nu1,u2,1.0\n")
+    with users.open("rb") as users_handle, edges.open("rb") as edges_handle:
+        validation = client.post(
+            "/api/datasets/validate",
+            data={"seed_user_ids": "u1"},
+            files={
+                "users_file": ("users.csv", users_handle, "text/csv"),
+                "edges_file": ("edges.csv", edges_handle, "text/csv"),
+            },
+        ).json()
+
+    job = client.post(
+        "/api/runs",
+        json={
+            "validation_id": validation["validation_id"],
+            "mock_provider": True,
+            "scenario": {"post_text": "Eco launch", "topic_tags": "eco", "seed_user_ids": "u1", "horizon": 2},
+        },
+    ).json()
+
+    assert job["state"] in {"queued", "running", "succeeded"}
+    polled = _wait_for_terminal(client, str(job["run_id"]))
+    assert polled["state"] == "succeeded"
+    assert client.get(f"/api/runs/{job['run_id']}/report-payload").json()["decision_source_summary"]["provider"] > 0

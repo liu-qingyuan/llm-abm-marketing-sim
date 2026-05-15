@@ -116,7 +116,7 @@ and a bare list:
 [{"source":"u1","target":"u2","weight":1.0}]
 ```
 
-The Web import boundary normalizes uploads into canonical local files and then validates through the existing `DatasetConfig` / `load_network_dataset` semantics. Template files are available under `configs/templates/` and through `/api/templates/users.csv`, `/api/templates/edges.csv`, `/api/templates/users.json`, and `/api/templates/edges.json`.
+The Web import boundary normalizes uploads into canonical local files and then validates through the existing `DatasetConfig` / `load_network_dataset` semantics. Template files are available under `configs/templates/` and through `/api/templates/users.csv`, `/api/templates/edges.csv`, `/api/templates/users.json`, and `/api/templates/edges.json`. Run creation follows the browser-safe job contract: `POST /api/runs` returns `queued`/`running`/terminal job state, and the UI polls `GET /api/runs/{run_id}` until `succeeded`, `failed`, or `blocked`.
 
 ### Provider modes
 

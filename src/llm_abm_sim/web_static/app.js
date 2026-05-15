@@ -59,8 +59,11 @@ document.getElementById('run-form').addEventListener('submit', async e => {
     }
   };
   const res = await fetch('/api/runs', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload) });
-  const job = await res.json();
+  let job = await res.json();
   setPanel('run-output', safeJson(job));
+  if(job.run_id && (job.state === 'queued' || job.state === 'running')){
+    job = await pollRun(job.run_id);
+  }
   if(job.state === 'succeeded'){
     const report = await (await fetch(`/api/runs/${job.run_id}/report-payload`)).json();
     lastReport = report;
@@ -68,6 +71,16 @@ document.getElementById('run-form').addEventListener('submit', async e => {
     renderReport(report);
   }
 });
+
+async function pollRun(runId){
+  for(let attempt = 0; attempt < 240; attempt++){
+    const job = await (await fetch(`/api/runs/${runId}`)).json();
+    setPanel('run-output', safeJson(job));
+    if(!['queued','running'].includes(job.state)) return job;
+    await new Promise(resolve => setTimeout(resolve, 500));
+  }
+  throw new Error(`Timed out waiting for run ${runId}`);
+}
 
 function renderReport(report){
   document.getElementById('results').classList.remove('hidden');
