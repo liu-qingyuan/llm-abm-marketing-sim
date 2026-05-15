@@ -11,14 +11,18 @@
 
 ## Setup
 
+For a fresh macOS clone, use the canonical zero-to-run guide first: `docs/getting-started-macos.md`. The development install below matches that guide and includes the Web console plus optional provider SDK so one environment can run the documented CLI, API, and Playwright checks. The default test/run path remains offline unless the live gate is explicitly set.
+
 ```bash
-python -m venv .venv
+python3 -m venv .venv
 . .venv/bin/activate
 python -m pip install -U pip
-python -m pip install -e ".[dev]"
-npm install
+python -m pip install -e ".[dev,web,llm]"
+npm ci
 npx playwright install chromium
 ```
+
+For CLI-only work, `python -m pip install -e ".[dev]"` is enough. Use `npm ci`, not `npm install`, when validating a fresh clone against `package-lock.json`.
 
 ## Run the simulator
 
@@ -27,7 +31,7 @@ npx playwright install chromium
 python -m llm_abm_sim.run --config configs/default.yaml --output runs/sample
 ```
 
-Expected generated files:
+Expected generated files include:
 
 ```text
 runs/sample/config.json
@@ -37,6 +41,9 @@ runs/sample/metrics_summary.json
 runs/sample/report.html
 runs/sample/run_result.json
 runs/sample/step_records.csv
+runs/sample/report_payload.json
+runs/sample/graph_trace.json
+runs/sample/input-builder.html
 ```
 
 
@@ -44,7 +51,7 @@ runs/sample/step_records.csv
 
 ```bash
 . .venv/bin/activate
-python -m llm_abm_sim.run --config configs/fixtures/realistic_marketing_dataset.yaml --output runs/realistic-marketing-dataset
+python -m llm_abm_sim.run --config configs/fixtures/realistic_marketing_dataset.yaml --output runs/realistic-sample
 ```
 
 This uses a commit-safe real-like social-network sample with directed weighted
@@ -53,7 +60,7 @@ context, time settings, and marketing content. Replace it with local private
 data by placing cleaned files under ignored `data/raw/` or `data/processed/`
 and updating `dataset.edge_list_path` / `dataset.profile_path` in a local config.
 Do not commit raw/private exports, handles, emails, tokens, cookies, API keys,
-or secret-bearing headers.
+or secret-bearing headers. The realistic fixture writes `runs/realistic-sample/dataset_validation.json` in addition to the common report artifacts.
 
 ## Quality Gates
 
@@ -67,13 +74,15 @@ mypy src
 pytest -q
 python -m py_compile $(find src tests -name '*.py' -print)
 python -m llm_abm_sim.run --config configs/default.yaml --output runs/sample
-npx playwright test
+python -m llm_abm_sim.run --config configs/fixtures/realistic_marketing_dataset.yaml --output runs/realistic-sample
+pytest -q tests/web/test_web_api.py
+npx playwright test tests/playwright/web-console.spec.ts
 ```
 
 Manual live-gate checks:
 
 ```bash
-pytest -q -m live_llm -rs
+pytest -q -m live_llm -rs                         # should skip/fail closed without the live gate
 LLM_ABM_RUN_LIVE_LLM=1 pytest -q -m live_llm -rs
 OPENAI_API_KEY=... LLM_ABM_RUN_LIVE_LLM=1 pytest -q -m live_llm -rs
 ```
@@ -116,12 +125,24 @@ The live gate performs one provider decision only when explicitly opted in and w
 4. Add a commit-safe fixture and integration test. Use a toy fixture for small contracts and a richer real-like fixture when exercising real dataset shape.
 5. Update `docs/dataset-ingestion.md` with schema examples, validation policies, seed/platform/time configuration, privacy rules, and path-resolution rules.
 
+## Local Web console
+
+Start the single-user Web console after installing the `web` extra:
+
+```bash
+. .venv/bin/activate
+python -m llm_abm_sim.web --host 127.0.0.1 --port 8000 --artifact-root runs/web
+# or: llm-abm-web --host 127.0.0.1 --port 8000 --artifact-root runs/web
+```
+
+Open `http://127.0.0.1:8000`. Product mode preflights `/api/provider/readiness` and is `blocked` until the live gate, optional SDK, provider metadata, and runtime credential are ready. For offline demos/tests, enable **Use mock provider for test/dev**; mock runs are visibly labeled and avoid network/secrets. Web artifacts are written under `runs/web/<run-id>/` and include `web_run_metadata.json` plus the common report artifacts.
+
 ## Testing Strategy
 
 - Prefer unit tests for pure schema/decision/cache behavior.
 - Use integration tests for runner/model/environment interactions.
 - Use Python E2E tests only for full CLI/output workflows.
-- Use Playwright only for generated static report smoke tests, not business logic.
+- Use Playwright for generated static report smoke tests and the local Web console browser flow; keep business logic covered by Python tests.
 - Keep default test suite offline and deterministic.
 
 ## Generated Artifact Policy
@@ -149,7 +170,7 @@ _Generated using BMAD Method `document-project` workflow._
 
 ## Manual live provider smoke
 
-Default development and CI-style tests remain offline. After installing the optional LLM extra locally (`python -m pip install -e '.[llm]'`) and confirming provider readiness, run a single provider-backed smoke with:
+Default development and CI-style tests remain offline. After installing the optional LLM extra locally (`python -m pip install -e '.[dev,web,llm]'` or `python -m pip install -e '.[llm]'` on top of an existing environment) and confirming provider readiness, run a single provider-backed smoke with:
 
 ```bash
 LLM_ABM_RUN_LIVE_LLM=1 python -m llm_abm_sim.run --config configs/live/provider_smoke.yaml --output runs/live-provider-smoke

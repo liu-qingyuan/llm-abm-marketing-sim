@@ -85,13 +85,15 @@ Provider artifacts expose only allowlisted evidence: provider name, sanitized ba
 
 ## Local Web Console polished dashboard
 
-Start the SaaS-like single-user local Web console:
+Start the SaaS-like single-user local Web console. From a fresh macOS clone, follow `docs/getting-started-macos.md`; the matching local install is:
 
 ```bash
 . .venv/bin/activate
-python -m pip install -e ".[dev,web]"
+python -m pip install -e ".[dev,web,llm]"
+npm ci
+npx playwright install chromium
 python -m llm_abm_sim.web --host 127.0.0.1 --port 8000 --artifact-root runs/web
-# or: llm-abm-web --host 127.0.0.1 --port 8000
+# or: llm-abm-web --host 127.0.0.1 --port 8000 --artifact-root runs/web
 ```
 
 Open `http://127.0.0.1:8000`. The polished Web console keeps the same FastAPI + static HTML/CSS/JS architecture while organizing the browser flow into a bilingual dashboard:
@@ -130,7 +132,7 @@ The Web import boundary normalizes uploads into canonical local files and then v
 
 Product-mode Web runs default to provider-backed LLM decisions and preflight `/api/provider/readiness`. If the live gate, SDK, credential, or Codex provider metadata is missing, the provider strip and run prerequisite copy show `blocked`, and the run is marked `blocked` instead of silently falling back to the offline rule-based adapter. For intentional local tests, check “Use mock provider for test/dev”; this mode is visibly labeled as mock in the provider strip, result cards, report payload, and generated metadata while still avoiding network and secrets.
 
-Manual live validation remains opt-in only:
+Manual live validation remains opt-in only and uses the same readiness rules as `docs/provider-config.md`: `LLM_ABM_RUN_LIVE_LLM=1`, the optional `llm`/OpenAI SDK installed, Codex provider metadata or an API-key fallback, and a runtime credential from Codex auth or `OPENAI_API_KEY`.
 
 ```bash
 LLM_ABM_RUN_LIVE_LLM=1 pytest -q -m live_llm -rs
@@ -169,5 +171,5 @@ python -m llm_abm_sim.web --host 127.0.0.1 --port 8000 --artifact-root runs/web-
 rg -i 'sk-|Bearer|authorization|cookie|access_token|raw_prompt|raw_provider|headers|credential|password|secret' runs/web-ui-polish || true
 ```
 
-Expected scan result: no generated run artifact contains forbidden raw/provider/secret fragments.
+Expected scan result: no generated run artifact contains forbidden raw/provider/secret fragments. The words `secret` or `credential` may appear in documentation, UI copy, or policy metadata; classify those as policy-word false positives only after confirming no actual value, token, header, cookie, raw prompt, or raw provider response is present.
 

@@ -1,6 +1,6 @@
 # Provider Config and Live LLM Gate
 
-The simulator keeps live provider checks out of default tests. Default runs use the deterministic rule-based adapter and require no API key or network.
+The simulator keeps live provider checks out of default tests. Default CLI runs use the deterministic rule-based adapter and require no API key or network. The local Web console has two explicit modes: test/dev mock provider mode for offline demos, and product provider mode that fails closed as `blocked` until live readiness is satisfied.
 
 ## Codex-compatible provider resolution
 
@@ -23,6 +23,14 @@ Codex auth reuse is allowed only when the selected provider config explicitly de
 - `LLM_ABM_RUN_LIVE_LLM=1 pytest -q -m live_llm -rs` is the explicit manual gate shape; it makes one real provider decision only when Codex config/auth or `OPENAI_API_KEY` and the optional SDK are available.
 - Provider-shaped responses must validate through `EngageDecision`; default unit coverage uses a mocked/provider-shaped payload so no network or API key is needed.
 - Redaction tests must prove secrets are not emitted.
+- `GET /api/provider/readiness?mock_provider=true` returns visibly labeled mock readiness for offline Web demos/tests.
+- `GET /api/provider/readiness` without mock mode returns `blocked` unless the optional SDK, `LLM_ABM_RUN_LIVE_LLM=1`, provider metadata, and runtime credential are all available; `POST /api/runs` mirrors that blocked state instead of falling back to offline decisions.
+
+## Web console provider modes
+
+Use **Use mock provider for test/dev** for no-network browser demos. That path uses deterministic mock decisions, labels provider evidence as mock in UI/payloads/artifacts, and writes sanitized outputs under `runs/web/<run-id>/`.
+
+Leave mock unchecked only for product-provider validation. Product mode checks the same live gate and credential readiness before a run starts. Missing readiness is not an error in the offline demo path; it is the expected fail-closed product state.
 
 ## Phase 3 provider-backed adapter
 
@@ -33,6 +41,9 @@ Phase 3 adds an optional `provider_llm` config block. Omit it, or keep
 provider_llm:
   enabled: true
   provider: openai_compatible
+  # For committed live smoke configs, prefer Codex runtime metadata instead
+  # of hardcoding a provider host/model. If use_codex_provider_config is
+  # false, set model/base_url in a private local config.
   model: gpt-5.5
   base_url: https://api.example.test/v1
   wire_api: responses
@@ -68,8 +79,7 @@ OPENAI_API_KEY=... LLM_ABM_RUN_LIVE_LLM=1 pytest -q -m live_llm -rs
 If Codex auth is absent, provider config is not OpenAI-auth scoped, the optional
 `openai` dependency is missing, or credentials are otherwise unavailable, the
 test skips/fails closed with a redacted reason. Default `pytest -q` remains
-offline because `live_llm` is excluded by pytest configuration.
-wire API, model, `requires_openai_auth`, auth availability, adapter name/version, and non-secret config switches. URL query strings, fragments, userinfo, raw prompts, raw responses, and credential values are not serialized.
+offline because `live_llm` is excluded by pytest configuration. Provider evidence may include sanitized base URL, wire API, model, `requires_openai_auth`, auth availability, adapter name/version, and non-secret config switches. URL query strings, fragments, userinfo, raw prompts, raw responses, and credential values are not serialized.
 
 ## Live provider smoke config
 
@@ -83,4 +93,4 @@ LLM_ABM_RUN_LIVE_LLM=1 python -m llm_abm_sim.run \
   --output runs/live-provider-smoke
 ```
 
-The generated `metrics_summary.json`, `events.json`, `run_result.json`, and `report.html` include sanitized decision-source/provider evidence such as `decision_source_summary.provider == 1` when a provider-backed decision is observed. These artifacts must not include raw provider request/response payloads or secrets.
+The generated `metrics_summary.json`, `events.json`, `run_result.json`, `report_payload.json`, `graph_trace.json`, and `report.html` include sanitized decision-source/provider evidence such as `decision_source_summary.provider == 1` when a provider-backed decision is observed. These artifacts must not include raw provider request/response payloads or secrets.
