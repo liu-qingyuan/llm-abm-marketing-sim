@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>LLM-ABM Local Web Console</title>
+  <title data-i18n="documentTitle">LLM-ABM Local Web Console</title>
   <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
@@ -18,7 +18,7 @@
       <label class="language">🌐 <select id="language" data-testid="web-language"><option value="en-US">English</option><option value="zh-CN">中文</option></select></label>
     </header>
 
-    <section class="dashboard-overview" aria-label="Run workflow overview">
+    <section class="dashboard-overview" data-i18n-aria-label="ariaRunWorkflowOverview" aria-label="Run workflow overview">
       <article class="status-card provider-strip" aria-labelledby="provider-heading">
         <div class="strip-copy">
           <p class="section-kicker" data-i18n="providerKicker">Provider gate</p>
@@ -27,7 +27,7 @@
           <p id="provider-reasons" data-testid="provider-reasons" class="muted status-detail" role="status" aria-live="polite" aria-atomic="true"></p>
         </div>
         <div class="status-row provider-controls">
-          <span id="provider-state" data-testid="provider-state" class="pill">checking</span>
+          <span id="provider-state" data-testid="provider-state" class="pill" data-i18n="stateChecking">checking</span>
           <label class="toggle-card"><input id="mock-provider" data-testid="mock-provider-toggle" type="checkbox" aria-describedby="mock-helper"> <span data-i18n="mockLabel">Use mock provider for test/dev</span></label>
         </div>
         <div id="provider-mode-card" data-testid="provider-mode-card" class="mode-card" role="note">
@@ -37,7 +37,7 @@
         <p id="mock-helper" class="helper-text" data-i18n="mockHelper">Mock mode is visibly labeled in UI and generated metadata; use it for demos and tests without API auth values.</p>
       </article>
 
-      <nav class="stepper" aria-label="Simulation workflow">
+      <nav class="stepper" data-i18n-aria-label="ariaSimulationWorkflow" aria-label="Simulation workflow">
         <ol>
           <li class="step is-active"><span class="step-index">1</span><span><strong data-i18n="stepData">Data</strong><small data-i18n="stepDataHelp">Upload and validate inputs</small></span></li>
           <li class="step"><span class="step-index">2</span><span><strong data-i18n="stepScenario">Scenario</strong><small data-i18n="stepScenarioHelp">Define campaign context</small></span></li>
@@ -47,7 +47,7 @@
       </nav>
     </section>
 
-    <section class="workflow-grid" aria-label="Dataset and scenario setup">
+    <section class="workflow-grid" data-i18n-aria-label="ariaDatasetScenarioSetup" aria-label="Dataset and scenario setup">
       <form id="dataset-form" class="card workflow-card data-card" data-testid="dataset-form">
         <div class="card-head">
           <p class="section-kicker" data-i18n="dataKicker">Data source</p>
@@ -124,7 +124,7 @@
         <article aria-labelledby="trend-heading">
           <h3 id="trend-heading" data-i18n="trendTitle">Trend chart</h3>
           <p id="trend-summary" data-testid="trend-summary" class="helper-text"></p>
-          <div class="chart-legend" aria-label="Trend legend">
+          <div class="chart-legend" data-i18n-aria-label="ariaTrendLegend" aria-label="Trend legend">
             <span><i class="legend-swatch exposed"></i><span data-i18n="legendExposed">Exposed</span></span>
             <span><i class="legend-swatch engaged"></i><span data-i18n="legendEngaged">Engaged</span></span>
           </div>
@@ -137,7 +137,7 @@
         <article aria-labelledby="network-heading">
           <h3 id="network-heading" data-i18n="networkTitle">Network propagation timeline</h3>
           <p id="selected-step-summary" data-testid="selected-step-summary" class="helper-text" role="status" aria-live="polite" aria-atomic="true"></p>
-          <div class="chart-legend" aria-label="Node state legend">
+          <div class="chart-legend" data-i18n-aria-label="ariaNodeStateLegend" aria-label="Node state legend">
             <span><i class="legend-swatch unseen"></i><span data-i18n="legendUnseen">Unseen</span></span>
             <span><i class="legend-swatch exposed"></i><span data-i18n="legendExposed">Exposed</span></span>
             <span><i class="legend-swatch engaged"></i><span data-i18n="legendEngaged">Engaged</span></span>

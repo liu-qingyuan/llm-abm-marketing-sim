@@ -3,6 +3,12 @@ const I18N = {
     eyebrow:'Local single-user SaaS-like console',
     title:'LLM-ABM Marketing Simulator',
     subtitle:'Upload a social graph, validate it, run provider-backed diffusion, and inspect bilingual results locally.',
+    documentTitle:'LLM-ABM Local Web Console',
+    ariaRunWorkflowOverview:'Run workflow overview',
+    ariaSimulationWorkflow:'Simulation workflow',
+    ariaDatasetScenarioSetup:'Dataset and scenario setup',
+    ariaTrendLegend:'Trend legend',
+    ariaNodeStateLegend:'Node state legend',
     providerKicker:'Provider gate',
     providerTitle:'Provider readiness',
     providerHelp:'Product mode requires the live gate and runtime auth check. Mock mode is allowed only for local test/dev runs.',
@@ -18,6 +24,14 @@ const I18N = {
     providerBlockedCopy:'Live provider runs are fail-closed until the missing gate or auth setup is fixed. Use mock only for demos/tests.',
     providerReadyReason:'Provider appears ready for product mode.',
     providerMockReason:'Mock provider mode is visibly labeled and private-auth-free.',
+    reasonOpenAIMissing:'optional openai dependency is not installed',
+    reasonLiveGateMissing:'LLM_ABM_RUN_LIVE_LLM=1 live gate is not enabled',
+    reasonProviderMetadataMissing:'Codex provider metadata or API key environment is not available',
+    reasonRuntimeCredentialMissing:'runtime credential is missing from Codex auth or configured API key environment',
+    stateChecking:'checking',
+    stateReady:'ready',
+    stateMock:'mock',
+    stateBlocked:'blocked',
     stepData:'Data',
     stepDataHelp:'Upload and validate inputs',
     stepScenario:'Scenario',
@@ -54,6 +68,9 @@ const I18N = {
     validationWorking:'Validating dataset…',
     validationFailed:'Validation failed. Fix the files and try again.',
     validationReady:'Dataset validated. You can start a run.',
+    validationIdLabel:'validation_id',
+    profileCountLabel:'profiles',
+    edgeCountLabel:'edges',
     validationFirst:'Validate a dataset first.',
     runCreating:'Creating run…',
     runBlocked:'Run blocked by provider readiness. Fix product provider setup or switch to mock test/dev mode.',
@@ -77,6 +94,7 @@ const I18N = {
     metricsHelp:'Each card explains what the metric means and how to read the value.',
     trendTitle:'Trend chart',
     trendSummary:'Trend summary',
+    trendSummaryText:'{label}: final step {step} has {exposed} exposed and {engaged} engaged; peak new engagement occurs at step {peakStep}.',
     trendTableSummary:'Show accessible trend table',
     networkTitle:'Network propagation timeline',
     selectedStepLabel:'Selected time step',
@@ -135,12 +153,32 @@ const I18N = {
     agentPeer:'Peer context',
     agentPlatform:'Platform context',
     agentReason:'Reason',
-    influencers:'Key influencers'
+    influencers:'Key influencers',
+    notAvailable:'n/a',
+    mockAbbrev:'MOCK',
+    providerDecisionCount:'provider decisions',
+    providerMockMeta:'mock / test-dev',
+    providerProductMeta:'product',
+    confidenceLabel:'confidence',
+    ratioLabel:'ratio',
+    stepLabel:'step',
+    genericAgent:'agent',
+    genericDecision:'decision',
+    stateEngaged:'engaged',
+    stateIgnored:'ignored',
+    stateUnseen:'unseen',
+    seedUserLabel:'seed user'
   },
   'zh-CN': {
     eyebrow:'本地单用户 SaaS 风格控制台',
     title:'LLM-ABM 营销传播模拟器',
     subtitle:'上传社交图数据，完成校验，运行 Provider 驱动的传播模拟，并在本地查看双语结果。',
+    documentTitle:'LLM-ABM 本地 Web 控制台',
+    ariaRunWorkflowOverview:'运行工作流概览',
+    ariaSimulationWorkflow:'仿真工作流',
+    ariaDatasetScenarioSetup:'数据集与场景设置',
+    ariaTrendLegend:'趋势图图例',
+    ariaNodeStateLegend:'节点状态图例',
     providerKicker:'Provider 闸口',
     providerTitle:'Provider 就绪状态',
     providerHelp:'产品模式需要开启 live gate 并通过运行时鉴权检查。Mock 模式仅用于本地测试/演示。',
@@ -156,6 +194,14 @@ const I18N = {
     providerBlockedCopy:'缺少 gate 或鉴权配置时，产品模式会 fail-closed。仅在演示/测试时切换 Mock。',
     providerReadyReason:'Provider 已可用于产品模式。',
     providerMockReason:'Mock Provider 模式已明确标记且不包含私有鉴权值。',
+    reasonOpenAIMissing:'未安装可选 openai 依赖',
+    reasonLiveGateMissing:'LLM_ABM_RUN_LIVE_LLM=1 live gate 未启用',
+    reasonProviderMetadataMissing:'Codex Provider 元数据或 API key 环境不可用',
+    reasonRuntimeCredentialMissing:'Codex auth 或配置的 API key 环境缺少运行时凭据',
+    stateChecking:'检查中',
+    stateReady:'已就绪',
+    stateMock:'mock',
+    stateBlocked:'已阻止',
     stepData:'数据',
     stepDataHelp:'上传并校验输入',
     stepScenario:'场景',
@@ -192,6 +238,9 @@ const I18N = {
     validationWorking:'正在校验数据集…',
     validationFailed:'数据集校验失败。修正文件后重试。',
     validationReady:'数据集已校验，可以开始运行。',
+    validationIdLabel:'validation_id',
+    profileCountLabel:'用户数',
+    edgeCountLabel:'边数',
     validationFirst:'请先校验数据集。',
     runCreating:'正在创建运行…',
     runBlocked:'运行被 Provider 就绪状态阻止。请修复产品 Provider 设置，或切换 Mock 测试/演示模式。',
@@ -215,6 +264,7 @@ const I18N = {
     metricsHelp:'每张卡片都会说明指标含义与数值解读方式。',
     trendTitle:'趋势图',
     trendSummary:'趋势摘要',
+    trendSummaryText:'{label}：最终第 {step} 步有 {exposed} 个曝光、{engaged} 个互动；新增互动峰值在第 {peakStep} 步。',
     trendTableSummary:'显示无障碍趋势表格',
     networkTitle:'网络传播时间线',
     selectedStepLabel:'所选时间步',
@@ -273,7 +323,21 @@ const I18N = {
     agentPeer:'同伴语境',
     agentPlatform:'平台语境',
     agentReason:'理由',
-    influencers:'关键影响者'
+    influencers:'关键影响者',
+    notAvailable:'无',
+    mockAbbrev:'MOCK',
+    providerDecisionCount:'Provider 决策数',
+    providerMockMeta:'mock / 测试开发',
+    providerProductMeta:'产品模式',
+    confidenceLabel:'置信度',
+    ratioLabel:'比例',
+    stepLabel:'时间步',
+    genericAgent:'Agent',
+    genericDecision:'决策',
+    stateEngaged:'已互动',
+    stateIgnored:'未互动',
+    stateUnseen:'未触达',
+    seedUserLabel:'种子用户'
   }
 };
 let currentLang = 'en-US';
@@ -289,6 +353,8 @@ function t(key){ return (I18N[currentLang]||I18N['en-US'])[key] || key; }
 function applyI18n(){
   document.documentElement.lang=currentLang;
   document.querySelectorAll('[data-i18n]').forEach(el=>{el.textContent=t(el.dataset.i18n)});
+  document.querySelectorAll('[data-i18n-aria-label]').forEach(el=>{el.setAttribute('aria-label', t(el.dataset.i18nAriaLabel))});
+  document.title = t('documentTitle');
   if(lastReadiness) renderReadiness(lastReadiness);
   updateRunPrereqStatus();
   updateActionStates();
@@ -331,13 +397,32 @@ function formatTemplate(template, values){
 }
 function formatValue(value){
   const safeValue = sanitizeForUi(value);
-  if(Array.isArray(safeValue)) return safeValue.join(', ') || 'n/a';
+  if(Array.isArray(safeValue)) return safeValue.join(', ') || t('notAvailable');
   if(safeValue && typeof safeValue === 'object') return JSON.stringify(safeValue);
   if(typeof safeValue === 'number' && !Number.isInteger(safeValue)) return String(Math.round(safeValue * 1000) / 1000);
-  return String(safeValue ?? 'n/a');
+  return String(safeValue ?? t('notAvailable'));
 }
-function metricLabel(key){ return t(`metric_${key}_label`) || key.replace(/_/g, ' '); }
-function metricDescription(key){ return t(`metric_${key}_desc`) || ''; }
+function translateReason(reason){
+  const text = String(reason || '');
+  if(text === 'optional openai dependency is not installed') return t('reasonOpenAIMissing');
+  if(text === 'LLM_ABM_RUN_LIVE_LLM=1 live gate is not enabled') return t('reasonLiveGateMissing');
+  if(text === 'Codex provider metadata or API key environment is not available') return t('reasonProviderMetadataMissing');
+  if(text.startsWith('runtime credential is missing from Codex auth or ')) return t('reasonRuntimeCredentialMissing');
+  return text;
+}
+function stateLabel(state){
+  const map = { checking: 'stateChecking', ready: 'stateReady', mock: 'stateMock', blocked: 'stateBlocked', unseen: 'stateUnseen', engaged: 'stateEngaged', ignored: 'stateIgnored' };
+  const key = map[String(state || '')];
+  return key ? t(key) : String(state || t('notAvailable'));
+}
+function metricLabel(key){
+  const translated = t(`metric_${key}_label`);
+  return translated === `metric_${key}_label` ? key.replace(/_/g, ' ') : translated;
+}
+function metricDescription(key){
+  const translated = t(`metric_${key}_desc`);
+  return translated === `metric_${key}_desc` ? '' : translated;
+}
 function metricValue(report, key, fallback = 0){
   const metric = (report.metrics || []).find(item => item.key === key);
   return metric ? metric.value : fallback;
@@ -375,7 +460,7 @@ function renderReadiness(data){
   const modeCard = document.getElementById('provider-mode-card');
   const modeTitle = document.getElementById('provider-mode-title');
   const modeCopy = document.getElementById('provider-mode-copy');
-  state.textContent = data.state + (data.mock ? ' / MOCK' : '');
+  state.textContent = stateLabel(data.state) + (data.mock ? ` / ${t('mockAbbrev')}` : '');
   const isReady = data.state === 'ready';
   const isMock = data.state === 'mock' || data.mock;
   const stateClass = isMock ? 'warn' : (isReady ? 'good' : 'bad');
@@ -391,7 +476,7 @@ function renderReadiness(data){
     modeTitle.textContent = t('providerBlockedTitle');
     modeCopy.textContent = t('providerBlockedCopy');
   }
-  document.getElementById('provider-reasons').textContent = (data.reasons || []).join('; ') || (isMock ? t('providerMockReason') : t('providerReadyReason'));
+  document.getElementById('provider-reasons').textContent = (data.reasons || []).map(translateReason).join('; ') || (isMock ? t('providerMockReason') : t('providerReadyReason'));
   updateRunPrereqStatus();
   announce(`${modeTitle.textContent}. ${document.getElementById('provider-reasons').textContent}`);
 }
@@ -432,7 +517,7 @@ document.getElementById('dataset-form').addEventListener('submit', async e => {
     }
     validationId = data.validation_id;
     validationPayload = data.dataset_validation;
-    setPanel('validation-output', `${t('validationReady')} validation_id=${validationId}\nprofiles=${data.preview.profile_count} edges=${data.preview.edge_count}\n` + safeJson(data.preview));
+    setPanel('validation-output', `${t('validationReady')} ${t('validationIdLabel')}=${validationId}\n${t('profileCountLabel')}=${data.preview.profile_count} ${t('edgeCountLabel')}=${data.preview.edge_count}\n` + safeJson(data.preview));
   } catch (error) {
     setPanel('validation-output', `${t('validationFailed')}\n${error.message || String(error)}`);
   } finally {
@@ -522,7 +607,7 @@ function renderReport(report){
   renderAgentIO(report.graph_trace || {});
   const influencerMetric = report.metrics?.find(m=>m.key==='key_influencers')?.value;
   const influencers = (report.graph_trace?.run?.key_influencers || influencerMetric || report.metrics?.find(m=>m.key==='share_count')?.value || []);
-  document.getElementById('influencers').textContent = Array.isArray(influencers) ? (influencers.join(', ') || 'n/a') : String(influencers || 'n/a');
+  document.getElementById('influencers').textContent = Array.isArray(influencers) ? (influencers.join(', ') || t('notAvailable')) : String(influencers || t('notAvailable'));
 }
 
 function renderExecutiveSummary(report){
@@ -533,7 +618,7 @@ function renderExecutiveSummary(report){
   const shareCount = metricValue(report, 'share_count');
   const reachRate = metricValue(report, 'reach_rate');
   const engagementRate = metricValue(report, 'engagement_rate');
-  const source = report.inputs?.decision_mode || Object.entries(report.decision_source_summary || {}).map(([k,v]) => `${k}=${v}`).join(', ') || 'n/a';
+  const source = report.inputs?.decision_mode || Object.entries(report.decision_source_summary || {}).map(([k,v]) => `${k}=${v}`).join(', ') || t('notAvailable');
   const fallback = currentLang === 'zh-CN'
     ? `本次模拟覆盖 ${finalExposed}/${totalAgents} 个用户，${finalEngaged} 个用户发生互动，转发数 ${shareCount}。`
     : `This run reached ${finalExposed}/${totalAgents} users, with ${finalEngaged} engaged users and ${shareCount} shares.`;
@@ -571,9 +656,13 @@ function renderTrend(trend){
   const max = Math.max(1, ...trend.map(s=>Math.max(s.exposed_count||0, s.engaged_count||0)));
   const finalStep = trend[trend.length - 1] || {};
   const peakNewEngaged = trend.reduce((best, step) => (step.new_engaged_count || 0) > (best.new_engaged_count || 0) ? step : best, {});
-  summary.textContent = currentLang === 'zh-CN'
-    ? `${t('trendSummary')}：最终第 ${finalStep.time_step ?? 0} 步有 ${finalStep.exposed_count ?? 0} 个曝光、${finalStep.engaged_count ?? 0} 个互动；新增互动峰值在第 ${peakNewEngaged.time_step ?? 0} 步。`
-    : `${t('trendSummary')}: final step ${finalStep.time_step ?? 0} has ${finalStep.exposed_count ?? 0} exposed and ${finalStep.engaged_count ?? 0} engaged; peak new engagement occurs at step ${peakNewEngaged.time_step ?? 0}.`;
+  summary.textContent = formatTemplate(t('trendSummaryText'), {
+    label: t('trendSummary'),
+    step: finalStep.time_step ?? 0,
+    exposed: finalStep.exposed_count ?? 0,
+    engaged: finalStep.engaged_count ?? 0,
+    peakStep: peakNewEngaged.time_step ?? 0
+  });
   root.setAttribute('aria-label', summary.textContent);
   for(const step of trend){
     const row=document.createElement('div'); row.className='bar-row';
@@ -615,9 +704,10 @@ function drawNetwork(trace, step){
   for(const node of trace.nodes || []){
     const entry=(node.timeline||[]).find(x=>x.time_step===step) || {};
     const state = entry.state || 'unseen';
+    const stateText = stateLabel(state);
     const div=document.createElement('span'); div.className=`node ${state} ${node.is_seed?'seed':''}`;
-    div.textContent=`${node.id}: ${state}${node.is_seed ? ' · seed' : ''}`;
-    div.setAttribute('aria-label', `${node.id}: ${state}${node.is_seed ? ', seed user' : ''}`);
+    div.textContent=`${node.id}: ${stateText}${node.is_seed ? ' · ' + t('legendSeed') : ''}`;
+    div.setAttribute('aria-label', `${node.id}: ${stateText}${node.is_seed ? ', ' + t('seedUserLabel') : ''}`);
     root.appendChild(div);
   }
 }
@@ -641,27 +731,27 @@ function renderProviderEvidence(evidence){
   const cards = [
     {
       title: t('providerSourceTitle'),
-      value: Object.entries(sourceSummary).map(([key, value]) => `${key}: ${value}`).join(' · ') || `${t('executiveSource')}: n/a`,
+      value: Object.entries(sourceSummary).map(([key, value]) => `${key}: ${value}`).join(' · ') || `${t('executiveSource')}: ${t('notAvailable')}`,
       desc: t('providerSourceDesc'),
-      meta: [`provider decisions: ${safeEvidence.provider_decision_count ?? sourceSummary.provider ?? 0}`]
+      meta: [`${t('providerDecisionCount')}: ${safeEvidence.provider_decision_count ?? sourceSummary.provider ?? 0}`]
     },
     {
       title: t('providerModeTitle'),
-      value: readiness.label || readiness.state || configured.provider || 'n/a',
+      value: readiness.label || stateLabel(readiness.state) || configured.provider || t('notAvailable'),
       desc: t('providerModeDesc'),
-      meta: [readiness.mock ? 'mock / test-dev' : (readiness.state || 'product'), ...(readiness.reasons || []).slice(0,2)]
+      meta: [readiness.mock ? t('providerMockMeta') : (readiness.state ? stateLabel(readiness.state) : t('providerProductMeta')), ...(readiness.reasons || []).slice(0,2).map(translateReason)]
     },
     {
       title: t('providerConfigTitle'),
-      value: [configured.provider || safeEvidence.provider_metadata?.provider, configured.model || safeEvidence.provider_metadata?.model].filter(Boolean).join(' · ') || 'n/a',
+      value: [configured.provider || safeEvidence.provider_metadata?.provider, configured.model || safeEvidence.provider_metadata?.model].filter(Boolean).join(' · ') || t('notAvailable'),
       desc: t('providerConfigDesc'),
       meta: [configured.wire_api || safeEvidence.provider_metadata?.wire_api, configured.prompt_version || safeEvidence.provider_metadata?.prompt_version].filter(Boolean)
     },
     {
       title: t('providerFirstDecisionTitle'),
-      value: firstDecision.user_id ? `${firstDecision.user_id} · ${firstDecision.action || 'decision'} · p=${formatValue(firstDecision.probability)}` : 'n/a',
+      value: firstDecision.user_id ? `${firstDecision.user_id} · ${firstDecision.action || t('genericDecision')} · p=${formatValue(firstDecision.probability)}` : t('notAvailable'),
       desc: t('providerFirstDecisionDesc'),
-      meta: [firstDecision.reason, firstDecision.confidence !== undefined ? `confidence ${formatValue(firstDecision.confidence)}` : ''].filter(Boolean)
+      meta: [firstDecision.reason, firstDecision.confidence !== undefined ? `${t('confidenceLabel')} ${formatValue(firstDecision.confidence)}` : ''].filter(Boolean)
     }
   ];
   for(const card of cards){
@@ -691,20 +781,20 @@ function renderAgentIO(trace){
     const output = summary.output || {};
     const postTags = input.post?.topic_tags || [];
     const visiblePeers = input.peer_context?.visible_engaged_neighbors ?? input.peer_context?.visible_neighbor_count ?? 0;
-    const stateLabel = output.engage ? 'engaged' : 'ignored';
+    const engagementStateLabel = output.engage ? t('stateEngaged') : t('stateIgnored');
     card.innerHTML=`
       <div class="io-summary">
         <div>
-          <strong>${escapeHtml(summary.user_id || 'agent')} · step ${escapeHtml(event.time_step)}</strong>
-          <p>${escapeHtml(t('agentDecision'))}: ${escapeHtml(output.action || 'n/a')} · p=${escapeHtml(formatValue(output.probability))} · confidence=${escapeHtml(formatValue(output.confidence))}</p>
+          <strong>${escapeHtml(summary.user_id || t('genericAgent'))} · ${escapeHtml(t('stepLabel'))} ${escapeHtml(event.time_step)}</strong>
+          <p>${escapeHtml(t('agentDecision'))}: ${escapeHtml(output.action || t('notAvailable'))} · p=${escapeHtml(formatValue(output.probability))} · ${escapeHtml(t('confidenceLabel'))}=${escapeHtml(formatValue(output.confidence))}</p>
         </div>
-        <span class="pill ${output.engage ? 'good' : 'bad'}">${escapeHtml(stateLabel)}</span>
+        <span class="pill ${output.engage ? 'good' : 'bad'}">${escapeHtml(engagementStateLabel)}</span>
       </div>
       <dl class="io-facts">
-        <div><dt>${escapeHtml(t('agentInputs'))}</dt><dd>${escapeHtml((postTags || []).join(', ') || 'n/a')}</dd></div>
-        <div><dt>${escapeHtml(t('agentPeer'))}</dt><dd>${escapeHtml(visiblePeers)} · ratio ${escapeHtml(formatValue(input.peer_context?.engagement_ratio))}</dd></div>
-        <div><dt>${escapeHtml(t('agentPlatform'))}</dt><dd>${escapeHtml(input.platform_context?.platform_name || input.platform_context?.platform || 'n/a')}</dd></div>
-        <div><dt>${escapeHtml(t('agentReason'))}</dt><dd>${escapeHtml(output.reason || 'n/a')}</dd></div>
+        <div><dt>${escapeHtml(t('agentInputs'))}</dt><dd>${escapeHtml((postTags || []).join(', ') || t('notAvailable'))}</dd></div>
+        <div><dt>${escapeHtml(t('agentPeer'))}</dt><dd>${escapeHtml(visiblePeers)} · ${escapeHtml(t('ratioLabel'))} ${escapeHtml(formatValue(input.peer_context?.engagement_ratio))}</dd></div>
+        <div><dt>${escapeHtml(t('agentPlatform'))}</dt><dd>${escapeHtml(input.platform_context?.platform_name || input.platform_context?.platform || t('notAvailable'))}</dd></div>
+        <div><dt>${escapeHtml(t('agentReason'))}</dt><dd>${escapeHtml(output.reason || t('notAvailable'))}</dd></div>
       </dl>
       <details class="raw-disclosure">
         <summary>${escapeHtml(t('agentIORawSummary'))}</summary>
