@@ -30,6 +30,10 @@ build-backend = "setuptools.build_meta"
 [tool.setuptools.packages.find]
 where = ["src"]
 
+
+[tool.setuptools.package-data]
+llm_abm_sim = ["vendor/*.js", "vendor/*.md"]
+
 [tool.ruff]
 line-length = 120
 target-version = "py310"

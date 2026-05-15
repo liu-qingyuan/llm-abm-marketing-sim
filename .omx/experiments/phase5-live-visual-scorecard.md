@@ -60,3 +60,18 @@ Prior `ralphy-omx`/Phase 4 evidence ended with live LLM skipped because the opti
 - Live CLI smoke rewrote `runs/live-provider-smoke`; `provider_decision_count == 1`, first decision action `like`, probability `0.82`, confidence `0.86`.
 - `npx playwright test` -> `1 passed (2.0s)`.
 - Secret-shaped scan over retained run outputs plus this handoff/scorecard found no API-key/token-shaped values.
+
+## Fresh Iteration 3 verification refresh
+
+- Preflight: local `.venv` Python 3.14.3; optional `openai` dependency installed; Codex provider readiness sanitized as `sub2api`, `https://api.q1ngyuan.top`, `responses`, model `gpt-5.5`, `requires_openai_auth=true`, `auth_available=true`.
+- `pytest -q` -> `43 passed, 1 deselected in 2.16s`.
+- `pytest -q tests/e2e` -> `3 passed, 1 deselected in 1.85s`.
+- `pytest -q -m live_llm -rs` -> `1 skipped, 43 deselected in 0.34s` with gate unset.
+- `LLM_ABM_RUN_LIVE_LLM=1 pytest -q -m live_llm -rs` -> `1 passed, 43 deselected in 5.37s`.
+- `ruff check .` and `ruff format --check .` -> all checks passed / 28 files already formatted.
+- `mypy src` -> `Success: no issues found in 16 source files`.
+- `python -m py_compile $(find src tests -name '*.py' -print)` -> passed with no output.
+- `python -m llm_abm_sim.run --config configs/fixtures/realistic_marketing_dataset.yaml --output runs/realistic-marketing-dataset` -> wrote `runs/realistic-marketing-dataset`; `decision_source_summary == {'rule_based': 31}`.
+- `LLM_ABM_RUN_LIVE_LLM=1 python -m llm_abm_sim.run --config configs/live/provider_smoke.yaml --output runs/live-provider-smoke` -> wrote `runs/live-provider-smoke`; `decision_source_summary == {'provider': 1}` and `provider_decision_count == 1`.
+- `npx playwright test` -> `1 passed (2.3s)`; report smoke validates enriched static sections and `data-testid` hooks.
+- Secret-shaped scan over retained run outputs plus this Phase 5 scorecard -> `secret_scan_ok 16 files`.

@@ -9,7 +9,7 @@ from typing import Any
 import yaml
 
 from .events import SimulationRunResult
-from .graph_loader import DatasetValidationReport
+from .graph_loader import DatasetValidationReport, load_network_dataset
 from .provider_config import redact_secrets
 from .schemas import SimulationInput
 
@@ -49,6 +49,11 @@ def write_run_outputs(
     _write_events_json(result, output_path / "events.json")
     if dataset_validation_report is not None and dataset_validation_report.dataset_used:
         _write_dataset_validation_json(dataset_validation_report, output_path / "dataset_validation.json")
+    graph_trace = build_graph_trace(result, config)
+    (output_path / "graph_trace.json").write_text(
+        json.dumps(redact_secrets(graph_trace), indent=2, sort_keys=True),
+        encoding="utf-8",
+    )
     write_report_html(
         result,
         config,
@@ -57,6 +62,137 @@ def write_run_outputs(
         provider_readiness=provider_readiness,
     )
     return output_path
+
+
+def build_graph_trace(result: SimulationRunResult, config: SimulationInput) -> dict[str, Any]:
+    """Build the offline interactive graph trace consumed by report.html."""
+
+    dataset = load_network_dataset(
+        config.dataset,
+        inline_edges=[(str(left), str(right)) for left, right in config.graph_edges],
+        inline_profiles=config.profiles,
+        seed_user_ids=config.simulation.seed_user_ids,
+    )
+    graph = dataset.graph
+    profiles = dataset.profiles
+    seed_ids = set(config.simulation.seed_user_ids)
+    max_step = max([0, *[step.time_step for step in result.step_records]])
+
+    exposures_by_user: dict[str, list[dict[str, Any]]] = {}
+    decisions_by_user: dict[str, list[dict[str, Any]]] = {}
+    actions_by_user: dict[str, list[dict[str, Any]]] = {}
+    exposed_steps: dict[str, int] = {}
+    engaged_steps: dict[str, int] = {}
+
+    for exposure_event in result.exposure_events:
+        payload = exposure_event.model_dump(mode="json")
+        exposures_by_user.setdefault(exposure_event.user_id, []).append(payload)
+        exposed_steps[exposure_event.user_id] = min(
+            exposed_steps.get(exposure_event.user_id, exposure_event.time_step), exposure_event.time_step
+        )
+    for decision_event in result.decision_events:
+        payload = decision_event.model_dump(mode="json")
+        decisions_by_user.setdefault(decision_event.user_id, []).append(payload)
+    for action_event in result.action_events:
+        payload = action_event.model_dump(mode="json")
+        actions_by_user.setdefault(action_event.user_id, []).append(payload)
+        engaged_steps[action_event.user_id] = min(
+            engaged_steps.get(action_event.user_id, action_event.time_step), action_event.time_step
+        )
+
+    nodes = []
+    for node_id in sorted(str(node) for node in graph.nodes):
+        profile = profiles.get(node_id)
+        profile_payload = profile.model_dump(mode="json") if profile is not None else {"user_id": node_id}
+        nodes.append(
+            {
+                "id": node_id,
+                "label": node_id,
+                "profile": profile_payload,
+                "is_seed": node_id in seed_ids,
+                "timeline": [
+                    _node_timeline_entry(
+                        node_id,
+                        time_step,
+                        exposed_steps,
+                        engaged_steps,
+                        exposures_by_user,
+                        decisions_by_user,
+                        actions_by_user,
+                    )
+                    for time_step in range(max_step + 1)
+                ],
+            }
+        )
+
+    edges = [
+        {"source": str(source), "target": str(target), "attributes": dict(attributes)}
+        for source, target, attributes in sorted(graph.edges(data=True), key=lambda edge: (str(edge[0]), str(edge[1])))
+    ]
+    steps = [
+        {
+            "time_step": step.time_step,
+            "exposed_count": step.exposed_count,
+            "engaged_count": step.engaged_count,
+            "new_exposed_count": step.new_exposed_count,
+            "new_engaged_count": step.new_engaged_count,
+            "exposure_events": [event.model_dump(mode="json") for event in step.exposure_events],
+            "decision_events": [event.model_dump(mode="json") for event in step.decision_events],
+            "action_events": [event.model_dump(mode="json") for event in step.action_events],
+        }
+        for step in result.step_records
+    ]
+    return redact_secrets(
+        {
+            "schema_version": "graph-trace-v1",
+            "nodes": nodes,
+            "edges": edges,
+            "steps": steps,
+            "post": config.post.model_dump(mode="json"),
+            "run": {
+                "run_id": result.run_id,
+                "random_seed": result.random_seed,
+                "horizon": result.horizon,
+                "time_step_label": config.simulation.time_step_label,
+                "observation_window": config.simulation.observation_window,
+                "decision_source_summary": _decision_source_summary(result),
+            },
+            "process": [
+                "Environment computes exposure",
+                "Agent observes post and neighbor behavior",
+                "DecisionAdapter decides",
+                "User state/action updates",
+                "Metrics/events collected",
+            ],
+        }
+    )
+
+
+def _node_timeline_entry(
+    node_id: str,
+    time_step: int,
+    exposed_steps: dict[str, int],
+    engaged_steps: dict[str, int],
+    exposures_by_user: dict[str, list[dict[str, Any]]],
+    decisions_by_user: dict[str, list[dict[str, Any]]],
+    actions_by_user: dict[str, list[dict[str, Any]]],
+) -> dict[str, Any]:
+    exposures = [event for event in exposures_by_user.get(node_id, []) if event["time_step"] == time_step]
+    decisions = [event for event in decisions_by_user.get(node_id, []) if event["time_step"] == time_step]
+    actions = [event for event in actions_by_user.get(node_id, []) if event["time_step"] == time_step]
+    if node_id in engaged_steps and engaged_steps[node_id] <= time_step:
+        state = "engaged"
+    elif node_id in exposed_steps and exposed_steps[node_id] <= time_step:
+        state = "exposed"
+    else:
+        state = "unseen"
+    return {
+        "time_step": time_step,
+        "state": state,
+        "exposures": exposures,
+        "decisions": decisions,
+        "actions": actions,
+    }
 
 
 def copy_config_source(config_path: str | Path, output_dir: str | Path) -> None:
@@ -117,6 +253,7 @@ def write_report_html(
     key_influencers = raw_key_influencers if isinstance(raw_key_influencers, list) else []
     key_users = ", ".join(escape(str(user_id)) for user_id in key_influencers) if key_influencers else "None observed"
     provider_html = _provider_evidence_html(provider_evidence, decision_source_summary)
+    interactive_trace_html = _interactive_trace_html(result, config)
 
     path.write_text(
         f"""<!doctype html>
@@ -148,6 +285,21 @@ def write_report_html(
     .pill.good {{ background: #e8f6ef; color: var(--good); }}
     .pill.warn {{ background: #fff3e0; color: var(--warn); }}
     pre {{ white-space: pre-wrap; overflow-wrap: anywhere; padding: 12px; border-radius: 12px; background: #0f172a; color: #e2e8f0; }}
+    .trace-layout {{ display: grid; grid-template-columns: minmax(420px, 1.35fr) minmax(320px, .9fr); gap: 16px; align-items: stretch; }}
+    #abm-graph {{ min-height: 520px; border: 1px solid var(--line); border-radius: 16px; background: radial-gradient(circle at 20% 20%, #ffffff, #edf4ff); overflow: hidden; }}
+    .trace-controls {{ display: flex; gap: 14px; align-items: center; flex-wrap: wrap; margin: 12px 0 16px; }}
+    .trace-controls input[type=range] {{ flex: 1; min-width: 240px; accent-color: var(--accent); }}
+    .trace-panel {{ border: 1px solid var(--line); border-radius: 14px; background: #fbfcff; padding: 14px; min-height: 140px; overflow: auto; }}
+    .trace-panel h3 {{ margin: 0 0 8px; font-size: 1rem; }}
+    .trace-panel ul {{ margin: 8px 0 0; padding-left: 20px; }}
+    .trace-panel li {{ margin: 6px 0; }}
+    .trace-stack {{ display: grid; gap: 12px; }}
+    .state-legend {{ display: flex; gap: 10px; flex-wrap: wrap; margin: 8px 0; }}
+    .legend-dot {{ width: .85rem; height: .85rem; display: inline-block; border-radius: 999px; margin-right: 5px; vertical-align: -1px; }}
+    .node-buttons {{ display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }}
+    .node-buttons button {{ border: 1px solid var(--line); border-radius: 999px; background: #fff; padding: 5px 10px; color: var(--ink); cursor: pointer; }}
+    .node-buttons button.active {{ border-color: var(--accent); background: #eef4ff; color: #174ea6; font-weight: 700; }}
+    @media (max-width: 900px) {{ .trace-layout {{ grid-template-columns: 1fr; }} #abm-graph {{ min-height: 420px; }} }}
   </style>
 </head>
 <body>
@@ -177,6 +329,7 @@ def write_report_html(
         <tbody>{trend_rows}</tbody>
       </table>
     </section>
+    {interactive_trace_html}
     <section data-testid="dataset-validation-section">
       <h2>Dataset Validation</h2>
       {dataset_html}
@@ -197,6 +350,177 @@ def write_report_html(
         encoding="utf-8",
     )
     return path
+
+
+def _interactive_trace_html(result: SimulationRunResult, config: SimulationInput) -> str:
+    graph_trace = build_graph_trace(result, config)
+    trace_json = json.dumps(graph_trace, sort_keys=True, separators=(",", ":")).replace("</", "<\\/")
+    cytoscape_js = _cytoscape_source()
+    max_step = max([0, *[step["time_step"] for step in graph_trace["steps"]]])
+    return f'''
+    <section data-testid="interactive-trace-section" id="interactive-trace-section">
+      <h2>Interactive ABM Trace</h2>
+      <p class="subtle">Offline Cytoscape trace demo: Environment computes exposure → Agent observes post and neighbor behavior → DecisionAdapter decides → user state/action updates → metrics/events collected.</p>
+      <div class="state-legend" aria-label="Node state legend">
+        <span><i class="legend-dot" style="background:#cbd5e1"></i>unseen</span>
+        <span><i class="legend-dot" style="background:#f59e0b"></i>exposed</span>
+        <span><i class="legend-dot" style="background:#16a34a"></i>engaged</span>
+        <span><i class="legend-dot" style="background:#7c3aed"></i>seed</span>
+      </div>
+      <div class="trace-controls">
+        <label for="step-slider" class="label">Selected time step</label>
+        <input data-testid="step-slider" id="step-slider" type="range" min="0" max="{max_step}" step="1" value="0">
+        <strong data-testid="selected-step-label" id="selected-step-label">Step 0</strong>
+      </div>
+      <div class="trace-layout">
+        <div>
+          <div data-testid="abm-graph" id="abm-graph" role="img" aria-label="Interactive ABM social graph"></div>
+          <div class="node-buttons" id="node-button-list" aria-label="Fallback node selector"></div>
+        </div>
+        <div class="trace-stack">
+          <article class="trace-panel" data-testid="node-detail-panel" id="node-detail-panel"><h3>Node Detail</h3><p>Select a node to inspect profile and timeline.</p></article>
+          <article class="trace-panel" data-testid="event-stream-panel" id="event-stream-panel"><h3>Event Stream</h3></article>
+          <article class="trace-panel" data-testid="decision-trace-panel" id="decision-trace-panel"><h3>Decision Trace</h3></article>
+        </div>
+      </div>
+      <script id="graph-trace-data" type="application/json">{trace_json}</script>
+      <script>{cytoscape_js}</script>
+      <script>{_interactive_trace_script()}</script>
+    </section>'''
+
+
+def _cytoscape_source() -> str:
+    return (Path(__file__).parent / "vendor" / "cytoscape.min.js").read_text(encoding="utf-8")
+
+
+def _interactive_trace_script() -> str:
+    return r"""
+(function () {
+  const trace = JSON.parse(document.getElementById('graph-trace-data').textContent);
+  const graphEl = document.getElementById('abm-graph');
+  const slider = document.getElementById('step-slider');
+  const stepLabel = document.getElementById('selected-step-label');
+  const detailPanel = document.getElementById('node-detail-panel');
+  const eventPanel = document.getElementById('event-stream-panel');
+  const decisionPanel = document.getElementById('decision-trace-panel');
+  const nodeButtonList = document.getElementById('node-button-list');
+  let selectedNodeId = trace.nodes[0] ? trace.nodes[0].id : null;
+
+  const byId = Object.fromEntries(trace.nodes.map((node) => [node.id, node]));
+  const stepByNumber = Object.fromEntries(trace.steps.map((step) => [String(step.time_step), step]));
+  const exposureEdgeKeysByStep = {};
+  trace.steps.forEach((step) => {
+    exposureEdgeKeysByStep[String(step.time_step)] = new Set(
+      step.exposure_events
+        .filter((event) => event.source_user_id)
+        .map((event) => edgeKey(event.source_user_id, event.user_id))
+    );
+  });
+
+  function timelineFor(node, stepNumber) {
+    return node.timeline.find((entry) => entry.time_step === stepNumber) || node.timeline[node.timeline.length - 1];
+  }
+  function edgeKey(source, target) { return source + '->' + target; }
+  function escapeHtml(value) {
+    return String(value ?? '').replace(/[&<>"']/g, (ch) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
+  }
+  function eventSummary(event) {
+    if (event.event_type === 'exposure') {
+      return `${event.user_id} exposed via ${event.source_user_id || 'seed'} depth=${event.depth} p=${event.probability ?? 'n/a'}`;
+    }
+    if (event.event_type === 'decision') {
+      const d = event.decision || {};
+      return `${event.user_id} decision action=${d.action} p=${d.probability} confidence=${d.confidence} source=${d.decision_source || 'unknown'} reason=${d.reason || ''}`;
+    }
+    if (event.event_type === 'action') {
+      return `${event.user_id} action=${event.action} depth=${event.source_depth}`;
+    }
+    return JSON.stringify(event);
+  }
+  function renderList(events, emptyText) {
+    if (!events.length) return `<p class="subtle">${escapeHtml(emptyText)}</p>`;
+    return '<ul>' + events.map((event) => `<li>${escapeHtml(eventSummary(event))}</li>`).join('') + '</ul>';
+  }
+  function updateButtons() {
+    nodeButtonList.innerHTML = trace.nodes.slice(0, 18).map((node) => (
+      `<button type="button" data-node-id="${escapeHtml(node.id)}" class="${node.id === selectedNodeId ? 'active' : ''}">${escapeHtml(node.label)}</button>`
+    )).join('');
+  }
+  function renderPanels(stepNumber) {
+    const step = stepByNumber[String(stepNumber)] || { exposure_events: [], decision_events: [], action_events: [] };
+    const node = byId[selectedNodeId] || trace.nodes[0];
+    const timeline = node ? timelineFor(node, stepNumber) : null;
+    const profileRows = node ? Object.entries(node.profile || {}).map(([key, value]) => `<tr><th>${escapeHtml(key)}</th><td>${escapeHtml(Array.isArray(value) ? value.join(', ') : value)}</td></tr>`).join('') : '';
+    const latestDecision = timeline && timeline.decisions.length ? timeline.decisions[timeline.decisions.length - 1].decision : null;
+    const exposureSources = timeline ? timeline.exposures.map((event) => event.source_user_id || 'seed').join(', ') || 'none this step' : 'none';
+    detailPanel.innerHTML = node ? `<h3>Node Detail: ${escapeHtml(node.id)}</h3>
+      <p><span class="pill ${timeline && timeline.state === 'engaged' ? 'good' : ''}">${escapeHtml(timeline ? timeline.state : 'unknown')}</span> ${node.is_seed ? '<span class="pill">seed</span>' : ''}</p>
+      <table><tbody>${profileRows}</tbody></table>
+      <p><strong>Neighbor/source influence:</strong> ${escapeHtml(exposureSources)}</p>
+      <p><strong>Current decision:</strong> ${latestDecision ? `action=${escapeHtml(latestDecision.action)} probability=${escapeHtml(latestDecision.probability)} confidence=${escapeHtml(latestDecision.confidence)} source=${escapeHtml(latestDecision.decision_source)} reason=${escapeHtml(latestDecision.reason)}` : 'none this step'}</p>
+      <h4>Exposure timeline</h4>${renderList(timeline ? timeline.exposures : [], 'No exposure event for selected step.')}
+      <h4>Decision timeline</h4>${renderList(timeline ? timeline.decisions : [], 'No decision event for selected step.')}
+      <h4>Action timeline</h4>${renderList(timeline ? timeline.actions : [], 'No action event for selected step.')}` : '<h3>Node Detail</h3><p>No graph nodes available.</p>';
+    eventPanel.innerHTML = `<h3>Event Stream — Step ${stepNumber}</h3>
+      <p class="subtle">Exposure → decision → action events collected for this selected step.</p>
+      <h4>Exposure events</h4>${renderList(step.exposure_events || [], 'No exposure events this step.')}
+      <h4>Action events</h4>${renderList(step.action_events || [], 'No action events this step.')}`;
+    decisionPanel.innerHTML = `<h3>Decision Trace — Step ${stepNumber}</h3>
+      ${renderList(step.decision_events || [], 'No decision events this step.')}`;
+    updateButtons();
+  }
+
+  const cy = cytoscape({
+    container: graphEl,
+    elements: [
+      ...trace.nodes.map((node) => ({ data: { id: node.id, label: node.label, is_seed: node.is_seed } })),
+      ...trace.edges.map((edge, index) => ({ data: { id: `e${index}`, source: edge.source, target: edge.target, key: edgeKey(edge.source, edge.target), label: edge.attributes.relationship || edge.attributes.touchpoint || '' } }))
+    ],
+    layout: { name: 'cose', animate: false, randomize: false, fit: true, padding: 32 },
+    style: [
+      { selector: 'node', style: { 'label': 'data(label)', 'font-size': 11, 'text-valign': 'center', 'text-halign': 'center', 'background-color': '#cbd5e1', 'border-width': 2, 'border-color': '#64748b', 'width': 34, 'height': 34, 'color': '#0f172a' } },
+      { selector: 'node.exposed', style: { 'background-color': '#f59e0b', 'border-color': '#b45309' } },
+      { selector: 'node.engaged', style: { 'background-color': '#16a34a', 'border-color': '#166534', 'color': '#fff' } },
+      { selector: 'node.seed', style: { 'shape': 'star', 'background-color': '#7c3aed', 'border-color': '#4c1d95', 'color': '#fff' } },
+      { selector: 'node.selected', style: { 'border-width': 5, 'border-color': '#ef4444' } },
+      { selector: 'edge', style: { 'curve-style': 'bezier', 'line-color': '#94a3b8', 'target-arrow-shape': 'triangle', 'target-arrow-color': '#94a3b8', 'width': 1.5, 'opacity': .62 } },
+      { selector: 'edge.active-exposure', style: { 'line-color': '#ef4444', 'target-arrow-color': '#ef4444', 'width': 4, 'opacity': 1 } }
+    ]
+  });
+
+  function updateGraph() {
+    const stepNumber = Number(slider.value);
+    stepLabel.textContent = `Step ${stepNumber}`;
+    const activeEdges = exposureEdgeKeysByStep[String(stepNumber)] || new Set();
+    cy.nodes().forEach((ele) => {
+      const node = byId[ele.id()];
+      const timeline = timelineFor(node, stepNumber);
+      ele.removeClass('unseen exposed engaged seed selected');
+      ele.addClass(timeline.state);
+      if (node.is_seed) ele.addClass('seed');
+      if (ele.id() === selectedNodeId) ele.addClass('selected');
+    });
+    cy.edges().forEach((ele) => {
+      ele.toggleClass('active-exposure', activeEdges.has(ele.data('key')));
+    });
+    renderPanels(stepNumber);
+  }
+
+  cy.on('tap', 'node', (event) => {
+    selectedNodeId = event.target.id();
+    updateGraph();
+  });
+  nodeButtonList.addEventListener('click', (event) => {
+    const button = event.target.closest('button[data-node-id]');
+    if (!button) return;
+    selectedNodeId = button.getAttribute('data-node-id');
+    updateGraph();
+  });
+  slider.addEventListener('input', updateGraph);
+  updateButtons();
+  updateGraph();
+  setTimeout(() => { cy.resize(); cy.fit(undefined, 32); }, 100);
+})();"""
 
 
 def _metric_cards(metrics: dict[str, float | int | list[str] | dict[str, int]]) -> str:

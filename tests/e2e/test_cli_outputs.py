@@ -28,6 +28,7 @@ def test_cli_writes_offline_run_artifacts(tmp_path):
         "metrics_summary.json",
         "step_records.csv",
         "events.json",
+        "graph_trace.json",
         "report.html",
     }
     assert expected.issubset({path.name for path in output_dir.iterdir()})
@@ -35,6 +36,9 @@ def test_cli_writes_offline_run_artifacts(tmp_path):
     assert result["run_id"] == "sample-run"
     assert result["step_records"]
     assert "LLM-ABM Simulation Report" in (output_dir / "report.html").read_text()
+    trace = json.loads((output_dir / "graph_trace.json").read_text())
+    assert trace["schema_version"] == "graph-trace-v1"
+    assert trace["nodes"] and trace["steps"]
 
 
 def test_cli_writes_dataset_validation_for_toy_dataset_fixture(tmp_path):
@@ -62,6 +66,7 @@ def test_cli_writes_dataset_validation_for_toy_dataset_fixture(tmp_path):
         "metrics_summary.json",
         "step_records.csv",
         "events.json",
+        "graph_trace.json",
         "report.html",
         "dataset_validation.json",
     }
@@ -122,6 +127,7 @@ def test_cli_writes_realistic_marketing_dataset_artifacts(tmp_path):
         "events.json",
         "metrics_summary.json",
         "step_records.csv",
+        "graph_trace.json",
         "report.html",
     }
     assert expected.issubset({path.name for path in output_dir.iterdir()})
@@ -145,4 +151,8 @@ def test_cli_writes_realistic_marketing_dataset_artifacts(tmp_path):
     assert result["run_id"] == "realistic-marketing-dataset"
     assert metrics["total_agents"] == 36
     assert len(events["exposure_events"]) >= 20
+    trace = json.loads((output_dir / "graph_trace.json").read_text())
+    assert len(trace["nodes"]) == 36
+    assert len(trace["edges"]) == 45
+    assert len(trace["steps"]) == result["horizon"]
     assert "LLM-ABM Realistic Marketing Dataset Fixture Report" in (output_dir / "report.html").read_text()
