@@ -17,47 +17,71 @@
       <label class="language">🌐 <select id="language" data-testid="web-language"><option value="en-US">English</option><option value="zh-CN">中文</option></select></label>
     </header>
 
-    <section class="card status-card">
-      <h2 data-i18n="providerTitle">Provider readiness</h2>
-      <div class="status-row">
-        <span id="provider-state" data-testid="provider-state" class="pill">checking</span>
-        <label><input id="mock-provider" data-testid="mock-provider-toggle" type="checkbox"> <span data-i18n="mockLabel">Use mock provider for test/dev</span></label>
-      </div>
-      <p id="provider-reasons" data-testid="provider-reasons" class="muted"></p>
+    <section class="dashboard-overview" aria-label="Run workflow overview">
+      <article class="status-card provider-strip" aria-labelledby="provider-heading">
+        <div class="strip-copy">
+          <p class="section-kicker" data-i18n="providerKicker">Provider gate</p>
+          <h2 id="provider-heading" data-i18n="providerTitle">Provider readiness</h2>
+          <p id="provider-reasons" data-testid="provider-reasons" class="muted"></p>
+        </div>
+        <div class="status-row provider-controls">
+          <span id="provider-state" data-testid="provider-state" class="pill">checking</span>
+          <label class="toggle-card"><input id="mock-provider" data-testid="mock-provider-toggle" type="checkbox"> <span data-i18n="mockLabel">Use mock provider for test/dev</span></label>
+        </div>
+      </article>
+
+      <nav class="stepper" aria-label="Simulation workflow">
+        <ol>
+          <li class="step is-active"><span class="step-index">1</span><span><strong data-i18n="stepData">Data</strong><small data-i18n="stepDataHelp">Upload and validate inputs</small></span></li>
+          <li class="step"><span class="step-index">2</span><span><strong data-i18n="stepScenario">Scenario</strong><small data-i18n="stepScenarioHelp">Define campaign context</small></span></li>
+          <li class="step"><span class="step-index">3</span><span><strong data-i18n="stepRun">Run</strong><small data-i18n="stepRunHelp">Create provider-gated simulation</small></span></li>
+          <li class="step"><span class="step-index">4</span><span><strong data-i18n="stepResults">Results</strong><small data-i18n="stepResultsHelp">Review dashboard evidence</small></span></li>
+        </ol>
+      </nav>
     </section>
 
-    <section class="grid two">
-      <form id="dataset-form" class="card" data-testid="dataset-form">
-        <h2 data-i18n="dataTitle">1. Dataset validation</h2>
-        <p class="muted" data-i18n="dataHelp">Upload users and edges as CSV or JSON. Edge JSON accepts either {edges:[...]} or a bare list.</p>
-        <label data-i18n="usersFile">Users CSV/JSON</label>
-        <input data-testid="users-file" name="users_file" type="file" accept=".csv,.json" required>
-        <label data-i18n="edgesFile">Edges CSV/JSON</label>
-        <input data-testid="edges-file" name="edges_file" type="file" accept=".csv,.json" required>
-        <label data-i18n="seedUsers">Seed users</label>
-        <input data-testid="seed-users-input" name="seed_user_ids" value="u1" placeholder="u1,u2">
-        <div class="actions"><button data-testid="validate-dataset" type="submit" data-i18n="validate">Validate dataset</button><a href="/api/templates/users.csv" data-i18n="template">Download template</a></div>
-        <div id="validation-output" data-testid="validation-output" class="panel"></div>
+    <section class="workflow-grid" aria-label="Dataset and scenario setup">
+      <form id="dataset-form" class="card workflow-card data-card" data-testid="dataset-form">
+        <div class="card-head">
+          <p class="section-kicker" data-i18n="dataKicker">Data source</p>
+          <h2 data-i18n="dataTitle">1. Dataset validation</h2>
+          <p class="muted" data-i18n="dataHelp">Upload users and edges as CSV or JSON. Edge JSON accepts either {edges:[...]} or a bare list.</p>
+        </div>
+        <div class="input-stack">
+          <label data-i18n="usersFile">Users CSV/JSON</label>
+          <input data-testid="users-file" name="users_file" type="file" accept=".csv,.json" required>
+          <label data-i18n="edgesFile">Edges CSV/JSON</label>
+          <input data-testid="edges-file" name="edges_file" type="file" accept=".csv,.json" required>
+          <label data-i18n="seedUsers">Seed users</label>
+          <input data-testid="seed-users-input" name="seed_user_ids" value="u1" placeholder="u1,u2">
+        </div>
+        <div class="actions"><button data-testid="validate-dataset" type="submit" data-i18n="validate">Validate dataset</button><a class="secondary-link" href="/api/templates/users.csv" data-i18n="template">Download template</a></div>
+        <div id="validation-output" data-testid="validation-output" class="panel compact-panel"></div>
       </form>
 
-      <form id="run-form" class="card" data-testid="run-form">
-        <h2 data-i18n="runTitle">2. Scenario and run</h2>
-        <label data-i18n="postText">Marketing post</label>
-        <textarea data-testid="post-text" id="post-text" rows="5">Clean Glow launches a refillable eco skincare kit with limited community rewards.</textarea>
-        <label data-i18n="topics">Topic tags</label>
-        <input data-testid="topic-tags" id="topic-tags" value="eco,skincare,beauty">
-        <label data-i18n="mediaSummary">Media summary</label>
-        <input data-testid="media-summary" id="media-summary" value="Short video showing refillable package and before/after routine">
-        <label data-i18n="platformMood">Platform context</label>
-        <input data-testid="platform-mood" id="platform-mood" value="launch week with sustainability discussion">
-        <label data-i18n="horizon">Horizon</label>
-        <input data-testid="horizon" id="horizon" type="number" min="1" max="30" value="4">
+      <form id="run-form" class="card workflow-card scenario-card" data-testid="run-form">
+        <div class="card-head">
+          <p class="section-kicker" data-i18n="scenarioKicker">Campaign scenario</p>
+          <h2 data-i18n="runTitle">2. Scenario and run</h2>
+        </div>
+        <div class="input-stack">
+          <label data-i18n="postText">Marketing post</label>
+          <textarea data-testid="post-text" id="post-text" rows="5">Clean Glow launches a refillable eco skincare kit with limited community rewards.</textarea>
+          <label data-i18n="topics">Topic tags</label>
+          <input data-testid="topic-tags" id="topic-tags" value="eco,skincare,beauty">
+          <label data-i18n="mediaSummary">Media summary</label>
+          <input data-testid="media-summary" id="media-summary" value="Short video showing refillable package and before/after routine">
+          <label data-i18n="platformMood">Platform context</label>
+          <input data-testid="platform-mood" id="platform-mood" value="launch week with sustainability discussion">
+          <label data-i18n="horizon">Horizon</label>
+          <input data-testid="horizon" id="horizon" type="number" min="1" max="30" value="4">
+        </div>
         <div class="actions"><button data-testid="start-run" type="submit" data-i18n="startRun">Start run</button></div>
-        <div id="run-output" data-testid="run-output" class="panel"></div>
+        <div id="run-output" data-testid="run-output" class="panel compact-panel"></div>
       </form>
     </section>
 
-    <section id="results" data-testid="results-section" class="card hidden">
+    <section id="results" data-testid="results-section" class="card results-dashboard hidden">
       <div class="section-head">
         <h2 data-i18n="resultsTitle">3. Results</h2>
         <a id="report-link" data-testid="report-link" target="_blank" rel="noreferrer" data-i18n="openReport">Open generated report</a>
