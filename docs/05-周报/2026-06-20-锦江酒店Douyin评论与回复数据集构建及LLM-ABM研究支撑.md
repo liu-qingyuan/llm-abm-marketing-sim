@@ -18,26 +18,39 @@
 
 最初曾考虑只抓取 4 个高评论候选视频，但该口径过窄，容易把研究样本限制在少数异常高互动视频上，难以代表锦江酒店相关 Douyin 内容的整体互动结构。因此，本轮正式口径修正为：
 
-> 基于 metadata-only source run 中“Caption hashtag 统计”表覆盖的 top10 caption hashtags，从 source `videos.csv` 中重新匹配、去重，并排除 2 个女性安全/偷拍主题视频后，抓取这些目标视频的全部一级评论和 replies。
+> 基于 metadata-only source run 中“Caption hashtag 统计”表覆盖的 top10 caption hashtags，从 source `videos.csv` 中重新匹配、去重，并排除 2 个女性安全/偷拍主题视频后，抓取这些目标视频的一级评论和 replies。
 
-因此，本轮正式数据集不是“4 个高评论候选视频”，而是 top10 caption hashtag 覆盖视频集合。
+因此，本轮正式数据集不是“4 个高评论候选视频”，而是 caption hashtag 覆盖视频集合。
 
-本轮使用的 10 个 caption hashtags 为：
+### 2.1 口径二次修正：剔除 #锦江宾馆，补充 #锦江都城酒店吉安
+
+在进一步核对研究对象边界后，发现 `#锦江宾馆` 与本次“锦江酒店”研究对象不属于同一企业范围，因此不应继续纳入本轮核心样本。`#临空锦江宾馆` 同样属于“宾馆”相关口径，本次不纳入。相应地，top12 `#锦江都城酒店吉安` 更符合锦江都城酒店相关研究对象，应作为补充范围。
+
+这次调整是**研究对象边界修正**，不是数据质量失败，也不是随意删数据。修正规则是：
+
+- 以旧 manifest 的 `matched_caption_hashtags` 为主，剔除带有 `#锦江宾馆` 的视频；
+- 即使同一视频同时带有其他合格锦江 tag，只要带 `#锦江宾馆`，本轮也剔除；
+- 不补充 top11 `#临空锦江宾馆`；
+- 尝试补充 top12 `#锦江都城酒店吉安`，但只复用本地 source metadata，不运行 live API；
+- 不抓 profiles；
+- 不重新跑 top10 metadata 全量采集。
+
+二次修正后的 caption hashtag 目标列表为：
 
 - #锦江都城酒店
 - #锦江之星酒店
 - #锦江酒店
 - #锦江之星
-- #锦江宾馆
 - #绵阳锦江国际酒店
 - #锦江之星品尚
 - #锦江酒店华西区
 - #锦江之星海口
 - #锦江酒店中国区
+- #锦江都城酒店吉安
 
-需要说明的是，这些 hashtag 的统计数存在跨 tag 重复，因此不能简单加总，而是从 source `videos.csv` 重新匹配、去重后形成最终 target manifest。
+其中 `#锦江宾馆` 已删除，`#临空锦江宾馆` 不加入。
 
-本轮排除以下两个 video_id：
+本轮仍保持排除以下两个 video_id：
 
 - `7486704870804770107`
 - `7486891790218399034`
@@ -58,16 +71,32 @@ source 数据路径：
 data/processed/jinjiang_douyin/jinjiang-top10-jinjiang-only-video-metadata-unbounded-20260617T095743Z/videos.csv
 ```
 
-正式 comments + replies run：
+原 comments + replies run：
 
 ```text
-NEW_RUN_ID=jinjiang-top10-caption-hashtag-all-comments-excluding-safety-20260617T140519Z
+OLD_RUN_ID=jinjiang-top10-caption-hashtag-all-comments-excluding-safety-20260617T140519Z
 ```
+
+本次口径二次修正派生 run：
+
+```text
+DERIVED_RUN_ID=jinjiang-caption-hashtag-comments-excluding-binguan-adding-jian-derived-20260620T064712Z
+```
+
+当前派生 run 的状态是：
+
+```text
+completion_status=source_metadata_gap_for_top12
+partial=true
+source_metadata_gap_for_top12=true
+```
+
+这表示本地已完成 `#锦江宾馆` 剔除和旧评论/回复复用，但 `#锦江都城酒店吉安` 尚未出现在当前 source `videos.csv` 中，因此不能把 4,011 个视频、50,389 条 comments + replies 称为最终完整新口径。
 
 processed 路径：
 
 ```text
-data/processed/jinjiang_douyin/jinjiang-top10-caption-hashtag-all-comments-excluding-safety-20260617T140519Z/
+data/processed/jinjiang_douyin/jinjiang-caption-hashtag-comments-excluding-binguan-adding-jian-derived-20260620T064712Z/
 ```
 
 ### 图1：本周数据采集与处理架构图
@@ -78,20 +107,23 @@ graph TB
         sourceRun["Metadata-only source run"]
         sourceVideos["videos.csv"]
         noMetadataRedo["不重新采集 metadata"]
+        top12Gap["#锦江都城酒店吉安 metadata gap"]
     end
 
     subgraph scope["Scope Builder"]
-        tagStats["Top10 caption hashtag scope"]
+        tagStats["Caption hashtag scope"]
         matcher["Caption hashtag matcher"]
+        removeBinguan["Remove #锦江宾馆"]
+        skipLinkong["Skip #临空锦江宾馆"]
+        addJian["Add #锦江都城酒店吉安"]
         dedupe["Video ID 去重"]
         safetyFilter["Safety exclusion filter"]
-        targetManifest["Target video manifest"]
+        targetManifest["Derived target manifest"]
     end
 
     subgraph collection["Comment Collection Runtime"]
-        commentApi["TikHub Douyin comment API"]
-        topComments["Top-level comments"]
-        repliesCollector["Replies collector"]
+        oldComments["Reuse existing comments/replies"]
+        needsFetch["Needs fetch manifest if authorized"]
         profilesDisabled["Profiles disabled"]
     end
 
@@ -102,13 +134,13 @@ graph TB
         allCsv["all_comments.csv"]
         summaryCsv["comment_video_summary.csv"]
         reportJson["collection_report.json"]
-        auditJson["comment_collection_audit.json"]
+        auditJson["scope_change_audit.json"]
     end
 
     subgraph validation["Audit and Validation"]
-        audit["Automated audit"]
+        audit["Offline scope audit"]
         tests["Tests and static checks"]
-        secretScan["Sensitive information scan"]
+        secretScan["Sensitive information boundary"]
     end
 
     subgraph downstream["LLM-ABM Downstream"]
@@ -121,20 +153,22 @@ graph TB
     sourceRun --> sourceVideos
     noMetadataRedo -.-> sourceVideos
     sourceVideos --> matcher
+    sourceVideos --> top12Gap
     tagStats --> matcher
-    matcher --> dedupe
+    matcher --> removeBinguan
+    removeBinguan --> skipLinkong
+    skipLinkong --> addJian
+    addJian --> dedupe
     dedupe --> safetyFilter
     safetyFilter --> targetManifest
-    targetManifest --> commentApi
-    commentApi --> topComments
-    topComments --> repliesCollector
-    profilesDisabled -.-> collection
-    topComments --> commentsCsv
-    repliesCollector --> repliesCsv
-    topComments --> topCsv
-    topComments --> allCsv
-    repliesCollector --> allCsv
+    targetManifest --> oldComments
+    top12Gap --> needsFetch
+    oldComments --> topCsv
+    oldComments --> repliesCsv
+    oldComments --> commentsCsv
+    oldComments --> allCsv
     targetManifest --> summaryCsv
+    profilesDisabled -.-> collection
     commentsCsv --> reportJson
     allCsv --> reportJson
     reportJson --> audit
@@ -152,9 +186,11 @@ graph TB
     classDef outputClass fill:#d3f9d8,stroke:#2f9e44,color:#0b4218
     classDef validationClass fill:#fff4e6,stroke:#e67700,color:#663c00
     classDef futureClass fill:#f3d9fa,stroke:#862e9c,color:#4a1259
+    classDef gapClass fill:#fff0f6,stroke:#c2255c,color:#6b1238
 
     class sourceRun,sourceVideos,noMetadataRedo sourceClass
-    class tagStats,matcher,dedupe,safetyFilter,targetManifest,commentApi,topComments,repliesCollector,profilesDisabled processClass
+    class tagStats,matcher,removeBinguan,skipLinkong,addJian,dedupe,safetyFilter,targetManifest,oldComments,profilesDisabled processClass
+    class top12Gap,needsFetch gapClass
     class commentsCsv,topCsv,repliesCsv,allCsv,summaryCsv,reportJson,auditJson outputClass
     class audit,tests,secretScan validationClass
     class textCorpus,interactionNetwork,agentInit,abmSimulation futureClass
@@ -205,7 +241,7 @@ graph TB
 
     subgraph scopeBuilder["Scope Builder"]
         captionMatcher["Caption hashtag matcher"]
-        exclusionFilter["Safety exclusion filter"]
+        exclusionFilter["Research scope exclusion filter"]
         manifestBuilder["Target manifest builder"]
     end
 
@@ -225,7 +261,7 @@ graph TB
         auditScript["Audit script"]
         tests["Tests"]
         staticChecks["Ruff and Pyright"]
-        secretScan["Secret scan"]
+        secretScan["Secret and .env boundary"]
     end
 
     subgraph research["Research Outputs"]
@@ -270,62 +306,70 @@ graph TB
 
 ## 6. 本周数据结果
 
-本轮正式 run 产物如下：
+### 6.1 原正式 run 结果
+
+原 comments + replies run 产物如下：
 
 ```text
 data/processed/jinjiang_douyin/jinjiang-top10-caption-hashtag-all-comments-excluding-safety-20260617T140519Z/
 ```
 
-核心数据规模如下：
+其原口径核心规模为：target videos 4,427；top-level comments 44,054；replies 22,954；all_comments 67,008；partial false；profiles_collected false。
+
+这些数值只代表“含 #锦江宾馆 的旧 top10 caption hashtag 口径”，不再作为二次修正后新口径的完整结论。
+
+### 6.2 二次修正 derived scope 结果
+
+本次离线派生 run 产物如下：
+
+```text
+data/processed/jinjiang_douyin/jinjiang-caption-hashtag-comments-excluding-binguan-adding-jian-derived-20260620T064712Z/
+```
+
+离线审计结果如下：
 
 | 指标 | 数量 | 说明 |
 |---|---:|---|
-| target videos | 4,427 | 从 source metadata run 的 `videos.csv` 按 top10 caption hashtags 匹配、去重、排除 2 个敏感视频后的最终视频集合 |
-| top-level comments | 44,054 | 一级评论 |
-| replies | 22,954 | 一级评论下的回复 |
-| all_comments | 67,008 | 一级评论与 replies 合并后的总量 |
-| partial | false | 本轮目标范围内没有因为 API、分页或余额问题留下未完成视频 |
-| incomplete videos | 0 | 目标视频中未完成采集的视频数为 0 |
+| old unique target videos | 4,427 | 旧正式 run 的 unique 视频分母，不能用 manifest 物理行数代替 |
+| manifest physical rows | 4,427 | 当前旧 manifest 为一视频一行；后续若出现 multilabel 展开表，仍应以 unique video_id 为准 |
+| removed #锦江宾馆 videos | 416 | 按 `matched_caption_hashtags` 剔除 |
+| remaining after removal | 4,011 | 剔除 #锦江宾馆 后剩余视频 |
+| #锦江都城酒店吉安 in local source metadata | 0 | 当前 source `videos.csv` 未包含该 top12 tag 视频 |
+| corrected target videos | 4,011 | 当前只能形成“剔除 #锦江宾馆”的本地 derived target |
+| top-level comments | 33,206 | 仅保留新 target video_id 中已有评论数据 |
+| replies | 17,183 | 仅保留新 target video_id 中已有 replies 数据 |
+| all_comments | 50,389 | 一级评论与 replies 合并后的本地可用文本 |
+| partial | true | 因 top12 #锦江都城酒店吉安 缺 source metadata，不能声称新口径完整 |
+| incomplete videos | 0 | 对当前本地 4,011 个已覆盖视频，旧评论数据可复用；但 top12 metadata 缺口仍存在 |
 | profiles_collected | false | 本轮未抓取用户资料 |
 
 关键输出文件及作用如下：
 
 | 文件 | 作用 |
 |---|---|
-| `target_video_manifest.csv` | 最终目标视频清单，包含匹配 caption hashtags 和 metadata comment count |
-| `top_level_comments.csv` | 一级评论表 |
-| `replies.csv` | 一级评论下的回复表 |
-| `comments.csv` / `all_comments.csv` | 合并后的评论与回复文本表 |
-| `comment_video_summary.csv` | 每个视频的评论与回复采集状态 |
-| `collection_report.json` | 采集配置、阶段状态、汇总计数 |
-| `comment_collection_audit.json` | 审计结果，用于验证 target count、excluded IDs、profiles disabled、partial 状态等 |
+| `target_video_manifest.csv` | 二次修正后的目标视频清单 |
+| `top_level_comments.csv` | 修正口径下可复用的一级评论表 |
+| `replies.csv` | 修正口径下可复用的回复表 |
+| `comments.csv` / `all_comments.csv` | 修正口径下可复用的评论与回复文本表 |
+| `comment_video_summary.csv` | 每个视频的评论与回复状态 |
+| `collection_report.json` | 派生口径、阶段状态和汇总计数 |
+| `scope_change_audit.json` | 本次口径修正审计 |
+| `source_metadata_gap_manifest.csv` | `#锦江都城酒店吉安` 本地 metadata 缺口说明 |
 
 ## 7. 数据质量与验证
 
-本轮数据集已通过自动化审计、测试、静态检查和敏感信息扫描。
+本次二次修正是离线派生处理：没有运行 live API，没有读取或打印 `.env`，没有抓 profiles，也没有重新跑 top10 metadata 全量采集。
 
-验证结果包括：
+当前审计结论为：
 
-- 自动化 audit 通过：
-  - `expected_target_video_count = 4427`
-  - `manifest_video_count = 4427`
-  - `comments = 44054`
-  - `replies = 22954`
-  - `all_comments = 67008`
-  - `partial = false`
-  - excluded IDs absent
-- targeted tests：37 passed
-- full pytest：125 passed, 2 deselected
-- `py_compile`：passed
-- `ruff`：passed
-- `pyright`：0 errors
-- secret scan：
-  - Bearer 无命中
-  - Authorization 无命中
-  - TIKHUB_API_KEY 无命中
-- GitNexus：status up-to-date
+- `#锦江宾馆` 已从 derived target 中剔除；
+- `#临空锦江宾馆` 未纳入；
+- `#锦江都城酒店吉安` 在当前 source `videos.csv` 中不存在，因此需要先补充 metadata/source scope；
+- 原两个 safety excluded video_id 仍不在 derived target 中；
+- profiles_collected=false；
+- 当前 derived 数据集是“本地可复用评论/回复数据 + top12 metadata 待补”状态，不能称为新口径完整最终数据集。
 
-总体来看，本轮数据不是“全量抖音数据”，而是在明确研究口径下构建的锦江酒店相关 caption hashtag 评论与回复数据集。它的优势在于：样本边界清晰、视频分母可追溯、评论与回复阶段完整、profiles 明确禁用、敏感样本已排除，并且有自动化审计结果支撑。
+总体来看，本轮数据不是“全量抖音数据”，而是在明确研究口径下构建的锦江酒店相关 caption hashtag 评论与回复数据集。二次修正提高了研究对象边界的一致性，但也暴露出 top12 `#锦江都城酒店吉安` 需要后续 metadata/source scope 补充。
 
 ## 8. profiles 暂不采集的原因
 
@@ -378,7 +422,7 @@ profiles 指用户资料或账号画像字段，例如：
    通过评论、回复、视频作者关系，构建用户之间的互动边。
 
 2. **评论/回复文本语料构建**  
-   将 67,008 条评论与回复作为文本语料，用于主题分析、情绪分析和舆情识别。
+   当前二次修正后本地可用 50,389 条评论与回复作为文本语料；待补充 `#锦江都城酒店吉安` metadata/comments 后，应重新生成最终语料。
 
 3. **用户节点行为特征提取**  
    从评论次数、回复次数、参与视频数、被回复关系等维度形成用户行为特征。
@@ -396,17 +440,19 @@ profiles 指用户资料或账号画像字段，例如：
 
 ```mermaid
 graph LR
-    dataset["Step 1: 当前数据集完成"]
-    network["Step 2: 构建用户互动网络"]
-    textAnalysis["Step 3: 评论与回复文本分析"]
-    structure["Step 4: 识别传播节点和互动结构"]
-    agentInit["Step 5: 初始化 ABM agent"]
-    simulation["Step 6: 运行传播模拟"]
-    comparison["Step 7: 对比真实互动数据和模拟结果"]
-    conclusion["Step 8: 输出研究结论"]
+    dataset["Step 1: 当前 derived scope audit 完成"]
+    backfill["Step 2: top12 metadata/comments 补采授权"]
+    network["Step 3: 重新构建用户互动网络"]
+    textAnalysis["Step 4: 评论与回复文本分析"]
+    structure["Step 5: 识别传播节点和互动结构"]
+    agentInit["Step 6: 初始化 ABM agent"]
+    simulation["Step 7: 运行传播模拟"]
+    comparison["Step 8: 对比真实互动数据和模拟结果"]
+    conclusion["Step 9: 输出研究结论"]
 
-    dataset --> network
-    dataset --> textAnalysis
+    dataset --> backfill
+    backfill --> network
+    backfill --> textAnalysis
     network --> structure
     textAnalysis --> structure
     structure --> agentInit
@@ -415,11 +461,13 @@ graph LR
     comparison --> conclusion
 
     classDef doneClass fill:#d3f9d8,stroke:#2f9e44,color:#0b4218
+    classDef gapClass fill:#fff0f6,stroke:#c2255c,color:#6b1238
     classDef processClass fill:#e5dbff,stroke:#5f3dc4,color:#2b185f
     classDef futureClass fill:#e7f5ff,stroke:#1971c2,color:#0b3d66
     classDef resultClass fill:#fff4e6,stroke:#e67700,color:#663c00
 
     class dataset doneClass
+    class backfill gapClass
     class network,textAnalysis,structure,agentInit processClass
     class simulation,comparison futureClass
     class conclusion resultClass
@@ -427,26 +475,29 @@ graph LR
 
 ## 11. 下周计划
 
-下周建议围绕“从数据集到可模拟结构”推进，重点包括：
+下周建议围绕“补齐新口径分母并重新生成下游结构”推进，重点包括：
 
-1. 从 comments / replies 构建用户互动边；
-2. 统计高互动用户、高互动视频和核心评论节点；
-3. 开展评论文本主题、情绪和舆情初步分析；
-4. 形成 ABM agent 初始化字段草案；
-5. 设计真实互动数据与模拟结果的对比指标；
-6. 评估是否需要小范围补采 profiles，但不做全量 profiles 抓取；
-7. 将数据集转化为后续 ABM runtime 可读取的节点、边和内容输入格式。
+1. 完成 top12 `#锦江都城酒店吉安` 的 metadata/source scope 补充；如需 live API，需另行授权；
+2. 在 metadata 补齐后，完成 top12 新增视频的评论/回复补采；如需 live API，需另行授权；
+3. 重新生成新口径 interaction network / text corpus；
+4. 从 comments / replies 构建用户互动边；
+5. 统计高互动用户、高互动视频和核心评论节点；
+6. 开展评论文本主题、情绪和舆情初步分析；
+7. 形成 ABM agent 初始化字段草案；
+8. 设计真实互动数据与模拟结果的对比指标；
+9. 评估是否需要小范围补采 profiles，但不做全量 profiles 抓取。
 
 ## 12. 小结
 
 本周完成的是 LLM-ABM 研究前置的数据基础建设和验证工作。核心成果包括：
 
-- 明确从 4 个高评论候选视频修正为 top10 caption hashtag 覆盖视频集合；
+- 明确从 4 个高评论候选视频修正为 caption hashtag 覆盖视频集合；
 - 复用 metadata-only source run，没有重新跑 metadata 全量采集；
-- 完成 4,427 个目标视频的一级评论与 replies 采集；
-- 形成 67,008 条 comments + replies 文本数据；
+- 完成旧口径 4,427 个目标视频的一级评论与 replies 采集；
+- 完成二次口径修正：剔除 `#锦江宾馆`，跳过 `#临空锦江宾馆`，将 `#锦江都城酒店吉安` 列为补充目标；
+- 离线派生出 4,011 个当前本地可覆盖目标视频、50,389 条 comments + replies；
+- 明确 top12 `#锦江都城酒店吉安` 当前缺 source metadata，后续需要在授权后补齐 metadata 与评论/回复；
 - 明确禁用 profiles，避免不必要的隐私与成本风险；
-- 通过自动化审计、测试、静态检查和敏感信息扫描；
 - 为后续互动网络、文本分析和 ABM 传播模拟提供了可追溯的数据基础。
 
-因此，本周工作可以概括为：**完成了锦江酒店 Douyin 评论与回复数据集的阶段性构建与质量验证，为后续 LLM-ABM 营销传播模拟打下了数据基础。**
+因此，本周工作可以概括为：**完成了锦江酒店 Douyin 评论与回复数据集的阶段性构建、研究对象边界二次修正与离线审计，为后续 LLM-ABM 营销传播模拟打下了更清晰的数据基础；下一步需要补齐 `#锦江都城酒店吉安` 的 metadata/comments 后再生成最终新口径网络与语料。**
