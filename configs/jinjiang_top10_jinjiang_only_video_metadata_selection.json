@@ -1,0 +1,105 @@
+{
+  "scope": "jinjiang_top10_jinjiang_only_video_metadata_unbounded",
+  "source": "docs/04-开发验证/jinjiang-douyin-existing-topic-distribution.md; deep-interview spec .omx/specs/deep-interview-top10-jinjiang-video-scope.md; only challenge/tag names containing 锦江",
+  "notes": [
+    "Caption hashtag matching for this scope counts only the 10 explicit #锦江... hashtags listed here.",
+    "酒店, 住宿, 高性价比酒店推荐 are excluded because they do not contain 锦江 and are generic/weakly related for this pass.",
+    "Current live use is metadata-only unbounded/as-complete-as-API-allows: challenge_index,video_metadata; no comments/replies/profiles; stop with checkpoint/partial report on quota/rate/pagination/API blockers."
+  ],
+  "excluded_tags": [
+    {
+      "tag": "酒店",
+      "reason": "泛化酒店主题，且名称不带锦江"
+    },
+    {
+      "tag": "住宿",
+      "reason": "泛化/弱相关住宿主题，且名称不带锦江"
+    },
+    {
+      "tag": "高性价比酒店推荐",
+      "reason": "消费决策相关但名称不带锦江，不属于本轮名称带锦江 top10"
+    }
+  ],
+  "challenge_selections": [
+    {
+      "rank": 1,
+      "tag": "锦江都城酒店",
+      "challenge_id": "1629766950492163",
+      "source": "existing topic distribution challenge name video number top 锦江-only",
+      "include": true,
+      "include_reason": "名称带锦江的 top10 主题"
+    },
+    {
+      "rank": 2,
+      "tag": "锦江之星酒店",
+      "challenge_id": "1624819436442636",
+      "source": "existing topic distribution challenge name video number top 锦江-only",
+      "include": true,
+      "include_reason": "名称带锦江的 top10 主题"
+    },
+    {
+      "rank": 3,
+      "tag": "锦江酒店",
+      "challenge_id": "1614016211862532",
+      "source": "existing topic distribution challenge name video number top 锦江-only",
+      "include": true,
+      "include_reason": "名称带锦江的 top10 主题"
+    },
+    {
+      "rank": 4,
+      "tag": "锦江之星",
+      "challenge_id": "1600871309340680",
+      "source": "existing topic distribution challenge name video number top 锦江-only",
+      "include": true,
+      "include_reason": "名称带锦江的 top10 主题"
+    },
+    {
+      "rank": 5,
+      "tag": "锦江宾馆",
+      "challenge_id": "1608015311015939",
+      "source": "existing topic distribution challenge name video number top 锦江-only",
+      "include": true,
+      "include_reason": "名称带锦江的 top10 主题"
+    },
+    {
+      "rank": 6,
+      "tag": "绵阳锦江国际酒店",
+      "challenge_id": "7492373353357903924",
+      "source": "existing topic distribution challenge name video number top 锦江-only",
+      "include": true,
+      "include_reason": "名称带锦江的 top10 主题"
+    },
+    {
+      "rank": 7,
+      "tag": "锦江之星品尚",
+      "challenge_id": "1632849322176525",
+      "source": "existing topic distribution challenge name video number top 锦江-only",
+      "include": true,
+      "include_reason": "名称带锦江的 top10 主题"
+    },
+    {
+      "rank": 8,
+      "tag": "锦江酒店华西区",
+      "challenge_id": "7474793640091453503",
+      "source": "existing topic distribution challenge name video number top 锦江-only",
+      "include": true,
+      "include_reason": "名称带锦江的 top10 主题"
+    },
+    {
+      "rank": 9,
+      "tag": "锦江之星海口",
+      "challenge_id": "7642718226014537769",
+      "source": "existing topic distribution challenge name video number top 锦江-only",
+      "include": true,
+      "include_reason": "名称带锦江的 top10 主题"
+    },
+    {
+      "rank": 10,
+      "tag": "锦江酒店中国区",
+      "challenge_id": "1669845857481741",
+      "source": "existing topic distribution challenge name video number top 锦江-only",
+      "include": true,
+      "include_reason": "名称带锦江的 top10 主题"
+    }
+  ]
+}

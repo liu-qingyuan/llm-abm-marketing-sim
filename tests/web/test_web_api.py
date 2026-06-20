@@ -20,6 +20,7 @@ def _write(path: Path, text: str) -> Path:
 
 
 def _wait_for_terminal(client: TestClient, run_id: str) -> dict[str, object]:
+    job: dict[str, object] = {}
     for _ in range(100):
         job = client.get(f"/api/runs/{run_id}").json()
         if job["state"] not in {"queued", "running"}:
@@ -186,7 +187,9 @@ def test_mock_provider_run_writes_artifacts_and_report_payload(tmp_path: Path):
         assert forbidden not in serialized_payload
     artifact = client.get(f"/api/runs/{run['run_id']}/artifact/report.html")
     assert artifact.status_code == 200
-    artifact_dir = Path(run["artifact_dir"])
+    artifact_dir_value = run["artifact_dir"]
+    assert isinstance(artifact_dir_value, str)
+    artifact_dir = Path(artifact_dir_value)
     joined = "\n".join(path.read_text(errors="ignore") for path in artifact_dir.iterdir() if path.is_file()).lower()
     for forbidden in forbidden_fragments:
         assert forbidden not in joined

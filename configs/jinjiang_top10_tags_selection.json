@@ -1,0 +1,75 @@
+{
+  "selection_source": "docs/04-开发验证/jinjiang-douyin-existing-topic-distribution.md section 6.1 top10; cid resolved from related_challenges.json or existing structured tag cid frequency",
+  "challenge_selections": [
+    {
+      "rank": 1,
+      "tag": "酒店",
+      "challenge_id": "7419045480706869287",
+      "source": "existing aweme structured tag cid frequency",
+      "observed_tag_cid_rows": 1487
+    },
+    {
+      "rank": 2,
+      "tag": "锦江酒店",
+      "challenge_id": "1614016211862532",
+      "source": "related_challenges.json exact name",
+      "observed_tag_cid_rows": 1645
+    },
+    {
+      "rank": 3,
+      "tag": "高性价比酒店推荐",
+      "challenge_id": "1742310100775939",
+      "source": "existing aweme structured tag cid frequency",
+      "observed_tag_cid_rows": 1523
+    },
+    {
+      "rank": 4,
+      "tag": "锦江酒店中国区",
+      "challenge_id": "1669845857481741",
+      "source": "related_challenges.json exact name",
+      "observed_tag_cid_rows": 1210
+    },
+    {
+      "rank": 5,
+      "tag": "锦江之星",
+      "challenge_id": "1600871309340680",
+      "source": "related_challenges.json exact name",
+      "observed_tag_cid_rows": 1092
+    },
+    {
+      "rank": 6,
+      "tag": "锦江都城酒店",
+      "challenge_id": "1629766950492163",
+      "source": "related_challenges.json exact name",
+      "observed_tag_cid_rows": 1060
+    },
+    {
+      "rank": 7,
+      "tag": "锦江宾馆",
+      "challenge_id": "1608015311015939",
+      "source": "related_challenges.json exact name",
+      "observed_tag_cid_rows": 1007
+    },
+    {
+      "rank": 8,
+      "tag": "锦江之星酒店",
+      "challenge_id": "1624819436442636",
+      "source": "related_challenges.json exact name",
+      "observed_tag_cid_rows": 828
+    },
+    {
+      "rank": 9,
+      "tag": "住宿",
+      "challenge_id": "1581697840816141",
+      "source": "existing aweme structured tag cid frequency",
+      "observed_tag_cid_rows": 700
+    },
+    {
+      "rank": 10,
+      "tag": "南充锦江酒店",
+      "challenge_id": "7362438499401730111",
+      "source": "related_challenges.json exact name",
+      "observed_tag_cid_rows": 674
+    }
+  ]
+}

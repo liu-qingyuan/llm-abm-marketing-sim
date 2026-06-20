@@ -1,4 +1,5 @@
 from pathlib import Path
+from typing import cast
 
 from llm_abm_sim.runner import ExperimentRunner
 
@@ -11,7 +12,7 @@ def test_runner_produces_identical_events_for_fixed_seed():
     assert first.model_dump(mode="json") == second.model_dump(mode="json")
     assert first.run_id == "sample-run"
     assert first.metrics_summary["final_exposed"] == 3
-    assert first.metrics_summary["final_engaged"] >= 1
+    assert cast(int, first.metrics_summary["final_engaged"]) >= 1
 
 
 def test_runner_loads_toy_dataset_fixture_with_config_relative_paths():
@@ -66,9 +67,9 @@ def test_runner_loads_realistic_marketing_dataset_deterministically():
     assert first.model_dump(mode="json") == second.model_dump(mode="json")
     assert first.run_id == "realistic-marketing-dataset"
     assert first.metrics_summary["total_agents"] == 36
-    assert first.metrics_summary["final_exposed"] >= 20
-    assert first.metrics_summary["final_engaged"] >= 10
-    assert first.metrics_summary["diffusion_depth"] >= 3
+    assert cast(int, first.metrics_summary["final_exposed"]) >= 20
+    assert cast(int, first.metrics_summary["final_engaged"]) >= 10
+    assert cast(int, first.metrics_summary["diffusion_depth"]) >= 3
     report = first_runner.dataset_validation_report
     assert report is not None
     assert report.graph_node_count == 36

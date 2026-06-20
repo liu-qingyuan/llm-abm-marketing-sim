@@ -1,0 +1,53 @@
+{
+  "schema_version": "douyin.comment_candidates.v1",
+  "source_run_id": "jinjiang-top10-jinjiang-only-video-metadata-unbounded-20260617T095743Z",
+  "collection_type": "filtered_candidate_comments",
+  "excluded_video_ids": [
+    {
+      "video_id": "7486704870804770107",
+      "exclusion_reason": "女性安全/偷拍主题与当前锦江酒店学术研究目标不一致"
+    },
+    {
+      "video_id": "7486891790218399034",
+      "exclusion_reason": "女性安全/偷拍主题与当前锦江酒店学术研究目标不一致"
+    }
+  ],
+  "comment_candidates": [
+    {
+      "video_id": "7380282151763332403",
+      "source_challenge_name": "锦江酒店",
+      "source_challenge_id": "1614016211862532",
+      "caption_hashtags": "",
+      "metadata_comment_count": 11955,
+      "comment_fetch_limit": 2000,
+      "exclusion_reason": ""
+    },
+    {
+      "video_id": "7304930579651284264",
+      "source_challenge_name": "锦江之星",
+      "source_challenge_id": "1600871309340680",
+      "caption_hashtags": "#锦江之星",
+      "metadata_comment_count": 5040,
+      "comment_fetch_limit": 2000,
+      "exclusion_reason": ""
+    },
+    {
+      "video_id": "7498610642853858569",
+      "source_challenge_name": "锦江宾馆",
+      "source_challenge_id": "1608015311015939",
+      "caption_hashtags": "#锦江宾馆",
+      "metadata_comment_count": 2963,
+      "comment_fetch_limit": "unbounded",
+      "exclusion_reason": ""
+    },
+    {
+      "video_id": "7219508986515606839",
+      "source_challenge_name": "锦江宾馆",
+      "source_challenge_id": "1608015311015939",
+      "caption_hashtags": "#锦江宾馆",
+      "metadata_comment_count": 1069,
+      "comment_fetch_limit": "unbounded",
+      "exclusion_reason": ""
+    }
+  ]
+}

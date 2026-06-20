@@ -1,0 +1,88 @@
+{
+  "scope": "jinjiang_top10_non_generic_video_metadata_validation",
+  "source": "docs/04-开发验证/jinjiang-douyin-existing-topic-distribution.md section 6.1 top10; excludes generic #酒店 for metadata validation",
+  "challenge_selections": [
+    {
+      "rank": 1,
+      "tag": "酒店",
+      "challenge_id": "7419045480706869287",
+      "source": "existing aweme structured tag cid frequency",
+      "include": false,
+      "is_generic": true,
+      "exclude_reason": "泛化酒店主题，不作为锦江酒店相关核心验证样本"
+    },
+    {
+      "rank": 2,
+      "tag": "锦江酒店",
+      "challenge_id": "1614016211862532",
+      "source": "related_challenges.json exact name",
+      "include": true,
+      "include_reason": "锦江酒店核心品牌标签"
+    },
+    {
+      "rank": 3,
+      "tag": "高性价比酒店推荐",
+      "challenge_id": "1742310100775939",
+      "source": "existing aweme structured tag cid frequency",
+      "include": true,
+      "include_reason": "酒店消费决策相关标签"
+    },
+    {
+      "rank": 4,
+      "tag": "锦江酒店中国区",
+      "challenge_id": "1669845857481741",
+      "source": "related_challenges.json exact name",
+      "include": true,
+      "include_reason": "用户重点提到的锦江酒店中国区"
+    },
+    {
+      "rank": 5,
+      "tag": "锦江之星",
+      "challenge_id": "1600871309340680",
+      "source": "related_challenges.json exact name",
+      "include": true,
+      "include_reason": "锦江旗下品牌标签"
+    },
+    {
+      "rank": 6,
+      "tag": "锦江都城酒店",
+      "challenge_id": "1629766950492163",
+      "source": "related_challenges.json exact name",
+      "include": true,
+      "include_reason": "用户重点提到的锦江都城酒店"
+    },
+    {
+      "rank": 7,
+      "tag": "锦江宾馆",
+      "challenge_id": "1608015311015939",
+      "source": "related_challenges.json exact name",
+      "include": true,
+      "include_reason": "锦江相关实体标签"
+    },
+    {
+      "rank": 8,
+      "tag": "锦江之星酒店",
+      "challenge_id": "1624819436442636",
+      "source": "related_challenges.json exact name",
+      "include": true,
+      "include_reason": "用户重点提到的锦江之星酒店"
+    },
+    {
+      "rank": 9,
+      "tag": "住宿",
+      "challenge_id": "1581697840816141",
+      "source": "existing aweme structured tag cid frequency",
+      "include": true,
+      "is_generic": true,
+      "include_reason": "弱相关/泛化住宿标签；保留但报告中单独标注"
+    },
+    {
+      "rank": 10,
+      "tag": "南充锦江酒店",
+      "challenge_id": "7362438499401730111",
+      "source": "related_challenges.json exact name",
+      "include": true,
+      "include_reason": "地理实体相关锦江酒店标签"
+    }
+  ]
+}

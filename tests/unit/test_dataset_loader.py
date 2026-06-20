@@ -230,9 +230,11 @@ def test_realistic_marketing_fixture_preserves_real_data_attributes():
     assert edge["recency_days"] == 1
     assert edge["community_bridge"] is False
     assert dataset.profiles["u01"].interest_tags == ["skincare", "eco", "sustainability"]
-    assert dataset.profiles["u01"].model_extra["community"] == "eco_beauty"
-    assert dataset.profiles["u01"].model_extra["segment"] == "koc_seed"
-    assert dataset.profiles["u01"].model_extra["follower_count"] == "18500"
+    extra = dataset.profiles["u01"].model_extra
+    assert extra is not None
+    assert extra["community"] == "eco_beauty"
+    assert extra["segment"] == "koc_seed"
+    assert extra["follower_count"] == "18500"
 
     report = dataset.validation_report.to_dict()
     assert report["dataset_used"] is True

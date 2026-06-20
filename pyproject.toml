@@ -72,5 +72,6 @@ markers = [
   "integration: component interaction tests",
   "e2e: end-to-end workflow tests",
   "live_llm: manual live LLM/provider gate; skipped unless explicitly opted in",
+  "live_tikhub: manual live TikHub/Douyin API gate; skipped unless explicitly opted in",
 ]
-addopts = "-m 'not live_llm'"
+addopts = "-m 'not live_llm and not live_tikhub'"

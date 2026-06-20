@@ -1,105 +1,88 @@
-# llm-abm-marketing-sim Documentation Index
+# llm-abm-marketing-sim 文档索引
 
-**Type:** Monolith Python library/CLI with local Web console and Playwright browser tests  
-**Primary Language:** Python  
-**Architecture:** Lightweight custom ABM core + NetworkX + Pydantic + adapter/cache boundaries  
-**Last Updated:** 2026-05-16T00:00:00+08:00
+本目录已按阅读场景分类整理。建议第一次了解项目时，从“项目概览”开始；准备运行项目时看“使用指南”；准备改代码时看“架构设计”和“开发验证”。
 
-## Project Overview
+## 分类结构
 
-`llm-abm-marketing-sim` simulates marketing-post diffusion over a social network. It models users as social-media agents, uses platform exposure mechanics and visible interaction traces, and records longitudinal propagation events and metrics. The default path is deterministic and offline; live LLM/provider checks are manual and opt-in.
+```text
+docs/
+├── 01-项目概览/      # 项目是什么、能演示什么、与 Obsidian 设计如何对齐
+├── 02-架构设计/      # 核心架构、仿真流程、框架取舍
+├── 03-使用指南/      # 安装运行、数据导入、Provider/LLM 配置
+├── 04-开发验证/      # 开发计划、组件清单、源码结构、测试策略
+└── 99-参考资料/      # 自动扫描报告等低频参考资料
+```
 
-## Quick Reference
+## 推荐阅读路径
 
-- **Tech Stack:** Python 3.10+, Pydantic, NetworkX, PyYAML, pandas, pytest, ruff, mypy, Playwright
-- **CLI Entry Point:** `python -m llm_abm_sim.run --config configs/default.yaml --output runs/sample`
-- **Web Console Entry Point:** `python -m llm_abm_sim.web --host 127.0.0.1 --port 8000 --artifact-root runs/web`
-- **Architecture Pattern:** Event-sourced custom ABM runtime with provider-agnostic decision adapter
-- **Database:** None in MVP; future DecisionCache persistence may use SQLite/DuckDB
-- **Deployment:** Local library/CLI plus single-user FastAPI Web console; no production multi-user service
+### 只想快速了解项目
 
-## Generated Documentation
+1. [项目总览](01-项目概览/project-overview.md)
+2. [产品演示说明](01-项目概览/product-demo.md)
+3. [与 Obsidian 设计笔记的需求对齐](01-项目概览/requirements-alignment.md)
 
-### Core Documentation
+### 想在本机跑起来
 
-- [Project Overview](./project-overview.md) - Executive summary and high-level architecture
-- [Architecture](./architecture.md) - Technical architecture and Obsidian contract mapping
-- [Source Tree Analysis](./source-tree-analysis.md) - Annotated directory structure
-- [Component Inventory](./component-inventory.md) - Catalog of major runtime/test components
-- [Getting Started on macOS](./getting-started-macos.md) - Canonical from-zero macOS setup, CLI/Web console runs, mock provider, optional live LLM gate, artifacts, troubleshooting, and cleanup
-- [Development Guide](./development-guide.md) - Local setup and development workflow
-- [Dataset and Profile Ingestion](./dataset-ingestion.md) - Dataset schema examples, validation policies, and config-relative path rules
-- [Test Strategy](./test-strategy.md) - Test layers and acceptance coverage
-- [Provider Config](./provider-config.md) - Secret-safe Codex/sub2api manual live gate
-- [Product Demo](./product-demo.md) - 90% local prototype demo flow and review checklist
-- [Requirements Alignment](./requirements-alignment.md) - Obsidian six-layer alignment and simplification notes
+1. [macOS 从零开始运行指南](03-使用指南/getting-started-macos.md)
+2. [开发指南](03-使用指南/development-guide.md)
+3. [数据集与用户画像导入](03-使用指南/dataset-ingestion.md)
+4. [Provider 配置与 Live LLM 闸门](03-使用指南/provider-config.md)
 
-### Existing Planning/Analysis Docs
+### 想理解系统怎么设计
 
-- [Framework Analysis](./framework-analysis.md) - Framework selection and architectural tradeoffs
-- [Development Plan](./development-plan.md) - Phased roadmap and staffing guidance
-- [Simulation Flow](./simulation-flow.md) - Runtime flow and sequence diagrams
+1. [架构说明](02-架构设计/architecture.md)
+2. [仿真流程](02-架构设计/simulation-flow.md)
+3. [框架选型分析](02-架构设计/framework-analysis.md)
+4. [TikHub / Douyin 数据收集架构](02-架构设计/douyin-data-collection-architecture.md)
 
-## Getting Started
+### 想继续开发或验收
 
-### Prerequisites
+1. [TikHub / Douyin 数据收集架构](02-架构设计/douyin-data-collection-architecture.md)
+2. [锦江酒店抖音社交网络与绿色营销仿真标准](04-开发验证/jinjiang-douyin-research-standard.md)
+2. [开发计划](04-开发验证/development-plan.md)
+3. [组件清单](04-开发验证/component-inventory.md)
+4. [源码结构分析](04-开发验证/source-tree-analysis.md)
+5. [测试策略](04-开发验证/test-strategy.md)
 
-Python 3.10+, Node.js 18+, npm. For a true fresh macOS setup, follow [Getting Started on macOS](./getting-started-macos.md).
-
-### Setup
+## 快速命令
 
 ```bash
+# 安装开发环境
+python3 -m venv .venv
 . .venv/bin/activate
+python -m pip install -U pip
 python -m pip install -e ".[dev,web,llm]"
 npm ci
 npx playwright install chromium
-```
 
-### Run Locally
-
-```bash
+# 离线运行默认仿真
 python -m llm_abm_sim.run --config configs/default.yaml --output runs/sample
+
+# 离线运行真实感营销数据样例
 python -m llm_abm_sim.run --config configs/fixtures/realistic_marketing_dataset.yaml --output runs/realistic-sample
+
+# 启动本地 Web 控制台
 python -m llm_abm_sim.web --host 127.0.0.1 --port 8000 --artifact-root runs/web
-```
 
-Open the Web console at `http://127.0.0.1:8000`. The default CLI and Web mock-provider development paths are offline and deterministic. Product-mode Web runs fail closed unless the explicit live gate, provider readiness metadata, and credentials are present.
-
-### Run Tests
-
-```bash
+# 常规验证
 ruff check .
 ruff format --check .
 mypy src
 pytest -q
 python -m py_compile $(find src tests -name '*.py' -print)
-npx playwright test
 ```
 
-## For AI-Assisted Development
+## 数据收集快速入口
 
-This documentation is generated for future agents and human reviewers.
+- 当前数据收集架构：[`02-架构设计/douyin-data-collection-architecture.md`](02-架构设计/douyin-data-collection-architecture.md)
+- 数据目录语义：[`../data/README.md`](../data/README.md)
+- 当前 metadata 验证报告：[`04-开发验证/jinjiang-douyin-video-metadata-validation-20260617T035450Z.md`](04-开发验证/jinjiang-douyin-video-metadata-validation-20260617T035450Z.md)
+- 后续 AI Agent 应先确认 `collection_report.json` 中的 `stage_status` / `stage_counts`，不要只看 CSV 行数。
 
-### When planning simulator/runtime changes
+## 核心约定
 
-Reference: `architecture.md`, `component-inventory.md`, `source-tree-analysis.md`, `development-plan.md`.
-
-### When changing outputs or metrics
-
-Reference: `component-inventory.md`, `test-strategy.md`, `tests/integration/test_obsidian_metrics_contract.py`.
-
-### When changing dataset/profile ingestion
-
-Reference: `dataset-ingestion.md`, `schemas.py`, `graph_loader.py`, `runner.py`, `configs/fixtures/toy_dataset.yaml`, `tests/unit/test_dataset_loader.py`, `tests/unit/test_dataset_config.py`, `tests/integration/test_runner_determinism.py`.
-
-### When changing provider/LLM behavior
-
-Reference: `provider-config.md`, `decision.py`, `provider_config.py`, `tests/unit/test_provider_config.py`, `tests/e2e/test_live_llm_gate.py`.
-
-### When changing browser/report behavior
-
-Reference: `web_app.py`, `web_static/`, `report_payload.py`, `report_i18n.py`, `input_builder.py`, `outputs.py`, `tests/web/test_web_api.py`, `tests/playwright/web-console.spec.ts`, `tests/playwright/report-smoke.spec.ts`, `playwright.config.ts`.
-
----
-
-_Documentation generated by BMAD Method `document-project` workflow._
+- 默认路径必须离线、确定性、无 API key、无外部网络依赖。
+- LLM 是可替换的决策函数，不是仿真调度器。
+- ABM 循环负责时间、状态、扩散和可复现性。
+- 所有输入、输出、事件和 Provider 响应都通过 Pydantic/安全序列化边界约束。
+- 不提交真实私密数据、Token、Cookie、Header、API key、原始 Prompt 或原始 Provider 响应。

@@ -1,0 +1,186 @@
+{
+  "topic_query": {
+    "challenge_id": "cha_jj",
+    "keyword": "锦江酒店"
+  },
+  "challenge_posts": {
+    "videos": [
+      {
+        "aweme_id": "v1"
+      },
+      {
+        "aweme_id": "v2"
+      }
+    ]
+  },
+  "video_search": {
+    "videos": [
+      {
+        "aweme_id": "sv1"
+      }
+    ]
+  },
+  "video_details": {
+    "v1": {
+      "aweme_id": "v1",
+      "share_url": "https://www.douyin.com/video/v1",
+      "desc": "#锦江酒店 绿色入住",
+      "create_time": "2025-06-01T00:00:00",
+      "author": {
+        "uid": "creator1",
+        "sec_uid": "sec_creator1",
+        "nickname": "Creator"
+      },
+      "statistics": {
+        "digg_count": 10,
+        "comment_count": 2,
+        "share_count": 1,
+        "collect_count": 3
+      }
+    },
+    "v2": {
+      "aweme_id": "v2",
+      "share_url": "https://www.douyin.com/video/v2",
+      "desc": "锦江酒店 城市旅行",
+      "create_time": "2025-06-02T00:00:00",
+      "author": {
+        "uid": "creator2",
+        "sec_uid": "sec_creator2",
+        "nickname": "Creator2"
+      },
+      "statistics": {
+        "digg_count": 5,
+        "comment_count": 0,
+        "share_count": 0,
+        "collect_count": 1
+      }
+    },
+    "sv1": {
+      "aweme_id": "sv1",
+      "desc": "锦江酒店 search fallback",
+      "author": {
+        "uid": "creator1",
+        "sec_uid": "sec_creator1"
+      }
+    }
+  },
+  "comments": {
+    "v1": [
+      {
+        "cid": "c1",
+        "aweme_id": "v1",
+        "user": {
+          "uid": "u1",
+          "sec_uid": "sec_u1"
+        },
+        "text": "不错 @u2 锦江酒店",
+        "create_time": "2025-06-01T00:01:00",
+        "digg_count": 4,
+        "mentions": [
+          {
+            "uid": "u2"
+          }
+        ]
+      }
+    ],
+    "v2": []
+  },
+  "replies": {
+    "c1": [
+      {
+        "cid": "r1",
+        "aweme_id": "v1",
+        "reply_id": "c1",
+        "user": {
+          "uid": "u2",
+          "sec_uid": "sec_u2"
+        },
+        "text": "同意",
+        "create_time": "2025-06-01T00:02:00"
+      }
+    ]
+  },
+  "user_profiles": {
+    "sec_creator1": {
+      "uid": "creator1",
+      "sec_uid": "sec_creator1",
+      "nickname": "Creator",
+      "follower_count": 1000,
+      "aweme_count": 10
+    },
+    "sec_creator2": {
+      "uid": "creator2",
+      "sec_uid": "sec_creator2",
+      "nickname": "Creator2",
+      "follower_count": 500,
+      "aweme_count": 3
+    },
+    "sec_u1": {
+      "uid": "u1",
+      "sec_uid": "sec_u1",
+      "nickname": "User1",
+      "follower_count": 10,
+      "aweme_count": 1
+    },
+    "sec_u2": {
+      "uid": "u2",
+      "sec_uid": "sec_u2",
+      "nickname": "User2",
+      "follower_count": 20,
+      "aweme_count": 2
+    }
+  },
+  "video_search_v2": {
+    "data": {
+      "business_data": [
+        {
+          "data": {
+            "aweme_info": {
+              "aweme_id": "v1"
+            }
+          }
+        },
+        {
+          "data": {
+            "aweme_info": {
+              "aweme_id": "v2"
+            }
+          }
+        }
+      ]
+    }
+  },
+  "general_search_v2": {
+    "data": {
+      "business_data": []
+    }
+  },
+  "challenge_search_v2": {
+    "data": {
+      "business_data": [
+        {
+          "data": {
+            "challenge_info": {
+              "cid": "cha_jj",
+              "cha_name": "锦江酒店"
+            }
+          }
+        }
+      ]
+    }
+  },
+  "hashtag_video_list": {
+    "data": {
+      "aweme_list": [
+        {
+          "aweme_id": "v1"
+        },
+        {
+          "aweme_id": "v2"
+        }
+      ],
+      "cursor": 0,
+      "has_more": false
+    }
+  }
+}
