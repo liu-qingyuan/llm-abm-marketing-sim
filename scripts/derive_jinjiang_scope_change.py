@@ -17,6 +17,7 @@ from collections import defaultdict
 from collections.abc import Iterable, Mapping
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
 OLD_RUN_ID = "jinjiang-top10-caption-hashtag-all-comments-excluding-safety-20260617T140519Z"
 SOURCE_RUN_ID = "jinjiang-top10-jinjiang-only-video-metadata-unbounded-20260617T095743Z"
@@ -114,6 +115,135 @@ def first_by_video(rows: Iterable[dict[str, str]]) -> dict[str, dict[str, str]]:
     return out
 
 
+def split_semicolon_or_json_list(value: str) -> list[str]:
+    value = (value or "").strip()
+    if not value:
+        return []
+    try:
+        parsed = ast.literal_eval(value)
+        if isinstance(parsed, (list, tuple, set)):
+            return [str(item).strip() for item in parsed if str(item).strip()]
+    except (ValueError, SyntaxError):
+        pass
+    return [part.strip() for part in re.split(r"[;；,，\s]+", value) if part.strip()]
+
+
+def parse_nonnegative_int(value: Any) -> int:
+    try:
+        return max(0, int(float(str(value or 0))))
+    except (TypeError, ValueError):
+        return 0
+
+
+def normalize_comment_parent(value: str) -> str:
+    value = str(value or "").strip()
+    return "" if value in {"", "0", "None", "none", "null"} else value
+
+
+def build_derived_network_outputs(out_dir: Path, video_rows: list[dict[str, object]], comment_rows: list[dict[str, str]]) -> dict[str, int]:
+    from llm_abm_sim.data_sources.douyin_models import (
+        EDGE_COLUMNS,
+        PROFILE_COLUMNS,
+        TEXT_ITEM_COLUMNS,
+        USER_COLUMNS,
+        VIDEO_COLUMNS,
+        DouyinCommentRecord,
+        DouyinVideoRecord,
+    )
+    from llm_abm_sim.data_sources.douyin_network import build_interaction_edges
+
+    videos = [
+        DouyinVideoRecord(
+            video_id=str(row.get("video_id", "")),
+            source_challenge_id=str(row.get("source_challenge_id", "")),
+            source_challenge_name=str(row.get("source_challenge_name", "")),
+            source_challenge_rank=parse_nonnegative_int(row.get("source_challenge_rank", "0")),
+            raw_detail_status=str(row.get("raw_detail_status", "")) or "unknown",
+            metadata_source=str(row.get("metadata_source", "")),
+            video_url=str(row.get("video_url", "")),
+            publish_time=str(row.get("publish_time", "")),
+            caption=str(row.get("caption", "")),
+            hashtags=split_semicolon_or_json_list(str(row.get("hashtags", ""))),
+            creator_user_id=str(row.get("creator_user_id", "")),
+            like_count=parse_nonnegative_int(row.get("like_count", "0")),
+            comment_count=parse_nonnegative_int(row.get("comment_count", row.get("metadata_comment_count", "0"))),
+            share_count=parse_nonnegative_int(row.get("share_count", "0")),
+            collect_count=parse_nonnegative_int(row.get("collect_count", "0")),
+        )
+        for row in video_rows
+        if str(row.get("video_id", "")).strip()
+    ]
+    comments: list[DouyinCommentRecord] = []
+    for row in comment_rows:
+        comment_id = str(row.get("comment_id", "")).strip()
+        commenter_user_id = str(row.get("commenter_user_id", "")).strip()
+        video_id = str(row.get("video_id", "")).strip()
+        if not comment_id or not commenter_user_id or not video_id:
+            continue
+        comments.append(
+            DouyinCommentRecord(
+                comment_id=comment_id,
+                video_id=video_id,
+                parent_comment_id=normalize_comment_parent(row.get("parent_comment_id", "")),
+                commenter_user_id=commenter_user_id,
+                content=str(row.get("content", "")),
+                publish_time=str(row.get("publish_time", "")),
+                mentioned_user_ids=split_semicolon_or_json_list(row.get("mentioned_user_ids", "")),
+                like_count=parse_nonnegative_int(row.get("like_count", "0")),
+                comment_level="reply" if row.get("comment_level") == "reply" else "comment",
+            )
+        )
+    edges = build_interaction_edges(videos, comments)
+    user_ids = sorted(
+        {video.creator_user_id for video in videos if video.creator_user_id}
+        | {comment.commenter_user_id for comment in comments if comment.commenter_user_id}
+    )
+    text_items = []
+    for video in videos:
+        if video.caption:
+            text_items.append({
+                "item_id": video.video_id,
+                "item_type": "video",
+                "video_id": video.video_id,
+                "parent_comment_id": "",
+                "user_id": video.creator_user_id,
+                "target_user_id": "",
+                "text": video.caption,
+                "publish_time": video.publish_time,
+                "like_count": video.like_count,
+                "source": "videos.csv",
+            })
+    comment_by_id = {comment.comment_id: comment for comment in comments}
+    creator_by_video = {video.video_id: video.creator_user_id for video in videos}
+    for comment in comments:
+        target_user = creator_by_video.get(comment.video_id, "")
+        if comment.comment_level == "reply" and comment.parent_comment_id in comment_by_id:
+            target_user = comment_by_id[comment.parent_comment_id].commenter_user_id
+        text_items.append({
+            "item_id": comment.comment_id,
+            "item_type": comment.comment_level,
+            "video_id": comment.video_id,
+            "parent_comment_id": comment.parent_comment_id,
+            "user_id": comment.commenter_user_id,
+            "target_user_id": target_user,
+            "text": comment.content,
+            "publish_time": comment.publish_time,
+            "like_count": comment.like_count,
+            "source": "comments.csv",
+        })
+
+    write_csv(out_dir / "videos.csv", [video.model_dump() for video in videos], VIDEO_COLUMNS)
+    write_csv(
+        out_dir / "users.csv",
+        [{"user_id": user_id, "sec_user_id": user_id} for user_id in user_ids],
+        USER_COLUMNS,
+    )
+    write_csv(out_dir / "edges.csv", [edge.model_dump() for edge in edges], EDGE_COLUMNS)
+    write_csv(out_dir / "text_items.csv", text_items, TEXT_ITEM_COLUMNS)
+    write_csv(out_dir / "profiles.csv", [], PROFILE_COLUMNS)
+    return {"videos": len(videos), "users": len(user_ids), "edges": len(edges), "text_items": len(text_items), "profiles": 0}
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Derive corrected Jinjiang Douyin caption hashtag scope")
     parser.add_argument("--top12-metadata-run-id", default="", help="Optional processed run id containing #锦江都城酒店吉安 videos.csv")
@@ -207,13 +337,16 @@ def main() -> None:
 
     manifest_fields = list(manifest[0].keys()) + ["needs_comment_fetch", "scope_change_action"]
     new_manifest_rows: list[dict[str, object]] = []
+    derived_video_rows: list[dict[str, object]] = []
     for row in manifest:
         vid = row.get("video_id", "").strip()
         tags = tag_tokens(row.get("matched_caption_hashtags", ""))
         if vid in corrected_vids and vid in old_target_vids and REMOVE_TAG not in tags and SKIP_TAG not in tags:
             new_manifest_rows.append({**row, "needs_comment_fetch": "false", "scope_change_action": "kept_from_previous_run"})
+            derived_video_rows.append(dict(source_by_vid.get(vid, row)))
     for vid in sorted(add_new_vids):
         src = add_rows_by_vid[vid]
+        derived_video_rows.append(dict(src))
         new_manifest_rows.append({
             "video_id": vid,
             "source_challenge_name": src.get("source_challenge_name", ""),
@@ -292,6 +425,7 @@ def main() -> None:
     ]:
         fields = list(read_csv(OLD_RUN / filename)[0].keys())
         write_csv(out_dir / filename, rows, fields)
+    network_counts = build_derived_network_outputs(out_dir, derived_video_rows, comments_rows)
 
     old_audit = json.loads((OLD_RUN / "comment_collection_audit.json").read_text(encoding="utf-8"))
     old_report = json.loads((OLD_RUN / "collection_report.json").read_text(encoding="utf-8"))
@@ -334,6 +468,9 @@ def main() -> None:
         "replies_collected": len(reply_rows),
         "all_comments_collected": len(all_rows),
         "comments_collected": len(comments_rows),
+        "edges_collected": network_counts["edges"],
+        "users_collected": network_counts["users"],
+        "text_items_collected": network_counts["text_items"],
         "partial": partial,
         "incomplete_video_count": len(needs_fetch_vids),
         "profiles_collected": False,
@@ -380,7 +517,9 @@ def main() -> None:
             "comments": len(top_rows),
             "replies": len(reply_rows),
             "profiles": 0,
-            "text_items": len(all_rows),
+            "users": network_counts["users"],
+            "edges": network_counts["edges"],
+            "text_items": network_counts["text_items"],
         },
         "scope": {
             "type": "caption_hashtag_scope_change_derived",
@@ -394,6 +533,9 @@ def main() -> None:
         "replies_collected": len(reply_rows),
         "all_comments_collected": len(all_rows),
         "comments_collected": True,
+        "edges_collected": network_counts["edges"],
+        "users_collected": network_counts["users"],
+        "text_items_collected": network_counts["text_items"],
         "profiles_collected": False,
         "partial": partial,
         "incomplete_video_count": len(needs_fetch_vids),
@@ -486,6 +628,9 @@ def main() -> None:
 | top_level_comments | {len(top_rows)} |
 | replies | {len(reply_rows)} |
 | all_comments | {len(all_rows)} |
+| users | {network_counts["users"]} |
+| edges | {network_counts["edges"]} |
+| text_items | {network_counts["text_items"]} |
 | needs_comment_fetch_unique_videos | {len(needs_fetch_vids)} |
 | source_metadata_gap_for_top12 | {str(source_metadata_gap).lower()} |
 
@@ -547,6 +692,9 @@ See `scope_change_audit.json`, `needs_comment_fetch_manifest.csv`, and `source_m
 | top-level comments | {len(top_rows)} |
 | replies | {len(reply_rows)} |
 | all_comments | {len(all_rows)} |
+| users | {network_counts["users"]} |
+| edges | {network_counts["edges"]} |
+| text_items | {network_counts["text_items"]} |
 | needs_comment_fetch videos | {len(needs_fetch_vids)} |
 | partial | {str(partial).lower()} |
 | completion_status | {audit["completion_status"]} |
@@ -588,6 +736,9 @@ Derived processed path:
         "top_level_comments_collected": len(top_rows),
         "replies_collected": len(reply_rows),
         "all_comments_collected": len(all_rows),
+        "edges_collected": network_counts["edges"],
+        "users_collected": network_counts["users"],
+        "text_items_collected": network_counts["text_items"],
         "partial": partial,
         "incomplete_video_count": len(needs_fetch_vids),
     }, ensure_ascii=False, indent=2))

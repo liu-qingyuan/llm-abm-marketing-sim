@@ -1,4 +1,6 @@
-# 本周工作进展报告：锦江酒店 Douyin 评论与回复数据集构建
+# 本周工作进展报告（2026.06.17-2026.06.21）：锦江酒店 Douyin 评论与回复数据集构建
+
+> 统计周期：`2026.06.17-2026.06.21`；核心数据口径更新时间：`2026.06.21`。
 
 ## 1. 本周工作目标
 
@@ -80,7 +82,7 @@ OLD_RUN_ID=jinjiang-top10-caption-hashtag-all-comments-excluding-safety-20260617
 本次口径二次修正派生 run：
 
 ```text
-DERIVED_RUN_ID=jinjiang-caption-hashtag-comments-excluding-binguan-adding-jian-derived-20260620T073839Z
+DERIVED_RUN_ID=jinjiang-caption-hashtag-comments-excluding-binguan-adding-jian-derived-20260621T025127Z
 ```
 
 当前派生 run 的状态是：
@@ -103,7 +105,7 @@ TOP12_COMMENTS_RUN_ID=jinjiang-top12-jian-comments-replies-live-20260620T072706Z
 processed 路径：
 
 ```text
-data/processed/jinjiang_douyin/jinjiang-caption-hashtag-comments-excluding-binguan-adding-jian-derived-20260620T073839Z/
+data/processed/jinjiang_douyin/jinjiang-caption-hashtag-comments-excluding-binguan-adding-jian-derived-20260621T025127Z/
 ```
 
 ### 图1：本周数据采集与处理架构图
@@ -140,6 +142,10 @@ graph TB
         repliesCsv["replies.csv"]
         allCsv["all_comments.csv"]
         summaryCsv["comment_video_summary.csv"]
+        videosCsv["videos.csv"]
+        usersCsv["users.csv"]
+        edgesCsv["edges.csv"]
+        textItemsCsv["text_items.csv"]
         reportJson["collection_report.json"]
         auditJson["scope_change_audit.json"]
     end
@@ -180,6 +186,11 @@ graph TB
     oldComments --> commentsCsv
     oldComments --> allCsv
     targetManifest --> summaryCsv
+    targetManifest --> videosCsv
+    commentsCsv --> edgesCsv
+    commentsCsv --> textItemsCsv
+    videosCsv --> edgesCsv
+    edgesCsv --> usersCsv
     profilesDisabled -.-> collection
     commentsCsv --> reportJson
     allCsv --> reportJson
@@ -203,7 +214,7 @@ graph TB
     class sourceRun,sourceVideos,noMetadataRedo sourceClass
     class tagStats,matcher,removeBinguan,skipLinkong,addJian,dedupe,safetyFilter,targetManifest,oldComments,profilesDisabled processClass
     class top12Backfill,top12Comments doneClass
-    class commentsCsv,topCsv,repliesCsv,allCsv,summaryCsv,reportJson,auditJson outputClass
+    class commentsCsv,topCsv,repliesCsv,allCsv,summaryCsv,videosCsv,usersCsv,edgesCsv,textItemsCsv,reportJson,auditJson outputClass
     class audit,tests,secretScan validationClass
     class textCorpus,interactionNetwork,agentInit,abmSimulation futureClass
 ```
@@ -335,7 +346,7 @@ data/processed/jinjiang_douyin/jinjiang-top10-caption-hashtag-all-comments-exclu
 本次派生 run 产物如下：
 
 ```text
-data/processed/jinjiang_douyin/jinjiang-caption-hashtag-comments-excluding-binguan-adding-jian-derived-20260620T073839Z/
+data/processed/jinjiang_douyin/jinjiang-caption-hashtag-comments-excluding-binguan-adding-jian-derived-20260621T025127Z/
 ```
 
 派生审计结果如下：
@@ -351,6 +362,9 @@ data/processed/jinjiang_douyin/jinjiang-caption-hashtag-comments-excluding-bingu
 | top-level comments | 33,428 | 旧评论复用 + top12 授权补采 |
 | replies | 17,212 | 旧 replies 复用 + top12 授权补采 |
 | all_comments | 50,640 | 一级评论与 replies 合并后的新口径文本 |
+| users | 36,400 | 从视频作者、评论者、回复者派生出的 observed users；不是 profiles |
+| edges | 47,624 | 从一级评论、回复和 @mention 聚合出的用户互动边 |
+| text_items | 54,851 | 视频 caption + 评论/回复文本合并语料 |
 | partial | false | top12 metadata/comments/replies 已在授权后补齐 |
 | incomplete videos | 0 | 新口径 target videos 均有完整 comments/replies 状态 |
 | profiles_collected | false | 本轮未抓取用户资料 |
@@ -364,6 +378,10 @@ data/processed/jinjiang_douyin/jinjiang-caption-hashtag-comments-excluding-bingu
 | `replies.csv` | 修正口径下可复用的回复表 |
 | `comments.csv` / `all_comments.csv` | 修正口径下可复用的评论与回复文本表 |
 | `comment_video_summary.csv` | 每个视频的评论与回复状态 |
+| `videos.csv` | 新口径视频 metadata 分母，供 edge 连接视频作者 |
+| `users.csv` | 从视频作者、评论者、回复者派生的 observed user 表；不等同于 profiles |
+| `edges.csv` | 用户互动边表：commenter -> video_creator、replier -> parent_commenter、commenter -> mentioned_user |
+| `text_items.csv` | 视频 caption 与 comments/replies 合并文本语料 |
 | `collection_report.json` | 派生口径、阶段状态和汇总计数 |
 | `scope_change_audit.json` | 本次口径修正审计 |
 | `source_metadata_gap_manifest.csv` | 当前为空，保留 schema 用于证明无 metadata 缺口 |
@@ -379,7 +397,7 @@ data/processed/jinjiang_douyin/jinjiang-caption-hashtag-comments-excluding-bingu
 - `#锦江都城酒店吉安` 已通过授权 top12 metadata run 补入 201 个视频；
 - 原两个 safety excluded video_id 仍不在 derived target 中；
 - profiles_collected=false；
-- 当前 derived 数据集是“旧评论/回复复用 + top12 授权补采”的完整新口径 comments/replies 数据集。
+- 当前 derived 数据集是“旧评论/回复复用 + top12 授权补采”的完整新口径 comments/replies 数据集，并已补齐 `edges.csv`、`users.csv` 与 `text_items.csv` 派生产物。
 
 总体来看，本轮数据不是“全量抖音数据”，而是在明确研究口径下构建的锦江酒店相关 caption hashtag 评论与回复数据集。二次修正提高了研究对象边界的一致性，并已在授权 live API 后补齐 top12 `#锦江都城酒店吉安` 的 metadata 与 comments/replies。
 
@@ -434,7 +452,7 @@ profiles 指用户资料或账号画像字段，例如：
    通过评论、回复、视频作者关系，构建用户之间的互动边。
 
 2. **评论/回复文本语料构建**  
-   当前二次修正并补齐 top12 后，可用 50,640 条评论与回复作为新口径文本语料。
+   当前二次修正并补齐 top12 后，可用 50,640 条评论与回复作为新口径文本语料；同时已生成 47,624 条互动边用于后续网络分析。
 
 3. **用户节点行为特征提取**  
    从评论次数、回复次数、参与视频数、被回复关系等维度形成用户行为特征。
@@ -489,14 +507,13 @@ graph LR
 
 下周建议围绕“基于完整新口径数据生成下游结构”推进，重点包括：
 
-1. 重新生成新口径 interaction network / text corpus；
-2. 从 comments / replies 构建用户互动边；
-3. 统计高互动用户、高互动视频和核心评论节点；
-4. 开展评论文本主题、情绪和舆情初步分析；
-5. 形成 ABM agent 初始化字段草案；
-6. 设计真实互动数据与模拟结果的对比指标；
-7. 评估是否需要小范围补采 profiles，但不做全量 profiles 抓取；
-8. 若后续研究范围再次变化，先生成 scope audit，再决定是否需要 live API。
+1. 基于已生成的 `edges.csv` / `text_items.csv` 做 interaction network 与 text corpus 质量审计；
+2. 统计高互动用户、高互动视频和核心评论节点；
+3. 开展评论文本主题、情绪和舆情初步分析；
+4. 形成 ABM agent 初始化字段草案；
+5. 设计真实互动数据与模拟结果的对比指标；
+6. 评估是否需要小范围补采 profiles，但不做全量 profiles 抓取；
+7. 若后续研究范围再次变化，先生成 scope audit，再决定是否需要 live API。
 
 ## 12. 小结
 
@@ -507,8 +524,8 @@ graph LR
 - 完成旧口径 4,427 个目标视频的一级评论与 replies 采集；
 - 完成二次口径修正：剔除 `#锦江宾馆`，跳过 `#临空锦江宾馆`，将 `#锦江都城酒店吉安` 列为补充目标；
 - 在授权 live API 后补齐 top12 `#锦江都城酒店吉安`：metadata 201 个视频、top-level comments 222 条、replies 29 条；
-- 派生出完整新口径 4,212 个目标视频、50,640 条 comments + replies；
+- 派生出完整新口径 4,212 个目标视频、50,640 条 comments + replies，并补齐 47,624 条用户互动边；
 - 明确禁用 profiles，避免不必要的隐私与成本风险；
 - 为后续互动网络、文本分析和 ABM 传播模拟提供了可追溯的数据基础。
 
-因此，本周工作可以概括为：**完成了锦江酒店 Douyin 评论与回复数据集的阶段性构建、研究对象边界二次修正、授权 top12 补采与完整新口径派生，为后续 LLM-ABM 营销传播模拟打下了更清晰的数据基础；下一步应基于完整新口径重新生成 interaction network 与 text corpus。**
+因此，本周工作可以概括为：**完成了锦江酒店 Douyin 评论与回复数据集的阶段性构建、研究对象边界二次修正、授权 top12 补采与完整新口径派生，为后续 LLM-ABM 营销传播模拟打下了更清晰的数据基础；下一步应基于已生成的 interaction network 与 text corpus 开展质量审计、文本分析和 ABM 初始化设计。**

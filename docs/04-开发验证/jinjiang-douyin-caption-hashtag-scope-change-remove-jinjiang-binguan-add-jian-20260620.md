@@ -1,7 +1,7 @@
 # 锦江 Douyin caption hashtag 口径二次修正审计
 
-- generated_at: `20260620T073839Z`
-- derived_run_id: `jinjiang-caption-hashtag-comments-excluding-binguan-adding-jian-derived-20260620T073839Z`
+- generated_at: `20260621T025127Z`
+- derived_run_id: `jinjiang-caption-hashtag-comments-excluding-binguan-adding-jian-derived-20260621T025127Z`
 - old_run_id: `jinjiang-top10-caption-hashtag-all-comments-excluding-safety-20260617T140519Z`
 - source_run_id: `jinjiang-top10-jinjiang-only-video-metadata-unbounded-20260617T095743Z`
 - completion_status: `complete_with_authorized_top12_backfill`
@@ -34,6 +34,9 @@
 | top-level comments | 33428 |
 | replies | 17212 |
 | all_comments | 50640 |
+| users | 36400 |
+| edges | 47624 |
+| text_items | 54851 |
 | needs_comment_fetch videos | 0 |
 | partial | false |
 | completion_status | complete_with_authorized_top12_backfill |
@@ -57,4 +60,4 @@
 
 Derived processed path:
 
-`data/processed/jinjiang_douyin/jinjiang-caption-hashtag-comments-excluding-binguan-adding-jian-derived-20260620T073839Z`
+`data/processed/jinjiang_douyin/jinjiang-caption-hashtag-comments-excluding-binguan-adding-jian-derived-20260621T025127Z`
