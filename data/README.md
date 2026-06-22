@@ -68,6 +68,33 @@ data/processed/jinjiang_douyin/jinjiang-top10-non-generic-video-metadata-1y-2026
 
 后续分析应以 `collection_report.json` 的 stage counts 和 report 文档解释分母，不要只看单张 CSV 行数。
 
+
+
+## Profile 扩展与 sec_uid evidence recovery
+
+Profile 扩展 run 仍使用相同目录约定：
+
+```text
+data/raw/tikhub/douyin/jinjiang_hotel/<profile_run_id>/
+data/processed/jinjiang_douyin/<profile_run_id>/
+```
+
+扩展流程先读取最终 corrected processed dataset 的 `users.csv`，再从明确指定的 raw evidence runs 中恢复显式 `uid -> sec_uid/sec_user_id`。支持的证据入口包括 run 根目录下的 `comments.jsonl`、`comment_replies.jsonl`、`video_details.jsonl`、`user_profiles.jsonl`，以及同一 run 的 `pages/` / `pages_premerge_backup_*` 中可识别的 comments/replies/candidate video metadata JSON。`--sec-uid-evidence-run` 与 `--sec-uid-evidence-glob` 都限定在 `data/raw/tikhub/douyin/jinjiang_hotel/` 下，避免扫入无关目录。
+
+当前 corrected dataset 的 36,400 个 observed users 需要同时使用 comments/replies raw evidence 与 `jinjiang-top10-jinjiang-only-video-metadata-unbounded-20260617T095743Z` 的 video metadata evidence，才能补齐 creator 侧 sec_uid。Profile API 默认可用 App V3 单用户 `handler_user_profile`；大规模扩展可使用 `--profile-api batch` 调用 Web batch profile endpoint（每批最多 50），但仍逐用户做 uid/sec_uid identity validation 和 checkpoint。
+
+Profile 扩展输出应包含：
+
+- `profile_target_users.csv`
+- `sec_uid_evidence_audit.json` / `.md`
+- `profile_collection_report.json`
+- `profile_collection_audit.json` / `.md`
+- `users.csv`、`profiles.csv`、`abm_user_profiles.csv`
+- `missing_sec_uid_users.csv`、`failed_profile_users.csv`
+- raw-only `user_profiles.jsonl`、`rejected_user_profiles.jsonl`、`profile_status.csv`
+
+注意：`sec_uid_evidence_audit.md` 与验证文档只能写聚合统计和 provenance 计数，不展示昵称、bio、signature、raw payload、token、cookie、Authorization。processed CSV/profile 明细仍视为本地研究产物，不提交。
+
 ## 安全边界
 
 禁止：

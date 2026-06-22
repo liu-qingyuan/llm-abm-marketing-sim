@@ -102,9 +102,25 @@ def test_raw_sec_uid_recovery_and_abm_provenance(tmp_path: Path) -> None:
     rows, audit, _historical = profiles.build_profile_targets(src, tmp_path / "processed", tmp_path / "raw")
     by_uid = {row["user_id"]: row for row in rows}
     assert by_uid["u1"]["sec_user_id"] == "sec_u1_real"
-    assert by_uid["u1"]["sec_user_id_source"] == "raw_comments"
+    assert by_uid["u1"]["sec_user_id_source"] == "raw_comments:source-run"
     assert audit["confirmed_sec_uid_users"] == 2
     assert audit["source_raw_run_path"] == str(raw_source)
+    assert audit["sec_uid_evidence_audit"]["accepted_users"] == 1
+
+
+def test_raw_placeholder_sec_uid_evidence_is_rejected(tmp_path: Path) -> None:
+    src = make_source(tmp_path, sec="u1", creator_sec="creator")
+    raw_source = tmp_path / "raw" / "source-run"
+    write_jsonl(raw_source / "comments.jsonl", [{"user": {"uid": "u1", "sec_uid": "u1"}}])
+
+    rows, audit, _historical = profiles.build_profile_targets(src, tmp_path / "processed", tmp_path / "raw")
+
+    by_uid = {row["user_id"]: row for row in rows}
+    assert by_uid["u1"]["sec_user_id_confidence"] == "placeholder"
+    assert by_uid["u1"]["profile_fetch_status"] == "skipped"
+    evidence_audit = audit["sec_uid_evidence_audit"]
+    assert evidence_audit["accepted_users"] == 0
+    assert evidence_audit["rejected_empty_or_placeholder"] == 1
 
 
 def test_source_raw_run_override_recovers_sec_uid_when_run_id_differs(tmp_path: Path) -> None:
@@ -121,8 +137,91 @@ def test_source_raw_run_override_recovers_sec_uid_when_run_id_differs(tmp_path: 
 
     by_uid = {row["user_id"]: row for row in rows}
     assert by_uid["u1"]["sec_user_id"] == "sec_u1_real"
-    assert by_uid["u1"]["sec_user_id_source"] == "raw_comments"
+    assert by_uid["u1"]["sec_user_id_source"] == "raw_comments:renamed-source-raw"
     assert audit["source_raw_run_path"] == str(raw_source)
+
+
+def test_sec_uid_evidence_run_must_stay_under_raw_root(tmp_path: Path) -> None:
+    src = make_source(tmp_path, sec="u1")
+    outside = tmp_path / "outside" / "raw-run"
+    outside.mkdir(parents=True)
+
+    with pytest.raises(ValueError, match="raw evidence run must be under"):
+        profiles.build_profile_targets(
+            src,
+            tmp_path / "processed",
+            tmp_path / "raw",
+            sec_uid_evidence_runs=[outside],
+        )
+
+
+def test_multi_run_sec_uid_evidence_glob_and_conflict_audit(tmp_path: Path) -> None:
+    src = make_source(tmp_path, sec="u1", creator_sec="creator")
+    raw_root = tmp_path / "raw"
+    write_jsonl(raw_root / "evidence-b" / "comments.jsonl", [{"user": {"uid": "u1", "sec_uid": "sec_from_b"}}])
+    write_jsonl(raw_root / "evidence-a" / "comments.jsonl", [{"user": {"uid": "u1", "sec_uid": "sec_from_a"}}])
+    write_jsonl(raw_root / "explicit-run" / "comment_replies.jsonl", [{"user": {"uid": "creator", "sec_uid": "sec_creator_raw"}}])
+
+    rows, audit, _historical = profiles.build_profile_targets(
+        src,
+        tmp_path / "processed",
+        raw_root,
+        sec_uid_evidence_runs=[Path("explicit-run")],
+        sec_uid_evidence_globs=["evidence-*"],
+    )
+
+    by_uid = {row["user_id"]: row for row in rows}
+    assert by_uid["u1"]["sec_user_id"] == "sec_from_a"
+    assert by_uid["u1"]["sec_user_id_source"] == "raw_comments:evidence-a"
+    assert by_uid["creator"]["sec_user_id"] == "sec_creator_raw"
+    assert by_uid["creator"]["sec_user_id_source"] == "raw_replies:explicit-run"
+    evidence_audit = audit["sec_uid_evidence_audit"]
+    assert evidence_audit["conflict_count"] == 1
+    assert evidence_audit["scanned_run_count"] == 3  # explicit plus two glob runs; default source raw is missing
+    assert str(raw_root / "source-run") in evidence_audit["missing_run_paths"]
+    assert evidence_audit["accepted_by_source"]["raw_comments:evidence-a"] == 1
+
+
+def test_page_level_raw_evidence_is_scanned_without_payload_leak(tmp_path: Path) -> None:
+    src = make_source(tmp_path, sec="u1", creator_sec="creator")
+    raw_root = tmp_path / "raw"
+    (raw_root / "page-run" / "pages").mkdir(parents=True)
+    (raw_root / "page-run" / "pages" / "candidate_video_metadata_v1.json").write_text(
+        json.dumps({"author": {"uid": "u1", "sec_uid": "sec_from_page"}}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+    rows, audit, _historical = profiles.build_profile_targets(
+        src,
+        tmp_path / "processed",
+        raw_root,
+        sec_uid_evidence_runs=[Path("page-run")],
+    )
+
+    by_uid = {row["user_id"]: row for row in rows}
+    assert by_uid["u1"]["sec_user_id"] == "sec_from_page"
+    assert by_uid["u1"]["sec_user_id_source"] == "raw_video_details:page-run"
+    evidence_audit = audit["sec_uid_evidence_audit"]
+    assert evidence_audit["scanned_file_count"] == 1
+    assert "sec_from_page" not in json.dumps(evidence_audit, ensure_ascii=False)
+
+
+def test_historical_processed_sec_uid_does_not_promote_live_call_without_raw_evidence(tmp_path: Path) -> None:
+    src = make_source(tmp_path, sec="u1", creator_sec="creator")
+    processed_root = tmp_path / "processed"
+    write_csv(
+        processed_root / "old" / "users.csv",
+        ["user_id", "sec_user_id", "nickname", "follower_count"],
+        [{"user_id": "u1", "sec_user_id": "sec_from_processed", "nickname": "HIST", "follower_count": "7"}],
+    )
+
+    rows, audit, historical = profiles.build_profile_targets(src, processed_root, tmp_path / "raw")
+    by_uid = {row["user_id"]: row for row in rows}
+    assert by_uid["u1"]["sec_user_id_confidence"] == "placeholder"
+    assert by_uid["u1"]["profile_fetch_status"] == "skipped"
+    assert "u1" in historical
+    assert audit["historical_sec_uid_users"] == 1
+    assert audit["confirmed_sec_uid_users"] == 0
 
 
 def test_live_profile_wins_over_historical_and_reports_are_private(tmp_path: Path) -> None:
@@ -168,6 +267,38 @@ def test_resume_skips_success_and_no_duplicate_profiles(tmp_path: Path) -> None:
     profiles.build_processed_outputs(src, tmp_path / "processed" / "profile-run", raw_run, targets, historical, stats)
     prof_rows = read_csv(tmp_path / "processed" / "profile-run" / "profiles.csv")
     assert len([row for row in prof_rows if row["user_id"] == "u1"]) == 1
+
+
+def test_resumed_report_counts_prior_successes_cumulatively(tmp_path: Path) -> None:
+    src = make_source(tmp_path, sec="sec_u1")
+    raw_run = tmp_path / "raw" / "profile-run"
+    processed_run = tmp_path / "processed" / "profile-run"
+    write_csv(raw_run / "profile_status.csv", profiles.STATUS_COLUMNS, [
+        {"user_id": "u1", "sec_user_id": "sec_u1", "status": "success", "error": "", "attempted_at": "now"},
+    ])
+    write_jsonl(raw_run / "user_profiles.jsonl", [
+        {"user_id": "u1", "sec_user_id": "sec_u1", "items": [{"uid": "u1", "sec_uid": "sec_u1", "follower_count": 5}]},
+    ])
+    targets, target_audit, historical = profiles.build_profile_targets(src, tmp_path / "processed", tmp_path / "raw")
+    stats = profiles.CollectionStats(attempted=0, succeeded=0)
+    counts = profiles.build_processed_outputs(src, processed_run, raw_run, targets, historical, stats)
+    report = profiles.build_collection_report(
+        run_id="profile-run",
+        source_run=src,
+        processed_dir=processed_run,
+        raw_dir=raw_run,
+        target_rows=targets,
+        target_audit=target_audit,
+        processed_counts=counts,
+        stats=stats,
+        settings=profiles.TikHubSettings(live_fetch=True, api_key="test-key"),
+    )
+
+    assert report["attempted_profiles"] == 1
+    assert report["successful_profiles"] == 1
+    assert report["profiles_collected"] is True
+    assert report["expansion_state"] == "live_profile_partial"
+    assert report["current_run_attempted_profiles"] == 0
 
 
 def test_markdown_scan_rejects_headers_not_fixture_names(tmp_path: Path) -> None:
@@ -234,3 +365,52 @@ def test_identity_mismatch_or_empty_live_profile_is_not_success(tmp_path: Path) 
     assert not (raw_run / "user_profiles.jsonl").exists()
     profiles.build_processed_outputs(src, tmp_path / "processed" / "profile-run", raw_run, targets, historical, stats)
     assert read_csv(tmp_path / "processed" / "profile-run" / "profiles.csv") == []
+
+
+def test_batch_profile_api_validates_each_identity_and_checkpoints(tmp_path: Path) -> None:
+    src = make_source(tmp_path, sec="sec_u1", creator_sec="sec_creator")
+    targets, _audit, _historical = profiles.build_profile_targets(src, tmp_path / "processed", tmp_path / "raw")
+
+    class BatchClient:
+        endpoint_call_counts: dict[str, int] = {}
+
+        def fetch_batch_user_profile(self, sec_user_ids: list[str]) -> Any:
+            self.endpoint_call_counts["fetch_batch_user_profile_v2"] = self.endpoint_call_counts.get("fetch_batch_user_profile_v2", 0) + 1
+            assert sec_user_ids == ["sec_creator", "sec_u1"]
+            return {
+                "data": [
+                    {"uid": "creator", "sec_uid": "sec_creator", "follower_count": 10},
+                    {"uid": "wrong", "sec_uid": "sec_u1", "follower_count": 5},
+                ]
+            }
+
+    raw_run = tmp_path / "raw" / "profile-run"
+    stats = profiles.collect_profiles(targets, raw_run, BatchClient(), resume=True, max_users=None, api_key="", profile_api="batch")  # type: ignore[arg-type]
+
+    assert stats.attempted == 2
+    assert stats.succeeded == 1
+    assert stats.failed == 1
+    statuses = {row["user_id"]: row for row in read_csv(raw_run / "profile_status.csv")}
+    assert statuses["creator"]["status"] == "success"
+    assert statuses["u1"]["status"] == "failed"
+    assert sum(1 for _ in (raw_run / "user_profiles.jsonl").open(encoding="utf-8")) == 1
+    assert (raw_run / "rejected_user_profiles.jsonl").exists()
+
+
+def test_returned_sec_match_with_wrong_known_uid_is_rejected(tmp_path: Path) -> None:
+    src = make_source(tmp_path, sec="sec_u1", creator_sec="sec_creator")
+    targets, _audit, _historical = profiles.build_profile_targets(src, tmp_path / "processed", tmp_path / "raw")
+
+    class WrongUidClient:
+        endpoint_call_counts: dict[str, int] = {}
+
+        def handler_user_profile(self, sec_user_id: str) -> Any:
+            self.endpoint_call_counts["handler_user_profile"] = self.endpoint_call_counts.get("handler_user_profile", 0) + 1
+            return {"user": {"uid": "u1", "sec_uid": sec_user_id, "follower_count": 999}}
+
+    raw_run = tmp_path / "raw" / "profile-run"
+    stats = profiles.collect_profiles(targets, raw_run, WrongUidClient(), resume=True, max_users=1, api_key="")  # type: ignore[arg-type]
+    assert stats.attempted == 1
+    assert stats.succeeded == 0
+    assert stats.failed == 1
+    assert read_csv(raw_run / "profile_status.csv")[0]["error"] == "identity_mismatch_or_empty_profile_response"

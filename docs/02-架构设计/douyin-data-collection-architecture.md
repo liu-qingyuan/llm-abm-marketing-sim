@@ -126,6 +126,148 @@ sequenceDiagram
 | `replies` | comment IDs | `comments.csv` 中 `comment_level=reply` | 回复依赖一级评论 | 否 |
 | `profiles` | creator/commenter IDs | `users.csv`、`profiles.csv` | 不泄露昵称、bio 等明细 | 否 |
 
+
+
+## 用户 Profile 扩展架构（sec_uid evidence recovery）
+
+用户 profile 扩展不是把 TikHub provider 细节直接写入业务表，而是在 `users.csv` 与 Profile API 之间增加 `sec_uid_evidence_recovery` 阶段：先从限定 raw evidence runs 中恢复显式 `uid -> sec_uid/sec_user_id` 证据，再构建 `profile_target_users.csv`，最后只对 confirmed `sec_uid` 调用 TikHub profile API。大规模抓取优先使用 `fetch_batch_user_profile_v2`（每批最多 50），保留 `handler_user_profile` 作为单用户 smoke/回退；两种入口都必须逐用户执行 identity validation。
+
+### C4 / Container 视图
+
+```mermaid
+graph TB
+    SourceRun["Final corrected processed dataset<br/>users/videos/comments/edges"]
+    RawEvidence["Raw evidence runs<br/>comments/replies/video_details/pages JSON"]
+    SecIndex["SecUidEvidenceIndex<br/>uid -> sec_uid + provenance"]
+    TargetBuilder["ProfileTargetBuilder<br/>priority + missing manifests"]
+    Adapter["TikHubProfileAdapter<br/>handler_user_profile / batch profile"]
+    Collector["ProfileCollector<br/>checkpoint + resume"]
+    Validator["IdentityValidator<br/>uid/sec_uid contract"]
+    Normalizer["ProfileNormalizer<br/>users/profiles/ABM outputs"]
+    Reports["AuditReporter<br/>aggregate-only Markdown/JSON"]
+
+    SourceRun --> SecIndex
+    RawEvidence --> SecIndex
+    SecIndex --> TargetBuilder
+    TargetBuilder --> Collector
+    Collector --> Adapter
+    Adapter --> Validator
+    Validator --> Normalizer
+    Normalizer --> Reports
+    TargetBuilder --> Reports
+```
+
+### Profile 数据流程
+
+```mermaid
+graph LR
+    Users["source users.csv"] --> Evidence["sec_uid_evidence_recovery"]
+    Raw["raw evidence runs"] --> Evidence
+    Evidence --> Targets["profile_target_users.csv"]
+    Targets -->|confirmed sec_uid only| API["TikHub Profile API"]
+    API -->|accepted| Out["users.csv / profiles.csv / abm_user_profiles.csv"]
+    API -->|identity mismatch| Rejected["rejected_user_profiles.jsonl"]
+    Targets --> Missing["missing_sec_uid_users.csv"]
+    Out --> Audit["profile_collection_audit.md/json"]
+    Evidence --> SecAudit["sec_uid_evidence_audit.md/json"]
+```
+
+### 组件 / 类图
+
+```mermaid
+classDiagram
+    class ProfileExpansionCLI {
+      +--source-run
+      +--sec-uid-evidence-run
+      +--sec-uid-evidence-glob
+      +--resume
+    }
+    class SecUidEvidenceIndex {
+      +build_sec_uid_evidence_index()
+      +resolve_raw_evidence_runs()
+      +conflict aggregate audit
+    }
+    class ProfileTargetBuilder {
+      +build_profile_targets()
+      +classify missing/placeholder/confirmed
+    }
+    class TikHubProfileAdapter {
+      +handler_user_profile(sec_user_id)
+    }
+    class ProfileCollector {
+      +collect_profiles()
+      +profile_status.csv checkpoint
+    }
+    class IdentityValidator {
+      +accepted_profile_items()
+      +profile_item_matches_target()
+    }
+    class ProfileNormalizer {
+      +build_processed_outputs()
+      +build_abm_row()
+    }
+    class AuditReporter {
+      +write_target_audit()
+      +write_collection_docs()
+      +write_validation_doc()
+    }
+    ProfileExpansionCLI --> SecUidEvidenceIndex
+    ProfileExpansionCLI --> ProfileTargetBuilder
+    ProfileTargetBuilder --> ProfileCollector
+    ProfileCollector --> TikHubProfileAdapter
+    ProfileCollector --> IdentityValidator
+    IdentityValidator --> ProfileNormalizer
+    ProfileNormalizer --> AuditReporter
+    SecUidEvidenceIndex --> AuditReporter
+```
+
+### Profile 抓取时序
+
+```mermaid
+sequenceDiagram
+    participant CLI as ProfileExpansionCLI
+    participant Index as SecUidEvidenceIndex
+    participant Target as ProfileTargetBuilder
+    participant Collector as ProfileCollector
+    participant API as TikHubProfileAdapter
+    participant Validator as IdentityValidator
+    participant Output as ProfileNormalizer/AuditReporter
+
+    CLI->>Index: scan source raw + --sec-uid-evidence-run/glob
+    Index-->>CLI: confirmed uid/sec_uid + aggregate conflicts
+    CLI->>Target: build profile_target_users.csv
+    Target-->>Collector: confirmed sec_uid targets only
+    loop each target checkpoint
+    Collector->>API: handler_user_profile(sec_user_id) or batch(sec_user_ids<=50)
+        API-->>Collector: profile response or quota/error
+        Collector->>Validator: uid/sec_uid identity validation
+        Validator-->>Collector: accept or reject
+        Collector->>Output: append raw jsonl / rejected / status
+    end
+    Output-->>CLI: profiles/users/abm outputs + aggregate audits
+```
+
+### PEA 四维说明
+
+| 维度 | 决策 |
+|---|---|
+| Module | `SecUidEvidenceIndex` 是 deep module：小接口隐藏 raw JSONL/page JSON 扫描、去重、冲突统计和 provenance 规则。 |
+| Boundary | `TikHubProfileAdapter` 是外部 API adapter；业务输出只依赖 confirmed target 与 normalized profile，不依赖 provider payload 细节。 |
+| Contract | Profile response 必须通过 identity validation：若返回 `uid`，必须匹配目标 `user_id`；否则至少 `sec_uid/sec_user_id` 匹配请求值。mismatch 写入 rejected raw journal，不计 success。 |
+| Governance | raw/processed 数据保持 git ignored；Markdown 只写聚合统计；`sec_uid_evidence_audit` 不展示 nickname/bio/signature/raw payload；quota/rate-limit 必须 partial reporting。 |
+
+### TEA 测试矩阵
+
+| 风险 | 测试层 | 保护面 |
+|---|---|---|
+| raw sec_uid 提取、去重、provenance、冲突 | unit | `build_sec_uid_evidence_index` / `build_profile_targets` public seam |
+| 多 run / glob / page journal 扫描 | unit | CLI evidence-run 解析与 raw-root 限定 |
+| fake TikHub profile 到 CSV 输出 | integration | `collect_profiles` + `build_processed_outputs` |
+| identity mismatch | contract/smoke | `accepted_profile_items` 与 rejected journal |
+| resume / quota partial | integration | `profile_status.csv` checkpoint 与 report counts |
+| privacy gate | static/report scan | Markdown/JSON reports 不包含 secret 或用户明细 |
+| corrected scope | data validation | safety video IDs absent，`#锦江宾馆` / `#临空锦江宾馆` 不回流 |
+
 ## 视频 metadata 合约
 
 `videos.csv` 当前应包含：

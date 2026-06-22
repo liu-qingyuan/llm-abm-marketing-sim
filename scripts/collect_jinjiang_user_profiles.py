@@ -12,7 +12,7 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT / "src") not in sys.path:
@@ -78,6 +78,23 @@ STATUS_COLUMNS = [
     "error",
     "attempted_at",
 ]
+RAW_SEC_UID_FILES = [
+    ("comments.jsonl", "raw_comments"),
+    ("comment_replies.jsonl", "raw_replies"),
+    ("video_details.jsonl", "raw_video_details"),
+    ("user_profiles.jsonl", "raw_profiles"),
+]
+RAW_SEC_UID_PAGE_SOURCES = {
+    "candidate_video_metadata": "raw_video_details",
+    "comments": "raw_comments",
+    "replies": "raw_replies",
+}
+RAW_SEC_UID_SOURCE_PRIORITY = {
+    "raw_comments": 0,
+    "raw_replies": 1,
+    "raw_video_details": 2,
+    "raw_profiles": 3,
+}
 
 
 def timestamp() -> str:
@@ -133,6 +150,42 @@ def read_jsonl(path: Path) -> list[dict[str, Any]]:
             if isinstance(obj, dict):
                 rows.append(obj)
     return rows
+
+
+def iter_jsonl_objects(path: Path) -> tuple[list[dict[str, Any]], int]:
+    """Read a JSONL file and return parsed dict rows plus malformed-line count."""
+
+    if not path.exists():
+        return [], 0
+    rows: list[dict[str, Any]] = []
+    malformed = 0
+    with path.open(encoding="utf-8") as handle:
+        for line in handle:
+            stripped = line.strip()
+            if not stripped:
+                continue
+            try:
+                obj = json.loads(stripped)
+            except json.JSONDecodeError:
+                malformed += 1
+                continue
+            if isinstance(obj, dict):
+                rows.append(obj)
+    return rows, malformed
+
+
+def iter_json_objects(path: Path) -> tuple[list[dict[str, Any]], int]:
+    if not path.exists():
+        return [], 0
+    try:
+        obj = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return [], 1
+    if isinstance(obj, dict):
+        return [obj], 0
+    if isinstance(obj, list):
+        return [item for item in obj if isinstance(item, dict)], 0
+    return [], 0
 
 
 def append_jsonl(path: Path, row: Mapping[str, Any]) -> None:
@@ -246,6 +299,35 @@ def extract_explicit_sec_uids(rows: Iterable[dict[str, Any]], source: str) -> di
     return found
 
 
+def iter_explicit_sec_uid_pairs(row: dict[str, Any]) -> Iterable[tuple[str, str]]:
+    """Yield only explicitly labeled uid -> sec_uid/sec_user_id pairs from a raw row."""
+
+    for value in walk_values(row):
+        if not isinstance(value, dict):
+            continue
+        sec = value.get("sec_user_id") or value.get("sec_uid")
+        if not sec:
+            continue
+        uid = value.get("user_id") or value.get("uid") or value.get("id") or find_user_id_near_sec(row, str(sec))
+        if uid:
+            yield str(uid), str(sec)
+
+
+def iter_evidence_files(run_dir: Path) -> Iterable[tuple[Path, str]]:
+    for filename, source in RAW_SEC_UID_FILES:
+        path = run_dir / filename
+        if path.exists():
+            yield path, source
+    page_roots = [run_dir / "pages", *sorted(run_dir.glob("pages_premerge_backup_*"))]
+    for page_root in page_roots:
+        if not page_root.is_dir():
+            continue
+        for path in sorted(page_root.glob("*.json")):
+            source = next((value for prefix, value in RAW_SEC_UID_PAGE_SOURCES.items() if path.name.startswith(prefix)), "")
+            if source:
+                yield path, source
+
+
 def normalize_profile_payload(row: dict[str, Any]) -> dict[str, Any]:
     missing: dict[str, list[str]] = defaultdict(list)
     user = normalize_user(row, missing).model_dump()
@@ -260,6 +342,8 @@ def extract_user_items(result: Any) -> list[dict[str, Any]]:
         if isinstance(value, list):
             return [item for item in value if isinstance(item, dict)]
     data = result.get("data")
+    if isinstance(data, list):
+        return [item for item in data if isinstance(item, dict)]
     if isinstance(data, dict):
         nested = extract_user_items(data)
         if nested:
@@ -284,6 +368,27 @@ class CollectionStats:
     partial_reason: str = ""
     quota_or_rate_limited: bool = False
     endpoint_call_counts: dict[str, int] | None = None
+
+
+@dataclass(frozen=True)
+class SecUidEvidence:
+    user_id: str
+    sec_user_id: str
+    source: str
+    run_id: str
+    path: str
+    priority: int
+    order: int
+
+    @property
+    def provenance(self) -> str:
+        return f"{self.source}:{self.run_id}"
+
+
+@dataclass
+class SecUidEvidenceIndex:
+    evidence: dict[str, SecUidEvidence]
+    audit: dict[str, Any]
 
 
 def is_quota_error(message: str) -> bool:
@@ -375,6 +480,145 @@ def user_role(metrics: Mapping[str, Any]) -> str:
     return roles[0] if len(roles) == 1 else "mixed"
 
 
+def resolve_raw_evidence_run(value: Path, raw_root: Path) -> Path:
+    """Resolve a raw evidence run argument as either a path or a RAW_ROOT run id."""
+
+    candidate = value if value.is_absolute() or len(value.parts) > 1 else raw_root / value
+    raw_root_resolved = raw_root.resolve()
+    candidate_resolved = candidate.resolve() if candidate.exists() else candidate.absolute()
+    try:
+        candidate_resolved.relative_to(raw_root_resolved)
+    except ValueError as exc:
+        raise ValueError(f"raw evidence run must be under {raw_root}: {value}") from exc
+    return candidate
+
+
+def resolve_raw_evidence_runs(
+    *,
+    raw_root: Path,
+    source_run: Path,
+    source_raw_run: Path | None,
+    evidence_runs: Iterable[Path] = (),
+    evidence_globs: Iterable[str] = (),
+) -> list[Path]:
+    """Return ordered, root-limited raw evidence runs.
+
+    Order is deterministic: source raw run first for backward compatibility,
+    then repeated ``--sec-uid-evidence-run`` values in CLI order, then sorted
+    matches for each ``--sec-uid-evidence-glob`` rooted at ``raw_root``.
+    """
+
+    ordered: list[Path] = [resolve_raw_evidence_run(source_raw_run, raw_root) if source_raw_run else raw_root / source_run.name]
+    ordered.extend(resolve_raw_evidence_run(path, raw_root) for path in evidence_runs)
+    raw_root_resolved = raw_root.resolve()
+    for pattern in evidence_globs:
+        for path in sorted(raw_root.glob(pattern)):
+            try:
+                path.resolve().relative_to(raw_root_resolved)
+            except ValueError:
+                continue
+            ordered.append(path)
+    deduped: list[Path] = []
+    seen: set[Path] = set()
+    for path in ordered:
+        normalized = path.resolve() if path.exists() else path
+        if normalized not in seen:
+            seen.add(normalized)
+            deduped.append(path)
+    return deduped
+
+
+def build_sec_uid_evidence_index(evidence_runs: Iterable[Path], current_user_ids: set[str]) -> SecUidEvidenceIndex:
+    """Index explicit raw sec_uid evidence from multiple run directories.
+
+    Conflict policy: lower file priority wins (comments, replies, video details,
+    raw profiles), then earlier run order wins. Conflicting alternatives are
+    counted in the audit and never printed with raw payload excerpts.
+    """
+
+    indexed: dict[str, SecUidEvidence] = {}
+    candidate_counts: Counter[str] = Counter()
+    accepted_counts: Counter[str] = Counter()
+    conflicts: Counter[str] = Counter()
+    scanned_files: list[str] = []
+    scanned_runs: list[str] = []
+    malformed_jsonl_lines = 0
+    missing_run_paths: list[str] = []
+    rejected_not_current_user = 0
+    rejected_empty_or_placeholder = 0
+    run_list = list(evidence_runs)
+    for run_order, run_dir in enumerate(run_list):
+        if not run_dir.exists():
+            missing_run_paths.append(str(run_dir))
+            continue
+        if not run_dir.is_dir():
+            missing_run_paths.append(str(run_dir))
+            continue
+        scanned_runs.append(str(run_dir))
+        run_id = run_dir.name
+        for path, source in iter_evidence_files(run_dir):
+            scanned_files.append(str(path))
+            rows, malformed = iter_jsonl_objects(path) if path.suffix == ".jsonl" else iter_json_objects(path)
+            malformed_jsonl_lines += malformed
+            for row in rows:
+                for uid, sec in iter_explicit_sec_uid_pairs(row):
+                    if uid not in current_user_ids:
+                        rejected_not_current_user += 1
+                        continue
+                    if not sec or sec == uid:
+                        rejected_empty_or_placeholder += 1
+                        continue
+                    provenance = f"{source}:{run_id}"
+                    candidate_counts[provenance] += 1
+                    candidate = SecUidEvidence(
+                        user_id=uid,
+                        sec_user_id=sec,
+                        source=source,
+                        run_id=run_id,
+                        path=str(path),
+                        priority=RAW_SEC_UID_SOURCE_PRIORITY.get(source, 99),
+                        order=run_order,
+                    )
+                    existing = indexed.get(uid)
+                    if existing is None:
+                        indexed[uid] = candidate
+                        accepted_counts[provenance] += 1
+                        continue
+                    if existing.sec_user_id == sec:
+                        continue
+                    conflicts[f"{existing.provenance}|{candidate.provenance}"] += 1
+                    if (candidate.priority, candidate.order) < (existing.priority, existing.order):
+                        accepted_counts[existing.provenance] -= 1
+                        indexed[uid] = candidate
+                        accepted_counts[provenance] += 1
+    audit = {
+        "created_at": now_iso(),
+        "contract": {
+            "accepted_fields": ["sec_uid", "sec_user_id"],
+            "scope": "raw_root-limited evidence runs filtered to current source users",
+            "flag_semantics": "--sec-uid-evidence-run accepts a path or run id under raw_root; --sec-uid-evidence-glob is rooted at raw_root and sorted; --source-raw-run is scanned first for compatibility.",
+            "precedence": "first accepted evidence wins by file priority comments < replies < video_details < user_profiles, then CLI/glob run order; conflicts are aggregate-audited.",
+            "privacy": "aggregate-only audit; no nickname, bio, signature, or raw payload excerpts.",
+            "processed_historical_policy": "historical processed profiles may fill local output fields but do not promote a missing/placeholder sec_uid to live-callable confirmed evidence.",
+        },
+        "scanned_run_count": len(scanned_runs),
+        "scanned_runs": scanned_runs,
+        "missing_run_paths": missing_run_paths,
+        "scanned_file_count": len(scanned_files),
+        "scanned_files": scanned_files,
+        "malformed_jsonl_lines": malformed_jsonl_lines,
+        "raw_candidate_pairs": sum(candidate_counts.values()),
+        "accepted_users": len(indexed),
+        "accepted_by_source": {k: v for k, v in sorted(accepted_counts.items()) if v},
+        "candidate_by_source": dict(sorted(candidate_counts.items())),
+        "conflict_count": sum(conflicts.values()),
+        "conflicts_by_source_pair": dict(sorted(conflicts.items())),
+        "rejected_not_current_user": rejected_not_current_user,
+        "rejected_empty_or_placeholder": rejected_empty_or_placeholder,
+    }
+    return SecUidEvidenceIndex(evidence=indexed, audit=audit)
+
+
 def discover_current_raw_sec_uids(source_run: Path, raw_base: Path, source_raw_run: Path | None = None) -> dict[str, tuple[str, str]]:
     """Recover explicit sec_uid values from the source run's raw artifacts.
 
@@ -386,12 +630,7 @@ def discover_current_raw_sec_uids(source_run: Path, raw_base: Path, source_raw_r
 
     raw_root = source_raw_run or raw_base / source_run.name
     found: dict[str, tuple[str, str]] = {}
-    for filename, source in [
-        ("video_details.jsonl", "raw_video_details"),
-        ("comments.jsonl", "raw_comments"),
-        ("comment_replies.jsonl", "raw_replies"),
-        ("user_profiles.jsonl", "raw_profiles"),
-    ]:
+    for filename, source in RAW_SEC_UID_FILES:
         found.update({k: v for k, v in extract_explicit_sec_uids(read_jsonl(raw_root / filename), source).items() if k not in found})
     return found
 
@@ -486,14 +725,23 @@ def build_profile_targets(
     raw_root: Path,
     *,
     source_raw_run: Path | None = None,
+    sec_uid_evidence_runs: Iterable[Path] = (),
+    sec_uid_evidence_globs: Iterable[str] = (),
 ) -> tuple[list[dict[str, Any]], dict[str, Any], dict[str, HistoricalProfile]]:
     users = read_csv(source_run / "users.csv")
     if not users:
         raise ValueError(f"missing or empty users.csv: {source_run / 'users.csv'}")
     metrics_by_user, source_meta = source_role_and_metrics(source_run)
     user_ids = {row.get("user_id", "") for row in users if row.get("user_id")}
-    effective_source_raw_run = source_raw_run or raw_root / source_run.name
-    raw_secs = discover_current_raw_sec_uids(source_run, raw_root, effective_source_raw_run)
+    evidence_run_paths = resolve_raw_evidence_runs(
+        raw_root=raw_root,
+        source_run=source_run,
+        source_raw_run=source_raw_run,
+        evidence_runs=sec_uid_evidence_runs,
+        evidence_globs=sec_uid_evidence_globs,
+    )
+    evidence_index = build_sec_uid_evidence_index(evidence_run_paths, user_ids)
+    effective_source_raw_run = evidence_run_paths[0] if evidence_run_paths else raw_root / source_run.name
     historical_profiles, historical_secs = discover_historical_profiles(user_ids, processed_root, raw_root, exclude_processed_run=source_run)
     rows: list[dict[str, Any]] = []
     sec_source_counts: Counter[str] = Counter()
@@ -506,10 +754,9 @@ def build_profile_targets(
         if not uid:
             continue
         sec, source = classify_source_sec(uid, row.get("sec_user_id", ""))
-        if source in {"missing", "placeholder"} and uid in raw_secs:
-            sec, source = raw_secs[uid]
-        if source in {"missing", "placeholder"} and uid in historical_secs:
-            sec, source = historical_secs[uid]
+        if source in {"missing", "placeholder"} and uid in evidence_index.evidence:
+            evidence = evidence_index.evidence[uid]
+            sec, source = evidence.sec_user_id, evidence.provenance
         if source == "placeholder":
             placeholder_count += 1
             fetch_status = "skipped"
@@ -554,7 +801,8 @@ def build_profile_targets(
         "created_at": now_iso(),
         "source_dataset_path": str(source_run),
         "source_raw_run_path": str(effective_source_raw_run),
-        "source_raw_run_contract": "Defaults to raw_root/source_run.name; override with --source-raw-run when the raw run id differs.",
+        "source_raw_run_contract": "Defaults to raw_root/source_run.name; override with --source-raw-run when the raw run id differs. Additional --sec-uid-evidence-run/glob values extend raw evidence recovery.",
+        "sec_uid_evidence_audit": evidence_index.audit,
         "source_meta": source_meta,
         "target_users": len(rows),
         "source_unique_users": len(user_ids),
@@ -565,6 +813,7 @@ def build_profile_targets(
         "user_role_counts": dict(sorted(role_counts.items())),
         "historical_reusable_profiles": len(historical_profiles),
         "historical_sec_uid_users": len(historical_secs),
+        "historical_sec_uid_policy": "historical processed sec_uid values are audited but do not promote missing/placeholder IDs to live-callable confirmed sec_uid without raw/source evidence.",
         "scope_checks": validate_scope(source_run),
     }
     return rows, audit, historical_profiles
@@ -574,6 +823,9 @@ def write_target_audit(processed_dir: Path, target_rows: list[dict[str, Any]], a
     public_rows = [{k: v for k, v in row.items() if not k.startswith("_")} for row in target_rows]
     write_csv(processed_dir / "profile_target_users.csv", PROFILE_FIELDNAMES, public_rows)
     (processed_dir / "profile_target_audit.json").write_text(json.dumps(audit, ensure_ascii=False, indent=2), encoding="utf-8")
+    raw_sec_uid_audit = audit.get("sec_uid_evidence_audit")
+    sec_uid_audit: Mapping[str, Any] = cast(Mapping[str, Any], raw_sec_uid_audit) if isinstance(raw_sec_uid_audit, dict) else {}
+    (processed_dir / "sec_uid_evidence_audit.json").write_text(json.dumps(sec_uid_audit, ensure_ascii=False, indent=2), encoding="utf-8")
     lines = [
         "# Profile target audit",
         "",
@@ -596,6 +848,33 @@ def write_target_audit(processed_dir: Path, target_rows: list[dict[str, Any]], a
         lines.append(f"| {key} | {value} |")
     lines.append("\nNo nickname, bio, signature, token, cookie, or raw profile payload details are shown in this report.\n")
     (processed_dir / "profile_target_audit.md").write_text("\n".join(lines), encoding="utf-8")
+    evidence_lines = [
+        "# Sec uid evidence audit",
+        "",
+        "This audit is aggregate-only. It does not include nickname, bio, signature, raw payload excerpts, headers, tokens, cookies, or authorization values.",
+        "",
+        f"- scanned runs: {sec_uid_audit.get('scanned_run_count', 0)}",
+        f"- scanned files: {sec_uid_audit.get('scanned_file_count', 0)}",
+        f"- raw candidate pairs: {sec_uid_audit.get('raw_candidate_pairs', 0)}",
+        f"- accepted users: {sec_uid_audit.get('accepted_users', 0)}",
+        f"- conflict count: {sec_uid_audit.get('conflict_count', 0)}",
+        f"- malformed JSONL lines: {sec_uid_audit.get('malformed_jsonl_lines', 0)}",
+        f"- rejected non-current users: {sec_uid_audit.get('rejected_not_current_user', 0)}",
+        "",
+        "## Accepted evidence by provenance",
+        "",
+        "| provenance | users |",
+        "|---|---:|",
+    ]
+    for key, value in sorted((sec_uid_audit.get("accepted_by_source") or {}).items()):
+        evidence_lines.append(f"| {key} | {value} |")
+    evidence_lines.extend(["", "## Conflict source pairs", "", "| source pair | conflicts |", "|---|---:|"])
+    for key, value in sorted((sec_uid_audit.get("conflicts_by_source_pair") or {}).items()):
+        evidence_lines.append(f"| {key} | {value} |")
+    if not (sec_uid_audit.get("conflicts_by_source_pair") or {}):
+        evidence_lines.append("| none | 0 |")
+    evidence_lines.append("")
+    (processed_dir / "sec_uid_evidence_audit.md").write_text("\n".join(evidence_lines), encoding="utf-8")
 
 
 def load_statuses(raw_dir: Path) -> dict[str, dict[str, str]]:
@@ -619,7 +898,9 @@ def profile_item_matches_target(item: dict[str, Any], target_user_id: str, reque
     user = normalize_profile_payload(item)
     normalized_uid = str(user.get("user_id") or "")
     normalized_sec = str(user.get("sec_user_id") or "")
-    return bool((normalized_uid and normalized_uid == target_user_id) or (normalized_sec and normalized_sec == requested_sec_user_id))
+    if normalized_uid:
+        return normalized_uid == target_user_id
+    return bool(normalized_sec and normalized_sec == requested_sec_user_id)
 
 
 def accepted_profile_items(result: Any, target_user_id: str, requested_sec_user_id: str) -> list[dict[str, Any]]:
@@ -631,6 +912,44 @@ def accepted_profile_items(result: Any, target_user_id: str, requested_sec_user_
     return accepted
 
 
+def chunks(rows: list[dict[str, Any]], size: int) -> Iterable[list[dict[str, Any]]]:
+    for index in range(0, len(rows), size):
+        yield rows[index : index + size]
+
+
+def record_profile_success(raw_dir: Path, statuses: dict[str, dict[str, str]], row: dict[str, Any], item: dict[str, Any], response: Any | None = None) -> None:
+    uid = str(row["user_id"])
+    sec = str(row["sec_user_id"])
+    payload = {"user_id": uid, "sec_user_id": sec, "items": [item], "fetched_at": now_iso()}
+    if response is not None:
+        payload["response"] = response
+    append_jsonl(raw_dir / "user_profiles.jsonl", payload)
+    statuses[uid] = {"user_id": uid, "sec_user_id": sec, "status": "success", "error": "", "attempted_at": now_iso()}
+    row["profile_fetch_status"] = "success"
+    row["skip_reason"] = ""
+
+
+def record_profile_failure(
+    raw_dir: Path,
+    statuses: dict[str, dict[str, str]],
+    row: dict[str, Any],
+    message: str,
+    *,
+    response: Any | None = None,
+    api_key: str = "",
+    status: str = "failed",
+) -> None:
+    uid = str(row["user_id"])
+    sec = str(row["sec_user_id"])
+    rejected: dict[str, Any] = {"user_id": uid, "sec_user_id": sec, "reason": message, "fetched_at": now_iso()}
+    if response is not None:
+        rejected["response"] = redact_secrets(response, [api_key])
+    append_jsonl(raw_dir / "rejected_user_profiles.jsonl", rejected)
+    statuses[uid] = {"user_id": uid, "sec_user_id": sec, "status": status, "error": message, "attempted_at": now_iso()}
+    row["profile_fetch_status"] = "failed"
+    row["skip_reason"] = message
+
+
 def collect_profiles(
     target_rows: list[dict[str, Any]],
     raw_dir: Path,
@@ -639,6 +958,7 @@ def collect_profiles(
     resume: bool,
     max_users: int | None,
     api_key: str,
+    profile_api: str = "handler",
 ) -> CollectionStats:
     statuses = load_statuses(raw_dir) if resume else {}
     fetchable = classify_fetchable(target_rows)
@@ -656,31 +976,23 @@ def collect_profiles(
                 row["profile_fetch_status"] = "failed"
                 row["skip_reason"] = existing.get("error", "failed")
             continue
+        if profile_api == "batch":
+            continue
         stats.attempted += 1
         try:
             result = client.handler_user_profile(sec)
             success_items = accepted_profile_items(result, uid, sec)
             if not success_items:
                 message = "identity_mismatch_or_empty_profile_response"
-                append_jsonl(
-                    raw_dir / "rejected_user_profiles.jsonl",
-                    {"user_id": uid, "sec_user_id": sec, "reason": message, "response": redact_secrets(result, [api_key]), "fetched_at": now_iso()},
-                )
-                statuses[uid] = {"user_id": uid, "sec_user_id": sec, "status": "failed", "error": message, "attempted_at": now_iso()}
-                row["profile_fetch_status"] = "failed"
-                row["skip_reason"] = message
+                record_profile_failure(raw_dir, statuses, row, message, response=result, api_key=api_key)
                 stats.failed += 1
                 continue
-            append_jsonl(raw_dir / "user_profiles.jsonl", {"user_id": uid, "sec_user_id": sec, "response": result, "items": success_items, "fetched_at": now_iso()})
-            statuses[uid] = {"user_id": uid, "sec_user_id": sec, "status": "success", "error": "", "attempted_at": now_iso()}
-            row["profile_fetch_status"] = "success"
+            record_profile_success(raw_dir, statuses, row, success_items[0], response=result)
             stats.succeeded += 1
         except Exception as exc:  # noqa: BLE001 - per-profile failure is recorded and collection continues.
             message = str(redact_secrets(str(exc), [api_key]))
             status = "quota_stopped" if is_quota_error(message) else "failed"
-            statuses[uid] = {"user_id": uid, "sec_user_id": sec, "status": status, "error": message, "attempted_at": now_iso()}
-            row["profile_fetch_status"] = "failed"
-            row["skip_reason"] = message
+            record_profile_failure(raw_dir, statuses, row, message, api_key=api_key, status=status)
             stats.failed += 1
             if status == "quota_stopped":
                 stats.partial = True
@@ -688,6 +1000,40 @@ def collect_profiles(
                 stats.quota_or_rate_limited = True
                 break
         finally:
+            write_statuses(raw_dir, statuses)
+    if profile_api == "batch" and not stats.partial:
+        pending = [
+            row
+            for row in fetchable
+            if not (resume and (statuses.get(str(row["user_id"])) or {}).get("status") in {"success", "failed", "quota_stopped"})
+        ]
+        for batch in chunks(pending, 50):
+            stats.attempted += len(batch)
+            try:
+                result = client.fetch_batch_user_profile([str(row["sec_user_id"]) for row in batch])
+            except Exception as exc:  # noqa: BLE001 - batch failure is checkpointed per target.
+                message = str(redact_secrets(str(exc), [api_key]))
+                status = "quota_stopped" if is_quota_error(message) else "failed"
+                for row in batch:
+                    record_profile_failure(raw_dir, statuses, row, message, api_key=api_key, status=status)
+                    stats.failed += 1
+                write_statuses(raw_dir, statuses)
+                if status == "quota_stopped":
+                    stats.partial = True
+                    stats.partial_reason = "quota_or_rate_limit"
+                    stats.quota_or_rate_limited = True
+                    break
+                continue
+            for row in batch:
+                uid = str(row["user_id"])
+                sec = str(row["sec_user_id"])
+                success_items = accepted_profile_items(result, uid, sec)
+                if success_items:
+                    record_profile_success(raw_dir, statuses, row, success_items[0])
+                    stats.succeeded += 1
+                else:
+                    record_profile_failure(raw_dir, statuses, row, "identity_mismatch_or_empty_profile_response", api_key=api_key)
+                    stats.failed += 1
             write_statuses(raw_dir, statuses)
     stats.endpoint_call_counts = client.endpoint_call_counts
     return stats
@@ -866,16 +1212,16 @@ def effective_profile_limit(args: argparse.Namespace, settings: TikHubSettings) 
     return settings.max_users
 
 
-def expansion_state(stats: CollectionStats, pending_after: int, partial_reason: str) -> str:
+def expansion_state(attempted: int, succeeded: int, pending_after: int, partial_reason: str) -> str:
     if partial_reason == "audit_only":
         return "audit_only"
-    if partial_reason == "no_confirmed_sec_uid" and stats.attempted == 0:
+    if partial_reason == "no_confirmed_sec_uid" and attempted == 0:
         return "derived_only_no_confirmed_sec_uid"
-    if partial_reason.startswith("live_unavailable") and stats.attempted == 0:
+    if partial_reason.startswith("live_unavailable") and attempted == 0:
         return "live_unavailable"
-    if stats.attempted > 0 and pending_after == 0 and not stats.partial:
+    if attempted > 0 and pending_after == 0 and not partial_reason:
         return "live_profile_complete"
-    if stats.attempted > 0:
+    if attempted > 0 or succeeded > 0:
         return "live_profile_partial"
     return "derived_only"
 
@@ -907,12 +1253,16 @@ def build_collection_report(
     settings: TikHubSettings,
 ) -> dict[str, Any]:
     users = read_csv(processed_dir / "users.csv")
+    statuses = load_statuses(raw_dir)
+    cumulative_attempted = len(statuses)
+    cumulative_success = len([row for row in statuses.values() if row.get("status") == "success"])
+    cumulative_failed = len([row for row in statuses.values() if row.get("status") in {"failed", "quota_stopped"}])
     coverage = profile_field_coverage(users, target_rows)
     missing_count = len([row for row in target_rows if row.get("sec_user_id_confidence") in {"missing", "placeholder"}])
     pending_after = len([row for row in target_rows if row.get("profile_fetch_status") == "pending"])
     partial = stats.partial or pending_after > 0
     partial_reason = stats.partial_reason or ("pending_profiles_after_run" if pending_after else "")
-    state = expansion_state(stats, pending_after, partial_reason)
+    state = expansion_state(cumulative_attempted, cumulative_success, pending_after, partial_reason)
     return {
         "run_id": run_id,
         "created_at": now_iso(),
@@ -921,12 +1271,15 @@ def build_collection_report(
         "processed_dir": str(processed_dir),
         "target_users": len(target_rows),
         "source_unique_users": target_audit.get("source_unique_users"),
-        "attempted_profiles": stats.attempted,
-        "successful_profiles": stats.succeeded,
-        "failed_profiles": processed_counts.get("failed_profile_users", 0),
+        "attempted_profiles": cumulative_attempted,
+        "successful_profiles": cumulative_success,
+        "failed_profiles": cumulative_failed,
+        "current_run_attempted_profiles": stats.attempted,
+        "current_run_successful_profiles": stats.succeeded,
+        "current_run_failed_profiles": stats.failed,
         "missing_sec_uid_users": missing_count,
         "skipped_profiles": len([row for row in target_rows if row.get("profile_fetch_status") == "skipped"]),
-        "profiles_collected": stats.attempted > 0 and stats.succeeded > 0,
+        "profiles_collected": cumulative_success > 0,
         "partial": partial,
         "partial_reason": partial_reason,
         "expansion_state": state,
@@ -936,6 +1289,7 @@ def build_collection_report(
         "field_coverage": coverage,
         "processed_counts": dict(processed_counts),
         "target_audit_path": str(processed_dir / "profile_target_audit.json"),
+        "sec_uid_evidence_audit_path": str(processed_dir / "sec_uid_evidence_audit.json"),
         "scope_checks": target_audit.get("scope_checks", {}),
         "redacted_config": settings.redacted(),
         "secrets_read_printed_written": "no",
@@ -953,6 +1307,7 @@ def write_collection_docs(processed_dir: Path, report: Mapping[str, Any]) -> Non
         "",
         f"- source dataset: `{report.get('source_dataset_path')}`",
         f"- target users: {report.get('target_users')}",
+        f"- sec_uid evidence recovery coverage: {(report.get('field_coverage') or {}).get('sec_user_id', 0)} / {report.get('target_users')}",
         f"- attempted profiles: {report.get('attempted_profiles')}",
         f"- successful profiles: {report.get('successful_profiles')}",
         f"- failed profiles: {report.get('failed_profiles')}",
@@ -1005,6 +1360,7 @@ def write_validation_doc(docs_dir: Path, report: Mapping[str, Any]) -> Path:
         "",
         f"- source dataset: `{report.get('source_dataset_path')}`",
         f"- target users: {report.get('target_users')}",
+        f"- sec_uid evidence recovery coverage: {(report.get('field_coverage') or {}).get('sec_user_id', 0)} / {report.get('target_users')}",
         f"- attempted profiles: {report.get('attempted_profiles')}",
         f"- successful profiles: {report.get('successful_profiles')}",
         f"- failed profiles: {report.get('failed_profiles')}",
@@ -1054,12 +1410,31 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--resume", action="store_true")
     parser.add_argument("--max-users", type=int)
     parser.add_argument("--limit-profile", choices=["capped", "unbounded"], default="capped")
+    parser.add_argument(
+        "--profile-api",
+        choices=["handler", "batch"],
+        default="handler",
+        help="Profile API strategy. 'handler' calls App V3 per user; 'batch' calls Web batch profile with per-item identity validation.",
+    )
     parser.add_argument("--processed-root", type=Path, default=PROCESSED_ROOT)
     parser.add_argument("--raw-root", type=Path, default=RAW_ROOT)
     parser.add_argument(
         "--source-raw-run",
         type=Path,
         help="Raw source run directory for sec_uid recovery. Defaults to raw-root/source-run-name.",
+    )
+    parser.add_argument(
+        "--sec-uid-evidence-run",
+        type=Path,
+        action="append",
+        default=[],
+        help="Additional raw evidence run path or run id under --raw-root. Can be repeated.",
+    )
+    parser.add_argument(
+        "--sec-uid-evidence-glob",
+        action="append",
+        default=[],
+        help="Additional raw evidence run glob rooted at --raw-root. Can be repeated; matches are sorted.",
     )
     parser.add_argument("--docs-dir", type=Path, default=Path("docs/04-开发验证"))
     parser.add_argument("--audit-only", action="store_true")
@@ -1076,6 +1451,7 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     processed_dir.mkdir(parents=True, exist_ok=True)
     raw_dir.mkdir(parents=True, exist_ok=True)
+    (raw_dir / "rejected_user_profiles.jsonl").touch(exist_ok=True)
 
     if args.env_file:
         load_dotenv(Path(args.env_file))
@@ -1083,7 +1459,14 @@ def main(argv: list[str] | None = None) -> int:
     if args.limit_profile == "unbounded":
         settings = settings.model_copy(update={"max_users": None})
 
-    target_rows, target_audit, historical = build_profile_targets(source_run, args.processed_root, args.raw_root, source_raw_run=args.source_raw_run)
+    target_rows, target_audit, historical = build_profile_targets(
+        source_run,
+        args.processed_root,
+        args.raw_root,
+        source_raw_run=args.source_raw_run,
+        sec_uid_evidence_runs=args.sec_uid_evidence_run,
+        sec_uid_evidence_globs=args.sec_uid_evidence_glob,
+    )
     write_target_audit(processed_dir, target_rows, target_audit)
 
     stats = CollectionStats()
@@ -1099,7 +1482,15 @@ def main(argv: list[str] | None = None) -> int:
             stats.partial_reason = "no_confirmed_sec_uid"
         if classify_fetchable(target_rows) and not stats.partial:
             client = TikHubClient(settings)
-            stats = collect_profiles(target_rows, raw_dir, client, resume=args.resume, max_users=effective_profile_limit(args, settings), api_key=settings.api_key)
+            stats = collect_profiles(
+                target_rows,
+                raw_dir,
+                client,
+                resume=args.resume,
+                max_users=effective_profile_limit(args, settings),
+                api_key=settings.api_key,
+                profile_api=args.profile_api,
+            )
     else:
         stats.partial = True
         stats.partial_reason = "audit_only"
@@ -1120,8 +1511,10 @@ def main(argv: list[str] | None = None) -> int:
     doc_path = write_validation_doc(args.docs_dir, report)
     safety_findings = scan_report_safety([
         processed_dir / "profile_target_audit.md",
+        processed_dir / "sec_uid_evidence_audit.md",
         processed_dir / "profile_collection_audit.md",
         processed_dir / "README.md",
+        processed_dir / "sec_uid_evidence_audit.json",
         processed_dir / "profile_collection_report.json",
         processed_dir / "profile_collection_audit.json",
         doc_path,
