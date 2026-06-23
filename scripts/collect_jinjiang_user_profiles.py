@@ -36,6 +36,8 @@ SENSITIVE_REPORT_PATTERNS = [
     "TIKHUB_API_KEY",
     "Bearer ",
 ]
+PROFILE_BATCH_ENDPOINT = "fetch_batch_user_profile_v2"
+PROFILE_HANDLER_ENDPOINT = "handler_user_profile"
 PROFILE_FIELDNAMES = [
     "user_id",
     "sec_user_id",
@@ -75,6 +77,9 @@ STATUS_COLUMNS = [
     "user_id",
     "sec_user_id",
     "status",
+    "endpoint",
+    "http_status",
+    "error_category",
     "error",
     "attempted_at",
 ]
@@ -368,6 +373,20 @@ class CollectionStats:
     partial_reason: str = ""
     quota_or_rate_limited: bool = False
     endpoint_call_counts: dict[str, int] | None = None
+    http_status_counts: dict[str, int] | None = None
+    rejected_by_endpoint_status: dict[str, int] | None = None
+    cost_guard_triggered: bool = False
+    cost_guard_reason: str = ""
+    profile_api_requested: str = "cost-safe"
+    profile_api_resolved: str = "handler"
+
+
+@dataclass(frozen=True)
+class ProfileErrorClassification:
+    category: str
+    http_status: str = ""
+    quota_or_rate_limited: bool = False
+    retryable: bool = False
 
 
 @dataclass(frozen=True)
@@ -391,16 +410,107 @@ class SecUidEvidenceIndex:
     audit: dict[str, Any]
 
 
-def is_quota_error(message: str) -> bool:
+def classify_profile_error(message: str) -> ProfileErrorClassification:
     text = message.lower()
     http_status = re.search(r"\bhttp\s+(\d{3})\b", text)
-    if http_status:
-        return http_status.group(1) in {"402", "429"}
-    response_code = re.search(r'"code"\s*:\s*(\d{3})', text)
-    if response_code:
-        return response_code.group(1) in {"402", "429"}
-    return any(token in text for token in ["quota", "rate limit", "too many", "insufficient balance"])
+    status = http_status.group(1) if http_status else ""
+    if not status:
+        response_code = re.search(r'"code"\s*:\s*(\d{3})', text)
+        status = response_code.group(1) if response_code else ""
+    if status in {"402"}:
+        return ProfileErrorClassification("quota_or_balance", status, quota_or_rate_limited=True)
+    if status in {"429"}:
+        return ProfileErrorClassification("rate_limit", status, quota_or_rate_limited=True)
+    if status == "400":
+        return ProfileErrorClassification("provider_bad_request", status)
+    if status:
+        return ProfileErrorClassification(
+            "provider_transient" if status.startswith("5") else "provider_error",
+            status,
+            retryable=status.startswith("5"),
+        )
+    if any(token in text for token in ["insufficient balance", "paid quota", "quota不足", "余额不足"]):
+        return ProfileErrorClassification("quota_or_balance", quota_or_rate_limited=True)
+    if any(token in text for token in ["rate limit", "too many requests"]):
+        return ProfileErrorClassification("rate_limit", quota_or_rate_limited=True)
+    if "identity_mismatch_or_empty_profile_response" in text:
+        return ProfileErrorClassification("identity_mismatch_or_empty_response")
+    return ProfileErrorClassification("provider_error")
 
+
+def is_quota_error(message: str) -> bool:
+    return classify_profile_error(message).quota_or_rate_limited
+
+
+def increment_counter(counter: dict[str, int] | None, key: str) -> None:
+    if counter is not None:
+        counter[key] = counter.get(key, 0) + 1
+
+
+def record_profile_error_stats(stats: CollectionStats, *, endpoint: str, classification: ProfileErrorClassification) -> None:
+    if stats.http_status_counts is None:
+        stats.http_status_counts = {}
+    if stats.rejected_by_endpoint_status is None:
+        stats.rejected_by_endpoint_status = {}
+    status_key = classification.http_status or classification.category
+    increment_counter(stats.http_status_counts, status_key)
+    increment_counter(stats.rejected_by_endpoint_status, f"{endpoint}:{status_key}")
+
+
+def endpoint_from_error_message(message: str) -> str:
+    match = re.search(r"TikHub request failed for ([A-Za-z0-9_]+):", message)
+    return match.group(1) if match else "unknown"
+
+
+def classify_status_rows(statuses: Mapping[str, Mapping[str, str]]) -> tuple[dict[str, int], dict[str, int], int, str]:
+    http_status_counts: Counter[str] = Counter()
+    rejected_by_endpoint_status: Counter[str] = Counter()
+    quota_stopped_profiles = 0
+    quota_stop_reason = ""
+    for row in statuses.values():
+        if row.get("status") not in {"failed", "quota_stopped"}:
+            continue
+        classification = classify_profile_error(str(row.get("error") or ""))
+        status_key = str(row.get("http_status") or classification.http_status or row.get("error_category") or classification.category)
+        endpoint = str(row.get("endpoint") or endpoint_from_error_message(str(row.get("error") or "")))
+        http_status_counts[status_key] += 1
+        rejected_by_endpoint_status[f"{endpoint}:{status_key}"] += 1
+        if row.get("status") == "quota_stopped":
+            quota_stopped_profiles += 1
+            quota_stop_reason = str(row.get("error") or quota_stop_reason)
+    return dict(sorted(http_status_counts.items())), dict(sorted(rejected_by_endpoint_status.items())), quota_stopped_profiles, quota_stop_reason
+
+
+def recommended_resume_command() -> str:
+    return "\n".join(
+        [
+            ". .venv/bin/activate",
+            "TIKHUB_QPS=2 TIKHUB_BACKOFF_SECONDS=2 TIKHUB_MAX_RETRIES=0 \\",
+            "python scripts/collect_jinjiang_user_profiles.py \\",
+            f"  --source-run {DEFAULT_SOURCE_RUN} \\",
+            '  --sec-uid-evidence-glob "jinjiang-top10-caption-hashtag-all-comments-excluding-safety-20260617T140519Z*" \\',
+            "  --sec-uid-evidence-run data/raw/tikhub/douyin/jinjiang_hotel/jinjiang-top12-jian-comments-replies-live-20260620T072706Z \\",
+            "  --sec-uid-evidence-run data/raw/tikhub/douyin/jinjiang_hotel/jinjiang-top12-jian-video-metadata-live-20260620T072428Z \\",
+            "  --sec-uid-evidence-run data/raw/tikhub/douyin/jinjiang_hotel/jinjiang-top10-jinjiang-only-video-metadata-unbounded-20260617T095743Z \\",
+            "  --output-run-id jinjiang-profile-expansion-derived-20260622T151059Z-batch-full \\",
+            "  --env-file .env \\",
+            "  --profile-api handler \\",
+            "  --limit-profile unbounded \\",
+            "  --resume \\",
+            "  --retry-failed-profiles",
+        ]
+    )
+
+
+def mark_quota_stop(stats: CollectionStats) -> None:
+    stats.partial = True
+    stats.partial_reason = "quota_or_rate_limit"
+    stats.quota_or_rate_limited = True
+
+
+def mark_cost_guard(stats: CollectionStats, reason: str) -> None:
+    stats.cost_guard_triggered = True
+    stats.cost_guard_reason = reason
 
 def classify_source_sec(user_id: str, sec: str) -> tuple[str, str]:
     if not sec:
@@ -896,6 +1006,14 @@ def write_statuses(raw_dir: Path, statuses: Mapping[str, Mapping[str, Any]]) -> 
     write_csv(raw_dir / "profile_status.csv", STATUS_COLUMNS, statuses.values())
 
 
+def status_error_category(row: Mapping[str, str]) -> str:
+    category = str(row.get("error_category") or "").strip()
+    if category:
+        return category
+    error = str(row.get("error") or "")
+    return classify_profile_error(error).category if error else ""
+
+
 def classify_fetchable(target_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return [row for row in target_rows if str(row.get("profile_fetch_status")) == "pending" and str(row.get("sec_user_id_confidence")) in {"confirmed", "confirmed_equal_user_id"}]
 
@@ -930,7 +1048,16 @@ def record_profile_success(raw_dir: Path, statuses: dict[str, dict[str, str]], r
     if response is not None:
         payload["response"] = response
     append_jsonl(raw_dir / "user_profiles.jsonl", payload)
-    statuses[uid] = {"user_id": uid, "sec_user_id": sec, "status": "success", "error": "", "attempted_at": now_iso()}
+    statuses[uid] = {
+        "user_id": uid,
+        "sec_user_id": sec,
+        "status": "success",
+        "endpoint": "",
+        "http_status": "",
+        "error_category": "",
+        "error": "",
+        "attempted_at": now_iso(),
+    }
     row["profile_fetch_status"] = "success"
     row["skip_reason"] = ""
 
@@ -944,14 +1071,31 @@ def record_profile_failure(
     response: Any | None = None,
     api_key: str = "",
     status: str = "failed",
+    endpoint: str = "",
+    classification: ProfileErrorClassification | None = None,
 ) -> None:
     uid = str(row["user_id"])
     sec = str(row["sec_user_id"])
+    classification = classification or classify_profile_error(message)
     rejected: dict[str, Any] = {"user_id": uid, "sec_user_id": sec, "reason": message, "fetched_at": now_iso()}
+    if endpoint:
+        rejected["endpoint"] = endpoint
+    if classification.http_status:
+        rejected["http_status"] = classification.http_status
+    rejected["error_category"] = classification.category
     if response is not None:
         rejected["response"] = redact_secrets(response, [api_key])
     append_jsonl(raw_dir / "rejected_user_profiles.jsonl", rejected)
-    statuses[uid] = {"user_id": uid, "sec_user_id": sec, "status": status, "error": message, "attempted_at": now_iso()}
+    statuses[uid] = {
+        "user_id": uid,
+        "sec_user_id": sec,
+        "status": status,
+        "endpoint": endpoint,
+        "http_status": classification.http_status,
+        "error_category": classification.category,
+        "error": message,
+        "attempted_at": now_iso(),
+    }
     row["profile_fetch_status"] = "failed"
     row["skip_reason"] = message
 
@@ -979,7 +1123,18 @@ def collect_one_profile_with_handler(
         success_items = accepted_profile_items(result, uid, sec)
         if not success_items:
             message = "identity_mismatch_or_empty_profile_response"
-            record_profile_failure(raw_dir, statuses, row, message, response=result, api_key=api_key)
+            classification = classify_profile_error(message)
+            record_profile_error_stats(stats, endpoint=PROFILE_HANDLER_ENDPOINT, classification=classification)
+            record_profile_failure(
+                raw_dir,
+                statuses,
+                row,
+                message,
+                response=result,
+                api_key=api_key,
+                endpoint=PROFILE_HANDLER_ENDPOINT,
+                classification=classification,
+            )
             stats.failed += 1
             return False
         record_profile_success(raw_dir, statuses, row, success_items[0], response=result)
@@ -987,13 +1142,22 @@ def collect_one_profile_with_handler(
         return False
     except Exception as exc:  # noqa: BLE001 - per-profile failure is recorded and collection continues.
         message = str(redact_secrets(str(exc), [api_key]))
-        status = "quota_stopped" if is_quota_error(message) else "failed"
-        record_profile_failure(raw_dir, statuses, row, message, api_key=api_key, status=status)
+        classification = classify_profile_error(message)
+        status = "quota_stopped" if classification.quota_or_rate_limited else "failed"
+        record_profile_error_stats(stats, endpoint=PROFILE_HANDLER_ENDPOINT, classification=classification)
+        record_profile_failure(
+            raw_dir,
+            statuses,
+            row,
+            message,
+            api_key=api_key,
+            status=status,
+            endpoint=PROFILE_HANDLER_ENDPOINT,
+            classification=classification,
+        )
         stats.failed += 1
         if status == "quota_stopped":
-            stats.partial = True
-            stats.partial_reason = "quota_or_rate_limit"
-            stats.quota_or_rate_limited = True
+            mark_quota_stop(stats)
             return True
         return False
 
@@ -1006,6 +1170,8 @@ def collect_batch_profiles_with_split_fallback(
     stats: CollectionStats,
     *,
     api_key: str,
+    max_batch_http400_splits: int = 0,
+    _batch_http400_splits: list[int] | None = None,
 ) -> bool:
     """Collect a batch, recursively splitting failed batches before handler fallback.
 
@@ -1018,29 +1184,82 @@ def collect_batch_profiles_with_split_fallback(
 
     if not batch:
         return False
+    if _batch_http400_splits is None:
+        _batch_http400_splits = [0]
     try:
         result = client.fetch_batch_user_profile([str(row["sec_user_id"]) for row in batch])
     except Exception as exc:  # noqa: BLE001 - batch failure is split or checkpointed per target.
         message = str(redact_secrets(str(exc), [api_key]))
-        status = "quota_stopped" if is_quota_error(message) else "failed"
-        if len(batch) > 1 and status != "quota_stopped":
+        classification = classify_profile_error(message)
+        status = "quota_stopped" if classification.quota_or_rate_limited else "failed"
+        record_profile_error_stats(stats, endpoint=PROFILE_BATCH_ENDPOINT, classification=classification)
+        if status == "quota_stopped":
+            for row in batch:
+                record_profile_failure(
+                    raw_dir,
+                    statuses,
+                    row,
+                    message,
+                    api_key=api_key,
+                    status=status,
+                    endpoint=PROFILE_BATCH_ENDPOINT,
+                    classification=classification,
+                )
+                stats.failed += 1
+            write_statuses(raw_dir, statuses)
+            mark_quota_stop(stats)
+            mark_cost_guard(stats, f"batch_{classification.http_status or classification.category}_stop")
+            return True
+        if len(batch) > 1 and classification.http_status == "400" and _batch_http400_splits[0] >= max_batch_http400_splits:
+            mark_cost_guard(stats, "batch_http400_downgrade_handler")
+            for row in batch:
+                if collect_one_profile_with_handler(raw_dir, statuses, row, client, stats, api_key=api_key):
+                    write_statuses(raw_dir, statuses)
+                    return True
+            write_statuses(raw_dir, statuses)
+            return False
+        if len(batch) > 1:
+            if classification.http_status == "400":
+                _batch_http400_splits[0] += 1
             midpoint = len(batch) // 2
-            if collect_batch_profiles_with_split_fallback(batch[:midpoint], raw_dir, statuses, client, stats, api_key=api_key):
+            if collect_batch_profiles_with_split_fallback(
+                batch[:midpoint],
+                raw_dir,
+                statuses,
+                client,
+                stats,
+                api_key=api_key,
+                max_batch_http400_splits=max_batch_http400_splits,
+                _batch_http400_splits=_batch_http400_splits,
+            ):
                 return True
-            return collect_batch_profiles_with_split_fallback(batch[midpoint:], raw_dir, statuses, client, stats, api_key=api_key)
+            return collect_batch_profiles_with_split_fallback(
+                batch[midpoint:],
+                raw_dir,
+                statuses,
+                client,
+                stats,
+                api_key=api_key,
+                max_batch_http400_splits=max_batch_http400_splits,
+                _batch_http400_splits=_batch_http400_splits,
+            )
         if len(batch) == 1:
             stop = collect_one_profile_with_handler(raw_dir, statuses, batch[0], client, stats, api_key=api_key)
             write_statuses(raw_dir, statuses)
             return stop
         for row in batch:
-            record_profile_failure(raw_dir, statuses, row, message, api_key=api_key, status=status)
+            record_profile_failure(
+                raw_dir,
+                statuses,
+                row,
+                message,
+                api_key=api_key,
+                status=status,
+                endpoint=PROFILE_BATCH_ENDPOINT,
+                classification=classification,
+            )
             stats.failed += 1
         write_statuses(raw_dir, statuses)
-        if status == "quota_stopped":
-            stats.partial = True
-            stats.partial_reason = "quota_or_rate_limit"
-            stats.quota_or_rate_limited = True
-            return True
         return False
 
     for row in batch:
@@ -1051,6 +1270,8 @@ def collect_batch_profiles_with_split_fallback(
             record_profile_success(raw_dir, statuses, row, success_items[0])
             stats.succeeded += 1
         else:
+            classification = classify_profile_error("identity_mismatch_or_empty_profile_response")
+            record_profile_error_stats(stats, endpoint=PROFILE_BATCH_ENDPOINT, classification=classification)
             stop = collect_one_profile_with_handler(raw_dir, statuses, row, client, stats, api_key=api_key)
             if stop:
                 write_statuses(raw_dir, statuses)
@@ -1070,6 +1291,7 @@ def collect_profiles(
     profile_api: str = "handler",
     retry_failed_profiles: bool = False,
     batch_handler_fallback: bool = True,
+    max_batch_http400_splits: int = 0,
 ) -> CollectionStats:
     statuses = load_statuses(raw_dir) if resume else {}
     all_fetchable = classify_fetchable(target_rows)
@@ -1088,7 +1310,14 @@ def collect_profiles(
         fetchable.append(row)
     if max_users is not None:
         fetchable = fetchable[:max_users]
-    stats = CollectionStats(endpoint_call_counts=client.endpoint_call_counts)
+    stats = CollectionStats(
+        endpoint_call_counts=client.endpoint_call_counts,
+        http_status_counts={},
+        rejected_by_endpoint_status={},
+        profile_api_requested=profile_api,
+        profile_api_resolved=resolve_profile_api(profile_api, limit_profile="capped"),
+    )
+    profile_api = stats.profile_api_resolved
     for row in fetchable:
         uid = str(row["user_id"])
         sec = str(row["sec_user_id"])
@@ -1126,23 +1355,43 @@ def collect_profiles(
         for batch in chunks(pending, 50):
             stats.attempted += len(batch)
             if batch_handler_fallback:
-                if collect_batch_profiles_with_split_fallback(batch, raw_dir, statuses, client, stats, api_key=api_key):
+                if collect_batch_profiles_with_split_fallback(
+                    batch,
+                    raw_dir,
+                    statuses,
+                    client,
+                    stats,
+                    api_key=api_key,
+                    max_batch_http400_splits=max_batch_http400_splits,
+                ):
                     break
                 continue
             try:
                 result = client.fetch_batch_user_profile([str(row["sec_user_id"]) for row in batch])
             except Exception as exc:  # noqa: BLE001 - batch failure is checkpointed per target.
                 message = str(redact_secrets(str(exc), [api_key]))
-                status = "quota_stopped" if is_quota_error(message) else "failed"
+                classification = classify_profile_error(message)
+                status = "quota_stopped" if classification.quota_or_rate_limited else "failed"
+                record_profile_error_stats(stats, endpoint=PROFILE_BATCH_ENDPOINT, classification=classification)
                 for row in batch:
-                    record_profile_failure(raw_dir, statuses, row, message, api_key=api_key, status=status)
+                    record_profile_failure(
+                        raw_dir,
+                        statuses,
+                        row,
+                        message,
+                        api_key=api_key,
+                        status=status,
+                        endpoint=PROFILE_BATCH_ENDPOINT,
+                        classification=classification,
+                    )
                     stats.failed += 1
                 write_statuses(raw_dir, statuses)
                 if status == "quota_stopped":
-                    stats.partial = True
-                    stats.partial_reason = "quota_or_rate_limit"
-                    stats.quota_or_rate_limited = True
+                    mark_quota_stop(stats)
+                    mark_cost_guard(stats, f"batch_{classification.http_status or classification.category}_stop")
                     break
+                if classification.http_status == "400":
+                    mark_cost_guard(stats, "batch_http400_failed_without_fallback")
                 continue
             for row in batch:
                 uid = str(row["user_id"])
@@ -1152,7 +1401,17 @@ def collect_profiles(
                     record_profile_success(raw_dir, statuses, row, success_items[0])
                     stats.succeeded += 1
                 else:
-                    record_profile_failure(raw_dir, statuses, row, "identity_mismatch_or_empty_profile_response", api_key=api_key)
+                    classification = classify_profile_error("identity_mismatch_or_empty_profile_response")
+                    record_profile_error_stats(stats, endpoint=PROFILE_BATCH_ENDPOINT, classification=classification)
+                    record_profile_failure(
+                        raw_dir,
+                        statuses,
+                        row,
+                        "identity_mismatch_or_empty_profile_response",
+                        api_key=api_key,
+                        endpoint=PROFILE_BATCH_ENDPOINT,
+                        classification=classification,
+                    )
                     stats.failed += 1
             write_statuses(raw_dir, statuses)
     stats.endpoint_call_counts = client.endpoint_call_counts
@@ -1271,7 +1530,7 @@ def build_processed_outputs(
             target["profile_fetch_status"] = "success"
             target["skip_reason"] = ""
         elif status.get("status") in {"failed", "quota_stopped"}:
-            target["profile_fetch_status"] = "failed"
+            target["profile_fetch_status"] = status.get("status")
             target["skip_reason"] = status.get("error", "failed")
         elif target.get("profile_fetch_status") == "pending" and stats.partial:
             target["profile_fetch_status"] = "skipped"
@@ -1281,13 +1540,13 @@ def build_processed_outputs(
         user, source = merge_profile_user(target, live, hist, source_users_by_id.get(uid, {}))
         fetch_status = str(target.get("profile_fetch_status") or "skipped")
         user_rows.append(user)
-        if fetch_status == "failed":
+        if fetch_status in {"failed", "quota_stopped"}:
             failed_rows.append({k: target.get(k, "") for k in PROFILE_FIELDNAMES})
         if target.get("sec_user_id_confidence") in {"missing", "placeholder"}:
             missing_rows.append({k: target.get(k, "") for k in PROFILE_FIELDNAMES})
         abm = build_abm_row(target, user, source, fetch_status)
         abm_rows.append(abm)
-        if source != "none" and fetch_status in {"success", "skipped", "failed"}:
+        if source != "none" and fetch_status in {"success", "skipped", "failed", "quota_stopped"}:
             profile_rows.append({field: abm.get(field, "") for field in PROFILE_COLUMNS})
         target_public_rows.append({k: target.get(k, "") for k in PROFILE_FIELDNAMES})
     # no duplicates, stable first row by sorted target order
@@ -1332,6 +1591,12 @@ def effective_profile_limit(args: argparse.Namespace, settings: TikHubSettings) 
     return settings.max_users
 
 
+def resolve_profile_api(profile_api: str, *, limit_profile: str) -> str:
+    if profile_api in {"cost-safe", "auto"}:
+        return "handler"
+    return profile_api
+
+
 def expansion_state(attempted: int, succeeded: int, pending_after: int, partial_reason: str) -> str:
     if partial_reason == "audit_only":
         return "audit_only"
@@ -1374,6 +1639,7 @@ def build_collection_report(
 ) -> dict[str, Any]:
     users = read_csv(processed_dir / "users.csv")
     statuses = load_statuses(raw_dir)
+    status_http_counts, status_endpoint_counts, quota_stopped_profiles, quota_stop_reason = classify_status_rows(statuses)
     cumulative_attempted = len(statuses)
     cumulative_success = len([row for row in statuses.values() if row.get("status") == "success"])
     cumulative_failed = len([row for row in statuses.values() if row.get("status") in {"failed", "quota_stopped"}])
@@ -1398,15 +1664,35 @@ def build_collection_report(
         "current_run_attempted_profiles": stats.attempted,
         "current_run_successful_profiles": stats.succeeded,
         "current_run_failed_profiles": stats.failed,
+        "current_run_success_delta": stats.succeeded,
         "missing_sec_uid_users": missing_count,
         "skipped_profiles": len([row for row in target_rows if row.get("profile_fetch_status") == "skipped"]) or pending_after,
+        "pending_profiles": pending_after,
         "profiles_collected": cumulative_success > 0,
         "partial": partial,
         "partial_reason": partial_reason,
         "expansion_state": state,
         "quota_or_rate_limited": stats.quota_or_rate_limited or cumulative_quota_stopped > 0,
+        "quota_stopped_profiles": quota_stopped_profiles,
+        "quota_stop_reason": quota_stop_reason,
         "limit_profile": "unbounded" if settings.max_users is None else "capped",
+        "profile_api_requested": stats.profile_api_requested,
+        "profile_api_resolved": stats.profile_api_resolved,
+        "profile_error_contract": {
+            "http_400": "provider_bad_request; do not classify as quota; batch may downgrade to handler without recursively expanding cost.",
+            "http_402": "quota_or_balance; stop immediately.",
+            "http_429": "rate_limit; stop immediately.",
+            "identity_mismatch_or_empty_response": "write rejected_user_profiles.jsonl and do not count success.",
+        },
         "endpoint_call_counts": stats.endpoint_call_counts or {},
+        "http_status_counts": status_http_counts,
+        "current_run_http_status_counts": stats.http_status_counts or {},
+        "rejected_by_endpoint_status": status_endpoint_counts,
+        "current_run_rejected_by_endpoint_status": stats.rejected_by_endpoint_status or {},
+        "cost_guard_triggered": stats.cost_guard_triggered,
+        "cost_guard_reason": stats.cost_guard_reason,
+        "recommended_resume_mode": "handler",
+        "next_resume_command": recommended_resume_command(),
         "field_coverage": coverage,
         "processed_counts": dict(processed_counts),
         "target_audit_path": str(processed_dir / "profile_target_audit.json"),
@@ -1437,14 +1723,37 @@ def write_collection_docs(processed_dir: Path, report: Mapping[str, Any]) -> Non
         f"- partial: {report.get('partial')}",
         f"- partial_reason: {report.get('partial_reason')}",
         f"- expansion_state: {report.get('expansion_state')}",
+        f"- profile_api: requested `{report.get('profile_api_requested')}`, resolved `{report.get('profile_api_resolved')}`",
+        f"- quota_stopped_profiles: {report.get('quota_stopped_profiles')}",
+        f"- current_run_success_delta: {report.get('current_run_success_delta')}",
+        f"- cost_guard_triggered: {report.get('cost_guard_triggered')}",
+        f"- cost_guard_reason: {report.get('cost_guard_reason')}",
+        f"- recommended_resume_mode: {report.get('recommended_resume_mode')}",
         f"- secrets read/printed/written: {report.get('secrets_read_printed_written')}",
         f"- raw/processed large data committed: {report.get('large_raw_processed_committed')}",
+        "",
+        "## Cost audit",
+        "",
+        "### Endpoint call counts",
+        "",
+        "| endpoint | calls |",
+        "|---|---:|",
+    ]
+    for key, value in sorted((report.get("endpoint_call_counts") or {}).items()):
+        lines.append(f"| {key} | {value} |")
+    lines.extend(["", "### HTTP status counts", "", "| status/category | rows |", "|---|---:|"])
+    for key, value in sorted((report.get("http_status_counts") or {}).items()):
+        lines.append(f"| {key} | {value} |")
+    lines.extend(["", "### Rejected by endpoint/status", "", "| endpoint:status | rows |", "|---|---:|"])
+    for key, value in sorted((report.get("rejected_by_endpoint_status") or {}).items()):
+        lines.append(f"| {key} | {value} |")
+    lines.extend([
         "",
         "## Field coverage",
         "",
         "| field | non-empty rows |",
         "|---|---:|",
-    ]
+    ])
     for key, value in sorted((report.get("field_coverage") or {}).items()):
         lines.append(f"| {key} | {value} |")
     lines.extend(["", "## Scope checks", "", "| check | value |", "|---|---|"])
@@ -1490,15 +1799,39 @@ def write_validation_doc(docs_dir: Path, report: Mapping[str, Any]) -> Path:
         f"- partial: {report.get('partial')}",
         f"- partial_reason: {report.get('partial_reason')}",
         f"- expansion_state: {report.get('expansion_state')}",
+        f"- profile_api: requested `{report.get('profile_api_requested')}`, resolved `{report.get('profile_api_resolved')}`",
+        f"- quota_stopped_profiles: {report.get('quota_stopped_profiles')}",
+        f"- current_run_success_delta: {report.get('current_run_success_delta')}",
+        f"- cost_guard_triggered: {report.get('cost_guard_triggered')}",
+        f"- recommended_resume_mode: {report.get('recommended_resume_mode')}",
         "- quota/rate limit: see partial_reason and endpoint_call_counts",
         "- secrets read/printed/written: no",
         "- raw/processed large data committed: no",
+        "",
+        "## 成本审计（聚合）",
+        "",
+        "| 指标 | 值 |",
+        "|---|---:|",
+        f"| quota_stopped_profiles | {report.get('quota_stopped_profiles')} |",
+        f"| current_run_success_delta | {report.get('current_run_success_delta')} |",
+        "",
+        "### endpoint_call_counts",
+        "",
+        "| endpoint | calls |",
+        "|---|---:|",
+    ]
+    for key, value in sorted((report.get("endpoint_call_counts") or {}).items()):
+        lines.append(f"| {key} | {value} |")
+    lines.extend(["", "### http_status_counts", "", "| status/category | rows |", "|---|---:|"])
+    for key, value in sorted((report.get("http_status_counts") or {}).items()):
+        lines.append(f"| {key} | {value} |")
+    lines.extend([
         "",
         "## 字段覆盖率",
         "",
         "| 字段 | 非空行数 |",
         "|---|---:|",
-    ]
+    ])
     for key, value in sorted((report.get("field_coverage") or {}).items()):
         lines.append(f"| {key} | {value} |")
     lines.extend([
@@ -1538,9 +1871,15 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--limit-profile", choices=["capped", "unbounded"], default="capped")
     parser.add_argument(
         "--profile-api",
-        choices=["handler", "batch"],
-        default="handler",
-        help="Profile API strategy. 'handler' calls App V3 per user; 'batch' calls Web batch profile with per-item identity validation.",
+        choices=["cost-safe", "auto", "handler", "batch"],
+        default="cost-safe",
+        help="Profile API strategy. 'cost-safe'/'auto' resolve to App V3 handler; 'batch' is explicit opt-in for Web batch profile.",
+    )
+    parser.add_argument(
+        "--max-batch-http400-splits",
+        type=int,
+        default=0,
+        help="Maximum recursive batch HTTP 400 splits before downgrading the batch to handler. Default 0 avoids repeated costly batch 400 calls.",
     )
     parser.add_argument("--processed-root", type=Path, default=PROCESSED_ROOT)
     parser.add_argument("--raw-root", type=Path, default=RAW_ROOT)
@@ -1584,6 +1923,7 @@ def main(argv: list[str] | None = None) -> int:
     settings = TikHubSettings.from_env()
     if args.limit_profile == "unbounded":
         settings = settings.model_copy(update={"max_users": None})
+    profile_api_resolved = resolve_profile_api(args.profile_api, limit_profile=args.limit_profile)
 
     target_rows, target_audit, historical = build_profile_targets(
         source_run,
@@ -1596,6 +1936,8 @@ def main(argv: list[str] | None = None) -> int:
     write_target_audit(processed_dir, target_rows, target_audit)
 
     stats = CollectionStats()
+    stats.profile_api_requested = args.profile_api
+    stats.profile_api_resolved = profile_api_resolved
     if not args.audit_only:
         fetchable = classify_fetchable(target_rows)
         if fetchable:
@@ -1615,9 +1957,12 @@ def main(argv: list[str] | None = None) -> int:
                 resume=args.resume,
                 max_users=effective_profile_limit(args, settings),
                 api_key=settings.api_key,
-                profile_api=args.profile_api,
+                profile_api=profile_api_resolved,
                 retry_failed_profiles=args.retry_failed_profiles,
+                max_batch_http400_splits=max(0, args.max_batch_http400_splits),
             )
+            stats.profile_api_requested = args.profile_api
+            stats.profile_api_resolved = profile_api_resolved
     else:
         stats.partial = True
         stats.partial_reason = "audit_only"

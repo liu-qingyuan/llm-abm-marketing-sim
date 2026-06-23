@@ -11,6 +11,10 @@
 - partial: True
 - partial_reason: quota_or_rate_limit
 - expansion_state: live_profile_partial
+- profile_api after guard: default `cost-safe` resolves to `handler_user_profile`; batch is explicit opt-in only
+- cost_guard: profile HTTP 400/402/429 are not retried by default; batch HTTP 402/429 stops immediately; batch HTTP 400 defaults to handler downgrade
+- recommended_resume_mode: `handler`
+- current_run_success_delta field: added to future reports for aggregate-only cost audit
 - quota/rate limit: see partial_reason and endpoint_call_counts
 - secrets read/printed/written: no
 - raw/processed large data committed: no
@@ -18,6 +22,10 @@
 ## 2026-06-23 充值后续跑状态
 
 充值后已继续按同一 run `--resume` 抓取，live profile 成功数从 5,449 增至 9,279；当前最新停止原因是 TikHub profile endpoint 返回 HTTP 402 余额/付费额度不足，因此仍为真实 partial，未伪称全量完成。后续余额恢复后继续使用同一 run resume 命令即可跳过已成功用户并从剩余用户继续。
+
+## 2026-06-23 成本保护补丁
+
+为避免下一次充值后继续被 batch 失败批次消耗额度，profile CLI 已改为成本安全策略：默认 `--profile-api cost-safe`，即使用单用户 `handler_user_profile`；`--profile-api batch` 必须显式传入。错误契约改为结构化聚合审计：HTTP 400 视作 provider bad request/transient，不标记为 quota；HTTP 402/429 立即停止；报告新增 `http_status_counts`、`rejected_by_endpoint_status`、`current_run_success_delta`、`cost_guard_triggered`、`recommended_resume_mode` 和 `next_resume_command`。本文档仍只展示聚合统计，不展示用户昵称、bio、signature 或 raw payload。
 
 ## 字段覆盖率
 

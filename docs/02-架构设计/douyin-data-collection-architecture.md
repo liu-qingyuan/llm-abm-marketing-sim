@@ -130,7 +130,7 @@ sequenceDiagram
 
 ## 用户 Profile 扩展架构（sec_uid evidence recovery）
 
-用户 profile 扩展不是把 TikHub provider 细节直接写入业务表，而是在 `users.csv` 与 Profile API 之间增加 `sec_uid_evidence_recovery` 阶段：先从限定 raw evidence runs 中恢复显式 `uid -> sec_uid/sec_user_id` 证据，再构建 `profile_target_users.csv`，最后只对 confirmed `sec_uid` 调用 TikHub profile API。大规模抓取优先使用 `fetch_batch_user_profile_v2`（每批最多 50），保留 `handler_user_profile` 作为单用户 smoke/回退；两种入口都必须逐用户执行 identity validation。
+用户 profile 扩展不是把 TikHub provider 细节直接写入业务表，而是在 `users.csv` 与 Profile API 之间增加 `sec_uid_evidence_recovery` 阶段：先从限定 raw evidence runs 中恢复显式 `uid -> sec_uid/sec_user_id` 证据，再构建 `profile_target_users.csv`，最后只对 confirmed `sec_uid` 调用 TikHub profile API。成本敏感的默认策略是 `--profile-api cost-safe`（解析为 `handler_user_profile` 单用户入口）；`fetch_batch_user_profile_v2` 只能显式 opt-in，用于小规模 canary 或人工确认后的高吞吐场景。两种入口都必须逐用户执行 identity validation。
 
 ### C4 / Container 视图
 
@@ -238,7 +238,7 @@ sequenceDiagram
     CLI->>Target: build profile_target_users.csv
     Target-->>Collector: confirmed sec_uid targets only
     loop each target checkpoint
-    Collector->>API: handler_user_profile(sec_user_id) or batch(sec_user_ids<=50)
+    Collector->>API: cost-safe handler_user_profile(sec_user_id) by default; batch only if explicit
         API-->>Collector: profile response or quota/error
         Collector->>Validator: uid/sec_uid identity validation
         Validator-->>Collector: accept or reject
@@ -253,8 +253,16 @@ sequenceDiagram
 |---|---|
 | Module | `SecUidEvidenceIndex` 是 deep module：小接口隐藏 raw JSONL/page JSON 扫描、去重、冲突统计和 provenance 规则。 |
 | Boundary | `TikHubProfileAdapter` 是外部 API adapter；业务输出只依赖 confirmed target 与 normalized profile，不依赖 provider payload 细节。 |
-| Contract | Profile response 必须通过 identity validation：若返回 `uid`，必须匹配目标 `user_id`；否则至少 `sec_uid/sec_user_id` 匹配请求值。mismatch 写入 rejected raw journal，不计 success。 |
-| Governance | raw/processed 数据保持 git ignored；Markdown 只写聚合统计；`sec_uid_evidence_audit` 不展示 nickname/bio/signature/raw payload；quota/rate-limit 必须 partial reporting。 |
+| Contract | Profile response 必须通过 identity validation：若返回 `uid`，必须匹配目标 `user_id`；否则至少 `sec_uid/sec_user_id` 匹配请求值。mismatch 写入 rejected raw journal，不计 success。HTTP 400 是 provider bad request/transient，不等同 quota；HTTP 402 是余额/付费额度停止；HTTP 429 是 rate-limit 停止。 |
+| Governance | raw/processed 数据保持 git ignored；Markdown 只写聚合统计；`sec_uid_evidence_audit` 不展示 nickname/bio/signature/raw payload；quota/rate-limit 必须 partial reporting。profile endpoint 对 HTTP 400/402/429 不做默认重试；batch HTTP 402/429 立即停止，batch HTTP 400 默认降级 handler，避免递归拆批造成额度空耗。 |
+
+### Profile cost / quota guard
+
+- 默认 `--profile-api cost-safe`，等价于 `handler_user_profile`；`--limit-profile unbounded` 不会自动启用 batch。
+- `--profile-api batch` 是显式 opt-in；batch HTTP 400 默认不递归拆批，除非显式提高 `--max-batch-http400-splits`。
+- `profile_status.csv` 保留 `endpoint`、`http_status`、`error_category`，其中 `quota_stopped` 不再在处理层被压平成普通 `failed`。
+- `profile_collection_report.json` / Markdown 只输出聚合审计：`endpoint_call_counts`、`http_status_counts`、`rejected_by_endpoint_status`、`current_run_success_delta`、`quota_stopped_profiles`、`cost_guard_triggered`、`recommended_resume_mode`。
+- 推荐充值后续跑仍使用 handler + 低 QPS + `TIKHUB_MAX_RETRIES=0`，并通过 `--resume` 跳过已成功用户。
 
 ### TEA 测试矩阵
 
@@ -264,7 +272,7 @@ sequenceDiagram
 | 多 run / glob / page journal 扫描 | unit | CLI evidence-run 解析与 raw-root 限定 |
 | fake TikHub profile 到 CSV 输出 | integration | `collect_profiles` + `build_processed_outputs` |
 | identity mismatch | contract/smoke | `accepted_profile_items` 与 rejected journal |
-| resume / quota partial | integration | `profile_status.csv` checkpoint 与 report counts |
+| resume / quota partial / cost guard | integration | `profile_status.csv` checkpoint、endpoint/status/error_category 与 report counts |
 | privacy gate | static/report scan | Markdown/JSON reports 不包含 secret 或用户明细 |
 | corrected scope | data validation | safety video IDs absent，`#锦江宾馆` / `#临空锦江宾馆` 不回流 |
 

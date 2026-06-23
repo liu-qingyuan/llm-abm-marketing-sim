@@ -11,6 +11,7 @@ from llm_abm_sim.data_sources.douyin_models import TIKHUB_OPENAPI_UPDATED, TIKHU
 from llm_abm_sim.data_sources.tikhub_client import (
     ENDPOINT_REGISTRY,
     TikHubClient,
+    TikHubClientError,
     TikHubEndpointError,
     TikHubSettings,
     validate_douyin_endpoint,
@@ -202,3 +203,28 @@ def test_urllib_transport_supports_proxy_user_agent_and_http_error_body(monkeypa
     assert "HTTP 403" in str(excinfo.value)
     assert "lacks required permissions" in str(excinfo.value)
     assert "secret-token" not in str(excinfo.value)
+
+
+def test_profile_endpoints_do_not_retry_400_402_429() -> None:
+    for endpoint_name, call in [
+        ("handler_user_profile", lambda client: client.handler_user_profile("sec")),
+        ("fetch_batch_user_profile_v2", lambda client: client.fetch_batch_user_profile(["sec"])),
+    ]:
+        for status in [400, 402, 429]:
+            attempts = 0
+
+            class ProfileHttpError(Exception):
+                status_code = status
+
+            def transport(method, url, headers, params, json_body, timeout, *, response_status: int = status):
+                nonlocal attempts
+                attempts += 1
+                raise ProfileHttpError(f"HTTP {response_status}: paid quota or provider error")
+
+            client = TikHubClient(
+                TikHubSettings(api_key="secret-token", qps=1000, max_retries=2, backoff_seconds=0),
+                transport=transport,
+            )
+            with pytest.raises(TikHubClientError):
+                call(client)
+            assert attempts == 1, f"{endpoint_name} retried HTTP {status}"

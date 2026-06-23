@@ -490,6 +490,7 @@ def test_batch_failure_falls_back_to_single_handler_per_user(tmp_path: Path) -> 
         api_key="",
         profile_api="batch",
         batch_handler_fallback=True,
+        max_batch_http400_splits=1,
     )  # type: ignore[arg-type]
 
     assert stats.attempted == 2
@@ -541,6 +542,7 @@ def test_batch_failure_splits_before_single_handler_fallback(tmp_path: Path) -> 
         api_key="",
         profile_api="batch",
         batch_handler_fallback=True,
+        max_batch_http400_splits=1,
     )  # type: ignore[arg-type]
 
     assert stats.attempted == 2
@@ -637,3 +639,203 @@ def test_resume_without_retry_failed_keeps_prior_failures(tmp_path: Path) -> Non
     statuses = {row["user_id"]: row for row in read_csv(raw_run / "profile_status.csv")}
     assert statuses["u1"]["status"] == "failed"
     assert statuses["creator"]["status"] == "quota_stopped"
+
+
+def test_quota_error_classifier_distinguishes_request_ids_from_cost_errors() -> None:
+    non_quota_messages = [
+        'TikHub request failed for fetch_batch_user_profile_v2: HTTP 400: {"detail":{"code":400,"request_id":"89c75839-2a46-4829-b860-be69fa4b23ec","message":"Request failed. Please retry."}}',
+        'TikHub request failed: {"code":400,"request_id":"402-429-like-digits","message":"bad request"}',
+    ]
+    quota_messages = [
+        'TikHub request failed: HTTP 402: {"detail":{"code":402,"message":"Insufficient balance"}}',
+        'TikHub request failed: {"code":402,"message":"Insufficient balance"}',
+        'TikHub request failed: HTTP 429: {"detail":{"code":429,"message":"Too many requests"}}',
+        'TikHub request failed: {"code":429,"message":"rate limit"}',
+        'insufficient balance / paid quota不足',
+        'rate limit exceeded',
+        'too many requests',
+    ]
+    for message in non_quota_messages:
+        classified = profiles.classify_profile_error(message)
+        assert classified.quota_or_rate_limited is False
+        assert profiles.is_quota_error(message) is False
+    for message in quota_messages:
+        classified = profiles.classify_profile_error(message)
+        assert classified.quota_or_rate_limited is True
+        assert profiles.is_quota_error(message) is True
+
+
+def test_batch_quota_error_marks_batch_quota_stopped_without_split_or_handler_fallback(tmp_path: Path) -> None:
+    src = make_source(tmp_path, sec="sec_u1", creator_sec="sec_creator")
+    targets, _audit, _historical = profiles.build_profile_targets(src, tmp_path / "processed", tmp_path / "raw")
+    calls: list[tuple[str, tuple[str, ...]]] = []
+
+    class BatchQuotaClient:
+        endpoint_call_counts: dict[str, int] = {}
+
+        def fetch_batch_user_profile(self, sec_user_ids: list[str]) -> Any:
+            calls.append(("batch", tuple(sec_user_ids)))
+            self.endpoint_call_counts["fetch_batch_user_profile_v2"] = self.endpoint_call_counts.get("fetch_batch_user_profile_v2", 0) + 1
+            raise RuntimeError('HTTP 402: {"detail":{"code":402,"message":"Insufficient balance"}}')
+
+        def handler_user_profile(self, sec_user_id: str) -> Any:  # pragma: no cover - must not fallback on quota
+            calls.append(("handler", (sec_user_id,)))
+            raise AssertionError("batch quota must stop immediately")
+
+    raw_run = tmp_path / "raw" / "profile-run"
+    stats = profiles.collect_profiles(
+        targets,
+        raw_run,
+        BatchQuotaClient(),
+        resume=True,
+        max_users=None,
+        api_key="",
+        profile_api="batch",
+        batch_handler_fallback=True,
+    )  # type: ignore[arg-type]
+
+    assert calls == [("batch", ("sec_creator", "sec_u1"))]
+    assert stats.partial is True
+    assert stats.partial_reason == "quota_or_rate_limit"
+    assert stats.quota_or_rate_limited is True
+    assert stats.cost_guard_triggered is True
+    statuses = {row["user_id"]: row for row in read_csv(raw_run / "profile_status.csv")}
+    assert {row["status"] for row in statuses.values()} == {"quota_stopped"}
+    assert {row["endpoint"] for row in statuses.values()} == {"fetch_batch_user_profile_v2"}
+    assert {row["http_status"] for row in statuses.values()} == {"402"}
+
+
+def test_handler_quota_error_stops_before_next_user(tmp_path: Path) -> None:
+    src = make_source(tmp_path, sec="sec_u1", creator_sec="sec_creator")
+    targets, _audit, _historical = profiles.build_profile_targets(src, tmp_path / "processed", tmp_path / "raw")
+    calls: list[str] = []
+
+    class HandlerQuotaClient:
+        endpoint_call_counts: dict[str, int] = {}
+
+        def handler_user_profile(self, sec_user_id: str) -> Any:
+            calls.append(sec_user_id)
+            self.endpoint_call_counts["handler_user_profile"] = self.endpoint_call_counts.get("handler_user_profile", 0) + 1
+            raise RuntimeError("HTTP 402: insufficient balance")
+
+    raw_run = tmp_path / "raw" / "profile-run"
+    stats = profiles.collect_profiles(targets, raw_run, HandlerQuotaClient(), resume=True, max_users=None, api_key="")  # type: ignore[arg-type]
+
+    assert calls == ["sec_creator"]
+    assert stats.attempted == 1
+    assert stats.partial is True
+    statuses = read_csv(raw_run / "profile_status.csv")
+    assert len(statuses) == 1
+    assert statuses[0]["status"] == "quota_stopped"
+    assert statuses[0]["endpoint"] == "handler_user_profile"
+
+
+def test_cost_safe_default_handler_mode_never_calls_batch(tmp_path: Path) -> None:
+    src = make_source(tmp_path, sec="sec_u1", creator_sec="sec_creator")
+    targets, _audit, _historical = profiles.build_profile_targets(src, tmp_path / "processed", tmp_path / "raw")
+
+    class HandlerOnlyClient:
+        endpoint_call_counts: dict[str, int] = {}
+
+        def fetch_batch_user_profile(self, sec_user_ids: list[str]) -> Any:  # pragma: no cover - cost-safe must not call batch
+            raise AssertionError("cost-safe/default mode must not call batch")
+
+        def handler_user_profile(self, sec_user_id: str) -> Any:
+            self.endpoint_call_counts["handler_user_profile"] = self.endpoint_call_counts.get("handler_user_profile", 0) + 1
+            if sec_user_id == "sec_creator":
+                return {"user": {"uid": "creator", "sec_uid": "sec_creator", "follower_count": 10}}
+            return {"user": {"uid": "u1", "sec_uid": "sec_u1", "follower_count": 5}}
+
+    stats = profiles.collect_profiles(
+        targets,
+        tmp_path / "raw" / "profile-run",
+        HandlerOnlyClient(),
+        resume=True,
+        max_users=None,
+        api_key="",
+        profile_api="cost-safe",
+    )  # type: ignore[arg-type]
+
+    assert stats.profile_api_requested == "cost-safe"
+    assert stats.profile_api_resolved == "handler"
+    assert stats.attempted == 2
+    assert stats.succeeded == 2
+    assert stats.endpoint_call_counts == {"handler_user_profile": 2}
+
+
+def test_batch_http400_default_downgrades_to_handler_without_recursive_split(tmp_path: Path) -> None:
+    src = make_source(tmp_path, sec="sec_u1", creator_sec="sec_creator")
+    targets, _audit, _historical = profiles.build_profile_targets(src, tmp_path / "processed", tmp_path / "raw")
+    calls: list[tuple[str, tuple[str, ...]]] = []
+
+    class Batch400HandlerSuccessClient:
+        endpoint_call_counts: dict[str, int] = {}
+
+        def fetch_batch_user_profile(self, sec_user_ids: list[str]) -> Any:
+            calls.append(("batch", tuple(sec_user_ids)))
+            self.endpoint_call_counts["fetch_batch_user_profile_v2"] = self.endpoint_call_counts.get("fetch_batch_user_profile_v2", 0) + 1
+            raise RuntimeError('HTTP 400: {"detail":{"code":400,"request_id":"abc-402-like","message":"Request failed"}}')
+
+        def handler_user_profile(self, sec_user_id: str) -> Any:
+            calls.append(("handler", (sec_user_id,)))
+            self.endpoint_call_counts["handler_user_profile"] = self.endpoint_call_counts.get("handler_user_profile", 0) + 1
+            if sec_user_id == "sec_creator":
+                return {"user": {"uid": "creator", "sec_uid": "sec_creator", "follower_count": 10}}
+            return {"user": {"uid": "u1", "sec_uid": "sec_u1", "follower_count": 5}}
+
+    raw_run = tmp_path / "raw" / "profile-run"
+    stats = profiles.collect_profiles(
+        targets,
+        raw_run,
+        Batch400HandlerSuccessClient(),
+        resume=True,
+        max_users=None,
+        api_key="",
+        profile_api="batch",
+        batch_handler_fallback=True,
+    )  # type: ignore[arg-type]
+
+    assert calls == [("batch", ("sec_creator", "sec_u1")), ("handler", ("sec_creator",)), ("handler", ("sec_u1",))]
+    assert stats.cost_guard_triggered is True
+    assert stats.cost_guard_reason == "batch_http400_downgrade_handler"
+    assert stats.partial is False
+    assert stats.quota_or_rate_limited is False
+    assert stats.succeeded == 2
+    statuses = {row["user_id"]: row for row in read_csv(raw_run / "profile_status.csv")}
+    assert {row["status"] for row in statuses.values()} == {"success"}
+
+
+def test_report_includes_aggregate_cost_audit_and_quota_state(tmp_path: Path) -> None:
+    src = make_source(tmp_path, sec="sec_u1")
+    raw_run = tmp_path / "raw" / "profile-run"
+    processed_run = tmp_path / "processed" / "profile-run"
+    write_csv(raw_run / "profile_status.csv", profiles.STATUS_COLUMNS, [
+        {"user_id": "u1", "sec_user_id": "sec_u1", "status": "success", "endpoint": "handler_user_profile", "http_status": "", "error_category": "", "error": "", "attempted_at": "now"},
+        {"user_id": "creator", "sec_user_id": "sec_creator", "status": "quota_stopped", "endpoint": "handler_user_profile", "http_status": "402", "error_category": "quota_or_balance", "error": "HTTP 402: insufficient balance", "attempted_at": "now"},
+    ])
+    write_jsonl(raw_run / "user_profiles.jsonl", [
+        {"user_id": "u1", "sec_user_id": "sec_u1", "items": [{"uid": "u1", "sec_uid": "sec_u1", "follower_count": 5}]},
+    ])
+    targets, target_audit, historical = profiles.build_profile_targets(src, tmp_path / "processed", tmp_path / "raw")
+    stats = profiles.CollectionStats(profile_api_requested="cost-safe", profile_api_resolved="handler")
+    counts = profiles.build_processed_outputs(src, processed_run, raw_run, targets, historical, stats)
+    report = profiles.build_collection_report(
+        run_id="profile-run",
+        source_run=src,
+        processed_dir=processed_run,
+        raw_dir=raw_run,
+        target_rows=targets,
+        target_audit=target_audit,
+        processed_counts=counts,
+        stats=stats,
+        settings=profiles.TikHubSettings(live_fetch=True, api_key="test-key"),
+    )
+
+    assert report["quota_stopped_profiles"] == 1
+    assert report["http_status_counts"] == {"402": 1}
+    assert report["rejected_by_endpoint_status"] == {"handler_user_profile:402": 1}
+    assert report["profile_api_requested"] == "cost-safe"
+    assert report["profile_api_resolved"] == "handler"
+    assert report["recommended_resume_mode"] == "handler"
+    assert "--profile-api handler" in report["next_resume_command"]
+    assert {row["user_id"]: row for row in read_csv(processed_run / "profile_target_users.csv")}["creator"]["profile_fetch_status"] == "quota_stopped"

@@ -76,6 +76,7 @@ ENDPOINT_REGISTRY: dict[str, TikHubEndpoint] = {
     "fetch_video_search_v1": TikHubEndpoint("fetch_video_search_v1", "POST", "/api/v1/douyin/search/fetch_video_search_v1"),
 }
 ALLOWED_ENDPOINT_PATHS = frozenset(endpoint.path for endpoint in ENDPOINT_REGISTRY.values())
+PROFILE_ENDPOINT_NAMES = frozenset({"handler_user_profile", "fetch_batch_user_profile_v2"})
 
 
 class TikHubSettings(BaseModel):
@@ -299,6 +300,8 @@ class TikHubClient:
                 )
             except Exception as exc:  # noqa: BLE001 - normalize transport and HTTP failures.
                 retryable = _is_retryable(exc)
+                if ep.name in PROFILE_ENDPOINT_NAMES and _exception_status(exc) in {400, 402, 429}:
+                    retryable = False
                 if attempt < self.settings.max_retries and retryable:
                     time.sleep(self.settings.backoff_seconds * (2**attempt))
                     attempt += 1
@@ -396,5 +399,13 @@ class TikHubClient:
 def _is_retryable(exc: Exception) -> bool:
     if isinstance(exc, (TimeoutError, ConnectionError, urllib.error.URLError)):
         return True
-    status = getattr(exc, "code", None) or getattr(exc, "status", None) or getattr(exc, "status_code", None)
+    status = _exception_status(exc)
     return status == 429 or (isinstance(status, int) and 500 <= status <= 599)
+
+
+def _exception_status(exc: Exception) -> int | None:
+    status = getattr(exc, "code", None) or getattr(exc, "status", None) or getattr(exc, "status_code", None)
+    if isinstance(status, int):
+        return status
+    match = re.search(r"\bHTTP\s+(\d{3})\b", str(exc), flags=re.IGNORECASE)
+    return int(match.group(1)) if match else None
