@@ -269,6 +269,40 @@ def test_resume_skips_success_and_no_duplicate_profiles(tmp_path: Path) -> None:
     assert len([row for row in prof_rows if row["user_id"] == "u1"]) == 1
 
 
+def test_max_users_applies_after_resume_successes_are_skipped(tmp_path: Path) -> None:
+    src = make_source(tmp_path, sec="sec_u1", creator_sec="sec_creator")
+    raw_run = tmp_path / "raw" / "profile-run"
+    write_csv(raw_run / "profile_status.csv", profiles.STATUS_COLUMNS, [
+        {"user_id": "creator", "sec_user_id": "sec_creator", "status": "success", "error": "", "attempted_at": "old"},
+    ])
+    write_jsonl(raw_run / "user_profiles.jsonl", [
+        {"user_id": "creator", "sec_user_id": "sec_creator", "items": [{"uid": "creator", "sec_uid": "sec_creator", "follower_count": 8}]},
+    ])
+
+    class OnePendingClient:
+        endpoint_call_counts: dict[str, int] = {}
+
+        def handler_user_profile(self, sec_user_id: str) -> Any:
+            self.endpoint_call_counts["handler_user_profile"] = self.endpoint_call_counts.get("handler_user_profile", 0) + 1
+            return {"user": {"uid": "u1", "sec_uid": "sec_u1", "follower_count": 5}}
+
+    targets, _audit, _historical = profiles.build_profile_targets(src, tmp_path / "processed", tmp_path / "raw")
+    stats = profiles.collect_profiles(
+        targets,
+        raw_run,
+        OnePendingClient(),
+        resume=True,
+        max_users=1,
+        api_key="",
+    )  # type: ignore[arg-type]
+
+    assert stats.attempted == 1
+    assert stats.succeeded == 1
+    statuses = {row["user_id"]: row for row in read_csv(raw_run / "profile_status.csv")}
+    assert statuses["creator"]["status"] == "success"
+    assert statuses["u1"]["status"] == "success"
+
+
 def test_resumed_report_counts_prior_successes_cumulatively(tmp_path: Path) -> None:
     src = make_source(tmp_path, sec="sec_u1")
     raw_run = tmp_path / "raw" / "profile-run"
@@ -299,6 +333,38 @@ def test_resumed_report_counts_prior_successes_cumulatively(tmp_path: Path) -> N
     assert report["profiles_collected"] is True
     assert report["expansion_state"] == "live_profile_partial"
     assert report["current_run_attempted_profiles"] == 0
+
+
+def test_report_preserves_prior_quota_stopped_partial_reason(tmp_path: Path) -> None:
+    src = make_source(tmp_path, sec="sec_u1")
+    raw_run = tmp_path / "raw" / "profile-run"
+    processed_run = tmp_path / "processed" / "profile-run"
+    write_csv(raw_run / "profile_status.csv", profiles.STATUS_COLUMNS, [
+        {"user_id": "u1", "sec_user_id": "sec_u1", "status": "success", "error": "", "attempted_at": "now"},
+        {"user_id": "creator", "sec_user_id": "sec_creator", "status": "quota_stopped", "error": "HTTP 402", "attempted_at": "now"},
+    ])
+    write_jsonl(raw_run / "user_profiles.jsonl", [
+        {"user_id": "u1", "sec_user_id": "sec_u1", "items": [{"uid": "u1", "sec_uid": "sec_u1", "follower_count": 5}]},
+    ])
+    targets, target_audit, historical = profiles.build_profile_targets(src, tmp_path / "processed", tmp_path / "raw")
+    stats = profiles.CollectionStats()
+    counts = profiles.build_processed_outputs(src, processed_run, raw_run, targets, historical, stats)
+    report = profiles.build_collection_report(
+        run_id="profile-run",
+        source_run=src,
+        processed_dir=processed_run,
+        raw_dir=raw_run,
+        target_rows=targets,
+        target_audit=target_audit,
+        processed_counts=counts,
+        stats=stats,
+        settings=profiles.TikHubSettings(live_fetch=True, api_key="test-key"),
+    )
+
+    assert report["partial"] is True
+    assert report["partial_reason"] == "quota_or_rate_limit"
+    assert report["quota_or_rate_limited"] is True
+    assert report["failed_profiles"] == 1
 
 
 def test_markdown_scan_rejects_headers_not_fixture_names(tmp_path: Path) -> None:
@@ -397,6 +463,82 @@ def test_batch_profile_api_validates_each_identity_and_checkpoints(tmp_path: Pat
     assert (raw_run / "rejected_user_profiles.jsonl").exists()
 
 
+def test_batch_failure_falls_back_to_single_handler_per_user(tmp_path: Path) -> None:
+    src = make_source(tmp_path, sec="sec_u1", creator_sec="sec_creator")
+    targets, _audit, _historical = profiles.build_profile_targets(src, tmp_path / "processed", tmp_path / "raw")
+
+    class BatchFailHandlerSuccessClient:
+        endpoint_call_counts: dict[str, int] = {}
+
+        def fetch_batch_user_profile(self, sec_user_ids: list[str]) -> Any:
+            self.endpoint_call_counts["fetch_batch_user_profile_v2"] = self.endpoint_call_counts.get("fetch_batch_user_profile_v2", 0) + 1
+            raise RuntimeError("HTTP 400: batch failed")
+
+        def handler_user_profile(self, sec_user_id: str) -> Any:
+            self.endpoint_call_counts["handler_user_profile"] = self.endpoint_call_counts.get("handler_user_profile", 0) + 1
+            if sec_user_id == "sec_creator":
+                return {"user": {"uid": "creator", "sec_uid": "sec_creator", "follower_count": 10}}
+            return {"user": {"uid": "u1", "sec_uid": "sec_u1", "follower_count": 5}}
+
+    raw_run = tmp_path / "raw" / "profile-run"
+    stats = profiles.collect_profiles(
+        targets,
+        raw_run,
+        BatchFailHandlerSuccessClient(),
+        resume=True,
+        max_users=None,
+        api_key="",
+        profile_api="batch",
+        batch_handler_fallback=True,
+    )  # type: ignore[arg-type]
+
+    assert stats.attempted == 2
+    assert stats.succeeded == 2
+    assert stats.failed == 0
+    statuses = {row["user_id"]: row for row in read_csv(raw_run / "profile_status.csv")}
+    assert statuses["creator"]["status"] == "success"
+    assert statuses["u1"]["status"] == "success"
+
+
+def test_batch_failure_splits_before_single_handler_fallback(tmp_path: Path) -> None:
+    src = make_source(tmp_path, sec="sec_u1", creator_sec="sec_creator")
+    targets, _audit, _historical = profiles.build_profile_targets(src, tmp_path / "processed", tmp_path / "raw")
+    calls: list[tuple[str, tuple[str, ...]]] = []
+
+    class SplitClient:
+        endpoint_call_counts: dict[str, int] = {}
+
+        def fetch_batch_user_profile(self, sec_user_ids: list[str]) -> Any:
+            calls.append(("batch", tuple(sec_user_ids)))
+            self.endpoint_call_counts["fetch_batch_user_profile_v2"] = self.endpoint_call_counts.get("fetch_batch_user_profile_v2", 0) + 1
+            if "sec_u1" in sec_user_ids:
+                raise RuntimeError("HTTP 400: batch failed")
+            return {"data": [{"uid": "creator", "sec_uid": "sec_creator", "follower_count": 10}]}
+
+        def handler_user_profile(self, sec_user_id: str) -> Any:
+            calls.append(("handler", (sec_user_id,)))
+            self.endpoint_call_counts["handler_user_profile"] = self.endpoint_call_counts.get("handler_user_profile", 0) + 1
+            return {"user": {"uid": "u1", "sec_uid": "sec_u1", "follower_count": 5}}
+
+    raw_run = tmp_path / "raw" / "profile-run"
+    stats = profiles.collect_profiles(
+        targets,
+        raw_run,
+        SplitClient(),
+        resume=True,
+        max_users=None,
+        api_key="",
+        profile_api="batch",
+        batch_handler_fallback=True,
+    )  # type: ignore[arg-type]
+
+    assert stats.attempted == 2
+    assert stats.succeeded == 2
+    assert ("batch", ("sec_creator", "sec_u1")) in calls
+    assert ("batch", ("sec_creator",)) in calls
+    assert ("handler", ("sec_u1",)) in calls
+
+
 def test_returned_sec_match_with_wrong_known_uid_is_rejected(tmp_path: Path) -> None:
     src = make_source(tmp_path, sec="sec_u1", creator_sec="sec_creator")
     targets, _audit, _historical = profiles.build_profile_targets(src, tmp_path / "processed", tmp_path / "raw")
@@ -414,3 +556,73 @@ def test_returned_sec_match_with_wrong_known_uid_is_rejected(tmp_path: Path) -> 
     assert stats.succeeded == 0
     assert stats.failed == 1
     assert read_csv(raw_run / "profile_status.csv")[0]["error"] == "identity_mismatch_or_empty_profile_response"
+
+def test_resume_can_retry_failed_and_quota_stopped_users(tmp_path: Path) -> None:
+    src = make_source(tmp_path, sec="sec_u1", creator_sec="sec_creator")
+    raw_run = tmp_path / "raw" / "profile-run"
+    write_csv(raw_run / "profile_status.csv", profiles.STATUS_COLUMNS, [
+        {"user_id": "u1", "sec_user_id": "sec_u1", "status": "failed", "error": "prior mismatch", "attempted_at": "old"},
+        {"user_id": "creator", "sec_user_id": "sec_creator", "status": "quota_stopped", "error": "prior quota", "attempted_at": "old"},
+    ])
+
+    class RetryClient:
+        endpoint_call_counts: dict[str, int] = {}
+
+        def fetch_batch_user_profile(self, sec_user_ids: list[str]) -> Any:
+            self.endpoint_call_counts["fetch_batch_user_profile_v2"] = self.endpoint_call_counts.get("fetch_batch_user_profile_v2", 0) + 1
+            return {
+                "data": [
+                    {"uid": "creator", "sec_uid": "sec_creator", "follower_count": 10},
+                    {"uid": "u1", "sec_uid": "sec_u1", "follower_count": 5},
+                ]
+            }
+
+    targets, _audit, _historical = profiles.build_profile_targets(src, tmp_path / "processed", tmp_path / "raw")
+    stats = profiles.collect_profiles(
+        targets,
+        raw_run,
+        RetryClient(),
+        resume=True,
+        max_users=None,
+        api_key="",
+        profile_api="batch",
+        retry_failed_profiles=True,
+    )  # type: ignore[arg-type]
+
+    assert stats.attempted == 2
+    assert stats.succeeded == 2
+    statuses = {row["user_id"]: row for row in read_csv(raw_run / "profile_status.csv")}
+    assert statuses["u1"]["status"] == "success"
+    assert statuses["creator"]["status"] == "success"
+
+
+def test_resume_without_retry_failed_keeps_prior_failures(tmp_path: Path) -> None:
+    src = make_source(tmp_path, sec="sec_u1", creator_sec="sec_creator")
+    raw_run = tmp_path / "raw" / "profile-run"
+    write_csv(raw_run / "profile_status.csv", profiles.STATUS_COLUMNS, [
+        {"user_id": "u1", "sec_user_id": "sec_u1", "status": "failed", "error": "prior mismatch", "attempted_at": "old"},
+        {"user_id": "creator", "sec_user_id": "sec_creator", "status": "quota_stopped", "error": "prior quota", "attempted_at": "old"},
+    ])
+
+    class NoCallBatchClient:
+        endpoint_call_counts: dict[str, int] = {}
+
+        def fetch_batch_user_profile(self, sec_user_ids: list[str]) -> Any:  # pragma: no cover - should not be called
+            raise AssertionError("failed statuses should not be retried without retry_failed_profiles")
+
+    targets, _audit, _historical = profiles.build_profile_targets(src, tmp_path / "processed", tmp_path / "raw")
+    stats = profiles.collect_profiles(
+        targets,
+        raw_run,
+        NoCallBatchClient(),
+        resume=True,
+        max_users=None,
+        api_key="",
+        profile_api="batch",
+        retry_failed_profiles=False,
+    )  # type: ignore[arg-type]
+
+    assert stats.attempted == 0
+    statuses = {row["user_id"]: row for row in read_csv(raw_run / "profile_status.csv")}
+    assert statuses["u1"]["status"] == "failed"
+    assert statuses["creator"]["status"] == "quota_stopped"

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import time
 import urllib.error
 import urllib.parse
@@ -200,6 +201,23 @@ def redact_secrets(value: Any, secrets: list[str] | tuple[str, ...] | None = Non
         redacted_text = value
         for secret in explicit:
             redacted_text = redacted_text.replace(secret, "<redacted>")
+        # Plain/multiline header dumps, including strings with escaped "\n"
+        # boundaries from repr/JSON error messages.
+        redacted_text = re.sub(
+            r"(?i)(^|\\n|\r\n|\n|\r)\s*(authorization|cookie)\s*:\s*.*?(?=(\\n|\r\n|\n|\r|$))",
+            lambda match: f"{match.group(1)}{match.group(2)}: <redacted>",
+            redacted_text,
+        )
+        redacted_text = re.sub(
+            r"(?i)([\"'](?:authorization|cookie)[\"']\s*:\s*)([\"'])(.*?)(\2)",
+            r"\1\2<redacted>\4",
+            redacted_text,
+        )
+        redacted_text = re.sub(
+            r"(?i)\b(authorization|cookie)\s*:\s*([^,\n\r}]+)",
+            r"\1: <redacted>",
+            redacted_text,
+        )
         if "Bearer " in redacted_text:
             redacted_text = redacted_text.replace(redacted_text.split("Bearer ", 1)[1].split()[0], "<redacted>")
         return redacted_text

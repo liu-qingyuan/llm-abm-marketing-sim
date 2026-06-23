@@ -15,6 +15,29 @@ def test_redact_secrets_nested_values() -> None:
     assert "abc" not in text
 
 
+def test_redact_secrets_stringified_header_fields() -> None:
+    text = '{"headers":{"Authorization":"Bearer secret-token","Cookie":"session=abc"},"message":"failed"}'
+    redacted = redact_secrets(text, ["secret-token"])
+    assert "secret-token" not in redacted
+    assert "session=abc" not in redacted
+    assert "Bearer" not in redacted
+
+
+def test_redact_secrets_plain_and_repr_header_strings() -> None:
+    samples = [
+        "Authorization: Bearer secret-token",
+        "Cookie: session=abc; other=def",
+        "{'Authorization': 'Bearer secret-token'}",
+        "headers\\nAuthorization: Bearer secret-token\\nCookie: session=abc; other=def\\nbody",
+    ]
+    for sample in samples:
+        redacted = redact_secrets(sample, ["secret-token"])
+        assert "secret-token" not in redacted
+        assert "session=abc" not in redacted
+        assert "other=def" not in redacted
+        assert "Bearer" not in redacted
+
+
 def test_collector_artifacts_do_not_leak_secret(tmp_path: Path) -> None:
     def transport(method, url, headers, params, json_body, timeout):
         if "fetch_topic_query" in url:

@@ -950,6 +950,109 @@ def record_profile_failure(
     row["skip_reason"] = message
 
 
+def collect_one_profile_with_handler(
+    raw_dir: Path,
+    statuses: dict[str, dict[str, str]],
+    row: dict[str, Any],
+    client: TikHubClient,
+    stats: CollectionStats,
+    *,
+    api_key: str,
+) -> bool:
+    """Collect one profile via the single-user handler.
+
+    Returns True when collection should stop because the single-user endpoint
+    hit a quota/rate-limit style blocker. The caller owns attempted counting so
+    batch fallback can avoid double-counting the same target user.
+    """
+
+    uid = str(row["user_id"])
+    sec = str(row["sec_user_id"])
+    try:
+        result = client.handler_user_profile(sec)
+        success_items = accepted_profile_items(result, uid, sec)
+        if not success_items:
+            message = "identity_mismatch_or_empty_profile_response"
+            record_profile_failure(raw_dir, statuses, row, message, response=result, api_key=api_key)
+            stats.failed += 1
+            return False
+        record_profile_success(raw_dir, statuses, row, success_items[0], response=result)
+        stats.succeeded += 1
+        return False
+    except Exception as exc:  # noqa: BLE001 - per-profile failure is recorded and collection continues.
+        message = str(redact_secrets(str(exc), [api_key]))
+        status = "quota_stopped" if is_quota_error(message) else "failed"
+        record_profile_failure(raw_dir, statuses, row, message, api_key=api_key, status=status)
+        stats.failed += 1
+        if status == "quota_stopped":
+            stats.partial = True
+            stats.partial_reason = "quota_or_rate_limit"
+            stats.quota_or_rate_limited = True
+            return True
+        return False
+
+
+def collect_batch_profiles_with_split_fallback(
+    batch: list[dict[str, Any]],
+    raw_dir: Path,
+    statuses: dict[str, dict[str, str]],
+    client: TikHubClient,
+    stats: CollectionStats,
+    *,
+    api_key: str,
+) -> bool:
+    """Collect a batch, recursively splitting failed batches before handler fallback.
+
+    TikHub's batch endpoint can fail the whole request when one sec_user_id in a
+    50-user batch is unacceptable to the endpoint. Splitting keeps the fast path
+    for valid sub-batches and only falls back to the slower single-user handler
+    for isolated records. Returns True when quota/rate-limit style blocking is
+    observed and the caller should stop this run.
+    """
+
+    if not batch:
+        return False
+    try:
+        result = client.fetch_batch_user_profile([str(row["sec_user_id"]) for row in batch])
+    except Exception as exc:  # noqa: BLE001 - batch failure is split or checkpointed per target.
+        message = str(redact_secrets(str(exc), [api_key]))
+        status = "quota_stopped" if is_quota_error(message) else "failed"
+        if len(batch) > 1 and status != "quota_stopped":
+            midpoint = len(batch) // 2
+            if collect_batch_profiles_with_split_fallback(batch[:midpoint], raw_dir, statuses, client, stats, api_key=api_key):
+                return True
+            return collect_batch_profiles_with_split_fallback(batch[midpoint:], raw_dir, statuses, client, stats, api_key=api_key)
+        if len(batch) == 1:
+            stop = collect_one_profile_with_handler(raw_dir, statuses, batch[0], client, stats, api_key=api_key)
+            write_statuses(raw_dir, statuses)
+            return stop
+        for row in batch:
+            record_profile_failure(raw_dir, statuses, row, message, api_key=api_key, status=status)
+            stats.failed += 1
+        write_statuses(raw_dir, statuses)
+        if status == "quota_stopped":
+            stats.partial = True
+            stats.partial_reason = "quota_or_rate_limit"
+            stats.quota_or_rate_limited = True
+            return True
+        return False
+
+    for row in batch:
+        uid = str(row["user_id"])
+        sec = str(row["sec_user_id"])
+        success_items = accepted_profile_items(result, uid, sec)
+        if success_items:
+            record_profile_success(raw_dir, statuses, row, success_items[0])
+            stats.succeeded += 1
+        else:
+            stop = collect_one_profile_with_handler(raw_dir, statuses, row, client, stats, api_key=api_key)
+            if stop:
+                write_statuses(raw_dir, statuses)
+                return True
+    write_statuses(raw_dir, statuses)
+    return False
+
+
 def collect_profiles(
     target_rows: list[dict[str, Any]],
     raw_dir: Path,
@@ -959,9 +1062,24 @@ def collect_profiles(
     max_users: int | None,
     api_key: str,
     profile_api: str = "handler",
+    retry_failed_profiles: bool = False,
+    batch_handler_fallback: bool = True,
 ) -> CollectionStats:
     statuses = load_statuses(raw_dir) if resume else {}
-    fetchable = classify_fetchable(target_rows)
+    all_fetchable = classify_fetchable(target_rows)
+    fetchable: list[dict[str, Any]] = []
+    for row in all_fetchable:
+        existing = statuses.get(str(row["user_id"]))
+        if resume and existing:
+            existing_status = existing.get("status")
+            if existing_status == "success":
+                row["profile_fetch_status"] = "success"
+                continue
+            if existing_status in {"failed", "quota_stopped"} and not retry_failed_profiles:
+                row["profile_fetch_status"] = "failed"
+                row["skip_reason"] = existing.get("error", "failed")
+                continue
+        fetchable.append(row)
     if max_users is not None:
         fetchable = fetchable[:max_users]
     stats = CollectionStats(endpoint_call_counts=client.endpoint_call_counts)
@@ -969,46 +1087,42 @@ def collect_profiles(
         uid = str(row["user_id"])
         sec = str(row["sec_user_id"])
         existing = statuses.get(uid)
-        if resume and existing and existing.get("status") in {"success", "failed", "quota_stopped"}:
-            if existing.get("status") == "success":
+        if resume and existing:
+            existing_status = existing.get("status")
+            if existing_status == "success":
                 row["profile_fetch_status"] = "success"
-            elif existing.get("status") == "failed":
+                continue
+            if existing_status in {"failed", "quota_stopped"} and not retry_failed_profiles:
                 row["profile_fetch_status"] = "failed"
                 row["skip_reason"] = existing.get("error", "failed")
-            continue
+                continue
         if profile_api == "batch":
             continue
         stats.attempted += 1
-        try:
-            result = client.handler_user_profile(sec)
-            success_items = accepted_profile_items(result, uid, sec)
-            if not success_items:
-                message = "identity_mismatch_or_empty_profile_response"
-                record_profile_failure(raw_dir, statuses, row, message, response=result, api_key=api_key)
-                stats.failed += 1
-                continue
-            record_profile_success(raw_dir, statuses, row, success_items[0], response=result)
-            stats.succeeded += 1
-        except Exception as exc:  # noqa: BLE001 - per-profile failure is recorded and collection continues.
-            message = str(redact_secrets(str(exc), [api_key]))
-            status = "quota_stopped" if is_quota_error(message) else "failed"
-            record_profile_failure(raw_dir, statuses, row, message, api_key=api_key, status=status)
-            stats.failed += 1
-            if status == "quota_stopped":
-                stats.partial = True
-                stats.partial_reason = "quota_or_rate_limit"
-                stats.quota_or_rate_limited = True
-                break
-        finally:
-            write_statuses(raw_dir, statuses)
+        stop = collect_one_profile_with_handler(raw_dir, statuses, row, client, stats, api_key=api_key)
+        write_statuses(raw_dir, statuses)
+        if stop:
+            break
     if profile_api == "batch" and not stats.partial:
         pending = [
             row
             for row in fetchable
-            if not (resume and (statuses.get(str(row["user_id"])) or {}).get("status") in {"success", "failed", "quota_stopped"})
+            if not (
+                resume
+                and (statuses.get(str(row["user_id"])) or {}).get("status") == "success"
+            )
+            and not (
+                resume
+                and not retry_failed_profiles
+                and (statuses.get(str(row["user_id"])) or {}).get("status") in {"failed", "quota_stopped"}
+            )
         ]
         for batch in chunks(pending, 50):
             stats.attempted += len(batch)
+            if batch_handler_fallback:
+                if collect_batch_profiles_with_split_fallback(batch, raw_dir, statuses, client, stats, api_key=api_key):
+                    break
+                continue
             try:
                 result = client.fetch_batch_user_profile([str(row["sec_user_id"]) for row in batch])
             except Exception as exc:  # noqa: BLE001 - batch failure is checkpointed per target.
@@ -1257,11 +1371,12 @@ def build_collection_report(
     cumulative_attempted = len(statuses)
     cumulative_success = len([row for row in statuses.values() if row.get("status") == "success"])
     cumulative_failed = len([row for row in statuses.values() if row.get("status") in {"failed", "quota_stopped"}])
+    cumulative_quota_stopped = len([row for row in statuses.values() if row.get("status") == "quota_stopped"])
     coverage = profile_field_coverage(users, target_rows)
     missing_count = len([row for row in target_rows if row.get("sec_user_id_confidence") in {"missing", "placeholder"}])
     pending_after = len([row for row in target_rows if row.get("profile_fetch_status") == "pending"])
-    partial = stats.partial or pending_after > 0
-    partial_reason = stats.partial_reason or ("pending_profiles_after_run" if pending_after else "")
+    partial = stats.partial or pending_after > 0 or cumulative_quota_stopped > 0
+    partial_reason = stats.partial_reason or ("quota_or_rate_limit" if cumulative_quota_stopped else "pending_profiles_after_run" if pending_after else "")
     state = expansion_state(cumulative_attempted, cumulative_success, pending_after, partial_reason)
     return {
         "run_id": run_id,
@@ -1278,12 +1393,12 @@ def build_collection_report(
         "current_run_successful_profiles": stats.succeeded,
         "current_run_failed_profiles": stats.failed,
         "missing_sec_uid_users": missing_count,
-        "skipped_profiles": len([row for row in target_rows if row.get("profile_fetch_status") == "skipped"]),
+        "skipped_profiles": len([row for row in target_rows if row.get("profile_fetch_status") == "skipped"]) or pending_after,
         "profiles_collected": cumulative_success > 0,
         "partial": partial,
         "partial_reason": partial_reason,
         "expansion_state": state,
-        "quota_or_rate_limited": stats.quota_or_rate_limited,
+        "quota_or_rate_limited": stats.quota_or_rate_limited or cumulative_quota_stopped > 0,
         "limit_profile": "unbounded" if settings.max_users is None else "capped",
         "endpoint_call_counts": stats.endpoint_call_counts or {},
         "field_coverage": coverage,
@@ -1408,6 +1523,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--output-run-id", default=f"jinjiang-profile-expansion-derived-{timestamp()}")
     parser.add_argument("--env-file")
     parser.add_argument("--resume", action="store_true")
+    parser.add_argument(
+        "--retry-failed-profiles",
+        action="store_true",
+        help="With --resume, retry users previously marked failed or quota_stopped; successes are still skipped.",
+    )
     parser.add_argument("--max-users", type=int)
     parser.add_argument("--limit-profile", choices=["capped", "unbounded"], default="capped")
     parser.add_argument(
@@ -1490,6 +1610,7 @@ def main(argv: list[str] | None = None) -> int:
                 max_users=effective_profile_limit(args, settings),
                 api_key=settings.api_key,
                 profile_api=args.profile_api,
+                retry_failed_profiles=args.retry_failed_profiles,
             )
     else:
         stats.partial = True

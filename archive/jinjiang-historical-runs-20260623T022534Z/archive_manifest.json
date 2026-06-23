@@ -1,0 +1,437 @@
+{
+  "created_at": "2026-06-23T02:25:34.220009+00:00",
+  "policy": "reversible move only; no deletion; preserve current corrected dataset, current profile run, and raw evidence required for sec_uid recovery/profile resume",
+  "archive_root": "archive/jinjiang-historical-runs-20260623T022534Z",
+  "kept": [
+    "docs/04-开发验证/README.md",
+    "docs/04-开发验证/component-inventory.md",
+    "docs/04-开发验证/development-plan.md",
+    "docs/04-开发验证/jinjiang-douyin-caption-hashtag-scope-change-remove-jinjiang-binguan-add-jian-20260620.md",
+    "docs/04-开发验证/jinjiang-douyin-existing-topic-distribution.md",
+    "docs/04-开发验证/jinjiang-douyin-profile-expansion-20260622.md",
+    "docs/04-开发验证/jinjiang-douyin-research-standard.md",
+    "docs/04-开发验证/source-tree-analysis.md",
+    "docs/04-开发验证/test-strategy.md",
+    "data/processed/jinjiang_douyin/README.md",
+    "data/processed/jinjiang_douyin/jinjiang-caption-hashtag-comments-excluding-binguan-adding-jian-derived-20260621T025127Z",
+    "data/processed/jinjiang_douyin/jinjiang-profile-expansion-derived-20260622T151059Z-batch-full",
+    "data/processed/jinjiang_douyin/jinjiang-top10-caption-hashtag-all-comments-excluding-safety-20260617T140519Z",
+    "data/processed/jinjiang_douyin/jinjiang-top10-caption-hashtag-all-comments-excluding-safety-20260617T140519Z-shard01",
+    "data/processed/jinjiang_douyin/jinjiang-top10-caption-hashtag-all-comments-excluding-safety-20260617T140519Z-shard02",
+    "data/processed/jinjiang_douyin/jinjiang-top10-caption-hashtag-all-comments-excluding-safety-20260617T140519Z-shard03",
+    "data/processed/jinjiang_douyin/jinjiang-top10-caption-hashtag-all-comments-excluding-safety-20260617T140519Z-shard04",
+    "data/processed/jinjiang_douyin/jinjiang-top10-caption-hashtag-all-comments-excluding-safety-20260617T140519Z-shard05",
+    "data/processed/jinjiang_douyin/jinjiang-top10-caption-hashtag-all-comments-excluding-safety-20260617T140519Z-shard06",
+    "data/processed/jinjiang_douyin/jinjiang-top10-caption-hashtag-all-comments-excluding-safety-20260617T140519Z-shard07",
+    "data/processed/jinjiang_douyin/jinjiang-top10-caption-hashtag-all-comments-excluding-safety-20260617T140519Z-shard08",
+    "data/processed/jinjiang_douyin/jinjiang-top10-jinjiang-only-video-metadata-unbounded-20260617T095743Z",
+    "data/processed/jinjiang_douyin/jinjiang-top12-jian-comments-replies-live-20260620T072706Z",
+    "data/processed/jinjiang_douyin/jinjiang-top12-jian-video-metadata-live-20260620T072428Z",
+    "data/raw/tikhub/douyin/jinjiang_hotel/jinjiang-profile-expansion-derived-20260622T151059Z-batch-full",
+    "data/raw/tikhub/douyin/jinjiang_hotel/jinjiang-top10-caption-hashtag-all-comments-excluding-safety-20260617T140519Z",
+    "data/raw/tikhub/douyin/jinjiang_hotel/jinjiang-top10-caption-hashtag-all-comments-excluding-safety-20260617T140519Z-shard01",
+    "data/raw/tikhub/douyin/jinjiang_hotel/jinjiang-top10-caption-hashtag-all-comments-excluding-safety-20260617T140519Z-shard02",
+    "data/raw/tikhub/douyin/jinjiang_hotel/jinjiang-top10-caption-hashtag-all-comments-excluding-safety-20260617T140519Z-shard03",
+    "data/raw/tikhub/douyin/jinjiang_hotel/jinjiang-top10-caption-hashtag-all-comments-excluding-safety-20260617T140519Z-shard04",
+    "data/raw/tikhub/douyin/jinjiang_hotel/jinjiang-top10-caption-hashtag-all-comments-excluding-safety-20260617T140519Z-shard05",
+    "data/raw/tikhub/douyin/jinjiang_hotel/jinjiang-top10-caption-hashtag-all-comments-excluding-safety-20260617T140519Z-shard06",
+    "data/raw/tikhub/douyin/jinjiang_hotel/jinjiang-top10-caption-hashtag-all-comments-excluding-safety-20260617T140519Z-shard07",
+    "data/raw/tikhub/douyin/jinjiang_hotel/jinjiang-top10-caption-hashtag-all-comments-excluding-safety-20260617T140519Z-shard08",
+    "data/raw/tikhub/douyin/jinjiang_hotel/jinjiang-top10-jinjiang-only-video-metadata-unbounded-20260617T095743Z",
+    "data/raw/tikhub/douyin/jinjiang_hotel/jinjiang-top12-jian-comments-replies-live-20260620T072706Z",
+    "data/raw/tikhub/douyin/jinjiang_hotel/jinjiang-top12-jian-video-metadata-live-20260620T072428Z"
+  ],
+  "archived": [
+    {
+      "from": "docs/04-开发验证/jinjiang-douyin-comment-candidates-filtered-20260617T122141Z.md",
+      "to": "archive/jinjiang-historical-runs-20260623T022534Z/docs/04-开发验证/jinjiang-douyin-comment-candidates-filtered-20260617T122141Z.md",
+      "reason": "historical Jinjiang validation doc superseded by current scope/profile docs"
+    },
+    {
+      "from": "docs/04-开发验证/jinjiang-douyin-top10-caption-hashtag-all-comments-excluding-safety-20260617T140519Z.md",
+      "to": "archive/jinjiang-historical-runs-20260623T022534Z/docs/04-开发验证/jinjiang-douyin-top10-caption-hashtag-all-comments-excluding-safety-20260617T140519Z.md",
+      "reason": "historical Jinjiang validation doc superseded by current scope/profile docs"
+    },
+    {
+      "from": "docs/04-开发验证/jinjiang-douyin-top10-jinjiang-video-scope-20260617T0857Z.md",
+      "to": "archive/jinjiang-historical-runs-20260623T022534Z/docs/04-开发验证/jinjiang-douyin-top10-jinjiang-video-scope-20260617T0857Z.md",
+      "reason": "historical Jinjiang validation doc superseded by current scope/profile docs"
+    },
+    {
+      "from": "docs/04-开发验证/jinjiang-douyin-top10-jinjiang-video-scope-smoke-20260617T090247Z.md",
+      "to": "archive/jinjiang-historical-runs-20260623T022534Z/docs/04-开发验证/jinjiang-douyin-top10-jinjiang-video-scope-smoke-20260617T090247Z.md",
+      "reason": "historical Jinjiang validation doc superseded by current scope/profile docs"
+    },
+    {
+      "from": "docs/04-开发验证/jinjiang-douyin-top10-jinjiang-video-scope-unbounded-20260617T095743Z.md",
+      "to": "archive/jinjiang-historical-runs-20260623T022534Z/docs/04-开发验证/jinjiang-douyin-top10-jinjiang-video-scope-unbounded-20260617T095743Z.md",
+      "reason": "historical Jinjiang validation doc superseded by current scope/profile docs"
+    },
+    {
+      "from": "docs/04-开发验证/jinjiang-douyin-top10-tags-live-run-20260615T105143Z.md",
+      "to": "archive/jinjiang-historical-runs-20260623T022534Z/docs/04-开发验证/jinjiang-douyin-top10-tags-live-run-20260615T105143Z.md",
+      "reason": "historical Jinjiang validation doc superseded by current scope/profile docs"
+    },
+    {
+      "from": "docs/04-开发验证/jinjiang-douyin-video-metadata-validation-20260617T035106Z.md",
+      "to": "archive/jinjiang-historical-runs-20260623T022534Z/docs/04-开发验证/jinjiang-douyin-video-metadata-validation-20260617T035106Z.md",
+      "reason": "historical Jinjiang validation doc superseded by current scope/profile docs"
+    },
+    {
+      "from": "docs/04-开发验证/jinjiang-douyin-video-metadata-validation-20260617T035450Z.md",
+      "to": "archive/jinjiang-historical-runs-20260623T022534Z/docs/04-开发验证/jinjiang-douyin-video-metadata-validation-20260617T035450Z.md",
+      "reason": "historical Jinjiang validation doc superseded by current scope/profile docs"
+    },
+    {
+      "from": "data/processed/jinjiang_douyin/jinjiang-caption-hashtag-comments-excluding-binguan-adding-jian-derived-20260620T064712Z",
+      "to": "archive/jinjiang-historical-runs-20260623T022534Z/data/processed/jinjiang_douyin/jinjiang-caption-hashtag-comments-excluding-binguan-adding-jian-derived-20260620T064712Z",
+      "reason": "historical processed run not needed for current profile retry/repro boundary"
+    },
+    {
+      "from": "data/processed/jinjiang_douyin/jinjiang-caption-hashtag-comments-excluding-binguan-adding-jian-derived-20260620T073452Z",
+      "to": "archive/jinjiang-historical-runs-20260623T022534Z/data/processed/jinjiang_douyin/jinjiang-caption-hashtag-comments-excluding-binguan-adding-jian-derived-20260620T073452Z",
+      "reason": "historical processed run not needed for current profile retry/repro boundary"
+    },
+    {
+      "from": "data/processed/jinjiang_douyin/jinjiang-caption-hashtag-comments-excluding-binguan-adding-jian-derived-20260620T073556Z",
+      "to": "archive/jinjiang-historical-runs-20260623T022534Z/data/processed/jinjiang_douyin/jinjiang-caption-hashtag-comments-excluding-binguan-adding-jian-derived-20260620T073556Z",
+      "reason": "historical processed run not needed for current profile retry/repro boundary"
+    },
+    {
+      "from": "data/processed/jinjiang_douyin/jinjiang-caption-hashtag-comments-excluding-binguan-adding-jian-derived-20260620T073839Z",
+      "to": "archive/jinjiang-historical-runs-20260623T022534Z/data/processed/jinjiang_douyin/jinjiang-caption-hashtag-comments-excluding-binguan-adding-jian-derived-20260620T073839Z",
+      "reason": "historical processed run not needed for current profile retry/repro boundary"
+    },
+    {
+      "from": "data/processed/jinjiang_douyin/jinjiang-caption-hashtag-comments-excluding-binguan-adding-jian-derived-20260620T073839Z.zip",
+      "to": "archive/jinjiang-historical-runs-20260623T022534Z/data/processed/jinjiang_douyin/jinjiang-caption-hashtag-comments-excluding-binguan-adding-jian-derived-20260620T073839Z.zip",
+      "reason": "historical processed run not needed for current profile retry/repro boundary"
+    },
+    {
+      "from": "data/processed/jinjiang_douyin/jinjiang-caption-hashtag-comments-excluding-binguan-adding-jian-derived-20260621T025127Z.zip",
+      "to": "archive/jinjiang-historical-runs-20260623T022534Z/data/processed/jinjiang_douyin/jinjiang-caption-hashtag-comments-excluding-binguan-adding-jian-derived-20260621T025127Z.zip",
+      "reason": "historical processed run not needed for current profile retry/repro boundary"
+    },
+    {
+      "from": "data/processed/jinjiang_douyin/jinjiang-hashtag-only-20260612T103453Z",
+      "to": "archive/jinjiang-historical-runs-20260623T022534Z/data/processed/jinjiang_douyin/jinjiang-hashtag-only-20260612T103453Z",
+      "reason": "historical processed run not needed for current profile retry/repro boundary"
+    },
+    {
+      "from": "data/processed/jinjiang_douyin/jinjiang-hashtag-only-20260612T103453Z.zip",
+      "to": "archive/jinjiang-historical-runs-20260623T022534Z/data/processed/jinjiang_douyin/jinjiang-hashtag-only-20260612T103453Z.zip",
+      "reason": "historical processed run not needed for current profile retry/repro boundary"
+    },
+    {
+      "from": "data/processed/jinjiang_douyin/jinjiang-hashtag-page-1y-20260612T101307Z",
+      "to": "archive/jinjiang-historical-runs-20260623T022534Z/data/processed/jinjiang_douyin/jinjiang-hashtag-page-1y-20260612T101307Z",
+      "reason": "historical processed run not needed for current profile retry/repro boundary"
+    },
+    {
+      "from": "data/processed/jinjiang_douyin/jinjiang-hashtag-page-continued-1y-20260612T102249Z",
+      "to": "archive/jinjiang-historical-runs-20260623T022534Z/data/processed/jinjiang_douyin/jinjiang-hashtag-page-continued-1y-20260612T102249Z",
+      "reason": "historical processed run not needed for current profile retry/repro boundary"
+    },
+    {
+      "from": "data/processed/jinjiang_douyin/jinjiang-hashtag-page-fixed-1y-20260612T103453Z",
+      "to": "archive/jinjiang-historical-runs-20260623T022534Z/data/processed/jinjiang_douyin/jinjiang-hashtag-page-fixed-1y-20260612T103453Z",
+      "reason": "historical processed run not needed for current profile retry/repro boundary"
+    },
+    {
+      "from": "data/processed/jinjiang_douyin/jinjiang-hashtag-text-1y-20260612T093557Z",
+      "to": "archive/jinjiang-historical-runs-20260623T022534Z/data/processed/jinjiang_douyin/jinjiang-hashtag-text-1y-20260612T093557Z",
+      "reason": "historical processed run not needed for current profile retry/repro boundary"
+    },
+    {
+      "from": "data/processed/jinjiang_douyin/jinjiang-profile-expansion-derived-20260622T130900Z-smoke",
+      "to": "archive/jinjiang-historical-runs-20260623T022534Z/data/processed/jinjiang_douyin/jinjiang-profile-expansion-derived-20260622T130900Z-smoke",
+      "reason": "historical processed run not needed for current profile retry/repro boundary"
+    },
+    {
+      "from": "data/processed/jinjiang_douyin/jinjiang-profile-expansion-derived-20260622T131000Z",
+      "to": "archive/jinjiang-historical-runs-20260623T022534Z/data/processed/jinjiang_douyin/jinjiang-profile-expansion-derived-20260622T131000Z",
+      "reason": "historical processed run not needed for current profile retry/repro boundary"
+    },
+    {
+      "from": "data/processed/jinjiang_douyin/jinjiang-profile-expansion-derived-20260622T131200Z",
+      "to": "archive/jinjiang-historical-runs-20260623T022534Z/data/processed/jinjiang_douyin/jinjiang-profile-expansion-derived-20260622T131200Z",
+      "reason": "historical processed run not needed for current profile retry/repro boundary"
+    },
+    {
+      "from": "data/processed/jinjiang_douyin/jinjiang-profile-expansion-derived-20260622T131400Z",
+      "to": "archive/jinjiang-historical-runs-20260623T022534Z/data/processed/jinjiang_douyin/jinjiang-profile-expansion-derived-20260622T131400Z",
+      "reason": "historical processed run not needed for current profile retry/repro boundary"
+    },
+    {
+      "from": "data/processed/jinjiang_douyin/jinjiang-profile-expansion-derived-20260622T144037Z-audit",
+      "to": "archive/jinjiang-historical-runs-20260623T022534Z/data/processed/jinjiang_douyin/jinjiang-profile-expansion-derived-20260622T144037Z-audit",
+      "reason": "historical processed run not needed for current profile retry/repro boundary"
+    },
+    {
+      "from": "data/processed/jinjiang_douyin/jinjiang-profile-expansion-derived-20260622T144531Z-audit2",
+      "to": "archive/jinjiang-historical-runs-20260623T022534Z/data/processed/jinjiang_douyin/jinjiang-profile-expansion-derived-20260622T144531Z-audit2",
+      "reason": "historical processed run not needed for current profile retry/repro boundary"
+    },
+    {
+      "from": "data/processed/jinjiang_douyin/jinjiang-profile-expansion-derived-20260622T144800Z-smoke",
+      "to": "archive/jinjiang-historical-runs-20260623T022534Z/data/processed/jinjiang_douyin/jinjiang-profile-expansion-derived-20260622T144800Z-smoke",
+      "reason": "historical processed run not needed for current profile retry/repro boundary"
+    },
+    {
+      "from": "data/processed/jinjiang_douyin/jinjiang-profile-expansion-derived-20260622T144939Z",
+      "to": "archive/jinjiang-historical-runs-20260623T022534Z/data/processed/jinjiang_douyin/jinjiang-profile-expansion-derived-20260622T144939Z",
+      "reason": "historical processed run not needed for current profile retry/repro boundary"
+    },
+    {
+      "from": "data/processed/jinjiang_douyin/jinjiang-profile-expansion-derived-20260622T150657Z-audit-full-evidence",
+      "to": "archive/jinjiang-historical-runs-20260623T022534Z/data/processed/jinjiang_douyin/jinjiang-profile-expansion-derived-20260622T150657Z-audit-full-evidence",
+      "reason": "historical processed run not needed for current profile retry/repro boundary"
+    },
+    {
+      "from": "data/processed/jinjiang_douyin/jinjiang-profile-expansion-derived-20260622T150749Z-batch-smoke",
+      "to": "archive/jinjiang-historical-runs-20260623T022534Z/data/processed/jinjiang_douyin/jinjiang-profile-expansion-derived-20260622T150749Z-batch-smoke",
+      "reason": "historical processed run not needed for current profile retry/repro boundary"
+    },
+    {
+      "from": "data/processed/jinjiang_douyin/jinjiang-profile-expansion-derived-20260622T151010Z-batch-smoke2",
+      "to": "archive/jinjiang-historical-runs-20260623T022534Z/data/processed/jinjiang_douyin/jinjiang-profile-expansion-derived-20260622T151010Z-batch-smoke2",
+      "reason": "historical processed run not needed for current profile retry/repro boundary"
+    },
+    {
+      "from": "data/processed/jinjiang_douyin/jinjiang-related-unbounded-1y-20260612T133214Z",
+      "to": "archive/jinjiang-historical-runs-20260623T022534Z/data/processed/jinjiang_douyin/jinjiang-related-unbounded-1y-20260612T133214Z",
+      "reason": "historical processed run not needed for current profile retry/repro boundary"
+    },
+    {
+      "from": "data/processed/jinjiang_douyin/jinjiang-text-1mo-controlled-20260612T080555Z",
+      "to": "archive/jinjiang-historical-runs-20260623T022534Z/data/processed/jinjiang_douyin/jinjiang-text-1mo-controlled-20260612T080555Z",
+      "reason": "historical processed run not needed for current profile retry/repro boundary"
+    },
+    {
+      "from": "data/processed/jinjiang_douyin/jinjiang-text-1mo-filtered-20260612T081259Z",
+      "to": "archive/jinjiang-historical-runs-20260623T022534Z/data/processed/jinjiang_douyin/jinjiang-text-1mo-filtered-20260612T081259Z",
+      "reason": "historical processed run not needed for current profile retry/repro boundary"
+    },
+    {
+      "from": "data/processed/jinjiang_douyin/jinjiang-text-1y-20260612T084611Z",
+      "to": "archive/jinjiang-historical-runs-20260623T022534Z/data/processed/jinjiang_douyin/jinjiang-text-1y-20260612T084611Z",
+      "reason": "historical processed run not needed for current profile retry/repro boundary"
+    },
+    {
+      "from": "data/processed/jinjiang_douyin/jinjiang-top10-caption-hashtag-all-comments-excluding-safety-20260617T140519Z.zip",
+      "to": "archive/jinjiang-historical-runs-20260623T022534Z/data/processed/jinjiang_douyin/jinjiang-top10-caption-hashtag-all-comments-excluding-safety-20260617T140519Z.zip",
+      "reason": "historical processed run not needed for current profile retry/repro boundary"
+    },
+    {
+      "from": "data/processed/jinjiang_douyin/jinjiang-top10-jinjiang-comment-candidates-filtered-20260617T122141Z",
+      "to": "archive/jinjiang-historical-runs-20260623T022534Z/data/processed/jinjiang_douyin/jinjiang-top10-jinjiang-comment-candidates-filtered-20260617T122141Z",
+      "reason": "historical processed run not needed for current profile retry/repro boundary"
+    },
+    {
+      "from": "data/processed/jinjiang_douyin/jinjiang-top10-jinjiang-only-video-metadata-smoke-20260617T090247Z",
+      "to": "archive/jinjiang-historical-runs-20260623T022534Z/data/processed/jinjiang_douyin/jinjiang-top10-jinjiang-only-video-metadata-smoke-20260617T090247Z",
+      "reason": "historical processed run not needed for current profile retry/repro boundary"
+    },
+    {
+      "from": "data/processed/jinjiang_douyin/jinjiang-top10-live-smoke-20260615T105017Z",
+      "to": "archive/jinjiang-historical-runs-20260623T022534Z/data/processed/jinjiang_douyin/jinjiang-top10-live-smoke-20260615T105017Z",
+      "reason": "historical processed run not needed for current profile retry/repro boundary"
+    },
+    {
+      "from": "data/processed/jinjiang_douyin/jinjiang-top10-non-generic-video-metadata-1y-20260617T035106Z",
+      "to": "archive/jinjiang-historical-runs-20260623T022534Z/data/processed/jinjiang_douyin/jinjiang-top10-non-generic-video-metadata-1y-20260617T035106Z",
+      "reason": "historical processed run not needed for current profile retry/repro boundary"
+    },
+    {
+      "from": "data/processed/jinjiang_douyin/jinjiang-top10-non-generic-video-metadata-1y-20260617T035450Z",
+      "to": "archive/jinjiang-historical-runs-20260623T022534Z/data/processed/jinjiang_douyin/jinjiang-top10-non-generic-video-metadata-1y-20260617T035450Z",
+      "reason": "historical processed run not needed for current profile retry/repro boundary"
+    },
+    {
+      "from": "data/processed/jinjiang_douyin/jinjiang-top10-tags-unbounded-1y-20260615T105143Z",
+      "to": "archive/jinjiang-historical-runs-20260623T022534Z/data/processed/jinjiang_douyin/jinjiang-top10-tags-unbounded-1y-20260615T105143Z",
+      "reason": "historical processed run not needed for current profile retry/repro boundary"
+    },
+    {
+      "from": "data/processed/jinjiang_douyin/live-jinjiang-1mo-20260611T124841Z",
+      "to": "archive/jinjiang-historical-runs-20260623T022534Z/data/processed/jinjiang_douyin/live-jinjiang-1mo-20260611T124841Z",
+      "reason": "historical processed run not needed for current profile retry/repro boundary"
+    },
+    {
+      "from": "data/processed/jinjiang_douyin/live-jinjiang-20260611T123432Z",
+      "to": "archive/jinjiang-historical-runs-20260623T022534Z/data/processed/jinjiang_douyin/live-jinjiang-20260611T123432Z",
+      "reason": "historical processed run not needed for current profile retry/repro boundary"
+    },
+    {
+      "from": "data/processed/jinjiang_douyin/live-jinjiang-v2-20260611T144627Z",
+      "to": "archive/jinjiang-historical-runs-20260623T022534Z/data/processed/jinjiang_douyin/live-jinjiang-v2-20260611T144627Z",
+      "reason": "historical processed run not needed for current profile retry/repro boundary"
+    },
+    {
+      "from": "data/processed/jinjiang_douyin/live-jinjiang-v2-newkey-20260612T053509Z",
+      "to": "archive/jinjiang-historical-runs-20260623T022534Z/data/processed/jinjiang_douyin/live-jinjiang-v2-newkey-20260612T053509Z",
+      "reason": "historical processed run not needed for current profile retry/repro boundary"
+    },
+    {
+      "from": "data/raw/tikhub/douyin/jinjiang_hotel/jinjiang-hashtag-page-1y-20260612T101307Z",
+      "to": "archive/jinjiang-historical-runs-20260623T022534Z/data/raw/tikhub/douyin/jinjiang_hotel/jinjiang-hashtag-page-1y-20260612T101307Z",
+      "reason": "historical raw run not needed for current profile retry/repro boundary"
+    },
+    {
+      "from": "data/raw/tikhub/douyin/jinjiang_hotel/jinjiang-hashtag-page-continued-1y-20260612T102249Z",
+      "to": "archive/jinjiang-historical-runs-20260623T022534Z/data/raw/tikhub/douyin/jinjiang_hotel/jinjiang-hashtag-page-continued-1y-20260612T102249Z",
+      "reason": "historical raw run not needed for current profile retry/repro boundary"
+    },
+    {
+      "from": "data/raw/tikhub/douyin/jinjiang_hotel/jinjiang-hashtag-page-fixed-1y-20260612T103453Z",
+      "to": "archive/jinjiang-historical-runs-20260623T022534Z/data/raw/tikhub/douyin/jinjiang_hotel/jinjiang-hashtag-page-fixed-1y-20260612T103453Z",
+      "reason": "historical raw run not needed for current profile retry/repro boundary"
+    },
+    {
+      "from": "data/raw/tikhub/douyin/jinjiang_hotel/jinjiang-hashtag-page-mix-1y-20260612T103105Z",
+      "to": "archive/jinjiang-historical-runs-20260623T022534Z/data/raw/tikhub/douyin/jinjiang_hotel/jinjiang-hashtag-page-mix-1y-20260612T103105Z",
+      "reason": "historical raw run not needed for current profile retry/repro boundary"
+    },
+    {
+      "from": "data/raw/tikhub/douyin/jinjiang_hotel/jinjiang-hashtag-text-1y-20260612T093557Z",
+      "to": "archive/jinjiang-historical-runs-20260623T022534Z/data/raw/tikhub/douyin/jinjiang_hotel/jinjiang-hashtag-text-1y-20260612T093557Z",
+      "reason": "historical raw run not needed for current profile retry/repro boundary"
+    },
+    {
+      "from": "data/raw/tikhub/douyin/jinjiang_hotel/jinjiang-profile-expansion-derived-20260622T130900Z-smoke",
+      "to": "archive/jinjiang-historical-runs-20260623T022534Z/data/raw/tikhub/douyin/jinjiang_hotel/jinjiang-profile-expansion-derived-20260622T130900Z-smoke",
+      "reason": "historical raw run not needed for current profile retry/repro boundary"
+    },
+    {
+      "from": "data/raw/tikhub/douyin/jinjiang_hotel/jinjiang-profile-expansion-derived-20260622T131000Z",
+      "to": "archive/jinjiang-historical-runs-20260623T022534Z/data/raw/tikhub/douyin/jinjiang_hotel/jinjiang-profile-expansion-derived-20260622T131000Z",
+      "reason": "historical raw run not needed for current profile retry/repro boundary"
+    },
+    {
+      "from": "data/raw/tikhub/douyin/jinjiang_hotel/jinjiang-profile-expansion-derived-20260622T131200Z",
+      "to": "archive/jinjiang-historical-runs-20260623T022534Z/data/raw/tikhub/douyin/jinjiang_hotel/jinjiang-profile-expansion-derived-20260622T131200Z",
+      "reason": "historical raw run not needed for current profile retry/repro boundary"
+    },
+    {
+      "from": "data/raw/tikhub/douyin/jinjiang_hotel/jinjiang-profile-expansion-derived-20260622T131400Z",
+      "to": "archive/jinjiang-historical-runs-20260623T022534Z/data/raw/tikhub/douyin/jinjiang_hotel/jinjiang-profile-expansion-derived-20260622T131400Z",
+      "reason": "historical raw run not needed for current profile retry/repro boundary"
+    },
+    {
+      "from": "data/raw/tikhub/douyin/jinjiang_hotel/jinjiang-profile-expansion-derived-20260622T144037Z-audit",
+      "to": "archive/jinjiang-historical-runs-20260623T022534Z/data/raw/tikhub/douyin/jinjiang_hotel/jinjiang-profile-expansion-derived-20260622T144037Z-audit",
+      "reason": "historical raw run not needed for current profile retry/repro boundary"
+    },
+    {
+      "from": "data/raw/tikhub/douyin/jinjiang_hotel/jinjiang-profile-expansion-derived-20260622T144531Z-audit2",
+      "to": "archive/jinjiang-historical-runs-20260623T022534Z/data/raw/tikhub/douyin/jinjiang_hotel/jinjiang-profile-expansion-derived-20260622T144531Z-audit2",
+      "reason": "historical raw run not needed for current profile retry/repro boundary"
+    },
+    {
+      "from": "data/raw/tikhub/douyin/jinjiang_hotel/jinjiang-profile-expansion-derived-20260622T144800Z-smoke",
+      "to": "archive/jinjiang-historical-runs-20260623T022534Z/data/raw/tikhub/douyin/jinjiang_hotel/jinjiang-profile-expansion-derived-20260622T144800Z-smoke",
+      "reason": "historical raw run not needed for current profile retry/repro boundary"
+    },
+    {
+      "from": "data/raw/tikhub/douyin/jinjiang_hotel/jinjiang-profile-expansion-derived-20260622T144939Z",
+      "to": "archive/jinjiang-historical-runs-20260623T022534Z/data/raw/tikhub/douyin/jinjiang_hotel/jinjiang-profile-expansion-derived-20260622T144939Z",
+      "reason": "historical raw run not needed for current profile retry/repro boundary"
+    },
+    {
+      "from": "data/raw/tikhub/douyin/jinjiang_hotel/jinjiang-profile-expansion-derived-20260622T150657Z-audit-full-evidence",
+      "to": "archive/jinjiang-historical-runs-20260623T022534Z/data/raw/tikhub/douyin/jinjiang_hotel/jinjiang-profile-expansion-derived-20260622T150657Z-audit-full-evidence",
+      "reason": "historical raw run not needed for current profile retry/repro boundary"
+    },
+    {
+      "from": "data/raw/tikhub/douyin/jinjiang_hotel/jinjiang-profile-expansion-derived-20260622T150749Z-batch-smoke",
+      "to": "archive/jinjiang-historical-runs-20260623T022534Z/data/raw/tikhub/douyin/jinjiang_hotel/jinjiang-profile-expansion-derived-20260622T150749Z-batch-smoke",
+      "reason": "historical raw run not needed for current profile retry/repro boundary"
+    },
+    {
+      "from": "data/raw/tikhub/douyin/jinjiang_hotel/jinjiang-profile-expansion-derived-20260622T151010Z-batch-smoke2",
+      "to": "archive/jinjiang-historical-runs-20260623T022534Z/data/raw/tikhub/douyin/jinjiang_hotel/jinjiang-profile-expansion-derived-20260622T151010Z-batch-smoke2",
+      "reason": "historical raw run not needed for current profile retry/repro boundary"
+    },
+    {
+      "from": "data/raw/tikhub/douyin/jinjiang_hotel/jinjiang-related-challenges-1y-20260612T120336Z",
+      "to": "archive/jinjiang-historical-runs-20260623T022534Z/data/raw/tikhub/douyin/jinjiang_hotel/jinjiang-related-challenges-1y-20260612T120336Z",
+      "reason": "historical raw run not needed for current profile retry/repro boundary"
+    },
+    {
+      "from": "data/raw/tikhub/douyin/jinjiang_hotel/jinjiang-related-unbounded-1y-20260612T133214Z",
+      "to": "archive/jinjiang-historical-runs-20260623T022534Z/data/raw/tikhub/douyin/jinjiang_hotel/jinjiang-related-unbounded-1y-20260612T133214Z",
+      "reason": "historical raw run not needed for current profile retry/repro boundary"
+    },
+    {
+      "from": "data/raw/tikhub/douyin/jinjiang_hotel/jinjiang-text-1mo-20260612T075547Z",
+      "to": "archive/jinjiang-historical-runs-20260623T022534Z/data/raw/tikhub/douyin/jinjiang_hotel/jinjiang-text-1mo-20260612T075547Z",
+      "reason": "historical raw run not needed for current profile retry/repro boundary"
+    },
+    {
+      "from": "data/raw/tikhub/douyin/jinjiang_hotel/jinjiang-text-1mo-controlled-20260612T080555Z",
+      "to": "archive/jinjiang-historical-runs-20260623T022534Z/data/raw/tikhub/douyin/jinjiang_hotel/jinjiang-text-1mo-controlled-20260612T080555Z",
+      "reason": "historical raw run not needed for current profile retry/repro boundary"
+    },
+    {
+      "from": "data/raw/tikhub/douyin/jinjiang_hotel/jinjiang-text-1mo-filtered-20260612T081259Z",
+      "to": "archive/jinjiang-historical-runs-20260623T022534Z/data/raw/tikhub/douyin/jinjiang_hotel/jinjiang-text-1mo-filtered-20260612T081259Z",
+      "reason": "historical raw run not needed for current profile retry/repro boundary"
+    },
+    {
+      "from": "data/raw/tikhub/douyin/jinjiang_hotel/jinjiang-text-1y-20260612T084611Z",
+      "to": "archive/jinjiang-historical-runs-20260623T022534Z/data/raw/tikhub/douyin/jinjiang_hotel/jinjiang-text-1y-20260612T084611Z",
+      "reason": "historical raw run not needed for current profile retry/repro boundary"
+    },
+    {
+      "from": "data/raw/tikhub/douyin/jinjiang_hotel/jinjiang-top10-jinjiang-comment-candidates-filtered-20260617T122141Z",
+      "to": "archive/jinjiang-historical-runs-20260623T022534Z/data/raw/tikhub/douyin/jinjiang_hotel/jinjiang-top10-jinjiang-comment-candidates-filtered-20260617T122141Z",
+      "reason": "historical raw run not needed for current profile retry/repro boundary"
+    },
+    {
+      "from": "data/raw/tikhub/douyin/jinjiang_hotel/jinjiang-top10-jinjiang-only-video-metadata-smoke-20260617T090247Z",
+      "to": "archive/jinjiang-historical-runs-20260623T022534Z/data/raw/tikhub/douyin/jinjiang_hotel/jinjiang-top10-jinjiang-only-video-metadata-smoke-20260617T090247Z",
+      "reason": "historical raw run not needed for current profile retry/repro boundary"
+    },
+    {
+      "from": "data/raw/tikhub/douyin/jinjiang_hotel/jinjiang-top10-live-smoke-20260615T105017Z",
+      "to": "archive/jinjiang-historical-runs-20260623T022534Z/data/raw/tikhub/douyin/jinjiang_hotel/jinjiang-top10-live-smoke-20260615T105017Z",
+      "reason": "historical raw run not needed for current profile retry/repro boundary"
+    },
+    {
+      "from": "data/raw/tikhub/douyin/jinjiang_hotel/jinjiang-top10-non-generic-video-metadata-1y-20260617T035106Z",
+      "to": "archive/jinjiang-historical-runs-20260623T022534Z/data/raw/tikhub/douyin/jinjiang_hotel/jinjiang-top10-non-generic-video-metadata-1y-20260617T035106Z",
+      "reason": "historical raw run not needed for current profile retry/repro boundary"
+    },
+    {
+      "from": "data/raw/tikhub/douyin/jinjiang_hotel/jinjiang-top10-non-generic-video-metadata-1y-20260617T035450Z",
+      "to": "archive/jinjiang-historical-runs-20260623T022534Z/data/raw/tikhub/douyin/jinjiang_hotel/jinjiang-top10-non-generic-video-metadata-1y-20260617T035450Z",
+      "reason": "historical raw run not needed for current profile retry/repro boundary"
+    },
+    {
+      "from": "data/raw/tikhub/douyin/jinjiang_hotel/jinjiang-top10-tags-unbounded-1y-20260615T105143Z",
+      "to": "archive/jinjiang-historical-runs-20260623T022534Z/data/raw/tikhub/douyin/jinjiang_hotel/jinjiang-top10-tags-unbounded-1y-20260615T105143Z",
+      "reason": "historical raw run not needed for current profile retry/repro boundary"
+    },
+    {
+      "from": "data/raw/tikhub/douyin/jinjiang_hotel/live-jinjiang-1mo-20260611T124841Z",
+      "to": "archive/jinjiang-historical-runs-20260623T022534Z/data/raw/tikhub/douyin/jinjiang_hotel/live-jinjiang-1mo-20260611T124841Z",
+      "reason": "historical raw run not needed for current profile retry/repro boundary"
+    },
+    {
+      "from": "data/raw/tikhub/douyin/jinjiang_hotel/live-jinjiang-20260611T123432Z",
+      "to": "archive/jinjiang-historical-runs-20260623T022534Z/data/raw/tikhub/douyin/jinjiang_hotel/live-jinjiang-20260611T123432Z",
+      "reason": "historical raw run not needed for current profile retry/repro boundary"
+    },
+    {
+      "from": "data/raw/tikhub/douyin/jinjiang_hotel/live-jinjiang-v2-20260611T144627Z",
+      "to": "archive/jinjiang-historical-runs-20260623T022534Z/data/raw/tikhub/douyin/jinjiang_hotel/live-jinjiang-v2-20260611T144627Z",
+      "reason": "historical raw run not needed for current profile retry/repro boundary"
+    },
+    {
+      "from": "data/raw/tikhub/douyin/jinjiang_hotel/live-jinjiang-v2-newkey-20260612T053509Z",
+      "to": "archive/jinjiang-historical-runs-20260623T022534Z/data/raw/tikhub/douyin/jinjiang_hotel/live-jinjiang-v2-newkey-20260612T053509Z",
+      "reason": "historical raw run not needed for current profile retry/repro boundary"
+    }
+  ],
+  "missing": []
+}

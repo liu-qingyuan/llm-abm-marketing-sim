@@ -38,3 +38,10 @@ _bmad/
 .ralphy/
 .ralphy-worktrees/
 .ralphy-sandboxes/
+
+# Local archive payloads from reversible data/doc cleanup. Keep only top-level lightweight manifests/docs.
+archive/**
+!archive/
+!archive/*/
+!archive/*/README.md
+!archive/*/archive_manifest.json
