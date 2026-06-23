@@ -393,7 +393,13 @@ class SecUidEvidenceIndex:
 
 def is_quota_error(message: str) -> bool:
     text = message.lower()
-    return any(token in text for token in ["quota", "rate limit", "too many", "402", "429", "insufficient balance"])
+    http_status = re.search(r"\bhttp\s+(\d{3})\b", text)
+    if http_status:
+        return http_status.group(1) in {"402", "429"}
+    response_code = re.search(r'"code"\s*:\s*(\d{3})', text)
+    if response_code:
+        return response_code.group(1) in {"402", "429"}
+    return any(token in text for token in ["quota", "rate limit", "too many", "insufficient balance"])
 
 
 def classify_source_sec(user_id: str, sec: str) -> tuple[str, str]:

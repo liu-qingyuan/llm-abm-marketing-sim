@@ -500,6 +500,17 @@ def test_batch_failure_falls_back_to_single_handler_per_user(tmp_path: Path) -> 
     assert statuses["u1"]["status"] == "success"
 
 
+def test_http_400_batch_error_with_request_id_digits_is_not_quota() -> None:
+    message = (
+        'TikHub request failed for fetch_batch_user_profile_v2: HTTP 400: '
+        '{"detail":{"code":400,"request_id":"89c75839-2a46-4829-b860-be69fa4b23ec",'
+        '"message":"Request failed. Please retry."}}'
+    )
+
+    assert profiles.is_quota_error(message) is False
+    assert profiles.is_quota_error('TikHub request failed: HTTP 402: {"detail":{"code":402,"message":"Insufficient balance"}}') is True
+
+
 def test_batch_failure_splits_before_single_handler_fallback(tmp_path: Path) -> None:
     src = make_source(tmp_path, sec="sec_u1", creator_sec="sec_creator")
     targets, _audit, _historical = profiles.build_profile_targets(src, tmp_path / "processed", tmp_path / "raw")
