@@ -7,7 +7,7 @@
 - selection manifest: `configs/jinjiang_top10_non_generic_video_metadata_selection.json`
 - 验证阶段: `challenge_index,video_metadata`
 - comments/profiles: 显式 skipped / disabled，本 run 未抓评论、回复或用户 profile。
-- 安全说明: 报告只写聚合统计；未打印 API key/token/cookie/Authorization，未列出昵称、bio、profile 明细。
+- 安全说明: 报告只写聚合统计；未打印 API 凭证、会话凭证或鉴权头，未列出用户个人资料文本或 profile 明细。
 
 ## Scope / tag 选择
 

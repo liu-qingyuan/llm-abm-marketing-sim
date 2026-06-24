@@ -9,7 +9,7 @@ docs/
 ├── 01-项目概览/      # 项目是什么、能演示什么、与 Obsidian 设计如何对齐
 ├── 02-架构设计/      # 核心架构、仿真流程、框架取舍
 ├── 03-使用指南/      # 安装运行、数据导入、Provider/LLM 配置
-├── 04-开发验证/      # 开发计划、组件清单、源码结构、测试策略
+├── 04-开发验证/      # 当前验证入口、最终数据集审计、研究标准、测试策略
 └── 99-参考资料/      # 自动扫描报告等低频参考资料
 ```
 
@@ -76,13 +76,15 @@ python -m py_compile $(find src tests -name '*.py' -print)
 
 - 当前数据收集架构：[`02-架构设计/douyin-data-collection-architecture.md`](02-架构设计/douyin-data-collection-architecture.md)
 - 数据目录语义：[`../data/README.md`](../data/README.md)
-- 当前 metadata 验证报告：[`04-开发验证/jinjiang-douyin-video-metadata-validation-20260617T035450Z.md`](04-开发验证/jinjiang-douyin-video-metadata-validation-20260617T035450Z.md)
-- 后续 AI Agent 应先确认 `collection_report.json` 中的 `stage_status` / `stage_counts`，不要只看 CSV 行数。
+- 当前最终数据集审计：[`04-开发验证/jinjiang-douyin-final-dataset-20260624.md`](04-开发验证/jinjiang-douyin-final-dataset-20260624.md)
+- 当前最终数据集清理记录：[`04-开发验证/jinjiang-douyin-final-dataset-cleanup-20260624.md`](04-开发验证/jinjiang-douyin-final-dataset-cleanup-20260624.md)
+- metadata-only 历史基线：[`04-开发验证/jinjiang-douyin-video-metadata-validation-20260617T035450Z.md`](04-开发验证/jinjiang-douyin-video-metadata-validation-20260617T035450Z.md)
+- 后续 AI Agent 应优先看最终数据集审计；如需追溯阶段化采集，再查看 metadata-only 基线与 Git 历史。
 
 ## 核心约定
 
-- 默认路径必须离线、确定性、无 API key、无外部网络依赖。
+- 默认路径必须离线、确定性、无 API 凭证、无外部网络依赖。
 - LLM 是可替换的决策函数，不是仿真调度器。
 - ABM 循环负责时间、状态、扩散和可复现性。
 - 所有输入、输出、事件和 Provider 响应都通过 Pydantic/安全序列化边界约束。
-- 不提交真实私密数据、Token、Cookie、Header、API key、原始 Prompt 或原始 Provider 响应。
+- 不提交真实私密数据、API 凭证、会话凭证、鉴权头、原始 Prompt 或原始 Provider 响应。

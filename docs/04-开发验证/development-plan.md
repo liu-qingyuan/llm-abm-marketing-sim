@@ -44,7 +44,7 @@
 
 **影响：**
 
-- 默认测试和样例运行不需要 API key。
+- 默认测试和样例运行不需要 API 凭证。
 - LLM Provider 集成是 opt-in 能力。
 - 事件和指标 schema 优先于复杂报告和可视化。
 
@@ -161,7 +161,7 @@
 
 验收：
 
-- 默认测试不需要 API key。
+- 默认测试不需要 API 凭证。
 - Mocked LLM 测试覆盖 schema、fallback/cache 行为。
 - live-provider smoke opt-in，默认跳过/关闭。
 

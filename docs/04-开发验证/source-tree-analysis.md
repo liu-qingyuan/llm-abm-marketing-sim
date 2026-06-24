@@ -154,7 +154,7 @@ npx playwright test
 
 ## 开发注意事项
 
-- 默认验证保持离线、无 API key。
+- 默认验证保持离线、无 API 凭证。
 - Provider-backed 调用只放在可选依赖和显式 manual gate 后。
 - 不要把 LangChain/LangGraph/GenericAgent 移入核心仿真循环。
 - 生成 run outputs 是可丢弃产物，除非明确设计为 fixture。

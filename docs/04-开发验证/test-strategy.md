@@ -44,7 +44,7 @@ LLM_ABM_RUN_LIVE_LLM=1 pytest -q -m live_llm -rs
 
 ## 测试编写原则
 
-- 默认测试不得需要 API key、网络、真实 Provider 或私密数据。
+- 默认测试不得需要 API 凭证、网络、真实 Provider 或私密数据。
 - 与随机有关的行为必须通过 seed 固定。
 - Provider 测试优先使用 mock/provider-shaped payload；真实调用只放在 `live_llm` marker 后。
 - 输出安全测试应覆盖 token、cookie、authorization、raw prompt、raw provider response、credential path 等敏感词和字段。
