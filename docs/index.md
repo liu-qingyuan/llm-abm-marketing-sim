@@ -38,8 +38,8 @@ docs/
 ### 想继续开发或验收
 
 1. [TikHub / Douyin 数据收集架构](02-架构设计/douyin-data-collection-architecture.md)
-2. [锦江酒店抖音社交网络与绿色营销仿真标准](04-开发验证/jinjiang-douyin-research-standard.md)
-2. [开发计划](04-开发验证/development-plan.md)
+2. [锦江酒店 Douyin 最终数据集审计](04-开发验证/jinjiang-douyin-final-dataset-20260624.md)
+3. [开发计划](04-开发验证/development-plan.md)
 3. [组件清单](04-开发验证/component-inventory.md)
 4. [源码结构分析](04-开发验证/source-tree-analysis.md)
 5. [测试策略](04-开发验证/test-strategy.md)
@@ -78,8 +78,7 @@ python -m py_compile $(find src tests -name '*.py' -print)
 - 数据目录语义：[`../data/README.md`](../data/README.md)
 - 当前最终数据集审计：[`04-开发验证/jinjiang-douyin-final-dataset-20260624.md`](04-开发验证/jinjiang-douyin-final-dataset-20260624.md)
 - 当前最终数据集清理记录：[`04-开发验证/jinjiang-douyin-final-dataset-cleanup-20260624.md`](04-开发验证/jinjiang-douyin-final-dataset-cleanup-20260624.md)
-- metadata-only 历史基线：[`04-开发验证/jinjiang-douyin-video-metadata-validation-20260617T035450Z.md`](04-开发验证/jinjiang-douyin-video-metadata-validation-20260617T035450Z.md)
-- 后续 AI Agent 应优先看最终数据集审计；如需追溯阶段化采集，再查看 metadata-only 基线与 Git 历史。
+- 后续 AI Agent 应优先看最终数据集审计；如需追溯阶段化采集或历史口径，再查看 Git 历史。
 
 ## 核心约定
 

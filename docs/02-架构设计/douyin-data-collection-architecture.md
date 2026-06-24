@@ -297,28 +297,30 @@ sequenceDiagram
 
 ## 当前验证基线
 
-最新 metadata-only 验证 run：
+当前应优先引用最终整合数据集，而不是旧的过程 run：
 
-- run_id: `jinjiang-top10-non-generic-video-metadata-1y-20260617T035450Z`
-- processed: `data/processed/jinjiang_douyin/jinjiang-top10-non-generic-video-metadata-1y-20260617T035450Z/`
-- report: `docs/04-开发验证/jinjiang-douyin-video-metadata-validation-20260617T035450Z.md`
+- final run_id: `jinjiang-final-caption-hashtag-comments-profiles-20260624T092200Z`
+- processed: `data/processed/jinjiang_douyin/jinjiang-final-caption-hashtag-comments-profiles-20260624T092200Z/`
+- audit: `docs/04-开发验证/jinjiang-douyin-final-dataset-20260624.md`
+- cleanup: `docs/04-开发验证/jinjiang-douyin-final-dataset-cleanup-20260624.md`
 
 已验证：
 
 | 指标 | 值 |
 |---|---:|
-| `indexed_video_ids` | 18 |
-| `videos.csv` rows | 8 |
-| `videos_with_caption` | 8 |
-| `videos_with_hashtags` | 8 |
-| `comments_collected` | false |
-| `profiles_collected` | false |
+| `videos.csv` rows | 4,212 |
+| `comments.csv` rows | 50,640 |
+| `edges.csv` rows | 47,624 |
+| `users.csv` unique user_id | 36,400 |
+| `profiles.csv` unique user_id | 36,400 |
+| `abm_user_profiles.csv` unique user_id | 36,400 |
+| `failed_profiles` | 0 |
 
 ## 后续 AI Agent 接手顺序
 
 1. 先读本文件，确认阶段模型。
 2. 再读 `data/README.md`，理解 raw/processed/run 目录语义。
-3. 如果任务涉及锦江酒店研究口径，读 `docs/04-开发验证/jinjiang-douyin-research-standard.md`。
-4. 如果任务涉及现有 top10 tags，读 `docs/04-开发验证/jinjiang-douyin-existing-topic-distribution.md` 和 `configs/jinjiang_top10_non_generic_video_metadata_selection.json`。
+3. 如果任务涉及锦江酒店最终数据集，读 `docs/04-开发验证/jinjiang-douyin-final-dataset-20260624.md`。
+4. 如果任务涉及本地清理边界，读 `docs/04-开发验证/jinjiang-douyin-final-dataset-cleanup-20260624.md`。
 5. 如果任务涉及实现细节，再读 `src/llm_abm_sim/data_sources/` 与对应测试。
-6. 除非用户明确要求并满足 live gate，不要继续大规模抓评论。
+6. 除非用户明确要求并满足 live gate，不要继续大规模抓评论或 profile。

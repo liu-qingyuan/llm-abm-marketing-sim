@@ -1,14 +1,11 @@
 # 04-开发验证
 
-本目录现在只保留“当前仍需要阅读/引用”的开发验证入口。历史过程报告已经从当前树清理；如需追溯，可通过 Git 历史查看。
+本目录只保留当前仍需要阅读/引用的开发验证入口。锦江 Douyin 相关文档已收敛到“最终数据集”两份文件；历史口径、metadata、profile retry、旧 live run 等过程报告不再放在当前树中，如需追溯请用 Git 历史。
 
-## 当前必读
+## 当前锦江 Douyin 数据集入口
 
 - [锦江酒店 Douyin 最终数据集审计（2026-06-24）](jinjiang-douyin-final-dataset-20260624.md)：当前最终数据集入口，整合话题/评论/视频/边表与 36,400 个完整 profile。
 - [锦江酒店 Douyin 最终数据集清理记录（2026-06-24）](jinjiang-douyin-final-dataset-cleanup-20260624.md)：本地旧 run 和中间数据清理记录，只含聚合统计。
-- [锦江酒店抖音社交网络与绿色营销仿真标准](jinjiang-douyin-research-standard.md)：研究口径、网络构建、仿真实验和写作标准。
-- [既有话题分布](jinjiang-douyin-existing-topic-distribution.md)：top10 tag/challenge scope 来源与话题口径。
-- [非泛化 top tag 视频 metadata 验证基线](jinjiang-douyin-video-metadata-validation-20260617T035450Z.md)：metadata-only 历史基线，保留给后续 Agent 对照阶段化采集口径。
 
 ## 工程验证入口
 
@@ -24,4 +21,4 @@
 
 ## 已清理内容
 
-为避免后续阅读混乱，本目录已删除旧式 live run、profile retry 过程稿、top10 smoke/unbounded 过程报告、重复 metadata 验证报告，以及大体量 caption/hashtag 过程报告。最终口径以本目录的最终数据集审计和清理记录为准。
+为避免后续阅读混乱，本目录已删除非最终版 Jinjiang Douyin 过程文档。当前口径以最终数据集审计和清理记录为准。
