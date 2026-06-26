@@ -37,6 +37,13 @@
 - comments/all_comments/edges 行数保持源话题数据集不变
 - scope exclusions absent: `7486704870804770107`, `7486891790218399034`, `#锦江宾馆`, `#临空锦江宾馆`
 
+## Profile 指标方法更新（2026-06-26）
+
+- method: `log1p_p95_equal_weight_v1`
+- 已将 `observed_activity_level` / `observed_influence` 从固定阈值启发式改为 `ln(x+1) + P95` 分位数归一化。
+- P95 thresholds: video_count=775.000000, comment_reply_count=3.000000, follower_count=7851.000000, comment_like_sum=3.000000, edge_degree=5.000000
+- 参考依据：清博 DCI 的发布/互动/覆盖维度与 `ln(X+1)` 标准化、飞瓜指数客观互动指标、旅游短视频 engagement 文献、复合指标等权重原则。
+
 ## 隐私边界
 
 本文档只记录聚合计数、路径和 lineage，不展示用户个人资料文本明细或 TikHub raw payload 明细；未读取或打印 `.env` / API 凭证 / 鉴权头 / 会话凭证。

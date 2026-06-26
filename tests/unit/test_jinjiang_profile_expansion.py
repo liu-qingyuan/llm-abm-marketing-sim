@@ -839,3 +839,53 @@ def test_report_includes_aggregate_cost_audit_and_quota_state(tmp_path: Path) ->
     assert report["recommended_resume_mode"] == "handler"
     assert "--profile-api handler" in report["next_resume_command"]
     assert {row["user_id"]: row for row in read_csv(processed_run / "profile_target_users.csv")}["creator"]["profile_fetch_status"] == "quota_stopped"
+
+
+def test_profile_index_uses_log1p_p95_equal_weight() -> None:
+    signals = [
+        {"video_count": 0, "comment_reply_count": 0, "follower_count": 0, "comment_like_sum": 0, "edge_degree": 0},
+        {"video_count": 100, "comment_reply_count": 20, "follower_count": 1000, "comment_like_sum": 50, "edge_degree": 5},
+        {"video_count": 200, "comment_reply_count": 40, "follower_count": 10000, "comment_like_sum": 100, "edge_degree": 10},
+    ]
+    thresholds = profiles.compute_profile_index_thresholds(signals)
+    assert thresholds["video_count"] > 100
+    score = profiles.compute_profile_index_scores(signals[1], thresholds)
+    assert 0.0 < score["activity_publish_score"] < 1.0
+    assert 0.0 < score["activity_comment_score"] < 1.0
+    assert score["observed_activity_level"] == pytest.approx((score["activity_publish_score"] + score["activity_comment_score"]) / 2)
+    assert score["observed_influence"] == pytest.approx(
+        (score["influence_coverage_score"] + score["influence_recognition_score"] + score["influence_network_score"]) / 3
+    )
+
+
+def test_build_abm_row_records_reference_based_profile_index() -> None:
+    target = {
+        "user_id": "u1",
+        "comment_count": "10",
+        "reply_count": "5",
+        "edge_degree": "3",
+        "comment_like_sum": "20",
+        "user_role": "observed",
+    }
+    user = {"user_id": "u1", "follower_count": "100", "following_count": "5", "video_count": "12"}
+    thresholds = {
+        "video_count": 24,
+        "comment_reply_count": 30,
+        "follower_count": 1000,
+        "comment_like_sum": 100,
+        "edge_degree": 10,
+    }
+    row = profiles.build_abm_row(target, user, "live_current", "success", profile_index_thresholds=thresholds)
+    assert row["activity_level"] == row["observed_activity_level"]
+    for field in [
+        "activity_publish_score",
+        "activity_comment_score",
+        "influence_coverage_score",
+        "influence_recognition_score",
+        "influence_network_score",
+    ]:
+        assert 0.0 <= row[field] <= 1.0
+    provenance = row["attribute_provenance"]
+    assert provenance["profile_index_method"] == profiles.PROFILE_INDEX_METHOD
+    assert provenance["profile_index_thresholds"] == thresholds
+    assert "Qingbo DCI" in provenance["profile_index_reference_basis"][0]

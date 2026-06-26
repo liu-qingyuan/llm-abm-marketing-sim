@@ -64,6 +64,11 @@ ABM_COLUMNS = [
     "observed_activity_level",
     "observed_influence",
     "interest_tags",
+    "activity_publish_score",
+    "activity_comment_score",
+    "influence_coverage_score",
+    "influence_recognition_score",
+    "influence_network_score",
     "brand_attitude",
     "activity_level",
     "like_tendency",
@@ -227,6 +232,88 @@ def bounded_log_ratio(value: int, denominator_power: float = 7.0) -> float:
     if value <= 0:
         return 0.0
     return max(0.0, min(1.0, math.log10(value + 1) / denominator_power))
+
+
+PROFILE_INDEX_METHOD = "log1p_p95_equal_weight_v1"
+PROFILE_INDEX_REFERENCE_BASIS = [
+    "Qingbo DCI: publish/interaction/coverage dimensions and ln(X+1) count normalization",
+    "Feigua index: followers plus likes/comments/shares/works as observable communication signals",
+    "Tourism short-video/social-media engagement: likes/comments/collects/shares as engagement behavior",
+    "Composite-indicator practice: transparent equal weighting when no empirical weights are validated",
+]
+PROFILE_INDEX_COMPONENT_FIELDS = [
+    "activity_publish_score",
+    "activity_comment_score",
+    "influence_coverage_score",
+    "influence_recognition_score",
+    "influence_network_score",
+]
+
+
+def percentile(values: Iterable[int], q: float) -> float:
+    clean = sorted(max(0, int(value)) for value in values)
+    if not clean:
+        return 0.0
+    if q <= 0:
+        return float(clean[0])
+    if q >= 1:
+        return float(clean[-1])
+    position = (len(clean) - 1) * q
+    lower = math.floor(position)
+    upper = math.ceil(position)
+    if lower == upper:
+        return float(clean[int(position)])
+    fraction = position - lower
+    return float(clean[lower] * (1 - fraction) + clean[upper] * fraction)
+
+
+def log_p95_score(value: int, p95: float) -> float:
+    if value <= 0 or p95 <= 0:
+        return 0.0
+    return max(0.0, min(1.0, math.log1p(value) / math.log1p(p95)))
+
+
+def profile_index_signals(target: Mapping[str, Any], user: Mapping[str, Any]) -> dict[str, int]:
+    comment_count = parse_int(target.get("comment_count"))
+    reply_count = parse_int(target.get("reply_count"))
+    return {
+        "video_count": parse_int(user.get("video_count")),
+        "comment_reply_count": comment_count + reply_count,
+        "follower_count": parse_int(user.get("follower_count")),
+        "comment_like_sum": parse_int(target.get("comment_like_sum")),
+        "edge_degree": parse_int(target.get("edge_degree")),
+    }
+
+
+def compute_profile_index_thresholds(signal_rows: Iterable[Mapping[str, int]]) -> dict[str, float]:
+    buckets: dict[str, list[int]] = {
+        "video_count": [],
+        "comment_reply_count": [],
+        "follower_count": [],
+        "comment_like_sum": [],
+        "edge_degree": [],
+    }
+    for row in signal_rows:
+        for key in buckets:
+            buckets[key].append(max(0, int(row.get(key, 0))))
+    return {key: percentile(values, 0.95) for key, values in buckets.items()}
+
+
+def compute_profile_index_scores(signals: Mapping[str, int], thresholds: Mapping[str, float]) -> dict[str, float]:
+    publish = log_p95_score(int(signals.get("video_count", 0)), float(thresholds.get("video_count", 0.0)))
+    comment = log_p95_score(int(signals.get("comment_reply_count", 0)), float(thresholds.get("comment_reply_count", 0.0)))
+    coverage = log_p95_score(int(signals.get("follower_count", 0)), float(thresholds.get("follower_count", 0.0)))
+    recognition = log_p95_score(int(signals.get("comment_like_sum", 0)), float(thresholds.get("comment_like_sum", 0.0)))
+    network = log_p95_score(int(signals.get("edge_degree", 0)), float(thresholds.get("edge_degree", 0.0)))
+    return {
+        "activity_publish_score": publish,
+        "activity_comment_score": comment,
+        "influence_coverage_score": coverage,
+        "influence_recognition_score": recognition,
+        "influence_network_score": network,
+        "observed_activity_level": (publish + comment) / 2,
+        "observed_influence": (coverage + recognition + network) / 3,
+    }
 
 
 def split_ids(value: str) -> list[str]:
@@ -1459,15 +1546,21 @@ def merge_profile_user(target: Mapping[str, Any], live: dict[str, Any] | None, h
     return base, source
 
 
-def build_abm_row(target: Mapping[str, Any], user: Mapping[str, Any], profile_source: str, fetch_status: str) -> dict[str, Any]:
-    comment_count = parse_int(target.get("comment_count"))
-    reply_count = parse_int(target.get("reply_count"))
-    edge_degree = parse_int(target.get("edge_degree"))
-    comment_like_sum = parse_int(target.get("comment_like_sum"))
+def build_abm_row(
+    target: Mapping[str, Any],
+    user: Mapping[str, Any],
+    profile_source: str,
+    fetch_status: str,
+    *,
+    profile_index_thresholds: Mapping[str, float] | None = None,
+) -> dict[str, Any]:
     follower_count = parse_int(user.get("follower_count"))
     video_count = parse_int(user.get("video_count"))
-    observed_activity = max(parse_float(user.get("observed_activity_level"), 0.0), bounded_ratio(video_count, 100), bounded_ratio(comment_count + reply_count, 20))
-    observed_influence = max(parse_float(user.get("observed_influence"), 0.0), bounded_log_ratio(follower_count), bounded_log_ratio(edge_degree + comment_like_sum, 4.0))
+    signals = profile_index_signals(target, user)
+    thresholds = profile_index_thresholds or compute_profile_index_thresholds([signals])
+    index_scores = compute_profile_index_scores(signals, thresholds)
+    observed_activity = index_scores["observed_activity_level"]
+    observed_influence = index_scores["observed_influence"]
     verified = str(user.get("verified_type") or "")
     role = str(target.get("user_role") or "observed")
     if verified and verified not in {"0", "False", "false", ""}:
@@ -1480,9 +1573,12 @@ def build_abm_row(target: Mapping[str, Any], user: Mapping[str, Any], profile_so
         user_type = role
     interest_tags = sorted(set(target.get("_interest_tags") or []))
     provenance = {
+        "profile_index_method": PROFILE_INDEX_METHOD,
+        "profile_index_reference_basis": PROFILE_INDEX_REFERENCE_BASIS,
+        "profile_index_thresholds": {key: round(float(value), 6) for key, value in thresholds.items()},
         "observed_api_fields": ["follower_count", "following_count", "video_count", "verified_type"] if profile_source != "none" else [],
         "interaction_observed_fields": ["comment_count", "reply_count", "edge_degree", "comment_like_sum"],
-        "derived_fields": ["observed_activity_level", "observed_influence", "interest_tags", "user_type"],
+        "derived_fields": ["observed_activity_level", "observed_influence", *PROFILE_INDEX_COMPONENT_FIELDS, "interest_tags", "user_type"],
         "defaulted_future_model_fields": ["brand_attitude", "like_tendency", "comment_tendency", "share_tendency"],
     }
     return {
@@ -1495,6 +1591,11 @@ def build_abm_row(target: Mapping[str, Any], user: Mapping[str, Any], profile_so
         "observed_activity_level": round(observed_activity, 6),
         "observed_influence": round(observed_influence, 6),
         "interest_tags": interest_tags,
+        "activity_publish_score": round(index_scores["activity_publish_score"], 6),
+        "activity_comment_score": round(index_scores["activity_comment_score"], 6),
+        "influence_coverage_score": round(index_scores["influence_coverage_score"], 6),
+        "influence_recognition_score": round(index_scores["influence_recognition_score"], 6),
+        "influence_network_score": round(index_scores["influence_network_score"], 6),
         "brand_attitude": 0.0,
         "activity_level": round(observed_activity, 6),
         "like_tendency": 0.5,
@@ -1513,7 +1614,7 @@ def build_processed_outputs(
     target_rows: list[dict[str, Any]],
     historical: Mapping[str, HistoricalProfile],
     stats: CollectionStats,
-) -> dict[str, int]:
+) -> dict[str, Any]:
     source_users_by_id = {row.get("user_id", ""): row for row in read_csv(source_run / "users.csv")}
     live_profiles = load_current_live_profiles(raw_dir)
     statuses = load_statuses(raw_dir)
@@ -1523,6 +1624,8 @@ def build_processed_outputs(
     failed_rows: list[dict[str, Any]] = []
     missing_rows: list[dict[str, Any]] = []
     target_public_rows: list[dict[str, Any]] = []
+    prepared_rows: list[tuple[dict[str, Any], dict[str, Any], str, str]] = []
+    signal_rows: list[dict[str, int]] = []
     for target in target_rows:
         uid = str(target["user_id"])
         status = statuses.get(uid, {})
@@ -1539,12 +1642,16 @@ def build_processed_outputs(
         hist = historical.get(uid)
         user, source = merge_profile_user(target, live, hist, source_users_by_id.get(uid, {}))
         fetch_status = str(target.get("profile_fetch_status") or "skipped")
+        prepared_rows.append((target, user, source, fetch_status))
+        signal_rows.append(profile_index_signals(target, user))
+    profile_index_thresholds = compute_profile_index_thresholds(signal_rows)
+    for target, user, source, fetch_status in prepared_rows:
         user_rows.append(user)
         if fetch_status in {"failed", "quota_stopped"}:
             failed_rows.append({k: target.get(k, "") for k in PROFILE_FIELDNAMES})
         if target.get("sec_user_id_confidence") in {"missing", "placeholder"}:
             missing_rows.append({k: target.get(k, "") for k in PROFILE_FIELDNAMES})
-        abm = build_abm_row(target, user, source, fetch_status)
+        abm = build_abm_row(target, user, source, fetch_status, profile_index_thresholds=profile_index_thresholds)
         abm_rows.append(abm)
         if source != "none" and fetch_status in {"success", "skipped", "failed", "quota_stopped"}:
             profile_rows.append({field: abm.get(field, "") for field in PROFILE_COLUMNS})
@@ -1576,6 +1683,8 @@ def build_processed_outputs(
         "missing_sec_uid_users": len(missing_rows),
         "live_profiles": len(live_profiles),
         "historical_profiles_used": len([r for r in users_out if str(r.get("profile_source", "")).startswith("historical")]),
+        "profile_index_method": PROFILE_INDEX_METHOD,
+        "profile_index_thresholds": {key: round(float(value), 6) for key, value in profile_index_thresholds.items()},
     }
 
 
