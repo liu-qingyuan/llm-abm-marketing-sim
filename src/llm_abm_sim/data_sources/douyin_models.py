@@ -47,6 +47,16 @@ USER_COLUMNS = [
     "bio",
     "observed_activity_level",
     "observed_influence",
+    "activity_score",
+    "activity_video_score",
+    "activity_comment_score",
+    "activity_reply_score",
+    "global_influence_score",
+    "local_influence_score",
+    "local_network_score",
+    "local_recognition_score",
+    "profile_index_method",
+    "profile_index_variant",
 ]
 EDGE_COLUMNS = [
     "source",
@@ -80,11 +90,20 @@ PROFILE_COLUMNS = [
     "observed_influence",
     "value_proposition",
     "interest_tags",
+    "activity_score",
+    "activity_video_score",
     "activity_publish_score",
     "activity_comment_score",
+    "activity_reply_score",
+    "global_influence_score",
+    "local_influence_score",
+    "local_network_score",
+    "local_recognition_score",
     "influence_coverage_score",
     "influence_recognition_score",
     "influence_network_score",
+    "profile_index_method",
+    "profile_index_variant",
     "brand_attitude",
     "activity_level",
     "like_tendency",
@@ -150,6 +169,16 @@ class DouyinUserRecord(BaseModel):
     bio: str = ""
     observed_activity_level: float = Field(default=0.5, ge=0.0, le=1.0)
     observed_influence: float = Field(default=0.0, ge=0.0, le=1.0)
+    activity_score: float = Field(default=0.5, ge=0.0, le=1.0)
+    activity_video_score: float = Field(default=0.0, ge=0.0, le=1.0)
+    activity_comment_score: float = Field(default=0.0, ge=0.0, le=1.0)
+    activity_reply_score: float = Field(default=0.0, ge=0.0, le=1.0)
+    global_influence_score: float = Field(default=0.0, ge=0.0, le=1.0)
+    local_influence_score: float = Field(default=0.0, ge=0.0, le=1.0)
+    local_network_score: float = Field(default=0.0, ge=0.0, le=1.0)
+    local_recognition_score: float = Field(default=0.0, ge=0.0, le=1.0)
+    profile_index_method: str = ""
+    profile_index_variant: str = "base"
 
 
 class DouyinEdgeRecord(BaseModel):
@@ -182,11 +211,20 @@ class DouyinProfileRecord(BaseModel):
     observed_influence: float = Field(default=0.0, ge=0.0, le=1.0)
     value_proposition: str = ""
     interest_tags: list[str] = Field(default_factory=list)
+    activity_score: float = Field(default=0.5, ge=0.0, le=1.0)
+    activity_video_score: float = Field(default=0.0, ge=0.0, le=1.0)
     activity_publish_score: float = Field(default=0.0, ge=0.0, le=1.0)
     activity_comment_score: float = Field(default=0.0, ge=0.0, le=1.0)
+    activity_reply_score: float = Field(default=0.0, ge=0.0, le=1.0)
+    global_influence_score: float = Field(default=0.0, ge=0.0, le=1.0)
+    local_influence_score: float = Field(default=0.0, ge=0.0, le=1.0)
+    local_network_score: float = Field(default=0.0, ge=0.0, le=1.0)
+    local_recognition_score: float = Field(default=0.0, ge=0.0, le=1.0)
     influence_coverage_score: float = Field(default=0.0, ge=0.0, le=1.0)
     influence_recognition_score: float = Field(default=0.0, ge=0.0, le=1.0)
     influence_network_score: float = Field(default=0.0, ge=0.0, le=1.0)
+    profile_index_method: str = ""
+    profile_index_variant: str = "base"
     brand_attitude: float = Field(default=0.0, ge=-1.0, le=1.0)
     activity_level: float = Field(default=0.5, ge=0.0, le=1.0)
     like_tendency: float = Field(default=0.5, ge=0.0, le=1.0)
@@ -195,7 +233,9 @@ class DouyinProfileRecord(BaseModel):
 
     @model_validator(mode="after")
     def _activity_level_follows_observed(self) -> DouyinProfileRecord:
+        self.observed_activity_level = self.activity_score if self.activity_score != 0.5 else self.observed_activity_level
         self.activity_level = self.observed_activity_level
+        self.activity_score = self.observed_activity_level
         return self
 
 

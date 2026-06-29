@@ -37,12 +37,63 @@
 - comments/all_comments/edges 行数保持源话题数据集不变
 - scope exclusions absent: `7486704870804770107`, `7486891790218399034`, `#锦江宾馆`, `#临空锦江宾馆`
 
-## Profile 指标方法更新（2026-06-26）
+## Profile 指标方法更新（2026-06-29）
 
-- method: `log1p_p95_equal_weight_v1`
-- 已将 `observed_activity_level` / `observed_influence` 从固定阈值启发式改为 `ln(x+1) + P95` 分位数归一化。
-- P95 thresholds: video_count=775.000000, comment_reply_count=3.000000, follower_count=7851.000000, comment_like_sum=3.000000, edge_degree=5.000000
-- 参考依据：清博 DCI 的发布/互动/覆盖维度与 `ln(X+1)` 标准化、飞瓜指数客观互动指标、旅游短视频 engagement 文献、复合指标等权重原则。
+- method: `log1p_p95_reference_weighted_v2`
+- variant: `base`
+- offline recompute only: `true`
+- robustness report: `data/processed/jinjiang_douyin/jinjiang-final-caption-hashtag-comments-profiles-20260624T092200Z/profile_index_robustness_report.md`
+- JSON report: `data/processed/jinjiang_douyin/jinjiang-final-caption-hashtag-comments-profiles-20260624T092200Z/profile_index_robustness_report.json`
+
+本次将旧的等权 `observed_activity_level` / `observed_influence` 解释口径，升级为三类可观测代理变量：
+
+| 指标 | 字段 | 解释边界 |
+|---|---|---|
+| Activity | `activity_score` | 用户在本研究语境中的内容生产、评论、回复活跃度代理 |
+| Global Influence | `global_influence_score` | 基于 `follower_count` 的平台潜在覆盖力代理 |
+| Local Influence | `local_influence_score` | 基于评论网络连接与评论获赞的锦江语境局部影响力代理 |
+
+归一化方式：
+
+```text
+Norm(x) = min(1, ln(1 + x) / ln(1 + P95))
+```
+
+P95 thresholds:
+
+| signal | P95 |
+|---|---:|
+| video_count | 775 |
+| comment_count | 0 |
+| reply_count | 3 |
+| follower_count | 7851 |
+| edge_degree | 5 |
+| comment_like_sum | 3 |
+
+基准公式：
+
+```text
+activity_score =
+  0.25 * Norm(video_count)
++ 0.45 * Norm(comment_count)
++ 0.30 * Norm(reply_count)
+
+global_influence_score = Norm(follower_count)
+
+local_influence_score =
+  0.60 * Norm(edge_degree)
++ 0.40 * Norm(comment_like_sum)
+```
+
+兼容字段：
+
+- `observed_activity_level = activity_score`
+- `activity_level = activity_score`
+- `observed_influence = 0.5 * global_influence_score + 0.5 * local_influence_score`
+
+参考依据只用于构建 proxy 逻辑，不表示复刻清博 DCI、飞瓜指数或新榜指数。由于本数据缺少播放量、曝光量、完整分享量、收藏量、新增粉丝数和完整视频点赞等后台字段，本文档只将这些字段称为 observable proxy，不将其表述为真实心理特征或真实因果影响力。
+
+稳健性检验已输出聚合报告，覆盖 Activity 权重扰动、Local Influence 权重扰动、P90/P95/P99 与 rank percentile 归一化扰动，并报告 Spearman rank correlation、Top10% overlap、Top20% overlap 与分布统计。判定口径为 Spearman >= 0.90 且 Top10% overlap >= 80%。
 
 ## 隐私边界
 

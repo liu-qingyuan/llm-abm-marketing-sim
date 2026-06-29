@@ -25,8 +25,24 @@ def test_models_have_safe_defaults_and_profile_columns() -> None:
     assert user.observed_activity_level == 0.5
     profile = DouyinProfileRecord(user_id="u1", observed_activity_level=0.8, value_proposition="extra")
     assert profile.activity_level == 0.8
+    assert profile.activity_score == 0.8
     assert profile.brand_attitude == 0.0
     assert "value_proposition" in PROFILE_COLUMNS
+    assert "activity_score" in PROFILE_COLUMNS
+    assert "global_influence_score" in PROFILE_COLUMNS
+    assert "local_influence_score" in PROFILE_COLUMNS
+    assert "profile_index_method" in PROFILE_COLUMNS
+
+
+def test_profile_activity_score_keeps_legacy_activity_fields_compatible() -> None:
+    profile = DouyinProfileRecord(
+        user_id="u1",
+        activity_score=0.42,
+        global_influence_score=0.2,
+        local_influence_score=0.6,
+    )
+    assert profile.observed_activity_level == 0.42
+    assert profile.activity_level == 0.42
 
 
 def test_comment_level_and_edge_weight_validation() -> None:

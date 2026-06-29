@@ -8,7 +8,7 @@ import math
 import re
 import sys
 from collections import Counter, defaultdict
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -64,11 +64,20 @@ ABM_COLUMNS = [
     "observed_activity_level",
     "observed_influence",
     "interest_tags",
+    "activity_score",
+    "activity_video_score",
     "activity_publish_score",
     "activity_comment_score",
+    "activity_reply_score",
+    "global_influence_score",
+    "local_influence_score",
+    "local_network_score",
+    "local_recognition_score",
     "influence_coverage_score",
     "influence_recognition_score",
     "influence_network_score",
+    "profile_index_method",
+    "profile_index_variant",
     "brand_attitude",
     "activity_level",
     "like_tendency",
@@ -234,20 +243,50 @@ def bounded_log_ratio(value: int, denominator_power: float = 7.0) -> float:
     return max(0.0, min(1.0, math.log10(value + 1) / denominator_power))
 
 
-PROFILE_INDEX_METHOD = "log1p_p95_equal_weight_v1"
+PROFILE_INDEX_METHOD = "log1p_p95_reference_weighted_v2"
+PROFILE_INDEX_VARIANT = "base"
 PROFILE_INDEX_REFERENCE_BASIS = [
     "Qingbo DCI: publish/interaction/coverage dimensions and ln(X+1) count normalization",
-    "Feigua index: followers plus likes/comments/shares/works as observable communication signals",
-    "Tourism short-video/social-media engagement: likes/comments/collects/shares as engagement behavior",
-    "Composite-indicator practice: transparent equal weighting when no empirical weights are validated",
+    "Feigua and Newrank index logic: follower_count is treated only as platform coverage/popularity proxy when full playback/share/fan-growth fields are unavailable",
+    "Tourism social-media engagement literature: comments require deeper participation than likes, supporting higher comment/reply activity weights",
+    "Social network analysis: edge degree is a local network-position proxy; comment_like_sum is local recognition, not account-wide influence",
+    "OECD/JRC composite-indicator practice: transparent weighting, log transformation, and sensitivity analysis for researcher-defined composite proxies",
 ]
 PROFILE_INDEX_COMPONENT_FIELDS = [
+    "activity_score",
+    "activity_video_score",
     "activity_publish_score",
     "activity_comment_score",
+    "activity_reply_score",
+    "global_influence_score",
+    "local_influence_score",
+    "local_network_score",
+    "local_recognition_score",
     "influence_coverage_score",
     "influence_recognition_score",
     "influence_network_score",
 ]
+PROFILE_INDEX_SIGNAL_FIELDS = [
+    "video_count",
+    "comment_count",
+    "reply_count",
+    "follower_count",
+    "edge_degree",
+    "comment_like_sum",
+]
+ACTIVITY_WEIGHT_VARIANTS: dict[str, tuple[float, float, float]] = {
+    "activity_equal": (1 / 3, 1 / 3, 1 / 3),
+    "activity_base": (0.25, 0.45, 0.30),
+    "activity_30_40_30": (0.30, 0.40, 0.30),
+    "activity_20_50_30": (0.20, 0.50, 0.30),
+    "activity_20_40_40": (0.20, 0.40, 0.40),
+}
+LOCAL_INFLUENCE_WEIGHT_VARIANTS: dict[str, tuple[float, float]] = {
+    "local_equal": (0.50, 0.50),
+    "local_base": (0.60, 0.40),
+    "local_network_heavy": (0.70, 0.30),
+}
+NORMALIZATION_VARIANTS = ["log1p_p90", "log1p_p95", "log1p_p99", "rank_percentile"]
 
 
 def percentile(values: Iterable[int], q: float) -> float:
@@ -273,12 +312,42 @@ def log_p95_score(value: int, p95: float) -> float:
     return max(0.0, min(1.0, math.log1p(value) / math.log1p(p95)))
 
 
+def log_percentile_score(value: int, threshold: float) -> float:
+    if value <= 0 or threshold <= 0:
+        return 0.0
+    return max(0.0, min(1.0, math.log1p(value) / math.log1p(threshold)))
+
+
+def rank_percentile_scores(values: Iterable[int]) -> list[float]:
+    clean = [max(0, int(value)) for value in values]
+    if not clean:
+        return []
+    if len(clean) == 1:
+        return [1.0 if clean[0] > 0 else 0.0]
+    sorted_values = sorted(clean)
+    rank_sums: dict[int, float] = defaultdict(float)
+    rank_counts: Counter[int] = Counter()
+    for one_based_rank, value in enumerate(sorted_values, start=1):
+        rank_sums[value] += one_based_rank
+        rank_counts[value] += 1
+    denominator = len(clean) - 1
+    scores: list[float] = []
+    for value in clean:
+        if value <= 0:
+            scores.append(0.0)
+            continue
+        average_rank = rank_sums[value] / rank_counts[value]
+        scores.append(max(0.0, min(1.0, (average_rank - 1) / denominator)))
+    return scores
+
+
 def profile_index_signals(target: Mapping[str, Any], user: Mapping[str, Any]) -> dict[str, int]:
     comment_count = parse_int(target.get("comment_count"))
     reply_count = parse_int(target.get("reply_count"))
     return {
         "video_count": parse_int(user.get("video_count")),
-        "comment_reply_count": comment_count + reply_count,
+        "comment_count": comment_count,
+        "reply_count": reply_count,
         "follower_count": parse_int(user.get("follower_count")),
         "comment_like_sum": parse_int(target.get("comment_like_sum")),
         "edge_degree": parse_int(target.get("edge_degree")),
@@ -286,13 +355,7 @@ def profile_index_signals(target: Mapping[str, Any], user: Mapping[str, Any]) ->
 
 
 def compute_profile_index_thresholds(signal_rows: Iterable[Mapping[str, int]]) -> dict[str, float]:
-    buckets: dict[str, list[int]] = {
-        "video_count": [],
-        "comment_reply_count": [],
-        "follower_count": [],
-        "comment_like_sum": [],
-        "edge_degree": [],
-    }
+    buckets: dict[str, list[int]] = {key: [] for key in PROFILE_INDEX_SIGNAL_FIELDS}
     for row in signal_rows:
         for key in buckets:
             buckets[key].append(max(0, int(row.get(key, 0))))
@@ -300,19 +363,328 @@ def compute_profile_index_thresholds(signal_rows: Iterable[Mapping[str, int]]) -
 
 
 def compute_profile_index_scores(signals: Mapping[str, int], thresholds: Mapping[str, float]) -> dict[str, float]:
-    publish = log_p95_score(int(signals.get("video_count", 0)), float(thresholds.get("video_count", 0.0)))
-    comment = log_p95_score(int(signals.get("comment_reply_count", 0)), float(thresholds.get("comment_reply_count", 0.0)))
+    video = log_p95_score(int(signals.get("video_count", 0)), float(thresholds.get("video_count", 0.0)))
+    comment = log_p95_score(int(signals.get("comment_count", 0)), float(thresholds.get("comment_count", 0.0)))
+    reply = log_p95_score(int(signals.get("reply_count", 0)), float(thresholds.get("reply_count", 0.0)))
     coverage = log_p95_score(int(signals.get("follower_count", 0)), float(thresholds.get("follower_count", 0.0)))
     recognition = log_p95_score(int(signals.get("comment_like_sum", 0)), float(thresholds.get("comment_like_sum", 0.0)))
     network = log_p95_score(int(signals.get("edge_degree", 0)), float(thresholds.get("edge_degree", 0.0)))
+    activity = 0.25 * video + 0.45 * comment + 0.30 * reply
+    local = 0.60 * network + 0.40 * recognition
+    observed_influence = 0.5 * coverage + 0.5 * local
     return {
-        "activity_publish_score": publish,
+        "activity_score": activity,
+        "activity_video_score": video,
+        "activity_publish_score": video,
         "activity_comment_score": comment,
+        "activity_reply_score": reply,
+        "global_influence_score": coverage,
+        "local_influence_score": local,
+        "local_network_score": network,
+        "local_recognition_score": recognition,
         "influence_coverage_score": coverage,
         "influence_recognition_score": recognition,
         "influence_network_score": network,
-        "observed_activity_level": (publish + comment) / 2,
-        "observed_influence": (coverage + recognition + network) / 3,
+        "observed_activity_level": activity,
+        "observed_influence": observed_influence,
+    }
+
+
+def normalization_scores(signal_rows: Sequence[Mapping[str, int]], method: str) -> dict[str, list[float]]:
+    values_by_field = {
+        field: [max(0, int(row.get(field, 0))) for row in signal_rows]
+        for field in PROFILE_INDEX_SIGNAL_FIELDS
+    }
+    if method == "rank_percentile":
+        return {field: rank_percentile_scores(values) for field, values in values_by_field.items()}
+    quantile_by_method = {"log1p_p90": 0.90, "log1p_p95": 0.95, "log1p_p99": 0.99}
+    if method not in quantile_by_method:
+        raise ValueError(f"unknown normalization method: {method}")
+    normalized: dict[str, list[float]] = {}
+    for field, values in values_by_field.items():
+        threshold = percentile(values, quantile_by_method[method])
+        normalized[field] = [log_percentile_score(value, threshold) for value in values]
+    return normalized
+
+
+def composite_profile_scores(
+    normalized: Mapping[str, list[float]],
+    activity_weights: tuple[float, float, float] = ACTIVITY_WEIGHT_VARIANTS["activity_base"],
+    local_weights: tuple[float, float] = LOCAL_INFLUENCE_WEIGHT_VARIANTS["local_base"],
+) -> dict[str, list[float]]:
+    video_scores = normalized["video_count"]
+    comment_scores = normalized["comment_count"]
+    reply_scores = normalized["reply_count"]
+    follower_scores = normalized["follower_count"]
+    network_scores = normalized["edge_degree"]
+    recognition_scores = normalized["comment_like_sum"]
+    activity = [
+        activity_weights[0] * video + activity_weights[1] * comment + activity_weights[2] * reply
+        for video, comment, reply in zip(video_scores, comment_scores, reply_scores, strict=True)
+    ]
+    local = [
+        local_weights[0] * network + local_weights[1] * recognition
+        for network, recognition in zip(network_scores, recognition_scores, strict=True)
+    ]
+    return {
+        "activity_score": activity,
+        "global_influence_score": list(follower_scores),
+        "local_influence_score": local,
+    }
+
+
+def spearman_correlation(left: list[float], right: list[float]) -> float:
+    if len(left) != len(right):
+        raise ValueError("spearman inputs must have equal length")
+    if not left:
+        return 0.0
+    left_ranks = rank_percentile_scores([int(round(value * 1_000_000)) for value in left])
+    right_ranks = rank_percentile_scores([int(round(value * 1_000_000)) for value in right])
+    mean_left = sum(left_ranks) / len(left_ranks)
+    mean_right = sum(right_ranks) / len(right_ranks)
+    numerator = sum((lval - mean_left) * (rval - mean_right) for lval, rval in zip(left_ranks, right_ranks, strict=True))
+    left_var = sum((value - mean_left) ** 2 for value in left_ranks)
+    right_var = sum((value - mean_right) ** 2 for value in right_ranks)
+    if left_var <= 0 or right_var <= 0:
+        return 1.0 if left == right else 0.0
+    return numerator / math.sqrt(left_var * right_var)
+
+
+def top_overlap(left: list[float], right: list[float], fraction: float) -> float:
+    if len(left) != len(right):
+        raise ValueError("top-overlap inputs must have equal length")
+    if not left:
+        return 0.0
+    k = max(1, math.ceil(len(left) * fraction))
+    left_top = {idx for idx, _value in sorted(enumerate(left), key=lambda item: (-item[1], item[0]))[:k]}
+    right_top = {idx for idx, _value in sorted(enumerate(right), key=lambda item: (-item[1], item[0]))[:k]}
+    return len(left_top & right_top) / k
+
+
+def distribution_stats(values: list[float]) -> dict[str, float]:
+    if not values:
+        return {key: 0.0 for key in ["mean", "variance", "min", "max", "p25", "p50", "p75", "p90", "p95", "p99"]}
+    mean = sum(values) / len(values)
+    variance = sum((value - mean) ** 2 for value in values) / len(values)
+    scaled = sorted(int(round(value * 1_000_000)) for value in values)
+    return {
+        "mean": mean,
+        "variance": variance,
+        "min": min(values),
+        "max": max(values),
+        "p25": percentile(scaled, 0.25) / 1_000_000,
+        "p50": percentile(scaled, 0.50) / 1_000_000,
+        "p75": percentile(scaled, 0.75) / 1_000_000,
+        "p90": percentile(scaled, 0.90) / 1_000_000,
+        "p95": percentile(scaled, 0.95) / 1_000_000,
+        "p99": percentile(scaled, 0.99) / 1_000_000,
+    }
+
+
+def profile_index_robustness_report(signal_rows: Sequence[Mapping[str, int]]) -> dict[str, Any]:
+    base_normalized = normalization_scores(signal_rows, "log1p_p95")
+    base_scores = composite_profile_scores(base_normalized)
+    variants: dict[str, dict[str, Any]] = {}
+    for method in NORMALIZATION_VARIANTS:
+        normalized = normalization_scores(signal_rows, method)
+        variants[f"normalization:{method}"] = {"method": method, "scores": composite_profile_scores(normalized)}
+    for name, weights in ACTIVITY_WEIGHT_VARIANTS.items():
+        variants[f"activity_weights:{name}"] = {
+            "activity_weights": weights,
+            "scores": composite_profile_scores(base_normalized, activity_weights=weights),
+        }
+    for name, weights in LOCAL_INFLUENCE_WEIGHT_VARIANTS.items():
+        variants[f"local_weights:{name}"] = {
+            "local_weights": weights,
+            "scores": composite_profile_scores(base_normalized, local_weights=weights),
+        }
+    metrics: dict[str, Any] = {}
+    for score_name, base_values in base_scores.items():
+        comparisons: dict[str, Any] = {}
+        for variant_name, variant in variants.items():
+            variant_scores = cast(dict[str, list[float]], variant["scores"])
+            variant_values = variant_scores[score_name]
+            rho = spearman_correlation(base_values, variant_values)
+            top10 = top_overlap(base_values, variant_values, 0.10)
+            top20 = top_overlap(base_values, variant_values, 0.20)
+            comparisons[variant_name] = {
+                "spearman": round(rho, 6),
+                "top10_overlap": round(top10, 6),
+                "top20_overlap": round(top20, 6),
+                "robust": rho >= 0.90 and top10 >= 0.80,
+                "distribution": {key: round(value, 6) for key, value in distribution_stats(variant_values).items()},
+            }
+        metrics[score_name] = {
+            "base_distribution": {key: round(value, 6) for key, value in distribution_stats(base_values).items()},
+            "comparisons": comparisons,
+            "robust": all(item["robust"] for item in comparisons.values()),
+        }
+    thresholds_by_quantile = {
+        label: {
+            field: round(percentile([max(0, int(row.get(field, 0))) for row in signal_rows], quantile), 6)
+            for field in PROFILE_INDEX_SIGNAL_FIELDS
+        }
+        for label, quantile in {"p90": 0.90, "p95": 0.95, "p99": 0.99}.items()
+    }
+    return {
+        "created_at": now_iso(),
+        "profile_index_method": PROFILE_INDEX_METHOD,
+        "profile_index_variant": PROFILE_INDEX_VARIANT,
+        "proxy_semantics": "observable proxy only; not true psychological traits, true causal influence, or a direct DCI/Feigua/Newrank clone",
+        "user_count": len(signal_rows),
+        "thresholds": thresholds_by_quantile,
+        "robust_rule": {"spearman_min": 0.90, "top10_overlap_min": 0.80},
+        "metrics": metrics,
+    }
+
+
+def write_profile_index_robustness_report(processed_dir: Path, report: Mapping[str, Any]) -> None:
+    json_path = processed_dir / "profile_index_robustness_report.json"
+    md_path = processed_dir / "profile_index_robustness_report.md"
+    json_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+    lines = [
+        "# Profile index robustness report",
+        "",
+        f"- method: `{report.get('profile_index_method')}`",
+        f"- base variant: `{report.get('profile_index_variant')}`",
+        f"- users: {report.get('user_count')}",
+        f"- semantics: {report.get('proxy_semantics')}",
+        "- robust rule: Spearman >= 0.90 and Top10% overlap >= 80%",
+        "",
+        "## Signal thresholds",
+        "",
+        "| quantile | video_count | comment_count | reply_count | follower_count | edge_degree | comment_like_sum |",
+        "|---|---:|---:|---:|---:|---:|---:|",
+    ]
+    raw_thresholds: Any = report.get("thresholds")
+    thresholds: Mapping[str, Any] = raw_thresholds if isinstance(raw_thresholds, dict) else {}
+    for label in ["p90", "p95", "p99"]:
+        raw_row: Any = thresholds.get(label, {})
+        row: Mapping[str, Any] = raw_row if isinstance(raw_row, dict) else {}
+        lines.append(
+            "| {label} | {video_count} | {comment_count} | {reply_count} | {follower_count} | {edge_degree} | {comment_like_sum} |".format(
+                label=label,
+                video_count=row.get("video_count", 0),
+                comment_count=row.get("comment_count", 0),
+                reply_count=row.get("reply_count", 0),
+                follower_count=row.get("follower_count", 0),
+                edge_degree=row.get("edge_degree", 0),
+                comment_like_sum=row.get("comment_like_sum", 0),
+            )
+        )
+    lines.extend(["", "## Robustness summary", "", "| score | robust comparisons | total comparisons | base mean | base variance |", "|---|---:|---:|---:|---:|"])
+    raw_metrics: Any = report.get("metrics")
+    metrics: Mapping[str, Any] = raw_metrics if isinstance(raw_metrics, dict) else {}
+    for score_name, metric in sorted(metrics.items()):
+        if not isinstance(metric, dict):
+            continue
+        raw_comparisons: Any = metric.get("comparisons")
+        comparisons: Mapping[str, Any] = raw_comparisons if isinstance(raw_comparisons, dict) else {}
+        robust_count = sum(1 for value in comparisons.values() if isinstance(value, dict) and value.get("robust") is True)
+        raw_base_distribution: Any = metric.get("base_distribution")
+        base_distribution: Mapping[str, Any] = raw_base_distribution if isinstance(raw_base_distribution, dict) else {}
+        lines.append(
+            f"| {score_name} | {robust_count} | {len(comparisons)} | {base_distribution.get('mean', 0)} | {base_distribution.get('variance', 0)} |"
+        )
+    lines.extend(
+        [
+            "",
+            "## Variant comparisons",
+            "",
+            "| score | variant | spearman | top10_overlap | top20_overlap | robust |",
+            "|---|---|---:|---:|---:|---|",
+        ]
+    )
+    for score_name, metric in sorted(metrics.items()):
+        if not isinstance(metric, dict):
+            continue
+        raw_comparisons = metric.get("comparisons")
+        comparisons = raw_comparisons if isinstance(raw_comparisons, dict) else {}
+        for variant_name, comparison in sorted(comparisons.items()):
+            if not isinstance(comparison, dict):
+                continue
+            lines.append(
+                f"| {score_name} | {variant_name} | {comparison.get('spearman', 0)} | {comparison.get('top10_overlap', 0)} | {comparison.get('top20_overlap', 0)} | {comparison.get('robust', False)} |"
+            )
+    lines.append("\nAggregate-only report. It excludes user text/profile details, credential material, request headers, session values, and TikHub raw payload details.\n")
+    md_path.write_text("\n".join(lines), encoding="utf-8")
+
+
+def recompute_profile_indices_in_place(processed_dir: Path) -> dict[str, Any]:
+    users = read_csv(processed_dir / "users.csv")
+    targets = read_csv(processed_dir / "profile_target_users.csv")
+    existing_abm = {row.get("user_id", ""): row for row in read_csv(processed_dir / "abm_user_profiles.csv")}
+    if not users:
+        raise ValueError(f"missing or empty users.csv: {processed_dir / 'users.csv'}")
+    if not targets:
+        raise ValueError(f"missing or empty profile_target_users.csv: {processed_dir / 'profile_target_users.csv'}")
+    targets_by_user = {row.get("user_id", ""): row for row in targets if row.get("user_id")}
+    signal_rows: list[dict[str, int]] = []
+    prepared: list[tuple[dict[str, str], dict[str, str], dict[str, int]]] = []
+    for user in users:
+        uid = user.get("user_id", "")
+        target = targets_by_user.get(uid, {})
+        signals = profile_index_signals(target, user)
+        prepared.append((user, target, signals))
+        signal_rows.append(signals)
+    thresholds = compute_profile_index_thresholds(signal_rows)
+    updated_users: list[dict[str, Any]] = []
+    updated_profiles: list[dict[str, Any]] = []
+    updated_abm: list[dict[str, Any]] = []
+    for user, target, _signals in prepared:
+        uid = user.get("user_id", "")
+        previous = existing_abm.get(uid, {})
+        fetch_status = user.get("profile_fetch_status") or target.get("profile_fetch_status") or "success"
+        profile_source = user.get("profile_source") or previous.get("profile_source") or "live_current"
+        row = build_abm_row(target, user, profile_source, fetch_status, profile_index_thresholds=thresholds)
+        for field in ["user_type", "interest_tags", "brand_attitude", "like_tendency", "comment_tendency", "share_tendency"]:
+            if previous.get(field, "") not in ("", None):
+                row[field] = previous[field]
+        row["profile_source"] = profile_source
+        row["profile_fetch_status"] = fetch_status
+        if previous.get("attribute_provenance"):
+            provenance = row["attribute_provenance"]
+            provenance["previous_profile_index_provenance_replaced"] = True
+            row["attribute_provenance"] = provenance
+        for field in [
+            "observed_activity_level",
+            "observed_influence",
+            "activity_score",
+            "activity_video_score",
+            "activity_comment_score",
+            "activity_reply_score",
+            "global_influence_score",
+            "local_influence_score",
+            "local_network_score",
+            "local_recognition_score",
+            "profile_index_method",
+            "profile_index_variant",
+        ]:
+            user[field] = row.get(field, "")
+        updated_users.append(user)
+        updated_profiles.append({field: row.get(field, "") for field in PROFILE_COLUMNS})
+        updated_abm.append({field: row.get(field, "") for field in ABM_COLUMNS})
+    write_csv(processed_dir / "users.csv", USER_COLUMNS + ["profile_source", "profile_fetch_status"], updated_users)
+    write_csv(processed_dir / "profiles.csv", PROFILE_COLUMNS, updated_profiles)
+    write_csv(processed_dir / "abm_user_profiles.csv", ABM_COLUMNS, updated_abm)
+    robustness = profile_index_robustness_report(signal_rows)
+    write_profile_index_robustness_report(processed_dir, robustness)
+    report = load_json(processed_dir / "final_collection_report.json")
+    if report:
+        report["profile_index_method"] = PROFILE_INDEX_METHOD
+        report["profile_index_variant"] = PROFILE_INDEX_VARIANT
+        report["profile_index_thresholds"] = {key: round(float(value), 6) for key, value in thresholds.items()}
+        report["profile_index_robustness_report"] = str(processed_dir / "profile_index_robustness_report.json")
+        report["profile_index_proxy_semantics"] = "observable proxy only; not true psychological traits or true causal influence"
+        report["updated_at"] = now_iso()
+        (processed_dir / "final_collection_report.json").write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+    return {
+        "users": len(updated_users),
+        "profiles": len(updated_profiles),
+        "abm_user_profiles": len(updated_abm),
+        "profile_index_method": PROFILE_INDEX_METHOD,
+        "profile_index_thresholds": {key: round(float(value), 6) for key, value in thresholds.items()},
+        "profile_index_robustness_report": str(processed_dir / "profile_index_robustness_report.json"),
     }
 
 
@@ -1574,6 +1946,7 @@ def build_abm_row(
     interest_tags = sorted(set(target.get("_interest_tags") or []))
     provenance = {
         "profile_index_method": PROFILE_INDEX_METHOD,
+        "profile_index_variant": PROFILE_INDEX_VARIANT,
         "profile_index_reference_basis": PROFILE_INDEX_REFERENCE_BASIS,
         "profile_index_thresholds": {key: round(float(value), 6) for key, value in thresholds.items()},
         "observed_api_fields": ["follower_count", "following_count", "video_count", "verified_type"] if profile_source != "none" else [],
@@ -1591,11 +1964,20 @@ def build_abm_row(
         "observed_activity_level": round(observed_activity, 6),
         "observed_influence": round(observed_influence, 6),
         "interest_tags": interest_tags,
+        "activity_score": round(index_scores["activity_score"], 6),
+        "activity_video_score": round(index_scores["activity_video_score"], 6),
         "activity_publish_score": round(index_scores["activity_publish_score"], 6),
         "activity_comment_score": round(index_scores["activity_comment_score"], 6),
+        "activity_reply_score": round(index_scores["activity_reply_score"], 6),
+        "global_influence_score": round(index_scores["global_influence_score"], 6),
+        "local_influence_score": round(index_scores["local_influence_score"], 6),
+        "local_network_score": round(index_scores["local_network_score"], 6),
+        "local_recognition_score": round(index_scores["local_recognition_score"], 6),
         "influence_coverage_score": round(index_scores["influence_coverage_score"], 6),
         "influence_recognition_score": round(index_scores["influence_recognition_score"], 6),
         "influence_network_score": round(index_scores["influence_network_score"], 6),
+        "profile_index_method": PROFILE_INDEX_METHOD,
+        "profile_index_variant": PROFILE_INDEX_VARIANT,
         "brand_attitude": 0.0,
         "activity_level": round(observed_activity, 6),
         "like_tendency": 0.5,
@@ -1646,12 +2028,27 @@ def build_processed_outputs(
         signal_rows.append(profile_index_signals(target, user))
     profile_index_thresholds = compute_profile_index_thresholds(signal_rows)
     for target, user, source, fetch_status in prepared_rows:
-        user_rows.append(user)
         if fetch_status in {"failed", "quota_stopped"}:
             failed_rows.append({k: target.get(k, "") for k in PROFILE_FIELDNAMES})
         if target.get("sec_user_id_confidence") in {"missing", "placeholder"}:
             missing_rows.append({k: target.get(k, "") for k in PROFILE_FIELDNAMES})
         abm = build_abm_row(target, user, source, fetch_status, profile_index_thresholds=profile_index_thresholds)
+        for field in [
+            "observed_activity_level",
+            "observed_influence",
+            "activity_score",
+            "activity_video_score",
+            "activity_comment_score",
+            "activity_reply_score",
+            "global_influence_score",
+            "local_influence_score",
+            "local_network_score",
+            "local_recognition_score",
+            "profile_index_method",
+            "profile_index_variant",
+        ]:
+            user[field] = abm.get(field, "")
+        user_rows.append(user)
         abm_rows.append(abm)
         if source != "none" and fetch_status in {"success", "skipped", "failed", "quota_stopped"}:
             profile_rows.append({field: abm.get(field, "") for field in PROFILE_COLUMNS})
@@ -1675,6 +2072,8 @@ def build_processed_outputs(
     write_csv(processed_dir / "abm_user_profiles.csv", ABM_COLUMNS, abm_rows)
     write_csv(processed_dir / "failed_profile_users.csv", PROFILE_FIELDNAMES, failed_rows)
     write_csv(processed_dir / "missing_sec_uid_users.csv", PROFILE_FIELDNAMES, missing_rows)
+    robustness = profile_index_robustness_report(signal_rows)
+    write_profile_index_robustness_report(processed_dir, robustness)
     return {
         "users": len(user_rows),
         "profiles": len(deduped_profiles),
@@ -1685,6 +2084,7 @@ def build_processed_outputs(
         "historical_profiles_used": len([r for r in users_out if str(r.get("profile_source", "")).startswith("historical")]),
         "profile_index_method": PROFILE_INDEX_METHOD,
         "profile_index_thresholds": {key: round(float(value), 6) for key, value in profile_index_thresholds.items()},
+        "profile_index_robustness_report": str(processed_dir / "profile_index_robustness_report.json"),
     }
 
 
@@ -2012,12 +2412,31 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--docs-dir", type=Path, default=Path("docs/04-开发验证"))
     parser.add_argument("--audit-only", action="store_true")
+    parser.add_argument(
+        "--recompute-profile-indices-only",
+        action="store_true",
+        help="Offline-only in-place recompute of profile index columns and robustness reports for an existing processed run.",
+    )
     args = parser.parse_args(argv)
 
     source_run = args.source_run
     if not source_run.exists():
         print(f"source run not found: {source_run}", file=sys.stderr)
         return 2
+    if args.recompute_profile_indices_only:
+        counts = recompute_profile_indices_in_place(source_run)
+        safety_findings = scan_report_safety(
+            [
+                source_run / "profile_index_robustness_report.md",
+                source_run / "profile_index_robustness_report.json",
+                source_run / "final_collection_report.json",
+            ]
+        )
+        if safety_findings:
+            print(f"unsafe report content: {safety_findings}", file=sys.stderr)
+            return 3
+        print(json.dumps({"processed_dir": str(source_run), "report": counts, "live_fetch": False}, ensure_ascii=False))
+        return 0
     processed_dir = args.processed_root / args.output_run_id
     raw_dir = args.raw_root / args.output_run_id
     if processed_dir.exists() and not args.resume:

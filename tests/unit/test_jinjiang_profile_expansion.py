@@ -841,21 +841,81 @@ def test_report_includes_aggregate_cost_audit_and_quota_state(tmp_path: Path) ->
     assert {row["user_id"]: row for row in read_csv(processed_run / "profile_target_users.csv")}["creator"]["profile_fetch_status"] == "quota_stopped"
 
 
-def test_profile_index_uses_log1p_p95_equal_weight() -> None:
+def test_profile_index_normalization_helpers() -> None:
+    assert profiles.log_p95_score(0, 10) == 0.0
+    assert profiles.log_p95_score(10, 10) == pytest.approx(1.0)
+    assert profiles.log_p95_score(20, 10) == pytest.approx(1.0)
+    assert profiles.percentile([0, 10, 20, 30, 40], 0.90) == pytest.approx(36.0)
+    assert profiles.percentile([0, 10, 20, 30, 40], 0.95) == pytest.approx(38.0)
+    assert profiles.percentile([0, 10, 20, 30, 40], 0.99) == pytest.approx(39.6)
+    assert profiles.rank_percentile_scores([0, 10, 20]) == pytest.approx([0.0, 0.5, 1.0])
+
+
+def test_profile_index_uses_reference_weighted_v2_formula() -> None:
     signals = [
-        {"video_count": 0, "comment_reply_count": 0, "follower_count": 0, "comment_like_sum": 0, "edge_degree": 0},
-        {"video_count": 100, "comment_reply_count": 20, "follower_count": 1000, "comment_like_sum": 50, "edge_degree": 5},
-        {"video_count": 200, "comment_reply_count": 40, "follower_count": 10000, "comment_like_sum": 100, "edge_degree": 10},
+        {"video_count": 0, "comment_count": 0, "reply_count": 0, "follower_count": 0, "comment_like_sum": 0, "edge_degree": 0},
+        {"video_count": 100, "comment_count": 20, "reply_count": 10, "follower_count": 1000, "comment_like_sum": 50, "edge_degree": 5},
+        {"video_count": 200, "comment_count": 40, "reply_count": 20, "follower_count": 10000, "comment_like_sum": 100, "edge_degree": 10},
     ]
     thresholds = profiles.compute_profile_index_thresholds(signals)
     assert thresholds["video_count"] > 100
+    assert thresholds["comment_count"] > 20
+    assert thresholds["reply_count"] > 10
     score = profiles.compute_profile_index_scores(signals[1], thresholds)
-    assert 0.0 < score["activity_publish_score"] < 1.0
+    assert 0.0 < score["activity_video_score"] < 1.0
     assert 0.0 < score["activity_comment_score"] < 1.0
-    assert score["observed_activity_level"] == pytest.approx((score["activity_publish_score"] + score["activity_comment_score"]) / 2)
-    assert score["observed_influence"] == pytest.approx(
-        (score["influence_coverage_score"] + score["influence_recognition_score"] + score["influence_network_score"]) / 3
+    assert 0.0 < score["activity_reply_score"] < 1.0
+    assert score["activity_publish_score"] == score["activity_video_score"]
+    assert score["activity_score"] == pytest.approx(
+        0.25 * score["activity_video_score"] + 0.45 * score["activity_comment_score"] + 0.30 * score["activity_reply_score"]
     )
+    assert score["global_influence_score"] == score["influence_coverage_score"]
+    assert score["local_influence_score"] == pytest.approx(
+        0.60 * score["local_network_score"] + 0.40 * score["local_recognition_score"]
+    )
+    assert score["observed_activity_level"] == pytest.approx(score["activity_score"])
+    assert score["observed_influence"] == pytest.approx(
+        0.5 * score["global_influence_score"] + 0.5 * score["local_influence_score"]
+    )
+
+
+def test_profile_index_global_influence_uses_only_follower_count() -> None:
+    thresholds = {
+        "video_count": 100,
+        "comment_count": 100,
+        "reply_count": 100,
+        "follower_count": 1000,
+        "comment_like_sum": 100,
+        "edge_degree": 100,
+    }
+    low_activity = {
+        "video_count": 0,
+        "comment_count": 0,
+        "reply_count": 0,
+        "follower_count": 100,
+        "comment_like_sum": 0,
+        "edge_degree": 0,
+    }
+    high_activity = dict(low_activity, video_count=999, comment_count=999, reply_count=999, comment_like_sum=999, edge_degree=999)
+    assert profiles.compute_profile_index_scores(low_activity, thresholds)["global_influence_score"] == pytest.approx(
+        profiles.compute_profile_index_scores(high_activity, thresholds)["global_influence_score"]
+    )
+
+
+def test_profile_index_robustness_report_is_aggregate_only() -> None:
+    signals = [
+        {"video_count": idx, "comment_count": idx % 5, "reply_count": idx % 3, "follower_count": idx * 10, "edge_degree": idx % 7, "comment_like_sum": idx % 11}
+        for idx in range(1, 31)
+    ]
+    report = profiles.profile_index_robustness_report(signals)
+    assert report["user_count"] == 30
+    assert "activity_score" in report["metrics"]
+    comparison = report["metrics"]["activity_score"]["comparisons"]["activity_weights:activity_base"]
+    assert comparison["spearman"] == pytest.approx(1.0)
+    assert comparison["top10_overlap"] == pytest.approx(1.0)
+    text = json.dumps(report, ensure_ascii=False)
+    for forbidden in ["Authorization", "Cookie", "Bearer", "nickname", "bio", "signature"]:
+        assert forbidden not in text
 
 
 def test_build_abm_row_records_reference_based_profile_index() -> None:
@@ -870,16 +930,28 @@ def test_build_abm_row_records_reference_based_profile_index() -> None:
     user = {"user_id": "u1", "follower_count": "100", "following_count": "5", "video_count": "12"}
     thresholds = {
         "video_count": 24,
-        "comment_reply_count": 30,
+        "comment_count": 20,
+        "reply_count": 10,
         "follower_count": 1000,
         "comment_like_sum": 100,
         "edge_degree": 10,
     }
     row = profiles.build_abm_row(target, user, "live_current", "success", profile_index_thresholds=thresholds)
     assert row["activity_level"] == row["observed_activity_level"]
+    assert row["activity_level"] == row["activity_score"]
+    assert row["observed_influence"] == pytest.approx(0.5 * row["global_influence_score"] + 0.5 * row["local_influence_score"])
+    assert row["profile_index_method"] == "log1p_p95_reference_weighted_v2"
+    assert row["profile_index_variant"] == "base"
     for field in [
+        "activity_score",
+        "activity_video_score",
         "activity_publish_score",
         "activity_comment_score",
+        "activity_reply_score",
+        "global_influence_score",
+        "local_influence_score",
+        "local_network_score",
+        "local_recognition_score",
         "influence_coverage_score",
         "influence_recognition_score",
         "influence_network_score",
