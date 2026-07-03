@@ -15,6 +15,18 @@
 
 在仓库内运行 `gh` 时，GitHub 仓库会从 `git remote -v` 自动推断。
 
+## 语言约定
+
+GitHub issue 标题、正文、评论和完成摘要默认使用中文，保持与本仓库文档和 `-lqy` 工程 skills 一致。
+
+以下内容保留原文或英文 token：
+
+- GitHub labels，例如 `ready-for-agent`
+- 命令、路径、配置键、代码标识符和错误原文
+- 外部资料标题或必须精确引用的英文术语
+
+如果上游模板包含英文小标题，可以翻译为中文；只有 issue tracker 或自动化工具依赖的字段名需要保持英文。
+
 ## PR 作为 triage 请求入口
 
 外部 PR 也作为 `/triage-lqy` 的请求输入。
