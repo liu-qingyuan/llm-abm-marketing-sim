@@ -2,6 +2,7 @@
 .env.*
 !.env.example
 __pycache__/
+.DS_Store
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
