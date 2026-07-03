@@ -1,6 +1,6 @@
 # llm-abm-marketing-sim 文档索引
 
-本目录已按阅读场景分类整理。建议第一次了解项目时，从“项目概览”开始；准备运行项目时看“使用指南”；准备改代码时看“架构设计”和“开发验证”。
+本目录已按阅读场景分类整理。建议第一次了解项目时，从“项目概览”开始；准备运行项目时看“使用指南”；准备改代码时看“架构设计”和“开发验证”。后续新增规划和长期维护文档优先使用职责型目录：PRD、Reference、Architecture Note、ADR。
 
 ## 分类结构
 
@@ -9,9 +9,26 @@ docs/
 ├── 01-项目概览/      # 项目是什么、能演示什么、与 Obsidian 设计如何对齐
 ├── 02-架构设计/      # 核心架构、仿真流程、框架取舍
 ├── 03-使用指南/      # 安装运行、数据导入、Provider/LLM 配置
-├── 04-开发验证/      # 当前验证入口、最终数据集审计、研究标准、测试策略
+├── 04-开发验证/      # 旧验证入口和迁移索引；新规格不再放这里
+├── agents/           # 工程 skills 的 issue tracker、triage 和领域文档约定
+├── architecture/     # 当前/目标架构说明、数据结构图、边界说明
+├── adr/              # 架构决策记录
+├── decision-maps/    # 多会话决策图
+├── prds/             # PRD 与 GitHub issue 父任务副本
+├── references/       # 外部资料整理、研究先验、不可执行参考
 └── 99-参考资料/      # 自动扫描报告等低频参考资料
 ```
+
+## 职责型入口
+
+新增或迁移文档时优先使用这些入口：
+
+- [PRDs](prds/README.md)：产品需求、用户故事、验收标准和后续 issue plan。
+- [References](references/README.md)：外部资料、研究先验和数据口径参考，不代表实现状态。
+- [Architecture Notes](architecture/README.md)：当前/目标架构、模块边界、数据结构图和测试架构。
+- [ADRs](adr/README.md)：难以逆转且有真实权衡的架构决策。
+- [Agent skills](agents/README.md)：工程 skills 的 issue tracker、triage labels 和 domain docs 约定。
+- [Decision maps](decision-maps/refactor-test-hardening-2026-07.md)：需要多轮推进的规划图。
 
 ## 推荐阅读路径
 
@@ -37,12 +54,13 @@ docs/
 
 ### 想继续开发或验收
 
-1. [TikHub / Douyin 数据收集架构](02-架构设计/douyin-data-collection-architecture.md)
-2. [锦江酒店 Douyin 最终数据集审计](04-开发验证/jinjiang-douyin-final-dataset-20260624.md)
-3. [开发计划](04-开发验证/development-plan.md)
-3. [组件清单](04-开发验证/component-inventory.md)
-4. [源码结构分析](04-开发验证/source-tree-analysis.md)
-5. [测试策略](04-开发验证/test-strategy.md)
+1. [PRD：文档架构重组与锦江 Latent Attributes 迁移试点](prds/docs-architecture-and-jinjiang-latent-attributes-migration.md)
+2. [Decision map：重构与测试补强](decision-maps/refactor-test-hardening-2026-07.md)
+3. [TikHub / Douyin 数据收集架构](02-架构设计/douyin-data-collection-architecture.md)
+4. [锦江酒店 Douyin 最终数据集审计](04-开发验证/05-jinjiang-douyin-final-dataset-20260624.md)
+5. [源码结构分析](04-开发验证/02-source-tree-analysis.md)
+6. [组件清单](04-开发验证/03-component-inventory.md)
+7. [测试策略](04-开发验证/04-test-strategy.md)
 
 ## 快速命令
 
@@ -76,8 +94,9 @@ python -m py_compile $(find src tests -name '*.py' -print)
 
 - 当前数据收集架构：[`02-架构设计/douyin-data-collection-architecture.md`](02-架构设计/douyin-data-collection-architecture.md)
 - 数据目录语义：[`../data/README.md`](../data/README.md)
-- 当前最终数据集审计：[`04-开发验证/jinjiang-douyin-final-dataset-20260624.md`](04-开发验证/jinjiang-douyin-final-dataset-20260624.md)
-- 当前最终数据集清理记录：[`04-开发验证/jinjiang-douyin-final-dataset-cleanup-20260624.md`](04-开发验证/jinjiang-douyin-final-dataset-cleanup-20260624.md)
+- 当前最终数据集审计：[`04-开发验证/05-jinjiang-douyin-final-dataset-20260624.md`](04-开发验证/05-jinjiang-douyin-final-dataset-20260624.md)
+- 当前最终数据集清理记录：[`04-开发验证/06-jinjiang-douyin-final-dataset-cleanup-20260624.md`](04-开发验证/06-jinjiang-douyin-final-dataset-cleanup-20260624.md)
+- 锦江 latent attributes 迁移计划：[`prds/docs-architecture-and-jinjiang-latent-attributes-migration.md`](prds/docs-architecture-and-jinjiang-latent-attributes-migration.md)
 - 后续 AI Agent 应优先看最终数据集审计；如需追溯阶段化采集或历史口径，再查看 Git 历史。
 
 ## 核心约定

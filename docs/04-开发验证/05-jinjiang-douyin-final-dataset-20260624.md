@@ -45,7 +45,7 @@
 - robustness report: `data/processed/jinjiang_douyin/jinjiang-final-caption-hashtag-comments-profiles-20260624T092200Z/profile_index_robustness_report.md`
 - JSON report: `data/processed/jinjiang_douyin/jinjiang-final-caption-hashtag-comments-profiles-20260624T092200Z/profile_index_robustness_report.json`
 
-本次将旧的等权 `observed_activity_level` / `observed_influence` 解释口径，升级为三类可观测代理变量：
+本次执行 breaking schema cleanup：最终数据集不再输出旧兼容字段，当前标准只保留三类可观测代理变量：
 
 | 指标 | 字段 | 解释边界 |
 |---|---|---|
@@ -85,11 +85,10 @@ local_influence_score =
 + 0.40 * Norm(comment_like_sum)
 ```
 
-兼容字段：
+Schema 边界：
 
-- `observed_activity_level = activity_score`
-- `activity_level = activity_score`
-- `observed_influence = 0.5 * global_influence_score + 0.5 * local_influence_score`
+- `users.csv`、`profiles.csv`、`abm_user_profiles.csv` 不再保留 `observed_activity_level`、`observed_influence`、`activity_level`
+- 如后续分析需要总体影响力，应在分析层显式定义，不写入基础 final dataset 合同
 
 参考依据只用于构建 proxy 逻辑，不表示复刻清博 DCI、飞瓜指数或新榜指数。由于本数据缺少播放量、曝光量、完整分享量、收藏量、新增粉丝数和完整视频点赞等后台字段，本文档只将这些字段称为 observable proxy，不将其表述为真实心理特征或真实因果影响力。
 

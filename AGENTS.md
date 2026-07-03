@@ -139,7 +139,21 @@ python -m llm_abm_sim.run --config configs/default.yaml --output runs/sample
 - 周报默认使用面向老师快速阅读的短版“小结”：标题 + 统计周期/口径更新时间 + 核心成果 + 下一步。
 - 清理 docs/data 时先保留最终入口和 lineage；删除历史过程稿前确认不会断链。
 
-## 8. GitNexus
+## 8. Agent skills
+
+### Issue tracker
+
+本仓库使用 GitHub Issues 作为 issue tracker，并通过 `gh` CLI 读写；外部 PR 也作为 triage 请求入口。详见 `docs/agents/issue-tracker.md`。
+
+### Triage labels
+
+使用默认 Matt Pocock triage 标签词汇：`needs-triage`、`needs-info`、`ready-for-agent`、`ready-for-human`、`wontfix`。详见 `docs/agents/triage-labels.md`。
+
+### Domain docs
+
+本仓库是单上下文仓库；如存在根目录 `CONTEXT.md` 和 `docs/adr/`，工程 skills 应按需读取。详见 `docs/agents/domain.md`。
+
+## 9. GitNexus
 
 本项目 GitNexus alias：
 
