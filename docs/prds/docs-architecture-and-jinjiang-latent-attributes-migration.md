@@ -101,7 +101,7 @@ GitHub issue: https://github.com/liu-qingyuan/llm-abm-marketing-sim/issues/1
 1. [#2 建立文档职责目录与导航骨架](https://github.com/liu-qingyuan/llm-abm-marketing-sim/issues/2)
 2. [#3 创建最小领域术语表 CONTEXT.md](https://github.com/liu-qingyuan/llm-abm-marketing-sim/issues/3)
 3. [#4 迁移锦江 latent attributes 参考资料](https://github.com/liu-qingyuan/llm-abm-marketing-sim/issues/4)
-4. [#5 迁移锦江用户数据结构架构说明](https://github.com/liu-qingyuan/llm-abm-marketing-sim/issues/5)
+4. [#5 迁移锦江用户数据结构架构说明](https://github.com/liu-qingyuan/llm-abm-marketing-sim/issues/5) - 本地文档已迁移到 [`../architecture/jinjiang-user-profile-data-structure.md`](../architecture/jinjiang-user-profile-data-structure.md)
 5. [#6 迁移锦江 latent attributes 实施规格为 PRD](https://github.com/liu-qingyuan/llm-abm-marketing-sim/issues/6)
 6. [#7 添加 Documentation Navigation Contract 检查](https://github.com/liu-qingyuan/llm-abm-marketing-sim/issues/7)
 

@@ -13,4 +13,4 @@
 - 核心架构仍在 [`../02-架构设计/architecture.md`](../02-架构设计/architecture.md)。
 - 仿真流程仍在 [`../02-架构设计/simulation-flow.md`](../02-架构设计/simulation-flow.md)。
 - Douyin 数据收集架构仍在 [`../02-架构设计/douyin-data-collection-architecture.md`](../02-架构设计/douyin-data-collection-architecture.md)。
-- 锦江用户数据结构图将由 issue [#5](https://github.com/liu-qingyuan/llm-abm-marketing-sim/issues/5) 迁移到本目录。
+- [锦江用户数据结构 Architecture Note](jinjiang-user-profile-data-structure.md)：说明目标模型是 Observed Profile Attributes + Latent Attributes，并标记当前代码只保留未知 profile columns、尚无结构化 `UserProfile.latent_attributes` contract。
