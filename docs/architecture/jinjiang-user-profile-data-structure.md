@@ -3,7 +3,7 @@
 Status: Architecture Note
 Scope: Jinjiang Douyin final dataset profile model and target latent attributes boundary
 Implementation status: target architecture documented; structured `UserProfile.latent_attributes` is not implemented
-Related PRD: [`../prds/docs-architecture-and-jinjiang-latent-attributes-migration.md`](../prds/docs-architecture-and-jinjiang-latent-attributes-migration.md)
+Related PRD: [`../prds/jinjiang-user-latent-attributes-v1.md`](../prds/jinjiang-user-latent-attributes-v1.md)
 Related reference: [`../references/jinjiang-user-latent-attributes-reference-zh.md`](../references/jinjiang-user-latent-attributes-reference-zh.md)
 Legacy source: [`../04-开发验证/08-jinjiang-user-data-structure-diagrams.md`](../04-开发验证/08-jinjiang-user-data-structure-diagrams.md)
 
@@ -192,7 +192,7 @@ Table 11 profile labels 第一版用于分组分析、审计和结果解释，�
 
 ## 相关文档
 
-- PRD：[`../prds/docs-architecture-and-jinjiang-latent-attributes-migration.md`](../prds/docs-architecture-and-jinjiang-latent-attributes-migration.md)
+- PRD：[`../prds/jinjiang-user-latent-attributes-v1.md`](../prds/jinjiang-user-latent-attributes-v1.md)
 - Reference：[`../references/jinjiang-user-latent-attributes-reference-zh.md`](../references/jinjiang-user-latent-attributes-reference-zh.md)
 - 最终数据集审计：[`../04-开发验证/05-jinjiang-douyin-final-dataset-20260624.md`](../04-开发验证/05-jinjiang-douyin-final-dataset-20260624.md)
 - 旧入口 redirect：[`../04-开发验证/08-jinjiang-user-data-structure-diagrams.md`](../04-开发验证/08-jinjiang-user-data-structure-diagrams.md)

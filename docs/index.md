@@ -59,10 +59,11 @@ docs/
 3. [TikHub / Douyin 数据收集架构](02-架构设计/douyin-data-collection-architecture.md)
 4. [锦江用户数据结构 Architecture Note](architecture/jinjiang-user-profile-data-structure.md)
 5. [锦江用户潜在属性研究先验整理](references/jinjiang-user-latent-attributes-reference-zh.md)
-6. [锦江酒店 Douyin 最终数据集审计](04-开发验证/05-jinjiang-douyin-final-dataset-20260624.md)
-7. [源码结构分析](04-开发验证/02-source-tree-analysis.md)
-8. [组件清单](04-开发验证/03-component-inventory.md)
-9. [测试策略](04-开发验证/04-test-strategy.md)
+6. [PRD：锦江用户 Latent Attributes v1](prds/jinjiang-user-latent-attributes-v1.md)
+7. [锦江酒店 Douyin 最终数据集审计](04-开发验证/05-jinjiang-douyin-final-dataset-20260624.md)
+8. [源码结构分析](04-开发验证/02-source-tree-analysis.md)
+9. [组件清单](04-开发验证/03-component-inventory.md)
+10. [测试策略](04-开发验证/04-test-strategy.md)
 
 ## 快速命令
 
@@ -101,6 +102,7 @@ python -m py_compile $(find src tests -name '*.py' -print)
 - 锦江用户数据结构 Architecture Note：[`architecture/jinjiang-user-profile-data-structure.md`](architecture/jinjiang-user-profile-data-structure.md)
 - 锦江 latent attributes 研究先验：[`references/jinjiang-user-latent-attributes-reference-zh.md`](references/jinjiang-user-latent-attributes-reference-zh.md)
 - 锦江 latent attributes 迁移计划：[`prds/docs-architecture-and-jinjiang-latent-attributes-migration.md`](prds/docs-architecture-and-jinjiang-latent-attributes-migration.md)
+- 锦江 latent attributes v1 PRD：[`prds/jinjiang-user-latent-attributes-v1.md`](prds/jinjiang-user-latent-attributes-v1.md)
 - 后续 AI Agent 应优先看最终数据集审计；如需追溯阶段化采集或历史口径，再查看 Git 历史。
 
 ## 核心约定
