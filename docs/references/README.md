@@ -12,4 +12,4 @@
 
 - 锦江 final dataset 审计当前仍在 [`../04-开发验证/05-jinjiang-douyin-final-dataset-20260624.md`](../04-开发验证/05-jinjiang-douyin-final-dataset-20260624.md)。
 - 锦江 final dataset 清理记录当前仍在 [`../04-开发验证/06-jinjiang-douyin-final-dataset-cleanup-20260624.md`](../04-开发验证/06-jinjiang-douyin-final-dataset-cleanup-20260624.md)。
-- 锦江 latent attributes 研究整理将由 issue [#4](https://github.com/liu-qingyuan/llm-abm-marketing-sim/issues/4) 迁移到本目录。
+- [锦江用户潜在属性研究先验整理](jinjiang-user-latent-attributes-reference-zh.md)：latent class、价值权重、Table 11 成员画像分布和使用边界，只作为外部研究先验，不代表当前代码实现状态。

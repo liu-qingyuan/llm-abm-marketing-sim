@@ -57,10 +57,11 @@ docs/
 1. [PRD：文档架构重组与锦江 Latent Attributes 迁移试点](prds/docs-architecture-and-jinjiang-latent-attributes-migration.md)
 2. [Decision map：重构与测试补强](decision-maps/refactor-test-hardening-2026-07.md)
 3. [TikHub / Douyin 数据收集架构](02-架构设计/douyin-data-collection-architecture.md)
-4. [锦江酒店 Douyin 最终数据集审计](04-开发验证/05-jinjiang-douyin-final-dataset-20260624.md)
-5. [源码结构分析](04-开发验证/02-source-tree-analysis.md)
-6. [组件清单](04-开发验证/03-component-inventory.md)
-7. [测试策略](04-开发验证/04-test-strategy.md)
+4. [锦江用户潜在属性研究先验整理](references/jinjiang-user-latent-attributes-reference-zh.md)
+5. [锦江酒店 Douyin 最终数据集审计](04-开发验证/05-jinjiang-douyin-final-dataset-20260624.md)
+6. [源码结构分析](04-开发验证/02-source-tree-analysis.md)
+7. [组件清单](04-开发验证/03-component-inventory.md)
+8. [测试策略](04-开发验证/04-test-strategy.md)
 
 ## 快速命令
 
@@ -96,6 +97,7 @@ python -m py_compile $(find src tests -name '*.py' -print)
 - 数据目录语义：[`../data/README.md`](../data/README.md)
 - 当前最终数据集审计：[`04-开发验证/05-jinjiang-douyin-final-dataset-20260624.md`](04-开发验证/05-jinjiang-douyin-final-dataset-20260624.md)
 - 当前最终数据集清理记录：[`04-开发验证/06-jinjiang-douyin-final-dataset-cleanup-20260624.md`](04-开发验证/06-jinjiang-douyin-final-dataset-cleanup-20260624.md)
+- 锦江 latent attributes 研究先验：[`references/jinjiang-user-latent-attributes-reference-zh.md`](references/jinjiang-user-latent-attributes-reference-zh.md)
 - 锦江 latent attributes 迁移计划：[`prds/docs-architecture-and-jinjiang-latent-attributes-migration.md`](prds/docs-architecture-and-jinjiang-latent-attributes-migration.md)
 - 后续 AI Agent 应优先看最终数据集审计；如需追溯阶段化采集或历史口径，再查看 Git 历史。
 

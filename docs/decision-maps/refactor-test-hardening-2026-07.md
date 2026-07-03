@@ -28,7 +28,7 @@ Type: Grilling
 
 ### Current Evidence
 
-- `07-jinjiang-user-latent-attributes-reference-zh.md` 是研究先验整理，适合作为 `docs/references/` 下的 Reference。
+- `docs/references/jinjiang-user-latent-attributes-reference-zh.md` 是研究先验整理，适合作为 Reference。
 - `08-jinjiang-user-data-structure-diagrams.md` 是目标数据结构图，适合作为 `docs/architecture/` 下的 Architecture Note。
 - `09-jinjiang-user-latent-attributes-spec.md` 是实施规格，但当前代码未实现其核心功能，应改成 `docs/prds/` 下的 PRD 并显式标记实现状态。
 - 当前代码没有结构化 `UserProfile.latent_attributes`、`PostContent.value_dimensions`、latent spec config、latent assignment engine、生成脚本或 rule-based latent score。

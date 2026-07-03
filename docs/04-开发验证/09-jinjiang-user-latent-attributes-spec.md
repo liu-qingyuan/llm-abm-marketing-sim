@@ -28,7 +28,7 @@ UserProfile = 真实观测数据 + 虚拟实验标签
 
 ## 输入依据
 
-来源材料为用户潜在属性研究文档；中文整理见 [07 锦江用户潜在属性参考文档中文整理](07-jinjiang-user-latent-attributes-reference-zh.md)。
+来源材料为用户潜在属性研究文档；中文整理见 [锦江用户潜在属性研究先验整理](../references/jinjiang-user-latent-attributes-reference-zh.md)。
 
 文档给出三类 latent class：
 

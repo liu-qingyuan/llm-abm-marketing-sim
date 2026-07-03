@@ -17,7 +17,7 @@
 - [04 测试策略](04-test-strategy.md)：单元、集成、E2E、Playwright 和 live LLM 手动门禁。
 - [05 锦江酒店 Douyin 最终数据集审计（2026-06-24）](05-jinjiang-douyin-final-dataset-20260624.md)：当前最终数据集入口，整合话题/评论/视频/边表与 36,400 个完整 profile。
 - [06 锦江酒店 Douyin 最终数据集清理记录（2026-06-24）](06-jinjiang-douyin-final-dataset-cleanup-20260624.md)：本地旧 run 和中间数据清理记录，只含聚合统计。
-- [07 锦江用户潜在属性参考文档中文整理](07-jinjiang-user-latent-attributes-reference-zh.md)：用户 latent class、价值权重、Table 11 成员画像分布的中文参考资料。
+- [锦江用户潜在属性研究先验整理](../references/jinjiang-user-latent-attributes-reference-zh.md)：已迁移到 Reference，保存 latent class、价值权重、Table 11 成员画像分布和使用边界。
 - [08 锦江用户数据结构简图](08-jinjiang-user-data-structure-diagrams.md)：说明当前用户数据与目标版本如何拆成真实观测数据和虚拟实验标签。
 - [09 锦江用户 Latent Attributes 新标签版本实施 Spec](09-jinjiang-user-latent-attributes-spec.md)：latent class 标签生成、数据版本、ABM 用户对象和规则决策接入方案。
 
