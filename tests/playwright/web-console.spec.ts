@@ -47,7 +47,7 @@ test('local web console validates uploads, runs mock provider, renders rich bili
     mkdirSync(fixtures, { recursive: true });
     const usersPath = path.join(fixtures, 'users.csv');
     const edgesPath = path.join(fixtures, 'edges.json');
-    writeFileSync(usersPath, 'user_id,interest_tags,brand_attitude,activity_level,authorization,segment\nu1,"eco,skincare",0.8,0.9,Bearer sk-hidden,A\nu2,"eco,beauty",0.4,0.7,Bearer sk-hidden,B\nu3,"gaming",0.0,0.4,Bearer sk-hidden,C\n');
+    writeFileSync(usersPath, 'user_id,interest_tags,brand_attitude,activity_score,authorization,segment\nu1,"eco,skincare",0.8,0.9,Bearer sk-hidden,A\nu2,"eco,beauty",0.4,0.7,Bearer sk-hidden,B\nu3,"gaming",0.0,0.4,Bearer sk-hidden,C\n');
     writeFileSync(edgesPath, JSON.stringify({ edges: [
       { source: 'u1', target: 'u2', weight: 1.0, relationship: 'follow' },
       { source: 'u2', target: 'u3', weight: 0.5, relationship: 'follow' },

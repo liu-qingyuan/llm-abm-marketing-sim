@@ -61,8 +61,6 @@ ABM_COLUMNS = [
     "following_count",
     "video_count",
     "verified_type",
-    "observed_activity_level",
-    "observed_influence",
     "interest_tags",
     "activity_score",
     "activity_video_score",
@@ -79,7 +77,6 @@ ABM_COLUMNS = [
     "profile_index_method",
     "profile_index_variant",
     "brand_attitude",
-    "activity_level",
     "like_tendency",
     "comment_tendency",
     "share_tendency",
@@ -220,6 +217,10 @@ def parse_int(value: Any) -> int:
         return int(float(str(value)))
     except (TypeError, ValueError):
         return 0
+
+
+def has_parent_comment_id(value: Any) -> bool:
+    return str(value or "").strip() not in {"", "0"}
 
 
 def parse_float(value: Any, default: float = 0.0) -> float:
@@ -371,7 +372,6 @@ def compute_profile_index_scores(signals: Mapping[str, int], thresholds: Mapping
     network = log_p95_score(int(signals.get("edge_degree", 0)), float(thresholds.get("edge_degree", 0.0)))
     activity = 0.25 * video + 0.45 * comment + 0.30 * reply
     local = 0.60 * network + 0.40 * recognition
-    observed_influence = 0.5 * coverage + 0.5 * local
     return {
         "activity_score": activity,
         "activity_video_score": video,
@@ -385,8 +385,6 @@ def compute_profile_index_scores(signals: Mapping[str, int], thresholds: Mapping
         "influence_coverage_score": coverage,
         "influence_recognition_score": recognition,
         "influence_network_score": network,
-        "observed_activity_level": activity,
-        "observed_influence": observed_influence,
     }
 
 
@@ -606,7 +604,7 @@ def write_profile_index_robustness_report(processed_dir: Path, report: Mapping[s
             lines.append(
                 f"| {score_name} | {variant_name} | {comparison.get('spearman', 0)} | {comparison.get('top10_overlap', 0)} | {comparison.get('top20_overlap', 0)} | {comparison.get('robust', False)} |"
             )
-    lines.append("\nAggregate-only report. It excludes user text/profile details, credential material, request headers, session values, and TikHub raw payload details.\n")
+    lines.append("\nAggregate-only report. It excludes user text/profile details, credential material, request headers, session values, and provider response details.\n")
     md_path.write_text("\n".join(lines), encoding="utf-8")
 
 
@@ -647,8 +645,6 @@ def recompute_profile_indices_in_place(processed_dir: Path) -> dict[str, Any]:
             provenance["previous_profile_index_provenance_replaced"] = True
             row["attribute_provenance"] = provenance
         for field in [
-            "observed_activity_level",
-            "observed_influence",
             "activity_score",
             "activity_video_score",
             "activity_comment_score",
@@ -686,6 +682,55 @@ def recompute_profile_indices_in_place(processed_dir: Path) -> dict[str, Any]:
         "profile_index_thresholds": {key: round(float(value), 6) for key, value in thresholds.items()},
         "profile_index_robustness_report": str(processed_dir / "profile_index_robustness_report.json"),
     }
+
+
+def recompute_profile_target_metrics_in_place(processed_dir: Path) -> dict[str, Any]:
+    targets = read_csv(processed_dir / "profile_target_users.csv")
+    if not targets:
+        raise ValueError(f"missing or empty profile_target_users.csv: {processed_dir / 'profile_target_users.csv'}")
+    metrics_by_user, source_meta = source_role_and_metrics(processed_dir)
+    updated_targets: list[dict[str, Any]] = []
+    changed_users = 0
+    before_comment_sum = 0
+    before_reply_sum = 0
+    after_comment_sum = 0
+    after_reply_sum = 0
+    role_counts: Counter[str] = Counter()
+    priority_counts: Counter[str] = Counter()
+    for target in targets:
+        uid = target.get("user_id", "")
+        metrics = metrics_by_user.get(uid, {})
+        updated = dict(target)
+        before_comment_sum += parse_int(target.get("comment_count"))
+        before_reply_sum += parse_int(target.get("reply_count"))
+        for field in ["comment_count", "reply_count", "edge_degree", "in_degree", "out_degree", "comment_like_sum"]:
+            updated[field] = parse_int(metrics.get(field))
+        updated["user_role"] = user_role(metrics)
+        updated["priority_tier"] = priority_tier(metrics)
+        after_comment_sum += parse_int(updated.get("comment_count"))
+        after_reply_sum += parse_int(updated.get("reply_count"))
+        role_counts[str(updated["user_role"])] += 1
+        priority_counts[str(updated["priority_tier"])] += 1
+        if any(str(updated.get(field, "")) != str(target.get(field, "")) for field in ["comment_count", "reply_count", "edge_degree", "in_degree", "out_degree", "comment_like_sum", "user_role", "priority_tier"]):
+            changed_users += 1
+        updated_targets.append(updated)
+    write_csv(processed_dir / "profile_target_users.csv", PROFILE_FIELDNAMES, updated_targets)
+    audit = {
+        "updated_at": now_iso(),
+        "method": "recompute_profile_target_metrics_from_processed_comments_v1",
+        "bugfix": "treat parent_comment_id values '' and '0' as no parent unless comment_level is reply",
+        "source_meta": source_meta,
+        "target_users": len(updated_targets),
+        "changed_users": changed_users,
+        "before_comment_count_sum": before_comment_sum,
+        "after_comment_count_sum": after_comment_sum,
+        "before_reply_count_sum": before_reply_sum,
+        "after_reply_count_sum": after_reply_sum,
+        "user_role_counts": dict(sorted(role_counts.items())),
+        "priority_tier_counts": dict(sorted(priority_counts.items())),
+    }
+    (processed_dir / "profile_target_metrics_recompute_audit.json").write_text(json.dumps(audit, ensure_ascii=False, indent=2), encoding="utf-8")
+    return audit
 
 
 def split_ids(value: str) -> list[str]:
@@ -1006,8 +1051,9 @@ def source_role_and_metrics(source_run: Path) -> tuple[dict[str, dict[str, Any]]
         uid = row.get("commenter_user_id", "")
         if not uid:
             continue
-        level = row.get("comment_level", "comment")
-        if level == "reply" or row.get("parent_comment_id"):
+        level = str(row.get("comment_level") or "").strip().lower()
+        parent_comment_id = row.get("parent_comment_id")
+        if level == "reply" or (level not in {"comment", "reply"} and has_parent_comment_id(parent_comment_id)):
             by_user[uid]["roles"].add("replier")
             by_user[uid]["reply_count"] += 1
         else:
@@ -1931,15 +1977,14 @@ def build_abm_row(
     signals = profile_index_signals(target, user)
     thresholds = profile_index_thresholds or compute_profile_index_thresholds([signals])
     index_scores = compute_profile_index_scores(signals, thresholds)
-    observed_activity = index_scores["observed_activity_level"]
-    observed_influence = index_scores["observed_influence"]
+    influence_score = max(index_scores["global_influence_score"], index_scores["local_influence_score"])
     verified = str(user.get("verified_type") or "")
     role = str(target.get("user_role") or "observed")
     if verified and verified not in {"0", "False", "false", ""}:
         user_type = "verified"
     elif target.get("priority_tier") == "creator":
         user_type = "creator"
-    elif observed_influence >= 0.6:
+    elif influence_score >= 0.6:
         user_type = "kol_or_central_user"
     else:
         user_type = role
@@ -1951,7 +1996,7 @@ def build_abm_row(
         "profile_index_thresholds": {key: round(float(value), 6) for key, value in thresholds.items()},
         "observed_api_fields": ["follower_count", "following_count", "video_count", "verified_type"] if profile_source != "none" else [],
         "interaction_observed_fields": ["comment_count", "reply_count", "edge_degree", "comment_like_sum"],
-        "derived_fields": ["observed_activity_level", "observed_influence", *PROFILE_INDEX_COMPONENT_FIELDS, "interest_tags", "user_type"],
+        "derived_fields": [*PROFILE_INDEX_COMPONENT_FIELDS, "interest_tags", "user_type"],
         "defaulted_future_model_fields": ["brand_attitude", "like_tendency", "comment_tendency", "share_tendency"],
     }
     return {
@@ -1961,8 +2006,6 @@ def build_abm_row(
         "following_count": parse_int(user.get("following_count")),
         "video_count": video_count,
         "verified_type": verified,
-        "observed_activity_level": round(observed_activity, 6),
-        "observed_influence": round(observed_influence, 6),
         "interest_tags": interest_tags,
         "activity_score": round(index_scores["activity_score"], 6),
         "activity_video_score": round(index_scores["activity_video_score"], 6),
@@ -1979,7 +2022,6 @@ def build_abm_row(
         "profile_index_method": PROFILE_INDEX_METHOD,
         "profile_index_variant": PROFILE_INDEX_VARIANT,
         "brand_attitude": 0.0,
-        "activity_level": round(observed_activity, 6),
         "like_tendency": 0.5,
         "comment_tendency": 0.2,
         "share_tendency": 0.2,
@@ -2034,8 +2076,6 @@ def build_processed_outputs(
             missing_rows.append({k: target.get(k, "") for k in PROFILE_FIELDNAMES})
         abm = build_abm_row(target, user, source, fetch_status, profile_index_thresholds=profile_index_thresholds)
         for field in [
-            "observed_activity_level",
-            "observed_influence",
             "activity_score",
             "activity_video_score",
             "activity_comment_score",
@@ -2417,12 +2457,33 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Offline-only in-place recompute of profile index columns and robustness reports for an existing processed run.",
     )
+    parser.add_argument(
+        "--recompute-profile-target-metrics-only",
+        action="store_true",
+        help="Offline-only in-place recompute of profile_target_users.csv comment/reply metrics, then refresh profile index columns.",
+    )
     args = parser.parse_args(argv)
 
     source_run = args.source_run
     if not source_run.exists():
         print(f"source run not found: {source_run}", file=sys.stderr)
         return 2
+    if args.recompute_profile_target_metrics_only:
+        target_audit = recompute_profile_target_metrics_in_place(source_run)
+        counts = recompute_profile_indices_in_place(source_run)
+        safety_findings = scan_report_safety(
+            [
+                source_run / "profile_target_metrics_recompute_audit.json",
+                source_run / "profile_index_robustness_report.md",
+                source_run / "profile_index_robustness_report.json",
+                source_run / "final_collection_report.json",
+            ]
+        )
+        if safety_findings:
+            print(f"unsafe report content: {safety_findings}", file=sys.stderr)
+            return 3
+        print(json.dumps({"processed_dir": str(source_run), "target_audit": target_audit, "report": counts, "live_fetch": False}, ensure_ascii=False))
+        return 0
     if args.recompute_profile_indices_only:
         counts = recompute_profile_indices_in_place(source_run)
         safety_findings = scan_report_safety(

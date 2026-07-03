@@ -19,7 +19,7 @@ def test_load_network_dataset_returns_directed_graph_profiles_and_serializable_r
         json.dumps(
             [
                 {"user_id": "u1", "interest_tags": ["eco", "skincare"], "brand_attitude": 0.8},
-                {"user_id": "u2", "interest_tags": ["skincare"], "activity_level": 0.7},
+                {"user_id": "u2", "interest_tags": ["skincare"], "activity_score": 0.7},
                 {"user_id": "u3", "interest_tags": ["gaming"], "brand_attitude": -0.2},
             ]
         ),
@@ -66,7 +66,7 @@ def test_load_network_dataset_parses_csv_profiles_and_defaults_missing_profiles(
     edges.write_text("u1 u2\nu2 u3\n", encoding="utf-8")
     profiles = tmp_path / "profiles.csv"
     profiles.write_text(
-        "user_id,interest_tags,brand_attitude,activity_level\nu1,eco|skincare,0.5,0.9\nu2,gaming,-0.1,0.4\n",
+        "user_id,interest_tags,brand_attitude,activity_score\nu1,eco|skincare,0.5,0.9\nu2,gaming,-0.1,0.4\n",
         encoding="utf-8",
     )
 
@@ -158,7 +158,7 @@ def test_load_network_dataset_reads_profile_object_json_and_comma_lists(tmp_path
         json.dumps(
             {
                 "profiles": [
-                    {"user_id": "u1", "interest_tags": "eco, skincare", "activity_level": 0.9},
+                    {"user_id": "u1", "interest_tags": "eco, skincare", "activity_score": 0.9},
                     {"user_id": "u2", "interest_tags": "gaming; wellness", "brand_attitude": -0.4},
                 ]
             }

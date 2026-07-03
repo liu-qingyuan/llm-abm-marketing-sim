@@ -103,8 +103,8 @@
   "outputs_generated": [
     "99-参考资料/project-scan-report.json",
     "01-项目概览/project-overview.md",
-    "04-开发验证/source-tree-analysis.md",
-    "04-开发验证/component-inventory.md",
+    "04-开发验证/02-source-tree-analysis.md",
+    "04-开发验证/03-component-inventory.md",
     "03-使用指南/development-guide.md",
     "index.md"
   ],

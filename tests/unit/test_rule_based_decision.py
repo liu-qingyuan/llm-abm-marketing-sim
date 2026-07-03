@@ -6,7 +6,7 @@ def test_rule_based_decision_returns_binary_schema():
     adapter = RuleBasedDecisionAdapter()
     decision = adapter.decide(
         PostContent(post_id="p1", text="new skincare post", topic_tags=["skincare"]),
-        UserProfile(user_id="u1", interest_tags=["skincare"], brand_attitude=0.5, activity_level=0.8),
+        UserProfile(user_id="u1", interest_tags=["skincare"], brand_attitude=0.5, activity_score=0.8),
         PeerContext(engaged_neighbors=3, exposed_neighbors=4),
     )
     assert isinstance(decision.engage, bool)

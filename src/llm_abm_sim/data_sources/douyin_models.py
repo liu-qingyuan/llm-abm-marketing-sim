@@ -45,8 +45,6 @@ USER_COLUMNS = [
     "video_count",
     "verified_type",
     "bio",
-    "observed_activity_level",
-    "observed_influence",
     "activity_score",
     "activity_video_score",
     "activity_comment_score",
@@ -86,8 +84,6 @@ PROFILE_COLUMNS = [
     "user_id",
     "user_type",
     "follower_count",
-    "observed_activity_level",
-    "observed_influence",
     "value_proposition",
     "interest_tags",
     "activity_score",
@@ -105,7 +101,6 @@ PROFILE_COLUMNS = [
     "profile_index_method",
     "profile_index_variant",
     "brand_attitude",
-    "activity_level",
     "like_tendency",
     "comment_tendency",
     "share_tendency",
@@ -167,8 +162,6 @@ class DouyinUserRecord(BaseModel):
     video_count: int = Field(default=0, ge=0)
     verified_type: str = ""
     bio: str = ""
-    observed_activity_level: float = Field(default=0.5, ge=0.0, le=1.0)
-    observed_influence: float = Field(default=0.0, ge=0.0, le=1.0)
     activity_score: float = Field(default=0.5, ge=0.0, le=1.0)
     activity_video_score: float = Field(default=0.0, ge=0.0, le=1.0)
     activity_comment_score: float = Field(default=0.0, ge=0.0, le=1.0)
@@ -207,8 +200,6 @@ class DouyinProfileRecord(BaseModel):
     user_id: str
     user_type: str = "observed"
     follower_count: int = Field(default=0, ge=0)
-    observed_activity_level: float = Field(default=0.5, ge=0.0, le=1.0)
-    observed_influence: float = Field(default=0.0, ge=0.0, le=1.0)
     value_proposition: str = ""
     interest_tags: list[str] = Field(default_factory=list)
     activity_score: float = Field(default=0.5, ge=0.0, le=1.0)
@@ -226,17 +217,9 @@ class DouyinProfileRecord(BaseModel):
     profile_index_method: str = ""
     profile_index_variant: str = "base"
     brand_attitude: float = Field(default=0.0, ge=-1.0, le=1.0)
-    activity_level: float = Field(default=0.5, ge=0.0, le=1.0)
     like_tendency: float = Field(default=0.5, ge=0.0, le=1.0)
     comment_tendency: float = Field(default=0.2, ge=0.0, le=1.0)
     share_tendency: float = Field(default=0.2, ge=0.0, le=1.0)
-
-    @model_validator(mode="after")
-    def _activity_level_follows_observed(self) -> DouyinProfileRecord:
-        self.observed_activity_level = self.activity_score if self.activity_score != 0.5 else self.observed_activity_level
-        self.activity_level = self.observed_activity_level
-        self.activity_score = self.observed_activity_level
-        return self
 
 
 class FieldProvenance(BaseModel):

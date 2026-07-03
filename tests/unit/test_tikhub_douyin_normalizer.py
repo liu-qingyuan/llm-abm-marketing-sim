@@ -45,7 +45,10 @@ def test_normalizer_outputs_processed_contract(tmp_path: Path) -> None:
     for name in ["videos.csv", "comments.csv", "text_items.csv", "users.csv", "edges.csv", "profiles.csv", "collection_report.json"]:
         assert (processed / name).exists()
     profile = rows(processed / "profiles.csv")[0]
-    assert profile["activity_level"] == profile["observed_activity_level"]
+    assert "observed_activity_level" not in profile
+    assert "observed_influence" not in profile
+    assert "activity_level" not in profile
+    assert 0.0 <= float(profile["activity_score"]) <= 1.0
     assert profile["brand_attitude"] == "0.0"
     assert "interest_tags" in profile
     assert "value_proposition" in profile

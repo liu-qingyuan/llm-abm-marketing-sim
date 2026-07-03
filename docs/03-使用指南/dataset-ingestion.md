@@ -135,7 +135,7 @@ u1 u3
 
 - `interest_tags`
 - `brand_attitude`，范围 `-1.0` 到 `1.0`
-- `activity_level`，范围 `0.0` 到 `1.0`
+- `activity_score`，范围 `0.0` 到 `1.0`
 - `like_tendency`，范围 `0.0` 到 `1.0`
 - `comment_tendency`，范围 `0.0` 到 `1.0`
 - `share_tendency`，范围 `0.0` 到 `1.0`
@@ -143,7 +143,7 @@ u1 u3
 ### CSV 用户画像
 
 ```csv
-user_id,interest_tags,brand_attitude,activity_level,like_tendency,comment_tendency,share_tendency
+user_id,interest_tags,brand_attitude,activity_score,like_tendency,comment_tendency,share_tendency
 u1,skincare|eco,0.8,0.9,0.8,0.3,0.6
 u2,skincare|wellness,0.5,0.8,0.7,0.2,0.4
 ```
@@ -161,7 +161,7 @@ u2,skincare|wellness,0.5,0.8,0.7,0.2,0.4
       "user_id": "u1",
       "interest_tags": ["skincare", "eco"],
       "brand_attitude": 0.8,
-      "activity_level": 0.9,
+      "activity_score": 0.9,
       "like_tendency": 0.8,
       "comment_tendency": 0.3,
       "share_tendency": 0.6

@@ -154,7 +154,7 @@ def normalize_run(
             ),
             "profiles": FieldProvenance(
                 observed=["follower_count", "video_count"],
-                derived=["observed_activity_level", "observed_influence", "interest_tags"],
+                derived=["activity_score", "global_influence_score", "local_influence_score", "interest_tags"],
                 defaulted=["brand_attitude", "like_tendency", "comment_tendency", "share_tendency"],
             ),
         },
@@ -370,8 +370,9 @@ def normalize_user(row: dict[str, Any], missing_fields: dict[str, list[str]]) ->
         video_count=video_count,
         verified_type=str(first_any(user, "verified_type", "verification_type", default="")),
         bio=first_str(user, "bio", "signature", "desc"),
-        observed_activity_level=bounded_ratio(video_count, 100),
-        observed_influence=bounded_log_ratio(follower_count),
+        activity_score=bounded_ratio(video_count, 100),
+        activity_video_score=bounded_ratio(video_count, 100),
+        global_influence_score=bounded_log_ratio(follower_count),
     )
 
 
@@ -409,16 +410,20 @@ def build_profiles(
                 tags_by_user[comment.commenter_user_id].add(token)
     profiles: list[DouyinProfileRecord] = []
     for user in users:
-        activity = max(user.observed_activity_level, bounded_ratio(comment_counts[user.user_id], 20))
+        activity_comment_score = bounded_ratio(comment_counts[user.user_id], 20)
+        activity = max(user.activity_score, activity_comment_score)
         profiles.append(
             DouyinProfileRecord(
                 user_id=user.user_id,
                 user_type="creator" if user.user_id in creators else "observed",
                 follower_count=user.follower_count,
-                observed_activity_level=activity,
-                observed_influence=user.observed_influence,
                 value_proposition="",
                 interest_tags=sorted(tag for tag in tags_by_user[user.user_id] if tag),
+                activity_score=activity,
+                activity_video_score=user.activity_video_score,
+                activity_publish_score=user.activity_video_score,
+                activity_comment_score=activity_comment_score,
+                global_influence_score=user.global_influence_score,
             )
         )
     return profiles

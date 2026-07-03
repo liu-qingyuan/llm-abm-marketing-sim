@@ -140,7 +140,7 @@ class RuleBasedDecisionAdapter(LLMDecisionAdapter):
             0.40 * preference_score
             + 0.25 * max(profile.brand_attitude, 0.0)
             + 0.15 * peer_context.engagement_ratio
-            + 0.10 * profile.activity_level
+            + 0.10 * profile.activity_score
             + platform_score
         )
         probability = round(min(score, 1.0), 4)

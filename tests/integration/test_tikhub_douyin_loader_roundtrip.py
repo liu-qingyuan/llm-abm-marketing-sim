@@ -17,10 +17,10 @@ def test_tikhub_processed_files_roundtrip_through_existing_loader(tmp_path: Path
     )
     profiles = tmp_path / "profiles.csv"
     profiles.write_text(
-        "user_id,user_type,follower_count,observed_activity_level,observed_influence,value_proposition,interest_tags,activity_score,activity_video_score,activity_comment_score,activity_reply_score,global_influence_score,local_influence_score,local_network_score,local_recognition_score,profile_index_method,profile_index_variant,brand_attitude,activity_level,like_tendency,comment_tendency,share_tendency\n"
-        "u1,commenter,10,0.7,0.35,green_quality,锦江酒店|绿色入住,0.7,0.2,0.8,0.6,0.2,0.5,0.4,0.6,log1p_p95_reference_weighted_v2,base,0.0,0.7,0.5,0.2,0.2\n"
-        "u2,replier,20,0.5,0.3,comfort,绿色酒店,0.5,0.1,0.3,0.8,0.3,0.3,0.2,0.45,log1p_p95_reference_weighted_v2,base,0.0,0.5,0.5,0.2,0.2\n"
-        "creator1,creator,1000,0.9,0.8,brand_official,酒店|锦江酒店,0.9,1.0,0.4,0.2,1.0,0.6,0.7,0.45,log1p_p95_reference_weighted_v2,base,0.0,0.9,0.5,0.2,0.2\n",
+        "user_id,user_type,follower_count,value_proposition,interest_tags,activity_score,activity_video_score,activity_comment_score,activity_reply_score,global_influence_score,local_influence_score,local_network_score,local_recognition_score,profile_index_method,profile_index_variant,brand_attitude,like_tendency,comment_tendency,share_tendency\n"
+        "u1,commenter,10,green_quality,锦江酒店|绿色入住,0.7,0.2,0.8,0.6,0.2,0.5,0.4,0.6,log1p_p95_reference_weighted_v2,base,0.0,0.5,0.2,0.2\n"
+        "u2,replier,20,comfort,绿色酒店,0.5,0.1,0.3,0.8,0.3,0.3,0.2,0.45,log1p_p95_reference_weighted_v2,base,0.0,0.5,0.2,0.2\n"
+        "creator1,creator,1000,brand_official,酒店|锦江酒店,0.9,1.0,0.4,0.2,1.0,0.6,0.7,0.45,log1p_p95_reference_weighted_v2,base,0.0,0.5,0.2,0.2\n",
         encoding="utf-8",
     )
     dataset = load_network_dataset(
@@ -48,16 +48,16 @@ def test_tikhub_processed_files_roundtrip_through_existing_loader(tmp_path: Path
     assert dataset.graph["u1"]["u2"]["mention_count"] == 1
     assert dataset.profiles["u1"].interest_tags == ["锦江酒店", "绿色入住"]
     assert dataset.profiles["u1"].brand_attitude == 0.0
-    assert dataset.profiles["u1"].activity_level == 0.7
+    assert dataset.profiles["u1"].activity_score == 0.7
     assert dataset.profiles["u1"].like_tendency == 0.5
     assert dataset.profiles["u1"].comment_tendency == 0.2
     assert dataset.profiles["u1"].share_tendency == 0.2
     extras = dataset.profiles["u1"].model_extra or {}
     assert extras["value_proposition"] == "green_quality"
-    assert extras["observed_activity_level"] == "0.7"
-    assert extras["observed_influence"] == "0.35"
-    assert extras["activity_score"] == "0.7"
     assert extras["global_influence_score"] == "0.2"
     assert extras["local_influence_score"] == "0.5"
     assert extras["profile_index_method"] == "log1p_p95_reference_weighted_v2"
     assert extras["user_type"] == "commenter"
+    assert "observed_activity_level" not in extras
+    assert "observed_influence" not in extras
+    assert "activity_level" not in extras

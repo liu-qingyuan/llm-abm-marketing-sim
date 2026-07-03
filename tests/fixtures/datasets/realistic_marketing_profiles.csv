@@ -1,4 +1,4 @@
-user_id,community,segment,interest_tags,brand_attitude,activity_level,like_tendency,comment_tendency,share_tendency,follower_count,locale,lifecycle_stage
+user_id,community,segment,interest_tags,brand_attitude,activity_score,like_tendency,comment_tendency,share_tendency,follower_count,locale,lifecycle_stage
 u01,eco_beauty,koc_seed,skincare|eco|sustainability,0.86,0.92,0.84,0.38,0.68,18500,US-CA,advocate
 u02,eco_beauty,beauty_enthusiast,skincare|clean_beauty|wellness,0.72,0.86,0.78,0.28,0.42,4200,US-OR,consideration
 u03,eco_beauty,ingredient_researcher,skincare|science|eco,0.61,0.74,0.66,0.35,0.31,3100,US-WA,consideration

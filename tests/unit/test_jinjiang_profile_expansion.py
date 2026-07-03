@@ -39,7 +39,7 @@ def make_source(tmp_path: Path, *, sec: str = "u1", creator_sec: str = "sec_crea
     src = tmp_path / "processed" / "source-run"
     write_csv(
         src / "users.csv",
-        ["user_id", "sec_user_id", "nickname", "follower_count", "following_count", "video_count", "verified_type", "bio", "observed_activity_level", "observed_influence"],
+        ["user_id", "sec_user_id", "nickname", "follower_count", "following_count", "video_count", "verified_type", "bio"],
         [
             {"user_id": "u1", "sec_user_id": sec},
             {"user_id": "creator", "sec_user_id": creator_sec},
@@ -106,6 +106,71 @@ def test_raw_sec_uid_recovery_and_abm_provenance(tmp_path: Path) -> None:
     assert audit["confirmed_sec_uid_users"] == 2
     assert audit["source_raw_run_path"] == str(raw_source)
     assert audit["sec_uid_evidence_audit"]["accepted_users"] == 1
+
+
+def test_profile_targets_treat_parent_zero_comment_as_top_level_comment(tmp_path: Path) -> None:
+    src = make_source(tmp_path, sec="sec_u1_real")
+    write_csv(
+        src / "comments.csv",
+        ["comment_id", "video_id", "parent_comment_id", "commenter_user_id", "mentioned_user_ids", "like_count", "comment_level", "content"],
+        [
+            {"comment_id": "c1", "video_id": "v1", "parent_comment_id": "0", "commenter_user_id": "u1", "like_count": "3", "comment_level": "comment", "content": "一级评论"},
+            {"comment_id": "r1", "video_id": "v1", "parent_comment_id": "c1", "commenter_user_id": "u1", "like_count": "2", "comment_level": "reply", "content": "回复评论"},
+        ],
+    )
+
+    rows, _audit, _historical = profiles.build_profile_targets(src, tmp_path / "processed", tmp_path / "raw")
+
+    by_uid = {row["user_id"]: row for row in rows}
+    assert by_uid["u1"]["comment_count"] == 1
+    assert by_uid["u1"]["reply_count"] == 1
+    assert by_uid["u1"]["user_role"] == "mixed"
+
+
+def test_recompute_profile_target_metrics_repairs_parent_zero_comment_counts(tmp_path: Path) -> None:
+    src = make_source(tmp_path, sec="sec_u1_real")
+    write_csv(
+        src / "comments.csv",
+        ["comment_id", "video_id", "parent_comment_id", "commenter_user_id", "mentioned_user_ids", "like_count", "comment_level", "content"],
+        [
+            {"comment_id": "c1", "video_id": "v1", "parent_comment_id": "0", "commenter_user_id": "u1", "like_count": "3", "comment_level": "comment", "content": "一级评论"},
+            {"comment_id": "r1", "video_id": "v1", "parent_comment_id": "c1", "commenter_user_id": "u1", "like_count": "2", "comment_level": "reply", "content": "回复评论"},
+        ],
+    )
+    write_csv(
+        src / "profile_target_users.csv",
+        profiles.PROFILE_FIELDNAMES,
+        [
+            {
+                "user_id": "u1",
+                "sec_user_id": "sec_u1_real",
+                "sec_user_id_source": "source_users",
+                "sec_user_id_confidence": "confirmed",
+                "user_role": "replier",
+                "comment_count": 0,
+                "reply_count": 2,
+                "edge_degree": 0,
+                "in_degree": 0,
+                "out_degree": 0,
+                "comment_like_sum": 0,
+                "priority_tier": "active_commenter",
+                "profile_fetch_status": "success",
+                "skip_reason": "",
+            }
+        ],
+    )
+
+    audit = profiles.recompute_profile_target_metrics_in_place(src)
+
+    repaired = {row["user_id"]: row for row in read_csv(src / "profile_target_users.csv")}["u1"]
+    assert repaired["comment_count"] == "1"
+    assert repaired["reply_count"] == "1"
+    assert repaired["comment_like_sum"] == "5"
+    assert repaired["user_role"] == "mixed"
+    assert audit["before_comment_count_sum"] == 0
+    assert audit["after_comment_count_sum"] == 1
+    assert audit["before_reply_count_sum"] == 2
+    assert audit["after_reply_count_sum"] == 1
 
 
 def test_raw_placeholder_sec_uid_evidence_is_rejected(tmp_path: Path) -> None:
@@ -873,10 +938,8 @@ def test_profile_index_uses_reference_weighted_v2_formula() -> None:
     assert score["local_influence_score"] == pytest.approx(
         0.60 * score["local_network_score"] + 0.40 * score["local_recognition_score"]
     )
-    assert score["observed_activity_level"] == pytest.approx(score["activity_score"])
-    assert score["observed_influence"] == pytest.approx(
-        0.5 * score["global_influence_score"] + 0.5 * score["local_influence_score"]
-    )
+    assert "observed_activity_level" not in score
+    assert "observed_influence" not in score
 
 
 def test_profile_index_global_influence_uses_only_follower_count() -> None:
@@ -937,9 +1000,9 @@ def test_build_abm_row_records_reference_based_profile_index() -> None:
         "edge_degree": 10,
     }
     row = profiles.build_abm_row(target, user, "live_current", "success", profile_index_thresholds=thresholds)
-    assert row["activity_level"] == row["observed_activity_level"]
-    assert row["activity_level"] == row["activity_score"]
-    assert row["observed_influence"] == pytest.approx(0.5 * row["global_influence_score"] + 0.5 * row["local_influence_score"])
+    assert "activity_level" not in row
+    assert "observed_activity_level" not in row
+    assert "observed_influence" not in row
     assert row["profile_index_method"] == "log1p_p95_reference_weighted_v2"
     assert row["profile_index_variant"] == "base"
     for field in [
