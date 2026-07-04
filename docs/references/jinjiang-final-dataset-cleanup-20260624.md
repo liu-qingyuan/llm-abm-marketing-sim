@@ -1,7 +1,7 @@
 # 锦江酒店 Douyin 最终数据集清理记录（2026-06-24）
 
 Status: Dataset Cleanup Reference
-Legacy source: [`../04-开发验证/06-jinjiang-douyin-final-dataset-cleanup-20260624.md`](../04-开发验证/06-jinjiang-douyin-final-dataset-cleanup-20260624.md)
+Legacy source: `docs/04-开发验证/06-jinjiang-douyin-final-dataset-cleanup-20260624.md`（已删除；迁移索引见 [`../04-开发验证/README.md`](../04-开发验证/README.md)）
 
 ## 清理结论
 

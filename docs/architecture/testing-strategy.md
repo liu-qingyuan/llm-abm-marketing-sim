@@ -1,7 +1,7 @@
 # 测试策略
 
 Status: Architecture Note
-Legacy source: [`../04-开发验证/04-test-strategy.md`](../04-开发验证/04-test-strategy.md)
+Legacy source: `docs/04-开发验证/04-test-strategy.md`（已删除；迁移索引见 [`../04-开发验证/README.md`](../04-开发验证/README.md)）
 
 默认验证必须离线、确定性、无秘密。真实 LLM 检查是手动发布/冒烟门禁，不属于默认测试路径。
 

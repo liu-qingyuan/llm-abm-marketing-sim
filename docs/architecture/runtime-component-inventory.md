@@ -1,7 +1,7 @@
 # 组件清单
 
 Status: Architecture Note
-Legacy source: [`../04-开发验证/03-component-inventory.md`](../04-开发验证/03-component-inventory.md)
+Legacy source: `docs/04-开发验证/03-component-inventory.md`（已删除；迁移索引见 [`../04-开发验证/README.md`](../04-开发验证/README.md)）
 
 本文记录主要运行时、输出、Provider 和测试组件，方便后续开发者与 AI Agent 快速定位职责。
 

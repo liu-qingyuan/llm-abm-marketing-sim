@@ -1,7 +1,7 @@
 # 源码结构分析
 
 Status: Architecture Note
-Legacy source: [`../04-开发验证/02-source-tree-analysis.md`](../04-开发验证/02-source-tree-analysis.md)
+Legacy source: `docs/04-开发验证/02-source-tree-analysis.md`（已删除；迁移索引见 [`../04-开发验证/README.md`](../04-开发验证/README.md)）
 
 本文说明仓库目录、入口点和文件组织方式。项目是一个 Python 包，旁边带少量 Node/Playwright sidecar，用于验证生成的静态 HTML 报告和本地 Web 控制台。
 
@@ -23,7 +23,7 @@ llm-abm-marketing-sim/
 │   ├── 01-项目概览/                 # 阅读路径
 │   ├── 02-架构设计/                 # 阅读路径
 │   ├── 03-使用指南/                 # 阅读路径
-│   ├── 04-开发验证/                 # legacy redirect / migration index
+│   ├── 04-开发验证/                 # legacy migration index
 │   ├── 05-周报/                     # reports archive
 │   ├── architecture/
 │   ├── adr/

@@ -113,7 +113,7 @@ python -m py_compile $(find src tests -name '*.py' -print)
 - 锦江 latent attributes 研究先验：[`references/jinjiang-user-latent-attributes-reference-zh.md`](references/jinjiang-user-latent-attributes-reference-zh.md)
 - 锦江 latent attributes 迁移计划：[`prds/docs-architecture-and-jinjiang-latent-attributes-migration.md`](prds/docs-architecture-and-jinjiang-latent-attributes-migration.md)
 - 锦江 latent attributes v1 PRD：[`prds/jinjiang-user-latent-attributes-v1.md`](prds/jinjiang-user-latent-attributes-v1.md)
-- 后续 AI Agent 应优先看最终数据集审计；如需追溯旧入口，再从 `04-开发验证/` 的 legacy redirect 跳转。
+- 后续 AI Agent 应优先看最终数据集审计；如需追溯旧文件名，再查看 `04-开发验证/README.md` 的迁移索引。
 
 ## 核心约定
 

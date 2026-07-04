@@ -1,7 +1,7 @@
 # 锦江酒店 Douyin 最终数据集审计（2026-06-24）
 
 Status: Dataset Audit Reference
-Legacy source: [`../04-开发验证/05-jinjiang-douyin-final-dataset-20260624.md`](../04-开发验证/05-jinjiang-douyin-final-dataset-20260624.md)
+Legacy source: `docs/04-开发验证/05-jinjiang-douyin-final-dataset-20260624.md`（已删除；迁移索引见 [`../04-开发验证/README.md`](../04-开发验证/README.md)）
 
 ## 最终数据集
 

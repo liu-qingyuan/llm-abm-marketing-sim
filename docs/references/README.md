@@ -14,4 +14,4 @@
 - [锦江 final dataset 清理记录](jinjiang-final-dataset-cleanup-20260624.md)：本地旧 run 和中间数据清理记录，只含聚合统计和路径。
 - [锦江用户潜在属性研究先验整理](jinjiang-user-latent-attributes-reference-zh.md)：latent class、价值权重、Table 11 成员画像分布和使用边界，只作为外部研究先验，不代表当前代码实现状态。
 
-`../04-开发验证/` 中的数据集审计和清理记录旧路径仅保留 redirect；迁移后的 Reference 文档必须保留 lineage、旧链接和聚合口径说明。
+`../04-开发验证/` 只保留迁移索引；迁移后的 Reference 文档必须保留 lineage、旧文件名和聚合口径说明。

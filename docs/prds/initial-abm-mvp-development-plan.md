@@ -1,7 +1,7 @@
 # 开发计划
 
 Status: Historical PRD
-Legacy source: [`../04-开发验证/01-development-plan.md`](../04-开发验证/01-development-plan.md)
+Legacy source: `docs/04-开发验证/01-development-plan.md`（已删除；迁移索引见 [`../04-开发验证/README.md`](../04-开发验证/README.md)）
 Related ADR: [`../adr/0001-deterministic-event-sourced-abm-mvp.md`](../adr/0001-deterministic-event-sourced-abm-mvp.md)
 
 本文是项目早期 ABM MVP 开发计划的历史记录，用于追溯初始目标、阶段路线和验收思路。它不代表当前待办状态；新的可执行工作应从当前 PRD 或 GitHub issues 派生。
