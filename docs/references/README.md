@@ -10,8 +10,8 @@
 
 ## 当前入口
 
-- 锦江 final dataset 审计当前仍在 [`../04-开发验证/05-jinjiang-douyin-final-dataset-20260624.md`](../04-开发验证/05-jinjiang-douyin-final-dataset-20260624.md)。
-- 锦江 final dataset 清理记录当前仍在 [`../04-开发验证/06-jinjiang-douyin-final-dataset-cleanup-20260624.md`](../04-开发验证/06-jinjiang-douyin-final-dataset-cleanup-20260624.md)。
+- [锦江 final dataset 审计](jinjiang-final-dataset-audit-20260624.md)：最终数据集 lineage、聚合计数、验收结果、profile 指标口径和隐私边界。
+- [锦江 final dataset 清理记录](jinjiang-final-dataset-cleanup-20260624.md)：本地旧 run 和中间数据清理记录，只含聚合统计和路径。
 - [锦江用户潜在属性研究先验整理](jinjiang-user-latent-attributes-reference-zh.md)：latent class、价值权重、Table 11 成员画像分布和使用边界，只作为外部研究先验，不代表当前代码实现状态。
 
-`../04-开发验证/` 中的数据集审计和清理记录在迁移前仍保留原路径；迁移时必须保留 lineage、旧链接和聚合口径说明。
+`../04-开发验证/` 中的数据集审计和清理记录旧路径仅保留 redirect；迁移后的 Reference 文档必须保留 lineage、旧链接和聚合口径说明。
