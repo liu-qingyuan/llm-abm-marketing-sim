@@ -301,8 +301,8 @@ sequenceDiagram
 
 - final run_id: `jinjiang-final-caption-hashtag-comments-profiles-20260624T092200Z`
 - processed: `data/processed/jinjiang_douyin/jinjiang-final-caption-hashtag-comments-profiles-20260624T092200Z/`
-- audit: `docs/04-开发验证/05-jinjiang-douyin-final-dataset-20260624.md`
-- cleanup: `docs/04-开发验证/06-jinjiang-douyin-final-dataset-cleanup-20260624.md`
+- audit: `docs/references/jinjiang-final-dataset-audit-20260624.md`
+- cleanup: `docs/references/jinjiang-final-dataset-cleanup-20260624.md`
 
 已验证：
 
@@ -320,7 +320,7 @@ sequenceDiagram
 
 1. 先读本文件，确认阶段模型。
 2. 再读 `data/README.md`，理解 raw/processed/run 目录语义。
-3. 如果任务涉及锦江酒店最终数据集，读 `docs/04-开发验证/05-jinjiang-douyin-final-dataset-20260624.md`。
-4. 如果任务涉及本地清理边界，读 `docs/04-开发验证/06-jinjiang-douyin-final-dataset-cleanup-20260624.md`。
+3. 如果任务涉及锦江酒店最终数据集，读 `docs/references/jinjiang-final-dataset-audit-20260624.md`。
+4. 如果任务涉及本地清理边界，读 `docs/references/jinjiang-final-dataset-cleanup-20260624.md`。
 5. 如果任务涉及实现细节，再读 `src/llm_abm_sim/data_sources/` 与对应测试。
 6. 除非用户明确要求并满足 live gate，不要继续大规模抓评论或 profile。

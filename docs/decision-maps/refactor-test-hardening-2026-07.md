@@ -87,7 +87,16 @@ Type: Grilling
 
 ### Answer
 
-Unresolved. 解决时应避免丢失当前最终数据集 lineage，并更新 `docs/index.md`、`docs/04-开发验证/README.md` 和任何内部链接。
+Resolved. `docs/04-开发验证/01-06` 正文已迁移到职责型目录，并保留旧入口 redirect：
+
+- `01-development-plan.md` -> `docs/prds/initial-abm-mvp-development-plan.md`，其中架构决策抽为 `docs/adr/0001-deterministic-event-sourced-abm-mvp.md`。
+- `02-source-tree-analysis.md` -> `docs/architecture/source-tree-and-entrypoints.md`。
+- `03-component-inventory.md` -> `docs/architecture/runtime-component-inventory.md`。
+- `04-test-strategy.md` -> `docs/architecture/testing-strategy.md`。
+- `05-jinjiang-douyin-final-dataset-20260624.md` -> `docs/references/jinjiang-final-dataset-audit-20260624.md`。
+- `06-jinjiang-douyin-final-dataset-cleanup-20260624.md` -> `docs/references/jinjiang-final-dataset-cleanup-20260624.md`。
+
+`docs/index.md`、`docs/04-开发验证/README.md` 和当前阅读入口已更新到 canonical 路径；`04-开发验证/` 只保留 legacy redirect 和迁移索引职责。
 
 ## #4: Core Simulation Characterization Tests
 

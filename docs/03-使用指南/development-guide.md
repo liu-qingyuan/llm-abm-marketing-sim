@@ -148,7 +148,7 @@ Web 产物写入 `runs/web/<run-id>/`，包含 `web_run_metadata.json` 和常规
 - 生成静态报告和 Web 控制台浏览器流程用 Playwright。
 - 默认测试套件必须离线、确定性、无密钥。
 
-详细说明见：[测试策略](../04-开发验证/04-test-strategy.md)。
+详细说明见：[测试策略](../architecture/testing-strategy.md)。
 
 ## 生成产物策略
 

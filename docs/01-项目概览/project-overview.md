@@ -75,4 +75,4 @@ runs/                       # 本地运行产物，git 忽略
 - 运行与演示：[产品演示说明](product-demo.md)、[开发指南](../03-使用指南/development-guide.md)
 - 数据接入：[数据集与用户画像导入](../03-使用指南/dataset-ingestion.md)
 - Provider/LLM：[Provider 配置与 Live LLM 闸门](../03-使用指南/provider-config.md)
-- 开发验收：[开发计划](../04-开发验证/01-development-plan.md)、[测试策略](../04-开发验证/04-test-strategy.md)
+- 开发验收：[Initial ABM MVP Development Plan](../prds/initial-abm-mvp-development-plan.md)、[测试策略](../architecture/testing-strategy.md)

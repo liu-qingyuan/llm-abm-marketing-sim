@@ -111,7 +111,7 @@ For TikHub / Douyin / 锦江酒店 data collection work, start with the staged a
 
 - [`docs/02-架构设计/douyin-data-collection-architecture.md`](docs/02-架构设计/douyin-data-collection-architecture.md): current staged collector architecture, Mermaid architecture diagram, and sequence diagram.
 - [`data/README.md`](data/README.md): raw/processed directory semantics, current metadata baseline, and safety boundaries.
-- [`docs/04-开发验证/jinjiang-douyin-video-metadata-validation-20260617T035450Z.md`](docs/04-开发验证/jinjiang-douyin-video-metadata-validation-20260617T035450Z.md): latest metadata-only validation evidence.
+- [`docs/references/jinjiang-final-dataset-audit-20260624.md`](docs/references/jinjiang-final-dataset-audit-20260624.md): current final dataset audit, aggregate validation evidence, and privacy boundaries.
 
 Current rule: validate `challenge_index` and `video_metadata` first; do not treat comments/replies/profiles as the primary collection path until the video metadata denominator is trusted.
 
@@ -163,9 +163,9 @@ See:
 - `docs/02-架构设计/architecture.md`
 - `docs/02-架构设计/simulation-flow.md`
 - `docs/02-架构设计/framework-analysis.md`
-- `docs/04-开发验证/development-plan.md`
+- `docs/prds/initial-abm-mvp-development-plan.md`
 - `docs/03-使用指南/dataset-ingestion.md`
-- `docs/04-开发验证/test-strategy.md`
+- `docs/architecture/testing-strategy.md`
 - `docs/03-使用指南/provider-config.md`
 - `docs/01-项目概览/product-demo.md`
 - `docs/01-项目概览/requirements-alignment.md`
