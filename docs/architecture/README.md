@@ -14,3 +14,5 @@
 - 仿真流程仍在 [`../02-架构设计/simulation-flow.md`](../02-架构设计/simulation-flow.md)。
 - Douyin 数据收集架构仍在 [`../02-架构设计/douyin-data-collection-architecture.md`](../02-架构设计/douyin-data-collection-architecture.md)。
 - [锦江用户数据结构 Architecture Note](jinjiang-user-profile-data-structure.md)：说明目标模型是 Observed Profile Attributes + Latent Attributes，并标记当前代码只保留未知 profile columns、尚无结构化 `UserProfile.latent_attributes` contract。
+
+`../02-架构设计/` 继续作为核心系统阅读路径保留；新增或迁移的长期架构说明默认放在本目录，并从 `../index.md` 或相关 README 指向。

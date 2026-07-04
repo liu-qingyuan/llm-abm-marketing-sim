@@ -1,25 +1,28 @@
 # llm-abm-marketing-sim 文档索引
 
-本目录已按阅读场景分类整理。建议第一次了解项目时，从“项目概览”开始；准备运行项目时看“使用指南”；准备改代码时看“架构设计”和“开发验证”。后续新增规划和长期维护文档优先使用职责型目录：PRD、Reference、Architecture Note、ADR。
+本文件是项目文档的唯一总入口。后续新增长期维护文档时，先判断它属于哪个职责型目录；编号目录主要作为阅读路径、历史入口或迁移索引保留。
 
-## 分类结构
+## 目录职责
 
 ```text
 docs/
-├── 01-项目概览/      # 项目是什么、能演示什么、与 Obsidian 设计如何对齐
-├── 02-架构设计/      # 核心架构、仿真流程、框架取舍
-├── 03-使用指南/      # 安装运行、数据导入、Provider/LLM 配置
-├── 04-开发验证/      # 旧验证入口和迁移索引；新规格不再放这里
+├── 01-项目概览/      # 阅读路径：项目是什么、能演示什么、与 Obsidian 设计如何对齐
+├── 02-架构设计/      # 阅读路径：核心架构、仿真流程、框架取舍；新架构说明优先放 architecture/
+├── 03-使用指南/      # 阅读路径：安装运行、数据导入、Provider/LLM 配置
+├── 04-开发验证/      # Legacy：旧验证入口和迁移索引；新规格不再放这里
+├── 05-周报/          # Reports archive：面向老师快速阅读的周期小结
 ├── agents/           # 工程 skills 的 issue tracker、triage 和领域文档约定
 ├── architecture/     # 当前/目标架构说明、数据结构图、边界说明
 ├── adr/              # 架构决策记录
 ├── decision-maps/    # 多会话决策图
 ├── prds/             # PRD 与 GitHub issue 父任务副本
 ├── references/       # 外部资料整理、研究先验、不可执行参考
-└── 99-参考资料/      # 自动扫描报告等低频参考资料
+└── 99-参考资料/      # Legacy：自动扫描报告等低频参考资料；新参考资料优先放 references/
 ```
 
-## 职责型入口
+根目录 [`../CONTEXT.md`](../CONTEXT.md) 保存稳定领域术语，不记录实现计划、任务状态或架构决策。
+
+## Canonical 入口
 
 新增或迁移文档时优先使用这些入口：
 
@@ -28,7 +31,14 @@ docs/
 - [Architecture Notes](architecture/README.md)：当前/目标架构、模块边界、数据结构图和测试架构。
 - [ADRs](adr/README.md)：难以逆转且有真实权衡的架构决策。
 - [Agent skills](agents/README.md)：工程 skills 的 issue tracker、triage labels 和 domain docs 约定。
-- [Decision maps](decision-maps/refactor-test-hardening-2026-07.md)：需要多轮推进的规划图。
+- [Decision maps](decision-maps/README.md)：需要多轮推进的规划图。
+
+## Reading Path 和 Legacy
+
+- `01-项目概览/`、`02-架构设计/`、`03-使用指南/` 是读者快速理解和运行项目的路径，可以继续维护现有入口；新增长期 PRD、Reference、Architecture Note 或 ADR 不默认放入这些目录。
+- `04-开发验证/` 是历史开发验证入口和迁移索引；新 PRD、Reference、Architecture Note 和 ADR 不再新增到这里。
+- `05-周报/` 是 reports archive，只放面向老师快速阅读的周期小结，不作为实现规格或当前架构入口。
+- `99-参考资料/` 是低频历史参考和机器扫描产物入口；新的研究先验、外部资料和数据口径参考优先放 `references/`。
 
 ## 推荐阅读路径
 

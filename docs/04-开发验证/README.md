@@ -2,6 +2,8 @@
 
 本目录是旧开发验证入口和迁移索引。新 PRD、Reference、Architecture Note 和 ADR 不再新增到本目录。
 
+保留本目录的目的只有两个：让历史链接继续可达；为尚未迁移的开发验证、数据集审计和清理记录提供阅读入口。迁移时优先把旧文件改成 redirect 或从本 README 指向新路径，避免复制两份长期维护。
+
 后续新增或迁移文档优先使用：
 
 - [`../prds/`](../prds/)：PRD、用户故事、验收标准和 issue plan。
@@ -20,6 +22,13 @@
 - [锦江用户潜在属性研究先验整理](../references/jinjiang-user-latent-attributes-reference-zh.md)：已迁移到 Reference，保存 latent class、价值权重、Table 11 成员画像分布和使用边界。
 - [锦江用户数据结构 Architecture Note](../architecture/jinjiang-user-profile-data-structure.md)：已迁移到 Architecture Notes，说明当前用户数据与目标版本如何拆成真实观测画像属性和 latent attributes。旧入口 [08 锦江用户数据结构简图](08-jinjiang-user-data-structure-diagrams.md) 仅保留 redirect。
 - [锦江用户 Latent Attributes v1 PRD](../prds/jinjiang-user-latent-attributes-v1.md)：已迁移到 PRD，说明 latent class 标签生成、数据版本、ABM 用户对象、规则决策接入、当前未实现能力和后续 issue plan。旧入口 [09 锦江用户 Latent Attributes 新标签版本实施 Spec](09-jinjiang-user-latent-attributes-spec.md) 仅保留 redirect。
+
+## 剩余 legacy 文档处理原则
+
+- `01-development-plan.md`：历史开发计划。后续如果需要重新启用，应拆为 PRD 或 GitHub issues。
+- `02-source-tree-analysis.md`、`03-component-inventory.md`：历史源码结构和组件盘点。后续如果需要维护当前结构，应迁移为 Architecture Note。
+- `04-test-strategy.md`：历史测试策略。后续如果需要维护当前测试架构，应迁移为 Architecture Note 或测试策略文档。
+- `05-jinjiang-douyin-final-dataset-20260624.md`、`06-jinjiang-douyin-final-dataset-cleanup-20260624.md`：当前数据集审计和清理记录入口。迁移前必须保留 lineage 和旧链接。
 
 ## 迁移计划
 
