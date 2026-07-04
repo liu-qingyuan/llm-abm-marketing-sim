@@ -1,9 +1,10 @@
 # PRD: 锦江用户 Latent Attributes v1
 
-Status: Draft PRD for future implementation
+Status: Published to GitHub issue tracker
 Implementation status: Not implemented in runtime
 Parent PRD: [`docs-architecture-and-jinjiang-latent-attributes-migration.md`](docs-architecture-and-jinjiang-latent-attributes-migration.md)
 GitHub migration issue: https://github.com/liu-qingyuan/llm-abm-marketing-sim/issues/6
+GitHub implementation issue: https://github.com/liu-qingyuan/llm-abm-marketing-sim/issues/10
 Related Reference: [`../references/jinjiang-user-latent-attributes-reference-zh.md`](../references/jinjiang-user-latent-attributes-reference-zh.md)
 Related Architecture Note: [`../architecture/jinjiang-user-profile-data-structure.md`](../architecture/jinjiang-user-profile-data-structure.md)
 
