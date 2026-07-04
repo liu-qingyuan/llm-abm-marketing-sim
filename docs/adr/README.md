@@ -17,4 +17,6 @@
 - 外部研究资料或数据审计。
 - 单纯描述当前代码结构的说明文档。
 
-当前还没有正式 ADR。
+## 当前 ADR
+
+- [ADR 0001: Deterministic Event-Sourced ABM MVP](0001-deterministic-event-sourced-abm-mvp.md)：选择确定性、事件溯源、自定义 ABM MVP，并把真实 Provider 调用保留为显式 opt-in 边界。

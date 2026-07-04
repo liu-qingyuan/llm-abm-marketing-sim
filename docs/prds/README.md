@@ -10,6 +10,9 @@
 
 ## 当前 PRD
 
+- [Initial ABM MVP Development Plan](initial-abm-mvp-development-plan.md)
+  - Status: Historical PRD; not current backlog state
+  - Related ADR: [`../adr/0001-deterministic-event-sourced-abm-mvp.md`](../adr/0001-deterministic-event-sourced-abm-mvp.md)
 - [文档架构重组与锦江 Latent Attributes 迁移试点](docs-architecture-and-jinjiang-latent-attributes-migration.md)
   - GitHub issue: [#1](https://github.com/liu-qingyuan/llm-abm-marketing-sim/issues/1)
   - 子 issues: [#2](https://github.com/liu-qingyuan/llm-abm-marketing-sim/issues/2)、[#3](https://github.com/liu-qingyuan/llm-abm-marketing-sim/issues/3)、[#4](https://github.com/liu-qingyuan/llm-abm-marketing-sim/issues/4)、[#5](https://github.com/liu-qingyuan/llm-abm-marketing-sim/issues/5)、[#6](https://github.com/liu-qingyuan/llm-abm-marketing-sim/issues/6)、[#7](https://github.com/liu-qingyuan/llm-abm-marketing-sim/issues/7)
