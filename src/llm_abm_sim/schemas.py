@@ -41,6 +41,19 @@ LATENT_PROFILE_LABEL_FIELDS: tuple[str, ...] = (
 )
 
 
+class ValueDimensions(BaseModel):
+    """Consumption value salience declared by one marketing post."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    epistemic: float = Field(default=0.0, ge=0.0, le=1.0)
+    environmental: float = Field(default=0.0, ge=0.0, le=1.0)
+    functional: float = Field(default=0.0, ge=0.0, le=1.0)
+    health: float = Field(default=0.0, ge=0.0, le=1.0)
+    emotional: float = Field(default=0.0, ge=0.0, le=1.0)
+    social: float = Field(default=0.0, ge=0.0, le=1.0)
+
+
 def default_available_languages() -> list[SupportedLanguage]:
     return ["en-US", "zh-CN"]
 
@@ -52,6 +65,7 @@ class PostContent(BaseModel):
     text: str
     topic_tags: list[str] = Field(default_factory=list)
     media_summary: str | None = None
+    value_dimensions: ValueDimensions = Field(default_factory=ValueDimensions)
 
 
 class PlatformContext(BaseModel):
