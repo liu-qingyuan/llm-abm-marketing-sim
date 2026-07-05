@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -8,7 +8,13 @@ from .events import SimulationRunResult
 from .graph_loader import DatasetValidationReport, load_network_dataset
 from .provider_evidence import decision_source_summary, provider_evidence
 from .safe_serialization import safe_data
-from .schemas import SimulationInput, SupportedLanguage, default_available_languages
+from .schemas import (
+    LATENT_PROFILE_LABEL_FIELDS,
+    SimulationInput,
+    SupportedLanguage,
+    UserProfile,
+    default_available_languages,
+)
 
 METRIC_KEYS = [
     "total_agents",
@@ -22,6 +28,28 @@ METRIC_KEYS = [
     "comment_count",
     "share_count",
 ]
+LatentGroupDimension = Literal[
+    "latent_class",
+    "latent_hotel_class",
+    "latent_travel_purpose",
+    "latent_gender",
+    "latent_age",
+    "latent_education",
+    "latent_monthly_income",
+]
+LATENT_GROUP_DIMENSIONS: tuple[LatentGroupDimension, ...] = (
+    "latent_class",
+    "latent_hotel_class",
+    "latent_travel_purpose",
+    "latent_gender",
+    "latent_age",
+    "latent_education",
+    "latent_monthly_income",
+)
+LATENT_GROUP_PRIVACY_NOTICE = (
+    "Latent labels are Virtual Experiment Labels for controlled ABM grouping. "
+    "They are not real user identity, not real demographic attributes, and not psychological profiles."
+)
 
 
 class MetricView(BaseModel):
@@ -29,6 +57,25 @@ class MetricView(BaseModel):
     value: float | int | str | list[str] | dict[str, int]
     label_key: str
     description_key: str
+
+
+class LatentGroupKey(BaseModel):
+    dimension: LatentGroupDimension
+    value: str
+
+
+class LatentGroupMetrics(BaseModel):
+    group: LatentGroupKey
+    user_count: int
+    exposed_count: int
+    engaged_count: int
+    engagement_rate: float
+
+
+class LatentGroupReport(BaseModel):
+    available: bool
+    privacy_notice: str = LATENT_GROUP_PRIVACY_NOTICE
+    groups: list[LatentGroupMetrics] = Field(default_factory=list)
 
 
 class ReportPayload(BaseModel):
@@ -46,6 +93,7 @@ class ReportPayload(BaseModel):
     dataset_validation: dict[str, Any] | None
     decision_source_summary: dict[str, int]
     provider_evidence: dict[str, Any] | None
+    latent_group_report: LatentGroupReport
     narrative: dict[str, str]
 
 
@@ -89,11 +137,12 @@ def build_report_payload(
         "time_step_label": config.simulation.time_step_label,
         "observation_window": config.simulation.observation_window,
     }
-    trend = [record.model_dump(mode="json") for record in result.step_records]
+    trend = [_report_payload_data(record.model_dump(mode="json")) for record in result.step_records]
     narrative = {
         "summary_en": _narrative_summary(result, source_summary, "en-US"),
         "summary_zh": _narrative_summary(result, source_summary, "zh-CN"),
     }
+    latent_group_report = build_latent_group_report(result, config)
     return ReportPayload.model_validate(
         safe_data(
             {
@@ -108,10 +157,88 @@ def build_report_payload(
                 "dataset_validation": dataset_payload,
                 "decision_source_summary": source_summary,
                 "provider_evidence": provider_evidence(result, provider_readiness),
+                "latent_group_report": latent_group_report.model_dump(mode="json"),
                 "narrative": narrative,
             }
         )
     )
+
+
+def build_latent_group_report(result: SimulationRunResult, config: SimulationInput) -> LatentGroupReport:
+    """Aggregate spread outcomes by allowed latent class and Table 11 label dimensions."""
+
+    dataset = load_network_dataset(
+        config.dataset,
+        inline_edges=[(str(left), str(right)) for left, right in config.graph_edges],
+        inline_profiles=config.profiles,
+        seed_user_ids=config.simulation.seed_user_ids,
+    )
+    profiles = dataset.profiles
+    exposed_user_ids = {event.user_id for event in result.exposure_events}
+    engaged_user_ids = {event.user_id for event in result.action_events}
+
+    groups: dict[tuple[LatentGroupDimension, str], dict[str, set[str]]] = {}
+    for user_id, profile in profiles.items():
+        for dimension, value in _latent_group_values(profile):
+            bucket = groups.setdefault(
+                (dimension, value),
+                {"users": set(), "exposed": set(), "engaged": set()},
+            )
+            bucket["users"].add(user_id)
+            if user_id in exposed_user_ids:
+                bucket["exposed"].add(user_id)
+            if user_id in engaged_user_ids:
+                bucket["engaged"].add(user_id)
+
+    metrics = []
+    for dimension in LATENT_GROUP_DIMENSIONS:
+        dimension_groups = sorted(
+            ((value, counts) for (group_dimension, value), counts in groups.items() if group_dimension == dimension),
+            key=lambda item: item[0],
+        )
+        for value, counts in dimension_groups:
+            exposed_count = len(counts["exposed"])
+            engaged_count = len(counts["engaged"])
+            metrics.append(
+                LatentGroupMetrics(
+                    group=LatentGroupKey(dimension=dimension, value=value),
+                    user_count=len(counts["users"]),
+                    exposed_count=exposed_count,
+                    engaged_count=engaged_count,
+                    engagement_rate=round(engaged_count / exposed_count, 6) if exposed_count else 0.0,
+                )
+            )
+
+    return LatentGroupReport(available=bool(metrics), groups=metrics)
+
+
+def _latent_group_values(profile: UserProfile) -> list[tuple[LatentGroupDimension, str]]:
+    attributes = profile.latent_attributes
+    if attributes is None:
+        return []
+    values: list[tuple[LatentGroupDimension, str]] = [("latent_class", attributes.latent_class)]
+    profile_labels = attributes.profile_labels.model_dump(mode="json")
+    for field_name in LATENT_PROFILE_LABEL_FIELDS:
+        dimension = f"latent_{field_name}"
+        if dimension in LATENT_GROUP_DIMENSIONS:
+            values.append((dimension, str(profile_labels[field_name])))  # type: ignore[arg-type]
+    return values
+
+
+def _report_payload_data(value: Any) -> Any:
+    return _drop_report_only_profile_fields(safe_data(value))
+
+
+def _drop_report_only_profile_fields(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {
+            key: _drop_report_only_profile_fields(item)
+            for key, item in value.items()
+            if key != "latent_attributes"
+        }
+    if isinstance(value, list):
+        return [_drop_report_only_profile_fields(item) for item in value]
+    return value
 
 
 def build_graph_trace(result: SimulationRunResult, config: SimulationInput) -> dict[str, Any]:
@@ -135,16 +262,16 @@ def build_graph_trace(result: SimulationRunResult, config: SimulationInput) -> d
     engaged_steps: dict[str, int] = {}
 
     for exposure_event in result.exposure_events:
-        payload = exposure_event.model_dump(mode="json")
+        payload = _report_payload_data(exposure_event.model_dump(mode="json"))
         exposures_by_user.setdefault(exposure_event.user_id, []).append(payload)
         exposed_steps[exposure_event.user_id] = min(
             exposed_steps.get(exposure_event.user_id, exposure_event.time_step), exposure_event.time_step
         )
     for decision_event in result.decision_events:
-        payload = decision_event.model_dump(mode="json")
+        payload = _report_payload_data(decision_event.model_dump(mode="json"))
         decisions_by_user.setdefault(decision_event.user_id, []).append(payload)
     for action_event in result.action_events:
-        payload = action_event.model_dump(mode="json")
+        payload = _report_payload_data(action_event.model_dump(mode="json"))
         actions_by_user.setdefault(action_event.user_id, []).append(payload)
         engaged_steps[action_event.user_id] = min(
             engaged_steps.get(action_event.user_id, action_event.time_step), action_event.time_step
@@ -153,7 +280,11 @@ def build_graph_trace(result: SimulationRunResult, config: SimulationInput) -> d
     nodes = []
     for node_id in sorted(str(node) for node in graph.nodes):
         profile = profiles.get(node_id)
-        profile_payload = profile.model_dump(mode="json") if profile is not None else {"user_id": node_id}
+        profile_payload = (
+            _report_payload_data(profile.model_dump(mode="json", exclude={"latent_attributes"}))
+            if profile is not None
+            else {"user_id": node_id}
+        )
         nodes.append(
             {
                 "id": node_id,
@@ -186,13 +317,13 @@ def build_graph_trace(result: SimulationRunResult, config: SimulationInput) -> d
             "engaged_count": step.engaged_count,
             "new_exposed_count": step.new_exposed_count,
             "new_engaged_count": step.new_engaged_count,
-            "exposure_events": [event.model_dump(mode="json") for event in step.exposure_events],
-            "decision_events": [event.model_dump(mode="json") for event in step.decision_events],
-            "action_events": [event.model_dump(mode="json") for event in step.action_events],
+            "exposure_events": [_report_payload_data(event.model_dump(mode="json")) for event in step.exposure_events],
+            "decision_events": [_report_payload_data(event.model_dump(mode="json")) for event in step.decision_events],
+            "action_events": [_report_payload_data(event.model_dump(mode="json")) for event in step.action_events],
         }
         for step in result.step_records
     ]
-    return safe_data(
+    return _report_payload_data(
         {
             "schema_version": "graph-trace-v1",
             "nodes": nodes,

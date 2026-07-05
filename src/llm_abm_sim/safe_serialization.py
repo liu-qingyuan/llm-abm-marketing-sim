@@ -22,11 +22,16 @@ FORBIDDEN_ARTIFACT_TERMS = (
 
 _DROP_KEY_FRAGMENTS = (
     "authorization",
+    "bio",
     "cookie",
     "headers",
+    "nickname",
     "raw_auth",
+    "raw payload",
+    "raw_payload",
     "raw_prompt",
     "raw_provider",
+    "signature",
     "credential_path",
 )
 

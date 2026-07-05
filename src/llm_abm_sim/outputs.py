@@ -129,6 +129,7 @@ def write_report_html(
 
 def _report_document(title: str, payload: ReportPayload, payload_json: str, i18n_json: str, cytoscape_js: str) -> str:
     metric_cards = _metric_cards(payload)
+    latent_group_html = _latent_group_html(payload)
     trend_rows = _trend_rows(payload)
     trend_bars = _trend_bars(payload)
     dataset_html = _dataset_validation_html(payload.dataset_validation)
@@ -176,6 +177,7 @@ def _report_document(title: str, payload: ReportPayload, payload_json: str, i18n
     </div></section>
     <section data-testid="inputs-section"><h2 data-i18n="input.title">Inputs Used</h2>{input_html}</section>
     <section data-testid="metrics-section"><h2 data-i18n="metrics.title">Key Metrics</h2><div class="card-grid" data-testid="metrics-cards">{metric_cards}</div><h3 data-i18n="metrics.help">Metric meanings</h3>{_metric_help_table()}</section>
+    <section data-testid="latent-group-section"><h2>Latent Group Spread Metrics</h2>{latent_group_html}</section>
     <section data-testid="what-happened-section"><h2 data-i18n="what.title">What Happened</h2><p data-testid="narrative-summary" data-narrative-en="{escape(payload.narrative["summary_en"])}" data-narrative-zh="{escape(payload.narrative["summary_zh"])}">{escape(payload.narrative["summary_en"])}</p><p class="subtle" data-i18n="what.body">The narrative summarizes final reach, engagement, spread speed, and decision source evidence.</p></section>
     <section data-testid="trend-section"><h2 data-i18n="trend.title">Exposure / Engagement Trend</h2><div class="trend" data-testid="trend-chart">{trend_bars}</div><table data-testid="step-records-table"><thead><tr><th data-i18n="trend.step">Step</th><th data-i18n="trend.exposed">Exposed</th><th data-i18n="trend.engaged">Engaged</th><th data-i18n="trend.newExposed">New Exposed</th><th data-i18n="trend.newEngaged">New Engaged</th><th data-i18n="trend.exposureEvents">Exposure Events</th><th data-i18n="trend.decisionEvents">Decision Events</th><th data-i18n="trend.actionEvents">Action Events</th></tr></thead><tbody>{trend_rows}</tbody></table></section>
     <section data-testid="interactive-trace-section" id="interactive-trace-section"><h2 data-i18n="graph.title">Interactive ABM Trace</h2><p class="subtle">Environment computes exposure → Agent observes post and neighbor behavior → DecisionAdapter decides → user state/action updates → metrics/events collected.</p><div class="state-legend" aria-label="Node state legend"><span><i class="legend-dot" style="background:#cbd5e1"></i><span data-i18n="graph.unseen">unseen</span></span><span><i class="legend-dot" style="background:#f59e0b"></i><span data-i18n="graph.exposed">exposed</span></span><span><i class="legend-dot" style="background:#16a34a"></i><span data-i18n="graph.engaged">engaged</span></span><span><i class="legend-dot" style="background:#7c3aed"></i><span data-i18n="graph.seed">seed</span></span></div><div class="trace-controls"><label for="step-slider" class="label" data-i18n="graph.selectedStep">Selected time step</label><input data-testid="step-slider" id="step-slider" type="range" min="0" max="{max_step}" step="1" value="0"><strong data-testid="selected-step-label" id="selected-step-label">Step 0</strong></div><div class="trace-layout"><div><div data-testid="abm-graph" id="abm-graph" role="img" aria-label="Interactive ABM social graph"></div><div class="node-buttons" id="node-button-list" aria-label="Fallback node selector"></div></div><div class="trace-stack"><article class="trace-panel" data-testid="node-detail-panel" id="node-detail-panel"><h3 data-i18n="graph.nodeDetail">Node Detail</h3><p>Select a node to inspect profile and timeline.</p></article><article class="trace-panel" data-testid="event-stream-panel" id="event-stream-panel"><h3 data-i18n="graph.eventStream">Event Stream</h3></article><article class="trace-panel" data-testid="decision-trace-panel" id="decision-trace-panel"><h3 data-i18n="decision.panel">Decision Trace</h3></article></div></div></section>
@@ -226,6 +228,30 @@ def _metric_help_table() -> str:
         for key in METRIC_KEYS
     )
     return f'<table data-testid="metric-help-table"><tbody>{rows}</tbody></table>'
+
+
+def _latent_group_html(payload: ReportPayload) -> str:
+    report = payload.latent_group_report
+    notice = f'<p class="subtle" data-testid="latent-group-notice">{escape(report.privacy_notice)}</p>'
+    if not report.available:
+        return notice + '<p data-testid="latent-group-unavailable">Latent grouping unavailable for this run.</p>'
+    rows = "\n".join(
+        "<tr>"
+        f"<td>{escape(metric.group.dimension)}</td>"
+        f"<td>{escape(metric.group.value)}</td>"
+        f"<td>{metric.user_count}</td>"
+        f"<td>{metric.exposed_count}</td>"
+        f"<td>{metric.engaged_count}</td>"
+        f"<td>{metric.engagement_rate}</td>"
+        "</tr>"
+        for metric in report.groups
+    )
+    return (
+        notice
+        + '<table data-testid="latent-group-table"><thead><tr>'
+        "<th>Dimension</th><th>Value</th><th>Users</th><th>Exposed</th><th>Engaged</th><th>Engagement Rate</th>"
+        f"</tr></thead><tbody>{rows}</tbody></table>"
+    )
 
 
 def _trend_rows(payload: ReportPayload) -> str:
