@@ -9,9 +9,33 @@ from typing import Any
 
 import networkx as nx
 
-from .schemas import DatasetConfig, ExtraProfilePolicy, MissingProfilePolicy, ProfileFormat, UserProfile
+from .schemas import (
+    LATENT_PROFILE_LABEL_FIELDS,
+    LATENT_VALUE_DIMENSIONS,
+    DatasetConfig,
+    ExtraProfilePolicy,
+    MissingProfilePolicy,
+    ProfileFormat,
+    UserProfile,
+)
 
 PROFILE_LIST_FIELDS = {"interest_tags"}
+LATENT_SPEC_FIELD = "latent_attribute_spec_id"
+LATENT_METHOD_FIELD = "latent_attribute_method"
+LATENT_SEED_FIELD = "latent_attribute_seed"
+LATENT_CLASS_FIELD = "latent_class"
+LATENT_ENVIRONMENTAL_COEF_FIELD = "latent_environmental_consciousness_coef"
+LATENT_VALUE_WEIGHT_FIELDS = tuple(f"latent_{dimension}_value_weight" for dimension in LATENT_VALUE_DIMENSIONS)
+LATENT_PROFILE_LABEL_COLUMNS = tuple(f"latent_{field_name}" for field_name in LATENT_PROFILE_LABEL_FIELDS)
+LATENT_FLAT_FIELDS = (
+    LATENT_SPEC_FIELD,
+    LATENT_METHOD_FIELD,
+    LATENT_SEED_FIELD,
+    LATENT_CLASS_FIELD,
+    LATENT_ENVIRONMENTAL_COEF_FIELD,
+    *LATENT_VALUE_WEIGHT_FIELDS,
+    *LATENT_PROFILE_LABEL_COLUMNS,
+)
 
 
 @dataclass(frozen=True)
@@ -319,6 +343,38 @@ def _normalize_profile_record(record: dict[str, Any]) -> dict[str, Any]:
             normalized[key] = _parse_list_value(value)
         else:
             normalized[key] = value
+    return _normalize_flat_latent_attributes(normalized)
+
+
+def _normalize_flat_latent_attributes(record: dict[str, Any]) -> dict[str, Any]:
+    present_fields = [field_name for field_name in LATENT_FLAT_FIELDS if field_name in record]
+    if not present_fields:
+        return record
+
+    missing_fields = [field_name for field_name in LATENT_FLAT_FIELDS if field_name not in record]
+    if missing_fields:
+        profile_id = record.get("user_id", "<unknown>")
+        raise ValueError(
+            "Profile "
+            f"{profile_id!r} has incomplete latent attributes; missing required latent columns: "
+            f"{', '.join(missing_fields)}"
+        )
+
+    normalized = dict(record)
+    latent_attributes = {
+        "spec_id": normalized.pop(LATENT_SPEC_FIELD),
+        "method": normalized.pop(LATENT_METHOD_FIELD),
+        "seed": normalized.pop(LATENT_SEED_FIELD),
+        "latent_class": normalized.pop(LATENT_CLASS_FIELD),
+        "environmental_consciousness_coef": normalized.pop(LATENT_ENVIRONMENTAL_COEF_FIELD),
+        "value_weights": {
+            dimension: normalized.pop(f"latent_{dimension}_value_weight") for dimension in LATENT_VALUE_DIMENSIONS
+        },
+        "profile_labels": {
+            field_name: normalized.pop(f"latent_{field_name}") for field_name in LATENT_PROFILE_LABEL_FIELDS
+        },
+    }
+    normalized["latent_attributes"] = latent_attributes
     return normalized
 
 

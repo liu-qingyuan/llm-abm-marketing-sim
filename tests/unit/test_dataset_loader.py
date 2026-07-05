@@ -7,6 +7,46 @@ import pytest
 from llm_abm_sim.graph_loader import load_network_dataset
 from llm_abm_sim.schemas import DatasetConfig, ExtraProfilePolicy, MissingProfilePolicy, ProfileFormat, UserProfile
 
+LATENT_COLUMNS = [
+    "latent_attribute_spec_id",
+    "latent_attribute_method",
+    "latent_attribute_seed",
+    "latent_class",
+    "latent_environmental_consciousness_coef",
+    "latent_epistemic_value_weight",
+    "latent_environmental_value_weight",
+    "latent_functional_value_weight",
+    "latent_health_value_weight",
+    "latent_emotional_value_weight",
+    "latent_social_value_weight",
+    "latent_hotel_class",
+    "latent_travel_purpose",
+    "latent_gender",
+    "latent_age",
+    "latent_education",
+    "latent_monthly_income",
+]
+
+VALID_LATENT_VALUES = [
+    "jinjiang_user_latent_attributes_v1",
+    "latent_class_exact_quota_v1",
+    "20260630",
+    "class_1",
+    "1.037",
+    "-1.678",
+    "2.054",
+    "-0.938",
+    "1.502",
+    "-1.517",
+    "0.576",
+    "economy",
+    "business",
+    "female",
+    "age_26_35",
+    "bachelor",
+    "income_8001_15000",
+]
+
 
 def test_load_network_dataset_returns_directed_graph_profiles_and_serializable_report(tmp_path):
     edges = tmp_path / "edges.csv"
@@ -82,9 +122,140 @@ def test_load_network_dataset_parses_csv_profiles_and_defaults_missing_profiles(
     assert isinstance(dataset.graph, nx.Graph)
     assert sorted(dataset.profiles) == ["u1", "u2", "u3"]
     assert dataset.profiles["u1"].interest_tags == ["eco", "skincare"]
+    assert dataset.profiles["u1"].latent_attributes is None
     assert dataset.profiles["u3"] == UserProfile(user_id="u3")
     assert dataset.validation_report.missing_profile_ids == ["u3"]
     assert dataset.validation_report.default_profile_ids == ["u3"]
+
+
+def test_load_network_dataset_parses_flat_latent_profile_columns(tmp_path):
+    edges = tmp_path / "edges.csv"
+    edges.write_text("u1 u2\n", encoding="utf-8")
+    profiles = tmp_path / "profiles.csv"
+    header = ["user_id", "interest_tags", "unknown_metric", *LATENT_COLUMNS]
+    profiles.write_text(
+        ",".join(header)
+        + "\n"
+        + ",".join(["u1", "eco|hotel", "kept", *VALID_LATENT_VALUES])
+        + "\n"
+        + ",".join(["u2", "hotel", "also-kept", *([""] * len(LATENT_COLUMNS))])
+        + "\n",
+        encoding="utf-8",
+    )
+
+    dataset = load_network_dataset(
+        DatasetConfig(edge_list_path=edges, profile_path=profiles, profile_format=ProfileFormat.CSV)
+    )
+
+    attributes = dataset.profiles["u1"].latent_attributes
+    assert attributes is not None
+    assert attributes.spec_id == "jinjiang_user_latent_attributes_v1"
+    assert attributes.method == "latent_class_exact_quota_v1"
+    assert attributes.seed == 20260630
+    assert attributes.latent_class == "class_1"
+    assert attributes.environmental_consciousness_coef == 1.037
+    assert attributes.value_weights.epistemic == -1.678
+    assert attributes.value_weights.environmental == 2.054
+    assert attributes.value_weights.functional == -0.938
+    assert attributes.value_weights.health == 1.502
+    assert attributes.value_weights.emotional == -1.517
+    assert attributes.value_weights.social == 0.576
+    assert attributes.profile_labels.hotel_class == "economy"
+    assert attributes.profile_labels.travel_purpose == "business"
+    assert attributes.profile_labels.gender == "female"
+    assert attributes.profile_labels.age == "age_26_35"
+    assert attributes.profile_labels.education == "bachelor"
+    assert attributes.profile_labels.monthly_income == "income_8001_15000"
+    assert dataset.profiles["u2"].latent_attributes is None
+
+    extras = dataset.profiles["u1"].model_extra or {}
+    assert extras["unknown_metric"] == "kept"
+    assert "latent_class" not in extras
+    assert "latent_epistemic_value_weight" not in extras
+    assert dataset.validation_report.preserved_profile_attribute_columns == ["unknown_metric"]
+
+
+def test_load_network_dataset_parses_flat_latent_json_profile_columns(tmp_path):
+    edges = tmp_path / "edges.csv"
+    edges.write_text("u1 u2\n", encoding="utf-8")
+    profiles = tmp_path / "profiles.json"
+    profiles.write_text(
+        json.dumps(
+            {
+                "profiles": [
+                    {
+                        "user_id": "u1",
+                        **dict(zip(LATENT_COLUMNS, VALID_LATENT_VALUES, strict=True)),
+                    },
+                    {"user_id": "u2"},
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    dataset = load_network_dataset(
+        DatasetConfig(edge_list_path=edges, profile_path=profiles, profile_format=ProfileFormat.JSON)
+    )
+
+    assert dataset.profiles["u1"].latent_attributes is not None
+    assert dataset.profiles["u1"].latent_attributes.profile_labels.monthly_income == "income_8001_15000"
+    assert dataset.profiles["u2"].latent_attributes is None
+
+
+def test_load_network_dataset_rejects_incomplete_latent_profile_columns(tmp_path):
+    edges = tmp_path / "edges.csv"
+    edges.write_text("u1 u2\n", encoding="utf-8")
+    profiles = tmp_path / "profiles.csv"
+    profiles.write_text(
+        "user_id,latent_attribute_spec_id,latent_class\nu1,jinjiang_user_latent_attributes_v1,class_1\nu2,,\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="incomplete latent attributes.*latent_attribute_method"):
+        load_network_dataset(DatasetConfig(edge_list_path=edges, profile_path=profiles, profile_format=ProfileFormat.CSV))
+
+
+def test_load_network_dataset_rejects_invalid_latent_class_and_numeric_values(tmp_path):
+    edges = tmp_path / "edges.csv"
+    edges.write_text("u1 u2\n", encoding="utf-8")
+    header = ["user_id", *LATENT_COLUMNS]
+
+    invalid_class = tmp_path / "invalid_class_profiles.csv"
+    invalid_values = VALID_LATENT_VALUES.copy()
+    invalid_values[LATENT_COLUMNS.index("latent_class")] = "class_4"
+    invalid_class.write_text(
+        ",".join(header) + "\n" + ",".join(["u1", *invalid_values]) + "\n" + ",".join(["u2", *VALID_LATENT_VALUES]),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="latent_attributes.latent_class"):
+        load_network_dataset(
+            DatasetConfig(edge_list_path=edges, profile_path=invalid_class, profile_format=ProfileFormat.CSV)
+        )
+
+    invalid_profile_label = tmp_path / "invalid_profile_label_profiles.csv"
+    invalid_values = VALID_LATENT_VALUES.copy()
+    invalid_values[LATENT_COLUMNS.index("latent_monthly_income")] = "income_unknown"
+    invalid_profile_label.write_text(
+        ",".join(header) + "\n" + ",".join(["u1", *invalid_values]) + "\n" + ",".join(["u2", *VALID_LATENT_VALUES]),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="latent_attributes.profile_labels.monthly_income"):
+        load_network_dataset(
+            DatasetConfig(edge_list_path=edges, profile_path=invalid_profile_label, profile_format=ProfileFormat.CSV)
+        )
+
+    invalid_seed = tmp_path / "invalid_seed_profiles.csv"
+    invalid_values = VALID_LATENT_VALUES.copy()
+    invalid_values[LATENT_COLUMNS.index("latent_attribute_seed")] = "not-a-number"
+    invalid_seed.write_text(
+        ",".join(header) + "\n" + ",".join(["u1", *invalid_values]) + "\n" + ",".join(["u2", *VALID_LATENT_VALUES]),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="latent_attributes.seed"):
+        load_network_dataset(
+            DatasetConfig(edge_list_path=edges, profile_path=invalid_seed, profile_format=ProfileFormat.CSV)
+        )
 
 
 def test_load_network_dataset_supports_extra_profile_policies(tmp_path):

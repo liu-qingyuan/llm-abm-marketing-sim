@@ -4,12 +4,41 @@ from enum import Enum
 from pathlib import Path
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator
 
 from .provider_config import sanitize_url
 
 SupportedLanguage = Literal["en-US", "zh-CN"]
 SUPPORTED_LANGUAGES: tuple[SupportedLanguage, ...] = ("en-US", "zh-CN")
+LatentClass = Literal["class_1", "class_2", "class_3"]
+HotelClassLabel = Literal["economy", "midscale", "upper_midscale"]
+TravelPurposeLabel = Literal["business", "leisure"]
+GenderLabel = Literal["female", "male"]
+AgeLabel = Literal["age_18_25", "age_26_35", "age_36_45", "age_46_55", "age_56_plus"]
+EducationLabel = Literal["high_school_or_below", "community_college", "bachelor", "master_or_above"]
+MonthlyIncomeLabel = Literal[
+    "income_8000_or_less",
+    "income_8001_15000",
+    "income_15001_25000",
+    "income_25001_40000",
+    "income_40001_or_more",
+]
+LATENT_VALUE_DIMENSIONS: tuple[str, ...] = (
+    "epistemic",
+    "environmental",
+    "functional",
+    "health",
+    "emotional",
+    "social",
+)
+LATENT_PROFILE_LABEL_FIELDS: tuple[str, ...] = (
+    "hotel_class",
+    "travel_purpose",
+    "gender",
+    "age",
+    "education",
+    "monthly_income",
+)
 
 
 def default_available_languages() -> list[SupportedLanguage]:
@@ -35,6 +64,53 @@ class PlatformContext(BaseModel):
     trace_visibility: float = Field(default=1.0, ge=0.0, le=1.0)
 
 
+class LatentValueWeights(BaseModel):
+    """Consumer value weights assigned to one latent class."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    epistemic: float
+    environmental: float
+    functional: float
+    health: float
+    emotional: float
+    social: float
+
+
+class LatentProfileLabels(BaseModel):
+    """Virtual experiment profile labels for grouping latent-class users."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    hotel_class: HotelClassLabel
+    travel_purpose: TravelPurposeLabel
+    gender: GenderLabel
+    age: AgeLabel
+    education: EducationLabel
+    monthly_income: MonthlyIncomeLabel
+
+
+class LatentAttributes(BaseModel):
+    """Structured runtime contract for latent user attributes."""
+
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    spec_id: str
+    method: str
+    seed: int
+    latent_class: LatentClass
+    environmental_consciousness_coef: float
+    value_weights: LatentValueWeights
+    profile_labels: LatentProfileLabels = Field(validation_alias=AliasChoices("profile_labels", "class_profile"))
+
+    @field_validator("spec_id", "method")
+    @classmethod
+    def _non_empty(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("must not be empty")
+        return value
+
+
 class UserProfile(BaseModel):
     """Individual preference state for one social-media user agent.
 
@@ -53,6 +129,7 @@ class UserProfile(BaseModel):
     like_tendency: float = Field(default=0.5, ge=0.0, le=1.0)
     comment_tendency: float = Field(default=0.2, ge=0.0, le=1.0)
     share_tendency: float = Field(default=0.2, ge=0.0, le=1.0)
+    latent_attributes: LatentAttributes | None = None
 
 
 class PeerContext(BaseModel):
