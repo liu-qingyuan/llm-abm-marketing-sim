@@ -76,7 +76,10 @@ class ExperimentRunner:
             return self.decision_adapter_override
         provider_config = self.config.provider_llm
         if not provider_config.enabled:
-            return CachedDecisionAdapter(RuleBasedDecisionAdapter(), InMemoryDecisionCache())
+            return CachedDecisionAdapter(
+                RuleBasedDecisionAdapter(self.config.rule_based_decision),
+                InMemoryDecisionCache(),
+            )
         if provider_config.fail_closed_action == FailClosedAction.SKIP_RUN:
             raise RuntimeError("provider_llm.fail_closed_action=skip_run prevents simulator run start")
         from .providers.openai_compatible import OpenAICompatibleDecisionAdapter

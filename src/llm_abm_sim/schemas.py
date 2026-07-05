@@ -176,6 +176,12 @@ class SimulationConfig(BaseModel):
     share_exposure_boost: float = Field(default=0.0, ge=0.0, le=1.0)
 
 
+class RuleBasedDecisionConfig(BaseModel):
+    """Local configuration for the deterministic rule-based decision adapter."""
+
+    latent_value_weight: float = Field(default=0.0, ge=0.0, le=1.0)
+
+
 class ProfileFormat(str, Enum):
     """Supported profile file encodings for dataset-backed runs."""
 
@@ -307,4 +313,5 @@ class SimulationInput(BaseModel):
     graph_edges: list[tuple[str, str]] = Field(default_factory=list)
     dataset: DatasetConfig = Field(default_factory=DatasetConfig)
     report: ReportConfig = Field(default_factory=ReportConfig)
+    rule_based_decision: RuleBasedDecisionConfig = Field(default_factory=RuleBasedDecisionConfig)
     provider_llm: ProviderLLMConfig = Field(default_factory=ProviderLLMConfig)

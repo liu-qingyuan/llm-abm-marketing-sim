@@ -8,7 +8,14 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
-from .schemas import PeerContext, PlatformContext, PostContent, UserProfile
+from .schemas import (
+    LATENT_VALUE_DIMENSIONS,
+    PeerContext,
+    PlatformContext,
+    PostContent,
+    RuleBasedDecisionConfig,
+    UserProfile,
+)
 
 EngagementAction = Literal["ignore", "like", "comment", "share"]
 
@@ -89,10 +96,10 @@ class LLMDecisionAdapter(ABC):
 class CachedDecisionAdapter(LLMDecisionAdapter):
     """LLMDecisionAdapter wrapper with stable DecisionInput cache keys."""
 
-    def __init__(self, wrapped: LLMDecisionAdapter, cache: DecisionCache, prompt_version: str = "engage-v1") -> None:
+    def __init__(self, wrapped: LLMDecisionAdapter, cache: DecisionCache, prompt_version: str | None = None) -> None:
         self.wrapped = wrapped
         self.cache = cache
-        self.prompt_version = prompt_version
+        self.prompt_version = prompt_version or str(getattr(wrapped, "prompt_version", "engage-v1"))
 
     def decide(
         self,
@@ -123,6 +130,11 @@ class RuleBasedDecisionAdapter(LLMDecisionAdapter):
 
     prompt_version = "engage-v1"
 
+    def __init__(self, config: RuleBasedDecisionConfig | None = None) -> None:
+        self.config = config or RuleBasedDecisionConfig()
+        if self.config.latent_value_weight > 0.0:
+            self.prompt_version = f"engage-v1-rule-latent-value-{self.config.latent_value_weight:g}"
+
     def decide(
         self,
         post: PostContent,
@@ -143,15 +155,43 @@ class RuleBasedDecisionAdapter(LLMDecisionAdapter):
             + 0.10 * profile.activity_score
             + platform_score
         )
+        latent_value_score = _latent_value_score(post, profile)
+        latent_applied = self.config.latent_value_weight > 0.0 and latent_value_score > 0.0
+        if latent_applied:
+            score += self.config.latent_value_weight * latent_value_score
         probability = round(min(score, 1.0), 4)
         action = _select_action(probability, profile, peer_context)
+        latent_reason = (
+            f"latent value score applied ({latent_value_score:.4f})"
+            if latent_applied
+            else "latent value score not applied"
+        )
         return EngageDecision(
             engage=action != "ignore",
             action=action,
             probability=probability,
-            reason="weighted baseline over post content, preference, peer influence, and platform context",
+            reason=(
+                "weighted baseline over post content, preference, peer influence, and platform context; "
+                f"{latent_reason}"
+            ),
             confidence=1.0,
+            provider_metadata={
+                "latent_value_score_applied": latent_applied,
+                "latent_value_score": round(latent_value_score, 4),
+                "latent_value_weight": self.config.latent_value_weight,
+            },
         )
+
+
+def _latent_value_score(post: PostContent, profile: UserProfile) -> float:
+    attributes = profile.latent_attributes
+    if attributes is None:
+        return 0.0
+    raw_score = sum(
+        getattr(attributes.value_weights, dimension) * getattr(post.value_dimensions, dimension)
+        for dimension in LATENT_VALUE_DIMENSIONS
+    )
+    return min(max(raw_score, 0.0), 1.0)
 
 
 def _select_action(probability: float, profile: UserProfile, peer_context: PeerContext) -> EngagementAction:

@@ -9,6 +9,7 @@ from .decision import (
     InMemoryDecisionCache,
     LLMDecisionAdapter,
     RuleBasedDecisionAdapter,
+    RuleBasedDecisionConfig,
 )
 from .environment import PlatformEnvironment
 from .events import ActionEvent, DecisionEvent, ExposureEvent, SimulationRunResult, StepRecord
@@ -30,6 +31,7 @@ __all__ = [
     "LLMDecisionAdapter",
     "PlatformEnvironment",
     "RuleBasedDecisionAdapter",
+    "RuleBasedDecisionConfig",
     "SimulationModel",
     "SimulationRunResult",
     "SocialUserAgent",
