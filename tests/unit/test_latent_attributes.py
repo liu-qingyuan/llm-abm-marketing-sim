@@ -17,6 +17,9 @@ from llm_abm_sim.data_sources.latent_attributes import (
     write_latent_assignment_outputs,
 )
 
+REPO_ROOT = Path(__file__).resolve().parents[2]
+JINJIANG_LATENT_SPEC = REPO_ROOT / "configs" / "latent_attributes" / "jinjiang_user_latent_attributes_v1.yaml"
+
 
 def make_spec_payload() -> dict[str, object]:
     profile_distributions = {
@@ -100,6 +103,19 @@ def test_load_latent_attribute_spec_from_yaml_and_validate_required_fields(tmp_p
         "social",
     }
     assert set(spec.classes["class_1"].profile_distributions) == set(PROFILE_FIELDS)
+
+
+def test_jinjiang_latent_spec_matches_final_dataset_validation_class_targets() -> None:
+    spec = load_latent_attribute_spec(JINJIANG_LATENT_SPEC)
+    user_ids = [f"user_{index:05d}" for index in range(36_400)]
+
+    result = assign_latent_attributes(user_ids, spec, seed=20260630)
+
+    assert result.audit.class_counts["class_1"]["target_count"] == 15_616
+    assert result.audit.class_counts["class_2"]["target_count"] == 15_070
+    assert result.audit.class_counts["class_3"]["target_count"] == 5_714
+    assert result.audit.max_count_deviation == 0
+    assert result.audit.max_proportion_deviation == 0.0
 
 
 def test_spec_validation_rejects_missing_class_value_dimension_profile_field_and_bad_distribution() -> None:

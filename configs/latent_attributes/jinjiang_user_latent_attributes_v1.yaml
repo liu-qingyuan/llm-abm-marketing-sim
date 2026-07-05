@@ -1,0 +1,117 @@
+spec_id: jinjiang_user_latent_attributes_v1
+method: latent_class_exact_quota_v1
+classes:
+  class_1:
+    probability: 0.429010989010989
+    environmental_consciousness_coef: 1.037
+    value_weights:
+      epistemic: -1.678
+      environmental: 2.054
+      functional: -0.938
+      health: 1.502
+      emotional: -1.517
+      social: 0.576
+    profile_distributions:
+      hotel_class:
+        economy: 0.371
+        midscale: 0.359
+        upper_midscale: 0.270
+      travel_purpose:
+        business: 0.427
+        leisure: 0.573
+      gender:
+        female: 0.594
+        male: 0.406
+      age:
+        age_18_25: 0.168
+        age_26_35: 0.405
+        age_36_45: 0.273
+        age_46_55: 0.096
+        age_56_plus: 0.058
+      education:
+        high_school_or_below: 0.048
+        community_college: 0.062
+        bachelor: 0.656
+        master_or_above: 0.234
+      monthly_income:
+        income_8000_or_less: 0.302
+        income_8001_15000: 0.448
+        income_15001_25000: 0.212
+        income_25001_40000: 0.030
+        income_40001_or_more: 0.008
+  class_2:
+    probability: 0.414010989010989
+    environmental_consciousness_coef: -0.833
+    value_weights:
+      epistemic: -1.706
+      environmental: 0.099
+      functional: 1.544
+      health: 2.634
+      emotional: -1.047
+      social: -1.525
+    profile_distributions:
+      hotel_class:
+        economy: 0.351
+        midscale: 0.470
+        upper_midscale: 0.179
+      travel_purpose:
+        business: 0.212
+        leisure: 0.788
+      gender:
+        female: 0.640
+        male: 0.360
+      age:
+        age_18_25: 0.312
+        age_26_35: 0.361
+        age_36_45: 0.198
+        age_46_55: 0.101
+        age_56_plus: 0.028
+      education:
+        high_school_or_below: 0.020
+        community_college: 0.119
+        bachelor: 0.737
+        master_or_above: 0.124
+      monthly_income:
+        income_8000_or_less: 0.507
+        income_8001_15000: 0.365
+        income_15001_25000: 0.103
+        income_25001_40000: 0.015
+        income_40001_or_more: 0.010
+  class_3:
+    probability: 0.156978021978022
+    environmental_consciousness_coef: -0.205
+    value_weights:
+      epistemic: 0.866
+      environmental: 0.487
+      functional: -0.831
+      health: 0.310
+      emotional: -0.489
+      social: -0.343
+    profile_distributions:
+      hotel_class:
+        economy: 0.315
+        midscale: 0.274
+        upper_midscale: 0.411
+      travel_purpose:
+        business: 0.319
+        leisure: 0.681
+      gender:
+        female: 0.558
+        male: 0.442
+      age:
+        age_18_25: 0.153
+        age_26_35: 0.351
+        age_36_45: 0.361
+        age_46_55: 0.064
+        age_56_plus: 0.071
+      education:
+        high_school_or_below: 0.029
+        community_college: 0.107
+        bachelor: 0.647
+        master_or_above: 0.217
+      monthly_income:
+        income_8000_or_less: 0.276
+        income_8001_15000: 0.400
+        income_15001_25000: 0.286
+        income_25001_40000: 0.026
+        income_40001_or_more: 0.012
