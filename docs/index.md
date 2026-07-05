@@ -70,10 +70,11 @@ docs/
 4. [锦江用户数据结构 Architecture Note](architecture/jinjiang-user-profile-data-structure.md)
 5. [锦江用户潜在属性研究先验整理](references/jinjiang-user-latent-attributes-reference-zh.md)
 6. [PRD：锦江用户 Latent Attributes v1](prds/jinjiang-user-latent-attributes-v1.md)
-7. [锦江酒店 Douyin 最终数据集审计](references/jinjiang-final-dataset-audit-20260624.md)
-8. [源码结构分析](architecture/source-tree-and-entrypoints.md)
-9. [组件清单](architecture/runtime-component-inventory.md)
-10. [测试策略](architecture/testing-strategy.md)
+7. [锦江 final dataset latent-v1 本地验收记录](references/jinjiang-final-dataset-latent-v1-validation-20260705.md)
+8. [锦江酒店 Douyin 最终数据集审计](references/jinjiang-final-dataset-audit-20260624.md)
+9. [源码结构分析](architecture/source-tree-and-entrypoints.md)
+10. [组件清单](architecture/runtime-component-inventory.md)
+11. [测试策略](architecture/testing-strategy.md)
 
 ## 快速命令
 

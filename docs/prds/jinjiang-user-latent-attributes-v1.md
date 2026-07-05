@@ -1,12 +1,14 @@
 # PRD: 锦江用户 Latent Attributes v1
 
 Status: Published to GitHub issue tracker
-Implementation status: Not implemented in runtime
+Implementation status: Implemented in runtime; final dataset latent-v1 validation recorded
 Parent PRD: [`docs-architecture-and-jinjiang-latent-attributes-migration.md`](docs-architecture-and-jinjiang-latent-attributes-migration.md)
 GitHub migration issue: https://github.com/liu-qingyuan/llm-abm-marketing-sim/issues/6
 GitHub implementation issue: https://github.com/liu-qingyuan/llm-abm-marketing-sim/issues/10
+Implementation issues: [#11](https://github.com/liu-qingyuan/llm-abm-marketing-sim/issues/11), [#12](https://github.com/liu-qingyuan/llm-abm-marketing-sim/issues/12), [#13](https://github.com/liu-qingyuan/llm-abm-marketing-sim/issues/13), [#14](https://github.com/liu-qingyuan/llm-abm-marketing-sim/issues/14), [#15](https://github.com/liu-qingyuan/llm-abm-marketing-sim/issues/15), [#16](https://github.com/liu-qingyuan/llm-abm-marketing-sim/issues/16), [#17](https://github.com/liu-qingyuan/llm-abm-marketing-sim/issues/17)
 Related Reference: [`../references/jinjiang-user-latent-attributes-reference-zh.md`](../references/jinjiang-user-latent-attributes-reference-zh.md)
 Related Architecture Note: [`../architecture/jinjiang-user-profile-data-structure.md`](../architecture/jinjiang-user-profile-data-structure.md)
+Final dataset validation: [`../references/jinjiang-final-dataset-latent-v1-validation-20260705.md`](../references/jinjiang-final-dataset-latent-v1-validation-20260705.md)
 
 ## 目标
 
@@ -24,17 +26,18 @@ Related Architecture Note: [`../architecture/jinjiang-user-profile-data-structur
 
 ## 当前实现状态
 
-本 PRD 描述目标能力和验收合同，不表示当前代码已经实现。当前仓库尚未实现：
+本 PRD 的第一版实现切片已完成，代码入口和验收记录如下：
 
-- 结构化 `UserProfile.latent_attributes`。
-- `PostContent.value_dimensions`。
-- latent attribute spec schema 或配置文件。
-- quota-based latent assignment engine。
-- `generate_jinjiang_latent_attributes` 生成脚本或等价 CLI。
-- `latent_attribute_audit.json/.md` 输出。
-- rule-based decision adapter 的 latent score。
+- `configs/latent_attributes/jinjiang_user_latent_attributes_v1.yaml` 保存结构化 spec。
+- `src/llm_abm_sim/data_sources/latent_attributes.py` 实现 spec schema、最大余数配额、稳定 seed 分配和聚合 audit。
+- `src/llm_abm_sim/data_sources/latent_processed_variant.py` 和 `scripts/generate_jinjiang_latent_attributes.py` 生成新的 latent-v1 processed variant，不覆盖 source run。
+- `UserProfile.latent_attributes` 是运行时结构化合同；CSV 扁平 `latent_` columns 由 `graph_loader` 解析为结构化对象。
+- `PostContent.value_dimensions` 是营销内容价值维度输入合同，缺省为全 0，兼容旧配置。
+- `RuleBasedDecisionAdapter` 可通过 `RuleBasedDecisionConfig.latent_value_weight` 显式启用 latent value score；缺省 `0.0`，保持旧 baseline。
+- `report_payload` 和 HTML report 支持按 `latent_class` 和 Table 11 profile labels 输出聚合分组指标，并移除 trace 中的用户级 `latent_attributes` 明细。
+- 36,400 用户 final dataset latent-v1 本地验收见 [`../references/jinjiang-final-dataset-latent-v1-validation-20260705.md`](../references/jinjiang-final-dataset-latent-v1-validation-20260705.md)。
 
-当前代码对用户 profile 的未知列只有兼容性保留能力；这不等同于有结构化 latent attributes runtime contract。
+本文仍保留原始需求背景、测试决策和验收合同，作为后续维护的产品上下文；当前实现入口以代码和上述验证记录为准。
 
 ## 非目标
 
@@ -43,7 +46,7 @@ Related Architecture Note: [`../architecture/jinjiang-user-profile-data-structur
 - 不覆盖 source run。
 - 不删除历史 raw、processed run 或审计证据。
 - 不把 Table 11 画像标签描述为真实 Douyin 用户身份、人口属性或心理画像推断。
-- 不在本 PRD 迁移任务中实现 runtime、loader、decision adapter 或数据生成代码。
+- 不让 Provider-backed LLM prompt 直接暴露 raw coefficients、完整 Table 11 标签或本地数据路径；如需接入，应另行设计 compact summary 和边界提示。
 
 ## 数据结构总览
 
@@ -55,7 +58,7 @@ UserProfile = 真实观测数据 + 虚拟实验标签
 
 - 真实观测数据来自 Douyin final dataset，例如 `comment_count`、`reply_count`、`edge_degree`、`activity_score` 和 influence scores。
 - 虚拟实验标签来自用户潜在属性研究文档，例如 `latent_class`、6 个消费价值权重和 Table 11 画像标签。
-- LLM 输入也按这两部分组织：一部分是可观测平台行为摘要，一部分是实验标签解释摘要。
+- 如后续接入 Provider-backed LLM prompt，输入也应按这两部分组织：一部分是可观测平台行为摘要，一部分是实验标签解释摘要。
 
 ## 输入依据
 
@@ -92,7 +95,7 @@ UserProfile = 真实观测数据 + 虚拟实验标签
 
 ### Table 11: class membership profile distribution
 
-Table 11 是 latent class 的用户构成画像，不是消费价值权重。第一版必须把它作为 `class_profile` 标签生成依据，用于后续分组分析和结果解释。
+Table 11 是 latent class 的用户构成画像，不是消费价值权重。第一版必须把它作为 profile labels 生成依据，用于后续分组分析和结果解释。
 
 最近入住锦江酒店档次：
 
@@ -155,7 +158,7 @@ Table 11 是 latent class 的用户构成画像，不是消费价值权重。第
 
 ### 结构化用户对象
 
-在核心用户对象中增加 `latent_attributes`，建议结构如下：
+核心用户对象已增加 `latent_attributes`，运行时结构如下：
 
 ```text
 latent_attributes:
@@ -163,6 +166,7 @@ latent_attributes:
   method: string
   seed: int
   latent_class: class_1 | class_2 | class_3
+  environmental_consciousness_coef: float
   value_weights:
     epistemic: float
     environmental: float
@@ -170,7 +174,7 @@ latent_attributes:
     health: float
     emotional: float
     social: float
-  class_profile:
+  profile_labels:
     hotel_class: economy | midscale | upper_midscale
     travel_purpose: business | leisure
     gender: female | male
@@ -213,15 +217,15 @@ latent_monthly_income
 
 ### 配置来源
 
-新增结构化 spec 文件，例如：
+已新增结构化 spec 文件：
 
 ```text
 configs/latent_attributes/jinjiang_user_latent_attributes_v1.yaml
 ```
 
-该 spec 是运行时唯一可信输入。用户潜在属性研究文档只作为来源材料，不在生产生成器中动态解析。
+该 spec 是生成器唯一可信输入。用户潜在属性研究文档只作为来源材料，不在生产生成器中动态解析。
 
-建议 spec 包含：
+spec 包含：
 
 ```text
 spec_id: jinjiang_user_latent_attributes_v1
@@ -298,17 +302,17 @@ upper_midscale target = remaining count after largest-remainder allocation
 
 ## 生成流程
 
-建议新增独立模块，不放进 TikHub collector 主流程：
+生成逻辑已放在独立模块，不进入 TikHub collector 主流程：
 
 ```text
 src/llm_abm_sim/data_sources/latent_attributes.py
 ```
 
-建议新增 CLI 或脚本入口：
+CLI 入口：
 
 ```text
 python scripts/generate_jinjiang_latent_attributes.py \
-  --source-run data/processed/jinjiang_douyin/jinjiang-final-caption-hashtag-comments-profiles-20260624T092200Z \
+  --source-processed-dir data/processed/jinjiang_douyin/jinjiang-final-caption-hashtag-comments-profiles-20260624T092200Z \
   --spec configs/latent_attributes/jinjiang_user_latent_attributes_v1.yaml \
   --output-run-id jinjiang-final-caption-hashtag-comments-profiles-latent-v1-<timestamp> \
   --seed 20260630
@@ -324,6 +328,7 @@ data/processed/jinjiang_douyin/<output-run-id>/
 
 - 原 final run 中需要保留的 CSV 原样复制。
 - `users.csv`、`profiles.csv`、`abm_user_profiles.csv` 增加 latent 字段。
+- 新增 `latent_attribute_assignments.csv`，保存每个用户一行的扁平 assignment。
 - 新增 `latent_attribute_spec.yaml`，保存本次使用的 spec 快照。
 - 新增 `latent_attribute_audit.json` / `latent_attribute_audit.md`。
 - 新增 `README.md`，说明该 run 是 latent-v1 派生版本。
@@ -339,7 +344,7 @@ data/processed/jinjiang_douyin/<output-run-id>/
 
 ### PostContent 增加内容价值向量
 
-`PostContent` 增加 `value_dimensions`：
+`PostContent` 已增加 `value_dimensions`：
 
 ```text
 value_dimensions:
@@ -362,10 +367,10 @@ value_dimensions:
 
 ### RuleBasedDecisionAdapter 增加 latent score
 
-新增可配置项：
+已新增可配置项：
 
 ```text
-latent_value_weight: 0.10
+latent_value_weight: 0.0
 ```
 
 规则决策计算：
@@ -375,7 +380,7 @@ latent_raw_score =
   dot(user.latent_attributes.value_weights, post.value_dimensions)
 
 latent_value_score =
-  normalize(latent_raw_score to [0, 1])
+  clip(latent_raw_score to [0, 1])
 ```
 
 然后进入 baseline：
@@ -386,9 +391,9 @@ probability_score =
 + latent_value_weight * latent_value_score
 ```
 
-第一版建议：
+当前实现：
 
-- 默认 `latent_value_weight = 0.10`。
+- 默认 `latent_value_weight = 0.0`，旧配置保持 baseline 行为；需要实验 latent score 时显式设置为大于 0。
 - 没有 `latent_attributes` 或没有 `post.value_dimensions` 时，`latent_value_score = 0`。
 - 只有 6 个消费价值维度权重进入 `latent_value_score`。
 - `latent_hotel_class`、`latent_travel_purpose`、`latent_gender`、`latent_age`、`latent_education`、`latent_monthly_income` 第一版只用于分组分析，不直接影响 probability。
@@ -473,16 +478,17 @@ pyright src/llm_abm_sim/data_sources tests scripts
 
 ## 后续 issue plan
 
-1. Latent spec schema/config：新增 `configs/latent_attributes/jinjiang_user_latent_attributes_v1.yaml` 和 schema 校验。
-2. Quota assignment engine：实现最大余数法、稳定 seed 洗牌、class 内 profile 字段配额。
-3. Processed variant generator：从 final dataset 生成 latent-v1 run，不覆盖 source run，并输出 README/spec snapshot。
-4. Audit output：生成 `latent_attribute_audit.json/.md`，报告 class 与 Table 11 target vs actual counts、偏差和隐私声明。
-5. Loader support：把 CSV 扁平 latent 字段解析为结构化 `UserProfile.latent_attributes`，同时保留旧 profile 兼容。
-6. Post content value dimensions：为 `PostContent` 增加 6 个消费价值维度输入。
-7. Rule-based latent score：让 `value_dimensions` 与 latent weights 可配置地影响 probability，并测试关闭权重时回到 baseline。
-8. Reporting/group analysis：按 latent class 和 profile 标签做传播结果分组报告，同时保留“虚拟实验标签”边界说明。
+第一版已拆分并完成以下实现 issue：
 
-每个 issue 都应保持离线、确定性、无 API 凭证运行；涉及 processed 数据时只写新的派生 run 和聚合审计，不写明细隐私报告。
+1. [#11](https://github.com/liu-qingyuan/llm-abm-marketing-sim/issues/11) Latent spec schema/config 与 assignment/audit 最小合同。
+2. [#12](https://github.com/liu-qingyuan/llm-abm-marketing-sim/issues/12) Processed variant generator。
+3. [#13](https://github.com/liu-qingyuan/llm-abm-marketing-sim/issues/13) Loader support：CSV 扁平 latent 字段解析为结构化 `UserProfile.latent_attributes`。
+4. [#14](https://github.com/liu-qingyuan/llm-abm-marketing-sim/issues/14) `PostContent.value_dimensions` 输入合同。
+5. [#15](https://github.com/liu-qingyuan/llm-abm-marketing-sim/issues/15) Rule-based latent value score。
+6. [#16](https://github.com/liu-qingyuan/llm-abm-marketing-sim/issues/16) Reporting/group analysis。
+7. [#17](https://github.com/liu-qingyuan/llm-abm-marketing-sim/issues/17) 36,400 用户 final dataset latent-v1 本地验收。
+
+这些 issue 均保持离线、确定性、无 API 凭证运行；涉及 processed 数据时只写新的派生 run 和聚合审计，不写入仓库中的用户明细隐私报告。
 
 ## 后续扩展
 

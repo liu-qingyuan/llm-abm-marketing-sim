@@ -19,4 +19,5 @@
 - [锦江用户 Latent Attributes v1](jinjiang-user-latent-attributes-v1.md)
   - GitHub migration issue: [#6](https://github.com/liu-qingyuan/llm-abm-marketing-sim/issues/6)
   - GitHub implementation issue: [#10](https://github.com/liu-qingyuan/llm-abm-marketing-sim/issues/10)
-  - Status: Published PRD; runtime not implemented
+  - Implementation issues: [#11](https://github.com/liu-qingyuan/llm-abm-marketing-sim/issues/11)、[#12](https://github.com/liu-qingyuan/llm-abm-marketing-sim/issues/12)、[#13](https://github.com/liu-qingyuan/llm-abm-marketing-sim/issues/13)、[#14](https://github.com/liu-qingyuan/llm-abm-marketing-sim/issues/14)、[#15](https://github.com/liu-qingyuan/llm-abm-marketing-sim/issues/15)、[#16](https://github.com/liu-qingyuan/llm-abm-marketing-sim/issues/16)、[#17](https://github.com/liu-qingyuan/llm-abm-marketing-sim/issues/17)
+  - Status: Published PRD; first runtime/data/reporting implementation completed and validated on the final dataset

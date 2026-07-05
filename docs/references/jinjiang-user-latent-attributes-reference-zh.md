@@ -2,11 +2,11 @@
 
 Status: Reference only
 Source role: 外部研究先验整理
-Implementation status: 不代表当前代码实现状态
+Runtime role: 本文已被整理进结构化 spec；本文本身仍不是运行时合同
 
 本文整理自用户潜在属性研究材料，用于后续生成锦江酒店 Douyin 用户 latent attributes 标签版本、LLM-ABM 决策输入和实验分组分析。
 
-本文是参考资料整理，不代表当前项目已经实现 latent attributes 生成、ABM 用户对象接入、LLM prompt 接入或规则决策接入。后续实现应将这些表格作为外部研究先验使用，而不是把本文件当作产品合同或运行时规格。
+本文是参考资料整理，不是产品合同或运行时规格。当前实现将这些表格整理进 `configs/latent_attributes/jinjiang_user_latent_attributes_v1.yaml`；生成器读取结构化 spec，不动态解析本文。
 
 本文不代表对 Douyin 用户真实人口属性或真实心理画像的直接推断。性别、年龄、教育、收入、最近一次入住锦江酒店档次、旅行目的等标签只可作为仿真实验标签或分组分析标签使用，不代表真实 Douyin 用户身份。
 

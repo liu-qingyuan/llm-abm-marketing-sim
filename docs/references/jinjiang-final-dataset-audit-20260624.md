@@ -40,6 +40,10 @@ Legacy source: `docs/04-开发验证/05-jinjiang-douyin-final-dataset-20260624.m
 - comments/all_comments/edges 行数保持源话题数据集不变
 - scope exclusions absent: `7486704870804770107`, `7486891790218399034`, `#锦江宾馆`, `#临空锦江宾馆`
 
+## Latent-v1 派生验收
+
+锦江 final dataset 的 latent-v1 派生 run 已完成本地聚合验收，记录见 [`jinjiang-final-dataset-latent-v1-validation-20260705.md`](jinjiang-final-dataset-latent-v1-validation-20260705.md)。该派生 run 不覆盖本 source final dataset；只在新的 processed output run 中追加 `latent_` 字段、spec snapshot、assignment CSV 和 aggregate audit。
+
 ## Profile 指标方法更新（2026-06-29）
 
 - method: `log1p_p95_reference_weighted_v2`
