@@ -700,7 +700,7 @@ def recompute_profile_target_metrics_in_place(processed_dir: Path) -> dict[str, 
     for target in targets:
         uid = target.get("user_id", "")
         metrics = metrics_by_user.get(uid, {})
-        updated = dict(target)
+        updated: dict[str, Any] = dict(target)
         before_comment_sum += parse_int(target.get("comment_count"))
         before_reply_sum += parse_int(target.get("reply_count"))
         for field in ["comment_count", "reply_count", "edge_degree", "in_degree", "out_degree", "comment_like_sum"]:
