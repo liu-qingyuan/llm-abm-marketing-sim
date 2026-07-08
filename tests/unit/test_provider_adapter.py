@@ -11,6 +11,9 @@ from llm_abm_sim.provider_config import redact_secrets
 from llm_abm_sim.providers.openai_compatible import OpenAICompatibleDecisionAdapter, ProviderRunSkipped
 from llm_abm_sim.schemas import (
     FailClosedAction,
+    LatentAttributes,
+    LatentProfileLabels,
+    LatentValueWeights,
     PeerContext,
     PlatformContext,
     PostContent,
@@ -47,10 +50,34 @@ def test_prompt_includes_post_preference_peer_influence_and_schema():
         {
             "user_id": "u1",
             "interest_tags": ["skincare"],
+            "global_influence_score": 0.9,
             "brand_attitude": 1.0,
             "like_tendency": 1.0,
             "comment_tendency": 1.0,
             "share_tendency": 1.0,
+            "latent_attributes": LatentAttributes(
+                spec_id="jinjiang_user_latent_attributes_v1",
+                method="latent_class_exact_quota_v1",
+                seed=20260630,
+                latent_class="class_1",
+                environmental_consciousness_coef=0.8,
+                value_weights=LatentValueWeights(
+                    epistemic=0.1,
+                    environmental=0.8,
+                    functional=0.4,
+                    health=0.7,
+                    emotional=0.2,
+                    social=0.3,
+                ),
+                profile_labels=LatentProfileLabels(
+                    hotel_class="economy",
+                    travel_purpose="business",
+                    gender="female",
+                    age="age_26_35",
+                    education="bachelor",
+                    monthly_income="income_8001_15000",
+                ),
+            ),
         }
     )
     decision_input = DecisionInput(time_step=2, prompt_version="engage-provider-v1", **context)
@@ -59,13 +86,27 @@ def test_prompt_includes_post_preference_peer_influence_and_schema():
     payload = json.loads(messages[1]["content"])
 
     assert messages[0]["role"] == "system"
-    assert payload["post_content"]["text"] == "Eco skincare launch"
-    assert payload["individual_preference"]["user_id"] == "u1"
-    assert "brand_attitude" not in payload["individual_preference"]
-    assert "like_tendency" not in payload["individual_preference"]
-    assert "comment_tendency" not in payload["individual_preference"]
-    assert "share_tendency" not in payload["individual_preference"]
-    assert payload["peer_influence"]["engaged_neighbors"] == 2
+    assert payload["post_summary"] == "帖子内容：Eco skincare launch；主题标签：eco、skincare"
+    assert payload["individual_preference_summary"] == (
+        "说明：活跃度、全平台影响力、锦江酒店社群内的局部影响力为可观测代理指标；"
+        "活跃度：中等（0.50）；全平台影响力：高（0.90）；真实 profile 兴趣标签：skincare；"
+        "环保意识倾向、消费价值、入住酒店类型和入住目的为虚拟实验标签，不代表真实身份或心理画像；"
+        "环保意识倾向：正向（0.80）；前三个秸秆制品相关消费价值：环保消费价值（0.80）、健康价值（0.70）、功能价值（0.40）；"
+        "最近一次入住锦江旗下酒店类型：经济型酒店；最近一次入住锦江旗下酒店目的：商务出行"
+    )
+    assert "brand_attitude" not in messages[1]["content"]
+    assert "like_tendency" not in messages[1]["content"]
+    assert "comment_tendency" not in messages[1]["content"]
+    assert "share_tendency" not in messages[1]["content"]
+    assert "latent_class" not in messages[1]["content"]
+    assert "female" not in messages[1]["content"]
+    assert "age_26_35" not in messages[1]["content"]
+    assert "bachelor" not in messages[1]["content"]
+    assert "income_8001_15000" not in messages[1]["content"]
+    assert payload["peer_influence_summary"] == (
+        "邻居曝光：4；邻居互动：2；互动比例：0.50；有影响力的已互动邻居：0；可见点赞：3；可见评论：0；可见分享：0"
+    )
+    assert payload["platform_context_summary"] == "平台热门话题：eco；平台氛围：launch week；Feed 排序权重：1.00；痕迹可见度：1.00"
     assert payload["required_output_schema"]["engage"] == "boolean"
     assert "api_key" not in messages[1]["content"]
 

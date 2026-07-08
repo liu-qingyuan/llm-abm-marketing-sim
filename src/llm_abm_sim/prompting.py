@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import json
 
-from .decision import DecisionInput, decision_profile_payload
+from .decision import DecisionInput
+from .prompt_field_summary import build_prompt_field_summary
 
 PROMPT_VERSION = "engage-provider-v1"
 
@@ -11,10 +12,7 @@ def build_engagement_prompt(decision_input: DecisionInput) -> list[dict[str, str
     """Build a provider prompt with only schema-safe simulation context."""
 
     payload = {
-        "post_content": decision_input.post.model_dump(mode="json"),
-        "individual_preference": decision_profile_payload(decision_input.profile),
-        "peer_influence": decision_input.peer_context.model_dump(mode="json"),
-        "platform_context": decision_input.platform_context.model_dump(mode="json"),
+        **build_prompt_field_summary(decision_input),
         "time_step": decision_input.time_step,
         "required_output_schema": {
             "engage": "boolean",
