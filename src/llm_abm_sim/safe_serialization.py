@@ -5,8 +5,9 @@ from typing import Any
 
 from pydantic import BaseModel
 
-from .provider_config import redact_secrets
+from .provider_config import redact_secrets, sanitize_url
 from .provider_evidence import allowlisted_provider_evidence
+from .schemas import LEGACY_DEMO_PRESET_FIELDS
 
 FORBIDDEN_ARTIFACT_TERMS = (
     "authorization",
@@ -63,7 +64,12 @@ def _artifact_scrub(value: Any) -> Any:
             if key == "provider_metadata":
                 scrubbed[key] = allowlisted_provider_evidence(item)
                 continue
+            if key in LEGACY_DEMO_PRESET_FIELDS:
+                continue
             if any(fragment in lowered for fragment in _DROP_KEY_FRAGMENTS):
+                continue
+            if isinstance(item, str) and "url" in lowered:
+                scrubbed[key] = sanitize_url(item.strip())
                 continue
             scrubbed[key] = _artifact_scrub(item)
         return scrubbed

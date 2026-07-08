@@ -4,7 +4,7 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
-from .decision import EngageDecision
+from .decision import EngageDecision, decision_profile_payload
 from .provider_config import redact_secrets
 from .provider_evidence import allowlisted_provider_evidence
 from .schemas import PeerContext, PlatformContext, PostContent, UserProfile
@@ -54,7 +54,7 @@ def build_decision_trace_summary(
                     "media_summary": post.media_summary,
                 }
             ),
-            profile=redact_secrets(profile.model_dump(mode="json")),
+            profile=redact_secrets(decision_profile_payload(profile)),
             peer_context=redact_secrets(
                 {
                     **peer_context.model_dump(mode="json"),

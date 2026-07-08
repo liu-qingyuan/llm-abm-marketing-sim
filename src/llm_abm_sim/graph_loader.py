@@ -12,6 +12,7 @@ import networkx as nx
 from .schemas import (
     LATENT_PROFILE_LABEL_FIELDS,
     LATENT_VALUE_DIMENSIONS,
+    LEGACY_DEMO_PRESET_FIELDS,
     DatasetConfig,
     ExtraProfilePolicy,
     MissingProfilePolicy,
@@ -383,7 +384,7 @@ def _profile_attribute_columns(profile_records: dict[str, UserProfile]) -> list[
     base_fields = set(UserProfile.model_fields)
     for profile in profile_records.values():
         for key in profile.model_extra or {}:
-            if key not in base_fields:
+            if key not in base_fields and key not in LEGACY_DEMO_PRESET_FIELDS:
                 columns.add(key)
     return sorted(columns)
 
