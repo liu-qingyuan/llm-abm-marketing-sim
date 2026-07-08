@@ -6,7 +6,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from .schemas import (
     LATENT_VALUE_DIMENSIONS,
@@ -31,6 +31,14 @@ class EngageDecision(BaseModel):
     action: EngagementAction = "ignore"
     decision_source: str = "rule_based"
     provider_metadata: dict[str, Any] | None = None
+
+    @model_validator(mode="after")
+    def _validate_engage_action_consistency(self) -> EngageDecision:
+        if not self.engage and self.action != "ignore":
+            raise ValueError("engage=false requires action=ignore")
+        if self.engage and self.action == "ignore":
+            raise ValueError("engage=true requires action to be like, comment, or share")
+        return self
 
 
 class DecisionInput(BaseModel):

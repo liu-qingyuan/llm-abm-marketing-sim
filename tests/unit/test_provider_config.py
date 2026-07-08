@@ -110,6 +110,7 @@ def test_provider_shaped_response_validates_as_engage_decision():
         "probability": 0.73,
         "reason": "matches skincare interest and peer influence",
         "confidence": 0.91,
+        "action": "like",
     }
 
     decision = EngageDecision.model_validate(payload)
@@ -117,6 +118,7 @@ def test_provider_shaped_response_validates_as_engage_decision():
     assert decision.engage is True
     assert decision.probability == 0.73
     assert decision.confidence == 0.91
+    assert decision.action == "like"
 
 
 def test_copy_config_source_redacts_secret_bearing_yaml(tmp_path):

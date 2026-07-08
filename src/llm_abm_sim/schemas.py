@@ -278,7 +278,7 @@ class ProviderLLMConfig(BaseModel):
     timeout_seconds: float = Field(default=30.0, gt=0.0)
     max_retries: int = Field(default=0, ge=0)
     fail_closed_action: FailClosedAction = FailClosedAction.RAISE
-    prompt_version: str = "engage-provider-v1"
+    prompt_version: str = "jinjiang-green-marketing-prompt-v2"
 
     def safe_metadata(self) -> dict[str, object]:
         """Return serialization-safe provider settings with no credentials."""

@@ -41,6 +41,10 @@ def build_prompt_field_summary(decision_input: DecisionInput) -> dict[str, str]:
 
     return {
         "post_summary": summarize_post_fields(decision_input.post),
+        "marketing_content_summary": summarize_marketing_content_fields(decision_input.post),
+        "post_value_summary": summarize_post_value_fields(decision_input.post),
+        "observed_profile_summary": summarize_observed_prompt_fields(decision_input.profile),
+        "consumption_preference_summary": summarize_consumption_preference_fields(decision_input.profile),
         "individual_preference_summary": summarize_prompt_fields(decision_input.profile),
         "peer_influence_summary": summarize_peer_fields(decision_input.peer_context),
         "platform_context_summary": summarize_platform_fields(decision_input.platform_context),
@@ -49,6 +53,16 @@ def build_prompt_field_summary(decision_input: DecisionInput) -> dict[str, str]:
 
 def summarize_prompt_fields(profile: UserProfile) -> str:
     """Return a stable Chinese prompt summary for provider-visible user fields."""
+
+    parts = [summarize_observed_prompt_fields(profile)]
+    preference_summary = summarize_consumption_preference_fields(profile)
+    if preference_summary:
+        parts.append(preference_summary)
+    return "；".join(parts)
+
+
+def summarize_observed_prompt_fields(profile: UserProfile) -> str:
+    """Return observed profile fields that may be shown to provider prompts."""
 
     parts: list[str] = ["说明：活跃度、全平台影响力、锦江酒店社群内的局部影响力为可观测代理指标"]
     extra = profile.model_extra or {}
@@ -61,24 +75,31 @@ def summarize_prompt_fields(profile: UserProfile) -> str:
     if interest_tags:
         parts.append(f"真实 profile 兴趣标签：{'、'.join(interest_tags)}")
 
-    attributes = profile.latent_attributes
-    if attributes is not None:
-        parts.append("环保意识倾向、消费价值、入住酒店类型和入住目的为虚拟实验标签，不代表真实身份或心理画像")
-        parts.append(
-            "环保意识倾向："
-            f"{_environmental_consciousness_level(attributes.environmental_consciousness_coef)}"
-            f"（{attributes.environmental_consciousness_coef:.2f}）"
-        )
-        parts.append(_top_value_weights_summary(attributes.value_weights))
-        parts.append(
-            "最近一次入住锦江旗下酒店类型："
-            f"{HOTEL_CLASS_LABELS[attributes.profile_labels.hotel_class]}"
-        )
-        parts.append(
-            "最近一次入住锦江旗下酒店目的："
-            f"{TRAVEL_PURPOSE_LABELS[attributes.profile_labels.travel_purpose]}"
-        )
+    return "；".join(parts)
 
+
+def summarize_consumption_preference_fields(profile: UserProfile) -> str:
+    """Return virtual experiment preference fields that may be shown to provider prompts."""
+
+    attributes = profile.latent_attributes
+    if attributes is None:
+        return ""
+
+    parts: list[str] = ["环保意识倾向、消费价值、入住酒店类型和入住目的为虚拟实验标签，不代表真实身份或心理画像"]
+    parts.append(
+        "环保意识倾向："
+        f"{_environmental_consciousness_level(attributes.environmental_consciousness_coef)}"
+        f"（{attributes.environmental_consciousness_coef:.2f}）"
+    )
+    parts.append(_top_value_weights_summary(attributes.value_weights))
+    parts.append(
+        "最近一次入住锦江旗下酒店类型："
+        f"{HOTEL_CLASS_LABELS[attributes.profile_labels.hotel_class]}"
+    )
+    parts.append(
+        "最近一次入住锦江旗下酒店目的："
+        f"{TRAVEL_PURPOSE_LABELS[attributes.profile_labels.travel_purpose]}"
+    )
     return "；".join(parts)
 
 
@@ -98,6 +119,25 @@ def summarize_post_fields(post: PostContent) -> str:
     if value_parts:
         parts.append(f"帖子价值维度：{'、'.join(value_parts)}")
     return "；".join(parts)
+
+
+def summarize_marketing_content_fields(post: PostContent) -> str:
+    """Return the full normalized marketing copy for Prompt v2."""
+
+    return _normalize_text(post.text)
+
+
+def summarize_post_value_fields(post: PostContent) -> str:
+    """Return the value dimensions emphasized by a post without topic tag expansion."""
+
+    value_parts = [
+        f"{VALUE_LABELS[dimension]}（{float(getattr(post.value_dimensions, dimension)):.2f}）"
+        for dimension in LATENT_VALUE_DIMENSIONS
+        if float(getattr(post.value_dimensions, dimension)) > 0.0
+    ]
+    if not value_parts:
+        return "未提供明确价值维度"
+    return "、".join(value_parts)
 
 
 def summarize_peer_fields(peer_context: PeerContext) -> str:
@@ -193,4 +233,8 @@ def _optional_float(value: Any) -> float | None:
 
 
 def _clean_text(value: str, max_length: int) -> str:
-    return " ".join(value.split())[:max_length]
+    return _normalize_text(value)[:max_length]
+
+
+def _normalize_text(value: str) -> str:
+    return " ".join(value.split())

@@ -33,6 +33,9 @@ class ProviderConfigurationError(RuntimeError):
     """Raised for missing provider SDK/auth/gate configuration."""
 
 
+REQUIRED_PROVIDER_DECISION_FIELDS = frozenset({"engage", "probability", "reason", "confidence", "action"})
+
+
 class OpenAICompatibleDecisionAdapter(LLMDecisionAdapter):
     """Optional OpenAI Responses-compatible implementation of LLMDecisionAdapter."""
 
@@ -48,6 +51,7 @@ class OpenAICompatibleDecisionAdapter(LLMDecisionAdapter):
         self.codex_provider_config = (
             load_codex_provider_config(codex_home) if self.config.use_codex_provider_config else None
         )
+        self.prompt_version = self.config.prompt_version
         model = self.config.model or (self.codex_provider_config.model if self.codex_provider_config else None)
         self.model = model or "gpt-5.5"
         self.client = client
@@ -193,6 +197,11 @@ def _parse_provider_decision(raw: str | dict[str, Any]) -> EngageDecision:
     payload = raw
     if isinstance(raw, str):
         payload = _loads_json_object(raw)
+    if not isinstance(payload, dict):
+        raise ValueError("provider response JSON must be an object")
+    missing_fields = sorted(REQUIRED_PROVIDER_DECISION_FIELDS - payload.keys())
+    if missing_fields:
+        raise ValueError(f"provider response missing required fields: {', '.join(missing_fields)}")
     return EngageDecision.model_validate(payload)
 
 

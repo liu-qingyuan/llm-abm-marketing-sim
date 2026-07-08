@@ -131,6 +131,13 @@ def test_build_prompt_field_summary_converts_decision_input_context_to_chinese_s
 
     assert summary == {
         "post_summary": "帖子内容：锦江推出秸秆制品绿色营销活动；主题标签：锦江、环保；媒体摘要：短视频展示酒店客房用品",
+        "marketing_content_summary": "锦江推出秸秆制品绿色营销活动",
+        "post_value_summary": "未提供明确价值维度",
+        "observed_profile_summary": (
+            "说明：活跃度、全平台影响力、锦江酒店社群内的局部影响力为可观测代理指标；"
+            "活跃度：中等偏高（0.60）；真实 profile 兴趣标签：绿色旅行"
+        ),
+        "consumption_preference_summary": "",
         "individual_preference_summary": (
             "说明：活跃度、全平台影响力、锦江酒店社群内的局部影响力为可观测代理指标；"
             "活跃度：中等偏高（0.60）；真实 profile 兴趣标签：绿色旅行"

@@ -15,7 +15,12 @@ class SequenceAdapter(LLMDecisionAdapter):
         platform_context=None,
         time_step: int = 0,
     ) -> EngageDecision:
-        return EngageDecision(engage=self.decisions.pop(0), probability=1.0 if self.decisions else 0.0)
+        engage = self.decisions.pop(0)
+        return EngageDecision(
+            engage=engage,
+            action="like" if engage else "ignore",
+            probability=1.0 if engage else 0.0,
+        )
 
 
 def test_agent_engagement_is_absorbing():

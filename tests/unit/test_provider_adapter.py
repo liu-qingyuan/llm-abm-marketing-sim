@@ -83,32 +83,67 @@ def test_prompt_includes_post_preference_peer_influence_and_schema():
     decision_input = DecisionInput(time_step=2, prompt_version="engage-provider-v1", **context)
 
     messages = build_engagement_prompt(decision_input)
-    payload = json.loads(messages[1]["content"])
+    system_content = messages[0]["content"]
+    user_content = messages[1]["content"]
 
     assert messages[0]["role"] == "system"
-    assert payload["post_summary"] == "帖子内容：Eco skincare launch；主题标签：eco、skincare"
-    assert payload["individual_preference_summary"] == (
+    assert "模拟一名抖音用户无意间刷到锦江酒店集团使用秸秆制品、推进环保举措的绿色营销内容" in system_content
+    assert "只返回一个 JSON 对象" in system_content
+    assert "【营销内容】" in user_content
+    assert "Eco skincare launch" in user_content
+    assert "【内容主要强调的价值】" in user_content
+    assert "未提供明确价值维度" in user_content
+    assert "主题标签：eco、skincare" not in user_content
+    assert "【用户可观测特征】" in user_content
+    assert "【用户消费偏好】" in user_content
+    assert (
         "说明：活跃度、全平台影响力、锦江酒店社群内的局部影响力为可观测代理指标；"
-        "活跃度：中等（0.50）；全平台影响力：高（0.90）；真实 profile 兴趣标签：skincare；"
+        "活跃度：中等（0.50）；全平台影响力：高（0.90）；真实 profile 兴趣标签：skincare"
+        in user_content
+    )
+    assert (
         "环保意识倾向、消费价值、入住酒店类型和入住目的为虚拟实验标签，不代表真实身份或心理画像；"
         "环保意识倾向：正向（0.80）；前三个秸秆制品相关消费价值：环保消费价值（0.80）、健康价值（0.70）、功能价值（0.40）；"
         "最近一次入住锦江旗下酒店类型：经济型酒店；最近一次入住锦江旗下酒店目的：商务出行"
+        in user_content
     )
-    assert "brand_attitude" not in messages[1]["content"]
-    assert "like_tendency" not in messages[1]["content"]
-    assert "comment_tendency" not in messages[1]["content"]
-    assert "share_tendency" not in messages[1]["content"]
-    assert "latent_class" not in messages[1]["content"]
-    assert "female" not in messages[1]["content"]
-    assert "age_26_35" not in messages[1]["content"]
-    assert "bachelor" not in messages[1]["content"]
-    assert "income_8001_15000" not in messages[1]["content"]
-    assert payload["peer_influence_summary"] == (
+    assert "brand_attitude" not in user_content
+    assert "like_tendency" not in user_content
+    assert "comment_tendency" not in user_content
+    assert "share_tendency" not in user_content
+    assert "latent_class" not in user_content
+    assert "female" not in user_content
+    assert "age_26_35" not in user_content
+    assert "bachelor" not in user_content
+    assert "income_8001_15000" not in user_content
+    assert "【其他用户行为】" in user_content
+    assert (
         "邻居曝光：4；邻居互动：2；互动比例：0.50；有影响力的已互动邻居：0；可见点赞：3；可见评论：0；可见分享：0"
+        in user_content
     )
-    assert payload["platform_context_summary"] == "平台热门话题：eco；平台氛围：launch week；Feed 排序权重：1.00；痕迹可见度：1.00"
-    assert payload["required_output_schema"]["engage"] == "boolean"
-    assert "api_key" not in messages[1]["content"]
+    assert "平台上下文：平台热门话题：eco；平台氛围：launch week；Feed 排序权重：1.00；痕迹可见度：1.00" in user_content
+    assert "输出 schema" in user_content
+    assert "engage" in user_content
+    assert "action" in user_content
+    assert "engage=false 时 action 必须为 ignore" in user_content
+    assert "api_key" not in user_content
+
+
+def test_prompt_keeps_full_marketing_copy_without_topic_tag_expansion():
+    long_text = "锦江绿色营销 " + "秸秆制品环保行动" * 40
+    decision_input = DecisionInput(
+        post=PostContent(post_id="p2", text=long_text, topic_tags=["tag"] * 20),
+        profile=UserProfile(user_id="u1"),
+        peer_context=PeerContext(),
+        platform_context=PlatformContext(),
+        time_step=0,
+        prompt_version="jinjiang-green-marketing-prompt-v2",
+    )
+
+    user_content = build_engagement_prompt(decision_input)[1]["content"]
+
+    assert long_text in user_content
+    assert "主题标签" not in user_content
 
 
 def test_mocked_provider_success_validates_engage_decision():
@@ -129,7 +164,16 @@ def test_mocked_provider_success_validates_engage_decision():
     assert client.calls[0][1] == "mock-model"
 
 
-@pytest.mark.parametrize("response", ["not-json", '{"engage": true, "probability": 2.0, "confidence": 0.9}'])
+@pytest.mark.parametrize(
+    "response",
+    [
+        "not-json",
+        '{"engage": true, "probability": 2.0, "confidence": 0.9}',
+        '{"engage": false, "probability": 0.2, "confidence": 0.9, "action": "ignore"}',
+        '{"engage": false, "probability": 0.2, "reason": "low fit", "confidence": 0.9, "action": "like"}',
+        '{"engage": true, "probability": 0.8, "reason": "fit", "confidence": 0.9, "action": "ignore"}',
+    ],
+)
 def test_provider_malformed_or_schema_invalid_raises_by_default(response):
     adapter = OpenAICompatibleDecisionAdapter(ProviderLLMConfig(enabled=True), client=FakeProviderClient(response))
 
@@ -179,7 +223,9 @@ api_key = "sk-should-not-load"
     (tmp_path / "auth.json").write_text('{"tokens":{"access_token":"very-secret"}}', encoding="utf-8")
     adapter = OpenAICompatibleDecisionAdapter(
         ProviderLLMConfig(enabled=True, use_codex_provider_config=True),
-        client=FakeProviderClient({"engage": False, "probability": 0.1, "reason": "low fit", "confidence": 0.8}),
+        client=FakeProviderClient(
+            {"engage": False, "probability": 0.1, "reason": "low fit", "confidence": 0.8, "action": "ignore"}
+        ),
         codex_home=tmp_path,
     )
 
