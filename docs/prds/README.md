@@ -21,3 +21,9 @@
   - GitHub implementation issue: [#10](https://github.com/liu-qingyuan/llm-abm-marketing-sim/issues/10)
   - Implementation issues: [#11](https://github.com/liu-qingyuan/llm-abm-marketing-sim/issues/11)、[#12](https://github.com/liu-qingyuan/llm-abm-marketing-sim/issues/12)、[#13](https://github.com/liu-qingyuan/llm-abm-marketing-sim/issues/13)、[#14](https://github.com/liu-qingyuan/llm-abm-marketing-sim/issues/14)、[#15](https://github.com/liu-qingyuan/llm-abm-marketing-sim/issues/15)、[#16](https://github.com/liu-qingyuan/llm-abm-marketing-sim/issues/16)、[#17](https://github.com/liu-qingyuan/llm-abm-marketing-sim/issues/17)
   - Status: Published PRD; first runtime/data/reporting implementation completed and validated on the final dataset
+- [锦江 ABM 用户画像合同收敛与 LLM Prompt v2](jinjiang-abm-profile-contract-and-llm-prompt-v2.md)
+  - GitHub issue: [#19](https://github.com/liu-qingyuan/llm-abm-marketing-sim/issues/19)
+  - Status: Published PRD; pending implementation issue split
+- [锦江 LLM Prompt 人口画像消融实验](jinjiang-demographic-prompt-ablation.md)
+  - GitHub issue: [#20](https://github.com/liu-qingyuan/llm-abm-marketing-sim/issues/20)
+  - Status: Published PRD; future optional ablation
