@@ -4,6 +4,7 @@ import pytest
 
 from llm_abm_sim.data_sources.douyin_models import (
     PROFILE_COLUMNS,
+    REMOVED_DEMO_PRESET_FIELDS,
     DouyinCollectionReport,
     DouyinCommentRecord,
     DouyinEdgeRecord,
@@ -25,7 +26,6 @@ def test_models_have_safe_defaults_and_profile_columns() -> None:
     assert user.activity_score == 0.5
     profile = DouyinProfileRecord(user_id="u1", activity_score=0.8, value_proposition="extra")
     assert profile.activity_score == 0.8
-    assert profile.brand_attitude == 0.0
     assert "value_proposition" in PROFILE_COLUMNS
     assert "activity_score" in PROFILE_COLUMNS
     assert "global_influence_score" in PROFILE_COLUMNS
@@ -34,6 +34,9 @@ def test_models_have_safe_defaults_and_profile_columns() -> None:
     assert "observed_activity_level" not in PROFILE_COLUMNS
     assert "observed_influence" not in PROFILE_COLUMNS
     assert "activity_level" not in PROFILE_COLUMNS
+    for removed in REMOVED_DEMO_PRESET_FIELDS:
+        assert removed not in PROFILE_COLUMNS
+        assert removed not in DouyinProfileRecord.model_fields
 
 
 def test_profile_activity_score_does_not_create_legacy_activity_fields() -> None:

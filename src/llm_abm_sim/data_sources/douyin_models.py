@@ -80,6 +80,13 @@ TEXT_ITEM_COLUMNS = [
     "source",
 ]
 
+REMOVED_DEMO_PRESET_FIELDS = [
+    "brand_attitude",
+    "like_tendency",
+    "comment_tendency",
+    "share_tendency",
+]
+
 PROFILE_COLUMNS = [
     "user_id",
     "user_type",
@@ -100,10 +107,6 @@ PROFILE_COLUMNS = [
     "influence_network_score",
     "profile_index_method",
     "profile_index_variant",
-    "brand_attitude",
-    "like_tendency",
-    "comment_tendency",
-    "share_tendency",
 ]
 
 
@@ -216,10 +219,6 @@ class DouyinProfileRecord(BaseModel):
     influence_network_score: float = Field(default=0.0, ge=0.0, le=1.0)
     profile_index_method: str = ""
     profile_index_variant: str = "base"
-    brand_attitude: float = Field(default=0.0, ge=-1.0, le=1.0)
-    like_tendency: float = Field(default=0.5, ge=0.0, le=1.0)
-    comment_tendency: float = Field(default=0.2, ge=0.0, le=1.0)
-    share_tendency: float = Field(default=0.2, ge=0.0, le=1.0)
 
 
 class FieldProvenance(BaseModel):
@@ -253,6 +252,7 @@ class DouyinCollectionReport(BaseModel):
     tikhub_openapi_version: str = TIKHUB_OPENAPI_VERSION
     tikhub_openapi_updated: str = TIKHUB_OPENAPI_UPDATED
     field_provenance: dict[str, FieldProvenance] = Field(default_factory=dict)
+    processed_profile_contract: dict[str, Any] = Field(default_factory=dict)
 
     @field_validator("redacted_config")
     @classmethod

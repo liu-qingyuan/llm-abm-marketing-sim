@@ -305,8 +305,9 @@ def test_live_profile_wins_over_historical_and_reports_are_private(tmp_path: Pat
     assert u1["follower_count"] == "99"
     abm = {row["user_id"]: row for row in read_csv(processed_root / "profile-run" / "abm_user_profiles.csv")}["u1"]
     provenance = json.loads(abm["attribute_provenance"])
-    assert "brand_attitude" in provenance["defaulted_future_model_fields"]
-    assert "share_tendency" in provenance["defaulted_future_model_fields"]
+    for removed in ("brand_attitude", "like_tendency", "comment_tendency", "share_tendency"):
+        assert removed not in abm
+        assert removed in provenance["removed_demo_preset_fields"]
 
 
 def test_resume_skips_success_and_no_duplicate_profiles(tmp_path: Path) -> None:
@@ -1024,3 +1025,6 @@ def test_build_abm_row_records_reference_based_profile_index() -> None:
     assert provenance["profile_index_method"] == profiles.PROFILE_INDEX_METHOD
     assert provenance["profile_index_thresholds"] == thresholds
     assert "Qingbo DCI" in provenance["profile_index_reference_basis"][0]
+    assert provenance["removed_demo_preset_fields"] == profiles.REMOVED_DEMO_PRESET_FIELDS
+    for removed in profiles.REMOVED_DEMO_PRESET_FIELDS:
+        assert removed not in row

@@ -49,7 +49,8 @@ def test_normalizer_outputs_processed_contract(tmp_path: Path) -> None:
     assert "observed_influence" not in profile
     assert "activity_level" not in profile
     assert 0.0 <= float(profile["activity_score"]) <= 1.0
-    assert profile["brand_attitude"] == "0.0"
+    for removed in ("brand_attitude", "like_tendency", "comment_tendency", "share_tendency"):
+        assert removed not in profile
     assert "interest_tags" in profile
     assert "value_proposition" in profile
     text_items = rows(processed / "text_items.csv")
@@ -61,6 +62,12 @@ def test_normalizer_outputs_processed_contract(tmp_path: Path) -> None:
     assert report.counts["videos"] == 1
     assert report.counts["text_items"] == 4
     assert report.mode == "mock"
+    assert report.processed_profile_contract["removed_demo_preset_fields"] == [
+        "brand_attitude",
+        "like_tendency",
+        "comment_tendency",
+        "share_tendency",
+    ]
 
 
 def test_normalizer_unwraps_live_app_v3_video_detail_shape(tmp_path: Path) -> None:

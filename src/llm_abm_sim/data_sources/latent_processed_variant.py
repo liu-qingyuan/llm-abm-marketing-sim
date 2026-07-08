@@ -7,6 +7,7 @@ from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict
 
+from .douyin_models import REMOVED_DEMO_PRESET_FIELDS
 from .latent_attributes import (
     LATENT_ASSIGNMENT_COLUMNS,
     LatentUserAssignment,
@@ -136,7 +137,8 @@ def _merge_latent_columns(path: Path, assignments_by_user: dict[str, LatentUserA
     rows = _read_csv_rows(path)
     if not rows:
         return
-    fieldnames = list(rows[0])
+    removed_fields = set(REMOVED_DEMO_PRESET_FIELDS)
+    fieldnames = [field for field in rows[0] if field not in removed_fields]
     latent_columns = [column for column in LATENT_ASSIGNMENT_COLUMNS if column != "user_id"]
     for column in latent_columns:
         if column not in fieldnames:
@@ -151,7 +153,8 @@ def _merge_latent_columns(path: Path, assignments_by_user: dict[str, LatentUserA
         if assignment is None:
             raise ValueError(f"{path} contains user_id not present in users.csv: {user_id}")
         flat_assignment = assignment.to_flat_row()
-        merged_rows.append({**row, **{column: flat_assignment[column] for column in latent_columns}})
+        cleaned_row = {key: value for key, value in row.items() if key not in removed_fields}
+        merged_rows.append({**cleaned_row, **{column: flat_assignment[column] for column in latent_columns}})
 
     with path.open("w", encoding="utf-8", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=fieldnames)
@@ -268,7 +271,7 @@ def _render_readme(
             "",
             "## Outputs",
             "",
-            "- `users.csv`, `profiles.csv`, and `abm_user_profiles.csv` preserve source user rows and append `latent_` fields.",
+            "- `users.csv`, `profiles.csv`, and `abm_user_profiles.csv` preserve source user rows, remove historical demo preset fields, and append `latent_` fields.",
             "- `latent_attribute_assignments.csv` contains one flat assignment row per user.",
             "- `latent_attribute_spec.yaml` snapshots the spec used for this run.",
             "- `latent_attribute_audit.json` and `latent_attribute_audit.md` contain aggregate assignment checks.",

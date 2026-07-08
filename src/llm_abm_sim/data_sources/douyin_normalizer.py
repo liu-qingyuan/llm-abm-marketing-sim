@@ -13,6 +13,7 @@ from .douyin_models import (
     COMMENT_COLUMNS,
     EDGE_COLUMNS,
     PROFILE_COLUMNS,
+    REMOVED_DEMO_PRESET_FIELDS,
     TEXT_ITEM_COLUMNS,
     USER_COLUMNS,
     VIDEO_COLUMNS,
@@ -155,8 +156,12 @@ def normalize_run(
             "profiles": FieldProvenance(
                 observed=["follower_count", "video_count"],
                 derived=["activity_score", "global_influence_score", "local_influence_score", "interest_tags"],
-                defaulted=["brand_attitude", "like_tendency", "comment_tendency", "share_tendency"],
+                defaulted=[],
             ),
+        },
+        processed_profile_contract={
+            "removed_demo_preset_fields": REMOVED_DEMO_PRESET_FIELDS,
+            "raw_private_data_overwritten": False,
         },
     )
     (processed_dir / "collection_report.json").write_text(

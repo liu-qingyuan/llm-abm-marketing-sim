@@ -41,14 +41,16 @@ def test_rule_based_decision_ignores_legacy_demo_presets_when_present_as_extra()
     post = PostContent(post_id="p1", text="eco hotel launch", topic_tags=["eco"])
     peer_context = PeerContext()
     base_profile = UserProfile(user_id="u1", interest_tags=["eco"], activity_score=0.5)
-    legacy_profile = UserProfile(
-        user_id="u1",
-        interest_tags=["eco"],
-        activity_score=0.5,
-        brand_attitude=1.0,
-        like_tendency=0.0,
-        comment_tendency=1.0,
-        share_tendency=1.0,
+    legacy_profile = UserProfile.model_validate(
+        {
+            "user_id": "u1",
+            "interest_tags": ["eco"],
+            "activity_score": 0.5,
+            "brand_attitude": 1.0,
+            "like_tendency": 0.0,
+            "comment_tendency": 1.0,
+            "share_tendency": 1.0,
+        }
     )
 
     base_decision = adapter.decide(post, base_profile, peer_context)

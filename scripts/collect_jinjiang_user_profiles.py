@@ -19,7 +19,11 @@ if str(REPO_ROOT / "src") not in sys.path:
     sys.path.insert(0, str(REPO_ROOT / "src"))
 
 from llm_abm_sim.data_sources.cli import load_dotenv  # noqa: E402
-from llm_abm_sim.data_sources.douyin_models import PROFILE_COLUMNS, USER_COLUMNS  # noqa: E402
+from llm_abm_sim.data_sources.douyin_models import (  # noqa: E402
+    PROFILE_COLUMNS,
+    REMOVED_DEMO_PRESET_FIELDS,
+    USER_COLUMNS,
+)
 from llm_abm_sim.data_sources.douyin_normalizer import normalize_user  # noqa: E402
 from llm_abm_sim.data_sources.tikhub_client import TikHubClient, TikHubSettings, redact_secrets  # noqa: E402
 
@@ -76,10 +80,6 @@ ABM_COLUMNS = [
     "influence_network_score",
     "profile_index_method",
     "profile_index_variant",
-    "brand_attitude",
-    "like_tendency",
-    "comment_tendency",
-    "share_tendency",
     "profile_source",
     "profile_fetch_status",
     "attribute_provenance",
@@ -635,7 +635,7 @@ def recompute_profile_indices_in_place(processed_dir: Path) -> dict[str, Any]:
         fetch_status = user.get("profile_fetch_status") or target.get("profile_fetch_status") or "success"
         profile_source = user.get("profile_source") or previous.get("profile_source") or "live_current"
         row = build_abm_row(target, user, profile_source, fetch_status, profile_index_thresholds=thresholds)
-        for field in ["user_type", "interest_tags", "brand_attitude", "like_tendency", "comment_tendency", "share_tendency"]:
+        for field in ["user_type", "interest_tags"]:
             if previous.get(field, "") not in ("", None):
                 row[field] = previous[field]
         row["profile_source"] = profile_source
@@ -1997,7 +1997,8 @@ def build_abm_row(
         "observed_api_fields": ["follower_count", "following_count", "video_count", "verified_type"] if profile_source != "none" else [],
         "interaction_observed_fields": ["comment_count", "reply_count", "edge_degree", "comment_like_sum"],
         "derived_fields": [*PROFILE_INDEX_COMPONENT_FIELDS, "interest_tags", "user_type"],
-        "defaulted_future_model_fields": ["brand_attitude", "like_tendency", "comment_tendency", "share_tendency"],
+        "removed_demo_preset_fields": REMOVED_DEMO_PRESET_FIELDS,
+        "field_contract_note": "Demo preset fields are not emitted in processed profile outputs.",
     }
     return {
         "user_id": target.get("user_id", ""),
@@ -2021,10 +2022,6 @@ def build_abm_row(
         "influence_network_score": round(index_scores["influence_network_score"], 6),
         "profile_index_method": PROFILE_INDEX_METHOD,
         "profile_index_variant": PROFILE_INDEX_VARIANT,
-        "brand_attitude": 0.0,
-        "like_tendency": 0.5,
-        "comment_tendency": 0.2,
-        "share_tendency": 0.2,
         "profile_source": profile_source,
         "profile_fetch_status": fetch_status,
         "attribute_provenance": provenance,
@@ -2252,6 +2249,10 @@ def build_collection_report(
         "large_raw_processed_committed": "no",
         "private_csv_outputs": ["users.csv", "profiles.csv", "abm_user_profiles.csv", "profile_target_users.csv", "missing_sec_uid_users.csv", "failed_profile_users.csv"],
         "public_report_boundary": "Markdown reports contain aggregate statistics only; processed CSVs are local ignored research artifacts and must not be committed when they include profile-like fields.",
+        "processed_profile_contract": {
+            "removed_demo_preset_fields": REMOVED_DEMO_PRESET_FIELDS,
+            "raw_private_data_overwritten": "no",
+        },
     }
 
 
@@ -2385,7 +2386,7 @@ def write_validation_doc(docs_dir: Path, report: Mapping[str, Any]) -> Path:
         lines.append(f"| {key} | {value} |")
     lines.extend([
         "",
-        "说明：本文档只展示聚合统计，不展开昵称、bio、signature 等用户明细。`brand_attitude` 与分享倾向等字段当前为后续模型默认/派生字段，不视为真实观测行为。",
+        "说明：本文档只展示聚合统计，不展开昵称、bio、signature 等用户明细。`brand_attitude`、`like_tendency`、`comment_tendency`、`share_tendency` 是已移除的历史 demo preset 字段，不再写入新的 processed profile 输出。",
     ])
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
     return path

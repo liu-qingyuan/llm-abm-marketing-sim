@@ -96,13 +96,13 @@ def read_csv(path: Path) -> list[dict[str, str]]:
 def make_source_processed_run(tmp_path: Path) -> tuple[Path, Path]:
     source = tmp_path / "processed" / "source-run"
     rows = [
-        {"user_id": "u1", "nickname": "Alice"},
-        {"user_id": "u2", "nickname": "Bob"},
-        {"user_id": "u3", "nickname": "Carol"},
-        {"user_id": "u4", "nickname": "Dan"},
+        {"user_id": "u1", "nickname": "Alice", "brand_attitude": "0.0", "like_tendency": "0.5", "comment_tendency": "0.2", "share_tendency": "0.2"},
+        {"user_id": "u2", "nickname": "Bob", "brand_attitude": "0.0", "like_tendency": "0.5", "comment_tendency": "0.2", "share_tendency": "0.2"},
+        {"user_id": "u3", "nickname": "Carol", "brand_attitude": "0.0", "like_tendency": "0.5", "comment_tendency": "0.2", "share_tendency": "0.2"},
+        {"user_id": "u4", "nickname": "Dan", "brand_attitude": "0.0", "like_tendency": "0.5", "comment_tendency": "0.2", "share_tendency": "0.2"},
     ]
     for filename in ("users.csv", "profiles.csv", "abm_user_profiles.csv"):
-        write_csv(source / filename, ["user_id", "nickname"], rows)
+        write_csv(source / filename, ["user_id", "nickname", "brand_attitude", "like_tendency", "comment_tendency", "share_tendency"], rows)
     write_csv(source / "edges.csv", ["source", "target", "weight"], [{"source": "u1", "target": "u2", "weight": 1}])
     (source / "collection_report.json").write_text(json.dumps({"run_id": "source-run"}), encoding="utf-8")
     spec_path = tmp_path / "latent_spec.yaml"
@@ -148,11 +148,13 @@ def test_generate_latent_processed_variant_adds_latent_columns_to_user_tables(tm
 
     assert result.user_count == 4
     latent_columns = set(LATENT_ASSIGNMENT_COLUMNS) - {"user_id"}
+    removed_fields = {"brand_attitude", "like_tendency", "comment_tendency", "share_tendency"}
     for filename in ("users.csv", "profiles.csv", "abm_user_profiles.csv"):
         source_rows = read_csv(source / filename)
         output_rows = read_csv(output / filename)
         assert [row["user_id"] for row in output_rows] == [row["user_id"] for row in source_rows]
-        assert set(source_rows[0]).issubset(output_rows[0])
+        assert (set(source_rows[0]) - removed_fields).issubset(output_rows[0])
+        assert removed_fields.isdisjoint(output_rows[0])
         assert latent_columns.issubset(output_rows[0])
         assert all(row["latent_class"] for row in output_rows)
 

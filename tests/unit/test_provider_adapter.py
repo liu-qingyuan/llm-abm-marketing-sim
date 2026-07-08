@@ -43,13 +43,15 @@ def sample_context():
 
 def test_prompt_includes_post_preference_peer_influence_and_schema():
     context = sample_context()
-    context["profile"] = UserProfile(
-        user_id="u1",
-        interest_tags=["skincare"],
-        brand_attitude=1.0,
-        like_tendency=1.0,
-        comment_tendency=1.0,
-        share_tendency=1.0,
+    context["profile"] = UserProfile.model_validate(
+        {
+            "user_id": "u1",
+            "interest_tags": ["skincare"],
+            "brand_attitude": 1.0,
+            "like_tendency": 1.0,
+            "comment_tendency": 1.0,
+            "share_tendency": 1.0,
+        }
     )
     decision_input = DecisionInput(time_step=2, prompt_version="engage-provider-v1", **context)
 
