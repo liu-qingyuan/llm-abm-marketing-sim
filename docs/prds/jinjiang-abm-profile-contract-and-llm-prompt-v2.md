@@ -4,6 +4,22 @@ Status: Published to GitHub issue tracker
 GitHub issue: https://github.com/liu-qingyuan/llm-abm-marketing-sim/issues/19
 Related PRD: [`jinjiang-user-latent-attributes-v1.md`](jinjiang-user-latent-attributes-v1.md)
 Related Architecture Note: [`../architecture/jinjiang-user-profile-data-structure.md`](../architecture/jinjiang-user-profile-data-structure.md)
+Mocked provider validation: [`../references/jinjiang-prompt-v2-mock-validation-20260708.md`](../references/jinjiang-prompt-v2-mock-validation-20260708.md)
+
+## 当前实现状态
+
+#19 主 Prompt v2 链路已经通过 #21-#26 收口：旧 demo preset 字段已从决策合同和新 processed 输出中移除，prompt field summary、锦江绿色营销 Prompt v2 provider contract、mocked provider E2E 与 aggregate-only 验收摘要均已完成。
+
+| Issue | 当前结果 |
+|---|---|
+| #21 | 删除 `brand_attitude`、`like_tendency`、`comment_tendency`、`share_tendency` 的正式决策使用；离线 baseline 不再读取旧 preset 字段。 |
+| #22 | 新 processed profile 输出不再包含旧 demo preset 字段，loader 继续兼容旧输入。 |
+| #23 | 建立 `DecisionInput -> Prompt Field Summary -> provider prompt` 边界，统一清洗可观测字段和合成实验标签摘要。 |
+| #24 | 实现 `jinjiang-green-marketing-prompt-v2`，包含中文分块 prompt 和 `engage/action` 一致性校验。 |
+| #25 | 完成 mocked provider E2E，覆盖 `comment`、`like`、`share` 和 `engage=false/action=ignore`，artifact 路径为 `runs/jinjiang-prompt-v2-mock-20260708T111054Z/`。 |
+| #26 | 新增 aggregate-only 验收摘要并更新文档导航。 |
+
+当前验收不是 36,400 用户全量 live LLM 批量运行，而是 prompt contract + mocked provider + 端到端路径验证。#20 人口画像消融实验是后续可选项，不属于本主 Prompt v2 实施链路。
 
 ## 问题陈述
 
@@ -188,15 +204,15 @@ User message 应按以下块组织：
 
 ## 运行与结果产物边界
 
-本 PRD 不要求全量真实 LLM 批量运行。当前实施目标是先完成 prompt 合同、mocked provider 验证和端到端路径打通。
+本 PRD 不要求全量真实 LLM 批量运行。当前主链路已完成 prompt 合同、mocked provider 验证和端到端路径打通。
 
-当前阶段：
+当前已验收阶段：
 
 - 默认离线运行，不发起 live API。
-- 使用 deterministic baseline 或 mocked provider 验证 prompt 构建、schema 校验、ABM event/report 串联。
+- 已使用 deterministic baseline 或 mocked provider 验证 prompt 构建、schema 校验、ABM event/report 串联。
 - 不对 36,400 个用户执行真实 provider-backed LLM 批量决策。
-- 如 mocked provider 验证需要写 run artifact，默认写到 `runs/jinjiang-prompt-v2-mock-<timestamp>/`。
-- 验收摘要应写成 aggregate-only 文档，默认路径为 `docs/references/jinjiang-prompt-v2-mock-validation-<YYYYMMDD>.md`。
+- Mocked provider run artifact：`runs/jinjiang-prompt-v2-mock-20260708T111054Z/`。
+- Aggregate-only 验收摘要：[`../references/jinjiang-prompt-v2-mock-validation-20260708.md`](../references/jinjiang-prompt-v2-mock-validation-20260708.md)。
 
 后续阶段：
 
@@ -226,11 +242,11 @@ User message 应按以下块组织：
 - 不要求第一版实现真实 live LLM 批量实验；mocked provider 和 prompt contract 先完成。
 - 不删除历史审计文档和 lineage 记录。
 
-## 进一步说明
+## 实施链路说明
 
 本 PRD 是对锦江 latent attributes v1 的后续收敛：v1 已经完成 latent 标签生成、runtime 解析和本地验收；本 PRD 解决“哪些字段真正应该进入 ABM 决策”和“LLM prompt 如何表达这些字段”的问题。
 
-后续拆 issue 时建议顺序：
+本 PRD 已按以下顺序拆分并完成：
 
 1. 清理 demo preset 字段的数据/schema/决策使用。
 2. 建立 prompt field summary 和等级表述规则。

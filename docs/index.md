@@ -71,10 +71,12 @@ docs/
 5. [锦江用户潜在属性研究先验整理](references/jinjiang-user-latent-attributes-reference-zh.md)
 6. [PRD：锦江用户 Latent Attributes v1](prds/jinjiang-user-latent-attributes-v1.md)
 7. [锦江 final dataset latent-v1 本地验收记录](references/jinjiang-final-dataset-latent-v1-validation-20260705.md)
-8. [锦江酒店 Douyin 最终数据集审计](references/jinjiang-final-dataset-audit-20260624.md)
-9. [源码结构分析](architecture/source-tree-and-entrypoints.md)
-10. [组件清单](architecture/runtime-component-inventory.md)
-11. [测试策略](architecture/testing-strategy.md)
+8. [PRD：锦江 ABM 用户画像合同收敛与 LLM Prompt v2](prds/jinjiang-abm-profile-contract-and-llm-prompt-v2.md)
+9. [锦江 Prompt v2 mocked provider 验收摘要](references/jinjiang-prompt-v2-mock-validation-20260708.md)
+10. [锦江酒店 Douyin 最终数据集审计](references/jinjiang-final-dataset-audit-20260624.md)
+11. [源码结构分析](architecture/source-tree-and-entrypoints.md)
+12. [组件清单](architecture/runtime-component-inventory.md)
+13. [测试策略](architecture/testing-strategy.md)
 
 ## 快速命令
 
@@ -115,6 +117,8 @@ python -m py_compile $(find src tests -name '*.py' -print)
 - 锦江 latent attributes 研究先验：[`references/jinjiang-user-latent-attributes-reference-zh.md`](references/jinjiang-user-latent-attributes-reference-zh.md)
 - 锦江 latent attributes 迁移计划：[`prds/docs-architecture-and-jinjiang-latent-attributes-migration.md`](prds/docs-architecture-and-jinjiang-latent-attributes-migration.md)
 - 锦江 latent attributes v1 PRD：[`prds/jinjiang-user-latent-attributes-v1.md`](prds/jinjiang-user-latent-attributes-v1.md)
+- 锦江 Prompt v2 PRD：[`prds/jinjiang-abm-profile-contract-and-llm-prompt-v2.md`](prds/jinjiang-abm-profile-contract-and-llm-prompt-v2.md)
+- 锦江 Prompt v2 mocked provider 验收摘要：[`references/jinjiang-prompt-v2-mock-validation-20260708.md`](references/jinjiang-prompt-v2-mock-validation-20260708.md)
 - 后续 AI Agent 应优先看最终数据集审计；如需追溯旧文件名，再查看 `04-开发验证/README.md` 的迁移索引。
 
 ## 核心约定

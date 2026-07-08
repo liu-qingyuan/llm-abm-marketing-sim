@@ -13,6 +13,7 @@
 - [锦江 final dataset 审计](jinjiang-final-dataset-audit-20260624.md)：最终数据集 lineage、聚合计数、验收结果、profile 指标口径和隐私边界。
 - [锦江 final dataset 清理记录](jinjiang-final-dataset-cleanup-20260624.md)：本地旧 run 和中间数据清理记录，只含聚合统计和路径。
 - [锦江 final dataset latent-v1 本地验收记录](jinjiang-final-dataset-latent-v1-validation-20260705.md)：36,400 用户 latent-v1 processed variant 的聚合验收、class counts、Table 11 profile counts 和隐私边界。
+- [锦江 Prompt v2 mocked provider 验收摘要](jinjiang-prompt-v2-mock-validation-20260708.md)：#19 主 Prompt v2 的 prompt contract、mocked provider、ABM event/report 端到端 aggregate-only 验收摘要。
 - [锦江用户潜在属性研究先验整理](jinjiang-user-latent-attributes-reference-zh.md)：latent class、价值权重、Table 11 成员画像分布和使用边界，只作为外部研究先验，不代表当前代码实现状态。
 
 `../04-开发验证/` 只保留迁移索引；迁移后的 Reference 文档必须保留 lineage、旧文件名和聚合口径说明。

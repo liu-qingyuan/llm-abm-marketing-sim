@@ -23,7 +23,8 @@
   - Status: Published PRD; first runtime/data/reporting implementation completed and validated on the final dataset
 - [锦江 ABM 用户画像合同收敛与 LLM Prompt v2](jinjiang-abm-profile-contract-and-llm-prompt-v2.md)
   - GitHub issue: [#19](https://github.com/liu-qingyuan/llm-abm-marketing-sim/issues/19)
-  - Status: Published PRD; pending implementation issue split
+  - 实现 issues: [#21](https://github.com/liu-qingyuan/llm-abm-marketing-sim/issues/21)、[#22](https://github.com/liu-qingyuan/llm-abm-marketing-sim/issues/22)、[#23](https://github.com/liu-qingyuan/llm-abm-marketing-sim/issues/23)、[#24](https://github.com/liu-qingyuan/llm-abm-marketing-sim/issues/24)、[#25](https://github.com/liu-qingyuan/llm-abm-marketing-sim/issues/25)、[#26](https://github.com/liu-qingyuan/llm-abm-marketing-sim/issues/26)
+  - 状态：主 Prompt v2 合同和 mocked provider E2E 已完成；见 [`../references/jinjiang-prompt-v2-mock-validation-20260708.md`](../references/jinjiang-prompt-v2-mock-validation-20260708.md)
 - [锦江 LLM Prompt 人口画像消融实验](jinjiang-demographic-prompt-ablation.md)
   - GitHub issue: [#20](https://github.com/liu-qingyuan/llm-abm-marketing-sim/issues/20)
   - Status: Published PRD; future optional ablation
