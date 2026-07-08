@@ -186,6 +186,24 @@ User message 应按以下块组织：
 - LLM 不能使用已删除字段。
 - LLM 不能把合成画像标签描述为真实用户身份。
 
+## 运行与结果产物边界
+
+本 PRD 不要求全量真实 LLM 批量运行。当前实施目标是先完成 prompt 合同、mocked provider 验证和端到端路径打通。
+
+当前阶段：
+
+- 默认离线运行，不发起 live API。
+- 使用 deterministic baseline 或 mocked provider 验证 prompt 构建、schema 校验、ABM event/report 串联。
+- 不对 36,400 个用户执行真实 provider-backed LLM 批量决策。
+- 如 mocked provider 验证需要写 run artifact，默认写到 `runs/jinjiang-prompt-v2-mock-<timestamp>/`。
+- 验收摘要应写成 aggregate-only 文档，默认路径为 `docs/references/jinjiang-prompt-v2-mock-validation-<YYYYMMDD>.md`。
+
+后续阶段：
+
+- 如果需要对完整 final dataset 做真实 LLM 决策，应新建单独 issue 或 PRD。
+- 真实 LLM 批量运行必须显式授权 provider、模型、预算、样本范围、失败策略和输出路径。
+- 真实 LLM 结果不得写入 raw/private data；对外文档只记录聚合统计、方法、路径和限制。
+
 ## 测试决策
 
 - 测试应优先覆盖外部行为：加载数据后不再暴露删除字段、prompt 不包含删除字段、LLM 输出协议可校验、离线默认路径仍可运行。
@@ -205,7 +223,7 @@ User message 应按以下块组织：
 - 不重新设计 latent class 分配概率。
 - 不把性别、年龄、教育、收入加入第一版 LLM prompt。
 - 不在本 PRD 中决定具体 Provider、模型或成本预算。
-- 不要求第一版实现真实 live LLM 批量实验；mocked provider 和 prompt contract 可以先完成。
+- 不要求第一版实现真实 live LLM 批量实验；mocked provider 和 prompt contract 先完成。
 - 不删除历史审计文档和 lineage 记录。
 
 ## 进一步说明
