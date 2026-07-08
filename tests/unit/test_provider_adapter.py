@@ -35,7 +35,7 @@ class FakeProviderClient:
 def sample_context():
     return {
         "post": PostContent(post_id="p1", text="Eco skincare launch", topic_tags=["eco", "skincare"]),
-        "profile": UserProfile(user_id="u1", interest_tags=["skincare"], brand_attitude=0.5),
+        "profile": UserProfile(user_id="u1", interest_tags=["skincare"]),
         "peer_context": PeerContext(engaged_neighbors=2, exposed_neighbors=4, visible_likes=3),
         "platform_context": PlatformContext(hot_topics=["eco"], platform_mood="launch week"),
     }
@@ -43,6 +43,14 @@ def sample_context():
 
 def test_prompt_includes_post_preference_peer_influence_and_schema():
     context = sample_context()
+    context["profile"] = UserProfile(
+        user_id="u1",
+        interest_tags=["skincare"],
+        brand_attitude=1.0,
+        like_tendency=1.0,
+        comment_tendency=1.0,
+        share_tendency=1.0,
+    )
     decision_input = DecisionInput(time_step=2, prompt_version="engage-provider-v1", **context)
 
     messages = build_engagement_prompt(decision_input)
@@ -51,6 +59,10 @@ def test_prompt_includes_post_preference_peer_influence_and_schema():
     assert messages[0]["role"] == "system"
     assert payload["post_content"]["text"] == "Eco skincare launch"
     assert payload["individual_preference"]["user_id"] == "u1"
+    assert "brand_attitude" not in payload["individual_preference"]
+    assert "like_tendency" not in payload["individual_preference"]
+    assert "comment_tendency" not in payload["individual_preference"]
+    assert "share_tendency" not in payload["individual_preference"]
     assert payload["peer_influence"]["engaged_neighbors"] == 2
     assert payload["required_output_schema"]["engage"] == "boolean"
     assert "api_key" not in messages[1]["content"]

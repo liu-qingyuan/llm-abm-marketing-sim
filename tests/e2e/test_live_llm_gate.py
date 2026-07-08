@@ -29,7 +29,7 @@ def test_manual_live_llm_gate_makes_one_decision_only_when_explicitly_ready():
     )
     decision = adapter.decide(
         post=PostContent(post_id="live-smoke", text="Tiny eco skincare launch", topic_tags=["eco", "skincare"]),
-        profile=UserProfile(user_id="live-user", interest_tags=["skincare"], brand_attitude=0.4),
+        profile=UserProfile(user_id="live-user", interest_tags=["skincare"]),
         peer_context=PeerContext(engaged_neighbors=1, exposed_neighbors=2),
         platform_context=PlatformContext(hot_topics=["eco"], platform_mood="manual smoke"),
         time_step=0,

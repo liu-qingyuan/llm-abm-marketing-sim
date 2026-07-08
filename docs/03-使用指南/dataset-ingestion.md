@@ -131,21 +131,19 @@ u1 u3
 
 - `user_id`
 
-核心偏好字段：
+核心画像字段：
 
 - `interest_tags`
-- `brand_attitude`，范围 `-1.0` 到 `1.0`
 - `activity_score`，范围 `0.0` 到 `1.0`
-- `like_tendency`，范围 `0.0` 到 `1.0`
-- `comment_tendency`，范围 `0.0` 到 `1.0`
-- `share_tendency`，范围 `0.0` 到 `1.0`
+
+历史 demo 中的 `brand_attitude`、`like_tendency`、`comment_tendency`、`share_tendency` 不再是正式决策合同字段。旧数据中如仍存在这些列，会作为额外非秘密属性保留用于兼容加载，但默认决策和 provider prompt 不读取这些字段。
 
 ### CSV 用户画像
 
 ```csv
-user_id,interest_tags,brand_attitude,activity_score,like_tendency,comment_tendency,share_tendency
-u1,skincare|eco,0.8,0.9,0.8,0.3,0.6
-u2,skincare|wellness,0.5,0.8,0.7,0.2,0.4
+user_id,interest_tags,activity_score
+u1,skincare|eco,0.9
+u2,skincare|wellness,0.8
 ```
 
 `interest_tags` 可以使用 JSON list，也可以使用 `|`、`;` 或 `,` 分隔的简单字符串。空单元格会被忽略，由 Pydantic 默认值生效。
@@ -160,17 +158,13 @@ u2,skincare|wellness,0.5,0.8,0.7,0.2,0.4
     {
       "user_id": "u1",
       "interest_tags": ["skincare", "eco"],
-      "brand_attitude": 0.8,
-      "activity_score": 0.9,
-      "like_tendency": 0.8,
-      "comment_tendency": 0.3,
-      "share_tendency": 0.6
+      "activity_score": 0.9
     }
   ]
 }
 ```
 
-重复 `user_id` 会导致校验失败。额外非秘密列会被保留，用于真实数据诊断和未来特征；当前确定性决策只使用已校验的偏好字段。
+重复 `user_id` 会导致校验失败。额外非秘密列会被保留，用于真实数据诊断和未来特征；当前确定性决策只使用已校验的画像字段。
 
 ## 图/画像校验策略
 

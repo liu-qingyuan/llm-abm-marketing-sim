@@ -26,7 +26,7 @@ def test_runner_loads_toy_dataset_fixture_with_config_relative_paths():
     assert first.run_id == "toy-dataset"
     assert first.metrics_summary == {
         "comment_count": 0,
-        "conversion_trend": {"0": 1, "1": 1, "2": 1, "3": 1},
+        "conversion_trend": {"0": 1, "1": 2, "2": 1, "3": 0},
         "diffusion_depth": 2,
         "engagement_rate": 1.0,
         "final_engaged": 4,

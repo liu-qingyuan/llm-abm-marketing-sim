@@ -22,11 +22,41 @@ def test_rule_based_decision_returns_binary_schema():
     adapter = RuleBasedDecisionAdapter()
     decision = adapter.decide(
         PostContent(post_id="p1", text="new skincare post", topic_tags=["skincare"]),
-        UserProfile(user_id="u1", interest_tags=["skincare"], brand_attitude=0.5, activity_score=0.8),
+        UserProfile(user_id="u1", interest_tags=["skincare"], activity_score=0.8),
         PeerContext(engaged_neighbors=3, exposed_neighbors=4),
     )
     assert isinstance(decision.engage, bool)
     assert 0.0 <= decision.probability <= 1.0
+
+
+def test_user_profile_contract_excludes_legacy_demo_presets():
+    assert "brand_attitude" not in UserProfile.model_fields
+    assert "like_tendency" not in UserProfile.model_fields
+    assert "comment_tendency" not in UserProfile.model_fields
+    assert "share_tendency" not in UserProfile.model_fields
+
+
+def test_rule_based_decision_ignores_legacy_demo_presets_when_present_as_extra():
+    adapter = RuleBasedDecisionAdapter()
+    post = PostContent(post_id="p1", text="eco hotel launch", topic_tags=["eco"])
+    peer_context = PeerContext()
+    base_profile = UserProfile(user_id="u1", interest_tags=["eco"], activity_score=0.5)
+    legacy_profile = UserProfile(
+        user_id="u1",
+        interest_tags=["eco"],
+        activity_score=0.5,
+        brand_attitude=1.0,
+        like_tendency=0.0,
+        comment_tendency=1.0,
+        share_tendency=1.0,
+    )
+
+    base_decision = adapter.decide(post, base_profile, peer_context)
+    legacy_decision = adapter.decide(post, legacy_profile, peer_context)
+
+    assert legacy_profile.model_extra is not None
+    assert "brand_attitude" in legacy_profile.model_extra
+    assert legacy_decision == base_decision
 
 
 def test_rule_based_decision_default_config_preserves_baseline_probability_and_action():
@@ -58,7 +88,6 @@ def test_rule_based_decision_disabled_latent_weight_ignores_latent_inputs():
         UserProfile(
             user_id=profile.user_id,
             interest_tags=profile.interest_tags,
-            brand_attitude=profile.brand_attitude,
             activity_score=profile.activity_score,
         ),
         peer_context,
@@ -83,7 +112,6 @@ def test_rule_based_decision_adds_configured_latent_value_score_and_clips_probab
             value_dimensions=ValueDimensions(health=0.5, emotional=0.5),
         ),
         _profile_with_latent(
-            brand_attitude=1.0,
             activity_score=1.0,
             value_weights=LatentValueWeights(
                 epistemic=0.0,
@@ -97,7 +125,7 @@ def test_rule_based_decision_adds_configured_latent_value_score_and_clips_probab
         peer_context,
     )
 
-    assert decision.probability == 0.6
+    assert decision.probability == 0.55
     assert decision.provider_metadata == {
         "latent_value_score_applied": True,
         "latent_value_score": 0.5,
@@ -112,7 +140,6 @@ def test_rule_based_decision_adds_configured_latent_value_score_and_clips_probab
             value_dimensions=ValueDimensions(health=1.0, emotional=1.0),
         ),
         _profile_with_latent(
-            brand_attitude=1.0,
             activity_score=1.0,
             value_weights=LatentValueWeights(
                 epistemic=0.0,
@@ -186,9 +213,7 @@ rule_based_decision:
   latent_value_weight: 0.4
 profiles:
   - user_id: u1
-    brand_attitude: 0.0
     activity_score: 0.0
-    like_tendency: 1.0
     latent_attributes:
       spec_id: jinjiang_user_latent_attributes_v1
       method: latent_class_exact_quota_v1
@@ -253,14 +278,12 @@ def _post_with_values() -> PostContent:
 
 def _profile_with_latent(
     *,
-    brand_attitude: float = 0.0,
     activity_score: float = 0.0,
     value_weights: LatentValueWeights | None = None,
     profile_labels: LatentProfileLabels | None = None,
 ) -> UserProfile:
     return UserProfile(
         user_id="u1",
-        brand_attitude=brand_attitude,
         activity_score=activity_score,
         latent_attributes=LatentAttributes(
             spec_id="jinjiang_user_latent_attributes_v1",

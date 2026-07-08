@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field
 
 from .schemas import (
     LATENT_VALUE_DIMENSIONS,
+    LEGACY_DEMO_PRESET_FIELDS,
     PeerContext,
     PlatformContext,
     PostContent,
@@ -44,6 +45,7 @@ class DecisionInput(BaseModel):
 
     def cache_key(self) -> str:
         payload = self.model_dump(mode="json")
+        payload["profile"] = decision_profile_payload(self.profile)
         encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
         return hashlib.sha256(encoded).hexdigest()
 
@@ -58,6 +60,16 @@ class DecisionCache(ABC):
     @abstractmethod
     def set(self, decision_input: DecisionInput, decision: EngageDecision) -> None:
         """Store a decision for an input."""
+
+
+def decision_profile_payload(profile: UserProfile) -> dict[str, Any]:
+    """Return profile fields that are allowed to affect decisions and provider prompts."""
+
+    return {
+        key: value
+        for key, value in profile.model_dump(mode="json").items()
+        if key not in LEGACY_DEMO_PRESET_FIELDS
+    }
 
 
 @dataclass
@@ -149,10 +161,9 @@ class RuleBasedDecisionAdapter(LLMDecisionAdapter):
         preference_score = min(topic_overlap / max(len(post.topic_tags), 1), 1.0)
         platform_score = min(0.15 * hot_topic_overlap * context.feed_ranking_weight, 0.2)
         score = (
-            0.40 * preference_score
-            + 0.25 * max(profile.brand_attitude, 0.0)
-            + 0.15 * peer_context.engagement_ratio
-            + 0.10 * profile.activity_score
+            0.50 * preference_score
+            + 0.20 * peer_context.engagement_ratio
+            + 0.30 * profile.activity_score
             + platform_score
         )
         latent_value_score = _latent_value_score(post, profile)
@@ -160,7 +171,7 @@ class RuleBasedDecisionAdapter(LLMDecisionAdapter):
         if latent_applied:
             score += self.config.latent_value_weight * latent_value_score
         probability = round(min(score, 1.0), 4)
-        action = _select_action(probability, profile, peer_context)
+        action = _select_action(probability, peer_context)
         latent_reason = (
             f"latent value score applied ({latent_value_score:.4f})"
             if latent_applied
@@ -194,15 +205,19 @@ def _latent_value_score(post: PostContent, profile: UserProfile) -> float:
     return min(max(raw_score, 0.0), 1.0)
 
 
-def _select_action(probability: float, profile: UserProfile, peer_context: PeerContext) -> EngagementAction:
+def _select_action(probability: float, peer_context: PeerContext) -> EngagementAction:
     if probability < 0.5:
         return "ignore"
-    share_score = probability * profile.share_tendency + 0.05 * peer_context.visible_shares
-    comment_score = probability * profile.comment_tendency + 0.03 * peer_context.visible_comments
-    like_score = probability * profile.like_tendency + 0.01 * peer_context.visible_likes
-    scored: list[tuple[float, EngagementAction]] = [
-        (share_score, "share"),
-        (comment_score, "comment"),
-        (like_score, "like"),
-    ]
-    return max(scored, key=lambda item: (item[0], {"like": 0, "comment": 1, "share": 2}[item[1]]))[1]
+    if (
+        peer_context.visible_shares > 0
+        and peer_context.visible_shares >= peer_context.visible_comments
+        and peer_context.visible_shares >= peer_context.visible_likes
+    ):
+        return "share"
+    if (
+        peer_context.visible_comments > 0
+        and peer_context.visible_comments >= peer_context.visible_likes
+        and peer_context.visible_comments >= peer_context.visible_shares
+    ):
+        return "comment"
+    return "like"

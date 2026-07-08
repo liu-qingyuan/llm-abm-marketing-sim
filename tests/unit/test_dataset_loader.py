@@ -85,7 +85,9 @@ def test_load_network_dataset_returns_directed_graph_profiles_and_serializable_r
     assert dataset.graph["u1"]["u2"]["weight"] == 0.7
     assert dataset.graph["u1"]["u2"]["relationship"] == "friend"
     assert dataset.profiles["u1"].interest_tags == ["eco", "skincare"]
-    assert dataset.profiles["u3"].brand_attitude == -0.2
+    assert dataset.profiles["u3"].model_extra is not None
+    assert dataset.profiles["u3"].model_extra["brand_attitude"] == -0.2
+    assert "brand_attitude" not in UserProfile.model_fields
 
     report = dataset.validation_report.to_dict()
     assert report["dataset_used"] is True
@@ -105,10 +107,7 @@ def test_load_network_dataset_parses_csv_profiles_and_defaults_missing_profiles(
     edges = tmp_path / "edges.csv"
     edges.write_text("u1 u2\nu2 u3\n", encoding="utf-8")
     profiles = tmp_path / "profiles.csv"
-    profiles.write_text(
-        "user_id,interest_tags,brand_attitude,activity_score\nu1,eco|skincare,0.5,0.9\nu2,gaming,-0.1,0.4\n",
-        encoding="utf-8",
-    )
+    profiles.write_text("user_id,interest_tags,activity_score\nu1,eco|skincare,0.9\nu2,gaming,0.4\n", encoding="utf-8")
 
     dataset = load_network_dataset(
         DatasetConfig(

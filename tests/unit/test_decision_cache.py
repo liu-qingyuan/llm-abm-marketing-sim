@@ -37,3 +37,25 @@ def test_cache_key_changes_with_time_step():
     adapter.decide(post, profile, peer, time_step=2)
 
     assert wrapped.calls == 2
+
+
+def test_cache_key_ignores_legacy_demo_presets():
+    wrapped = CountingAdapter()
+    adapter = CachedDecisionAdapter(wrapped, InMemoryDecisionCache())
+    post = PostContent(post_id="p1", text="eco skincare", topic_tags=["eco"])
+    peer = PeerContext()
+
+    adapter.decide(
+        post,
+        UserProfile(user_id="u1", interest_tags=["eco"], brand_attitude=1.0, like_tendency=1.0),
+        peer,
+        time_step=1,
+    )
+    adapter.decide(
+        post,
+        UserProfile(user_id="u1", interest_tags=["eco"], brand_attitude=-1.0, share_tendency=0.0),
+        peer,
+        time_step=1,
+    )
+
+    assert wrapped.calls == 1

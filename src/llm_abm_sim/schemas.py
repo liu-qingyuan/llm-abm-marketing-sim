@@ -39,6 +39,14 @@ LATENT_PROFILE_LABEL_FIELDS: tuple[str, ...] = (
     "education",
     "monthly_income",
 )
+LEGACY_DEMO_PRESET_FIELDS: frozenset[str] = frozenset(
+    {
+        "brand_attitude",
+        "like_tendency",
+        "comment_tendency",
+        "share_tendency",
+    }
+)
 
 
 class ValueDimensions(BaseModel):
@@ -138,11 +146,7 @@ class UserProfile(BaseModel):
 
     user_id: str
     interest_tags: list[str] = Field(default_factory=list)
-    brand_attitude: float = Field(default=0.0, ge=-1.0, le=1.0)
     activity_score: float = Field(default=0.5, ge=0.0, le=1.0)
-    like_tendency: float = Field(default=0.5, ge=0.0, le=1.0)
-    comment_tendency: float = Field(default=0.2, ge=0.0, le=1.0)
-    share_tendency: float = Field(default=0.2, ge=0.0, le=1.0)
     latent_attributes: LatentAttributes | None = None
 
 

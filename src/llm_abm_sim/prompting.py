@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 
-from .decision import DecisionInput
+from .decision import DecisionInput, decision_profile_payload
 
 PROMPT_VERSION = "engage-provider-v1"
 
@@ -12,7 +12,7 @@ def build_engagement_prompt(decision_input: DecisionInput) -> list[dict[str, str
 
     payload = {
         "post_content": decision_input.post.model_dump(mode="json"),
-        "individual_preference": decision_input.profile.model_dump(mode="json"),
+        "individual_preference": decision_profile_payload(decision_input.profile),
         "peer_influence": decision_input.peer_context.model_dump(mode="json"),
         "platform_context": decision_input.platform_context.model_dump(mode="json"),
         "time_step": decision_input.time_step,

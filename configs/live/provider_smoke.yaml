@@ -21,11 +21,7 @@ post:
 profiles:
   - user_id: live_u1
     interest_tags: [skincare, eco]
-    brand_attitude: 0.7
     activity_score: 0.8
-    like_tendency: 0.7
-    comment_tendency: 0.2
-    share_tendency: 0.3
 graph_edges: []
 provider_llm:
   enabled: true

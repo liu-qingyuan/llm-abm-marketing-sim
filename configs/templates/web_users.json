@@ -1,7 +1,7 @@
 {
   "profiles": [
-    {"user_id":"u1","interest_tags":["eco","skincare"],"brand_attitude":0.8,"activity_score":0.9,"segment":"advocate"},
-    {"user_id":"u2","interest_tags":["beauty","eco"],"brand_attitude":0.4,"activity_score":0.7,"segment":"explorer"},
-    {"user_id":"u3","interest_tags":["gaming","tech"],"brand_attitude":0.0,"activity_score":0.5,"segment":"neutral"}
+    {"user_id":"u1","interest_tags":["eco","skincare"],"activity_score":0.9,"segment":"advocate"},
+    {"user_id":"u2","interest_tags":["beauty","eco"],"activity_score":0.7,"segment":"explorer"},
+    {"user_id":"u3","interest_tags":["gaming","tech"],"activity_score":0.5,"segment":"neutral"}
   ]
 }

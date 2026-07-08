@@ -581,7 +581,7 @@ def write_caption_hashtag_comment_outputs(
     )
 
     report = json.loads((processed_dir / "collection_report.json").read_text(encoding="utf-8"))
-    failed_pages = report.get("failed_pages", []) if isinstance(report.get("failed_pages"), list) else []
+    failed_pages: list[Any] = report.get("failed_pages", []) if isinstance(report.get("failed_pages"), list) else []
     comments_by_video: dict[str, list[dict[str, str]]] = {}
     replies_by_video: dict[str, list[dict[str, str]]] = {}
     comment_to_video: dict[str, str] = {}
@@ -619,13 +619,13 @@ def write_caption_hashtag_comment_outputs(
     failed_comment_pages_by_video: dict[str, list[dict[str, Any]]] = {}
     failed_reply_pages_by_video: dict[str, list[dict[str, Any]]] = {}
     for item in failed_pages:
-        page = str(item.get("page", "")) if isinstance(item, dict) else str(item)
-        if page.startswith("comments:"):
-            parts = page.split(":")
+        page_text = str(item.get("page", "")) if isinstance(item, dict) else str(item)
+        if page_text.startswith("comments:"):
+            parts = page_text.split(":")
             if len(parts) >= 2:
                 failed_comment_pages_by_video.setdefault(parts[1], []).append(item)
-        if page.startswith("replies:"):
-            parts = page.split(":")
+        if page_text.startswith("replies:"):
+            parts = page_text.split(":")
             if len(parts) >= 2:
                 video_id = comment_to_video.get(parts[1], "")
                 if video_id:

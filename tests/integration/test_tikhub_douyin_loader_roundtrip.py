@@ -47,12 +47,12 @@ def test_tikhub_processed_files_roundtrip_through_existing_loader(tmp_path: Path
     assert dataset.graph["u1"]["creator1"]["weight"] == 1
     assert dataset.graph["u1"]["u2"]["mention_count"] == 1
     assert dataset.profiles["u1"].interest_tags == ["锦江酒店", "绿色入住"]
-    assert dataset.profiles["u1"].brand_attitude == 0.0
-    assert dataset.profiles["u1"].activity_score == 0.7
-    assert dataset.profiles["u1"].like_tendency == 0.5
-    assert dataset.profiles["u1"].comment_tendency == 0.2
-    assert dataset.profiles["u1"].share_tendency == 0.2
     extras = dataset.profiles["u1"].model_extra or {}
+    assert extras["brand_attitude"] == "0.0"
+    assert dataset.profiles["u1"].activity_score == 0.7
+    assert extras["like_tendency"] == "0.5"
+    assert extras["comment_tendency"] == "0.2"
+    assert extras["share_tendency"] == "0.2"
     assert extras["value_proposition"] == "green_quality"
     assert extras["global_influence_score"] == "0.2"
     assert extras["local_influence_score"] == "0.5"
