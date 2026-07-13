@@ -9,6 +9,7 @@ from llm_abm_sim.decision import EngageDecision, LLMDecisionAdapter
 from llm_abm_sim.providers.openai_compatible import OpenAICompatibleDecisionAdapter
 from llm_abm_sim.runner import ExperimentRunner, load_simulation_input
 from llm_abm_sim.schemas import (
+    HotelClassLabel,
     LatentAttributes,
     LatentProfileLabels,
     LatentValueWeights,
@@ -18,6 +19,7 @@ from llm_abm_sim.schemas import (
     ProviderLLMConfig,
     SimulationConfig,
     SimulationInput,
+    TravelPurposeLabel,
     UserProfile,
     ValueDimensions,
 )
@@ -288,8 +290,8 @@ def _jinjiang_profile(
     activity_score: float,
     global_influence_score: float,
     local_influence_score: float,
-    hotel_class: str,
-    travel_purpose: str,
+    hotel_class: HotelClassLabel,
+    travel_purpose: TravelPurposeLabel,
 ) -> UserProfile:
     return UserProfile.model_validate(
         {

@@ -73,12 +73,13 @@ docs/
 7. [锦江 final dataset latent-v1 本地验收记录](references/jinjiang-final-dataset-latent-v1-validation-20260705.md)
 8. [PRD：锦江 ABM 用户画像合同收敛与 LLM Prompt v2](prds/jinjiang-abm-profile-contract-and-llm-prompt-v2.md)
 9. [锦江 Prompt v2 mocked provider 验收摘要](references/jinjiang-prompt-v2-mock-validation-20260708.md)
-10. [锦江酒店 Douyin 最终数据集审计](references/jinjiang-final-dataset-audit-20260624.md)
-11. [Final Research 离线基线](architecture/final-research-offline-baseline.md)
-12. [Final Research 30 批次 Runtime 与报告合同](architecture/final-research-runtime.md)
-13. [源码结构分析](architecture/source-tree-and-entrypoints.md)
-14. [组件清单](architecture/runtime-component-inventory.md)
-15. [测试策略](architecture/testing-strategy.md)
+10. [锦江 Final Research 真实 Provider 验收记录](references/jinjiang-final-research-live-validation-20260713.md)
+11. [锦江酒店 Douyin 最终数据集审计](references/jinjiang-final-dataset-audit-20260624.md)
+12. [Final Research 离线基线](architecture/final-research-offline-baseline.md)
+13. [Final Research 30 批次 Runtime 与报告合同](architecture/final-research-runtime.md)
+14. [源码结构分析](architecture/source-tree-and-entrypoints.md)
+15. [组件清单](architecture/runtime-component-inventory.md)
+16. [测试策略](architecture/testing-strategy.md)
 
 ## 快速命令
 
@@ -121,6 +122,7 @@ python -m py_compile $(find src tests -name '*.py' -print)
 - 锦江 latent attributes v1 PRD：[`prds/jinjiang-user-latent-attributes-v1.md`](prds/jinjiang-user-latent-attributes-v1.md)
 - 锦江 Prompt v2 PRD：[`prds/jinjiang-abm-profile-contract-and-llm-prompt-v2.md`](prds/jinjiang-abm-profile-contract-and-llm-prompt-v2.md)
 - 锦江 Prompt v2 mocked provider 验收摘要：[`references/jinjiang-prompt-v2-mock-validation-20260708.md`](references/jinjiang-prompt-v2-mock-validation-20260708.md)
+- 锦江 Final Research 真实 Provider 验收记录：[`references/jinjiang-final-research-live-validation-20260713.md`](references/jinjiang-final-research-live-validation-20260713.md)
 - 后续 AI Agent 应优先看最终数据集审计；如需追溯旧文件名，再查看 `04-开发验证/README.md` 的迁移索引。
 
 ## 核心约定
