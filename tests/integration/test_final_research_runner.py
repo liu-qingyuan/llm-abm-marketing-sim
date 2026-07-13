@@ -11,8 +11,16 @@ from pydantic import ValidationError
 
 from llm_abm_sim import FinalResearchConfig, FinalResearchRunner
 from llm_abm_sim.decision import EngageDecision, LLMDecisionAdapter
+from llm_abm_sim.providers.openai_compatible import OpenAICompatibleDecisionAdapter
 from llm_abm_sim.safe_serialization import artifact_has_forbidden_terms
-from llm_abm_sim.schemas import PeerContext, PlatformContext, PostContent, UserProfile
+from llm_abm_sim.schemas import (
+    FailClosedAction,
+    PeerContext,
+    PlatformContext,
+    PostContent,
+    ProviderLLMConfig,
+    UserProfile,
+)
 
 TARGET_VIDEO_ID = "7328592728139353363"
 LATENT_COLUMNS = [
@@ -91,7 +99,7 @@ def _latent_row(user_number: int) -> dict[str, object]:
     }
 
 
-def _make_processed_fixture(tmp_path: Path) -> Path:
+def _make_processed_fixture(tmp_path: Path, *, user_count: int = 6, dense_target_network: bool = False) -> Path:
     dataset_dir = tmp_path / "processed" / "latent-v1"
     _write_csv(
         dataset_dir / "videos.csv",
@@ -128,7 +136,7 @@ def _make_processed_fixture(tmp_path: Path) -> Path:
                 "source_challenge_rank": 3,
                 "caption": "绿色酒店历史内容",
                 "hashtags": '["锦江ESG"]',
-                "creator_user_id": "creator-history",
+                "creator_user_id": "u1" if dense_target_network else "creator-history",
             },
             {
                 "video_id": "history-scope-a",
@@ -148,6 +156,59 @@ def _make_processed_fixture(tmp_path: Path) -> Path:
             },
         ],
     )
+    historical_rows = [
+        {
+            "comment_id": "h1",
+            "video_id": "history-jinjiang",
+            "parent_comment_id": "0",
+            "commenter_user_id": "u1",
+            "mentioned_user_ids": "[]",
+            "like_count": 4,
+            "comment_level": "comment",
+        },
+        {
+            "comment_id": "h2",
+            "video_id": "history-jinjiang",
+            "parent_comment_id": "h1",
+            "commenter_user_id": "u2",
+            "mentioned_user_ids": '["u3"]',
+            "like_count": 2,
+            "comment_level": "reply",
+        },
+        {
+            "comment_id": "h3",
+            "video_id": "history-scope-a",
+            "parent_comment_id": "0",
+            "commenter_user_id": "u3",
+            "mentioned_user_ids": "[]",
+            "like_count": 1,
+            "comment_level": "comment",
+        },
+        {
+            "comment_id": "h4",
+            "video_id": "history-scope-b",
+            "parent_comment_id": "0",
+            "commenter_user_id": "u4",
+            "mentioned_user_ids": "[]",
+            "like_count": 0,
+            "comment_level": "comment",
+        },
+    ]
+    if dense_target_network:
+        historical_rows.extend(
+            {
+                "comment_id": f"dense-{number}",
+                "video_id": "history-jinjiang",
+                "parent_comment_id": "0",
+                "commenter_user_id": f"u{number}",
+                "mentioned_user_ids": json.dumps(
+                    [f"u{other}" for other in range(1, user_count + 1) if other != number]
+                ),
+                "like_count": 0,
+                "comment_level": "comment",
+            }
+            for number in range(2, user_count + 1)
+        )
     _write_csv(
         dataset_dir / "all_comments.csv",
         [
@@ -160,42 +221,7 @@ def _make_processed_fixture(tmp_path: Path) -> Path:
             "comment_level",
         ],
         [
-            {
-                "comment_id": "h1",
-                "video_id": "history-jinjiang",
-                "parent_comment_id": "0",
-                "commenter_user_id": "u1",
-                "mentioned_user_ids": "[]",
-                "like_count": 4,
-                "comment_level": "comment",
-            },
-            {
-                "comment_id": "h2",
-                "video_id": "history-jinjiang",
-                "parent_comment_id": "h1",
-                "commenter_user_id": "u2",
-                "mentioned_user_ids": '["u3"]',
-                "like_count": 2,
-                "comment_level": "reply",
-            },
-            {
-                "comment_id": "h3",
-                "video_id": "history-scope-a",
-                "parent_comment_id": "0",
-                "commenter_user_id": "u3",
-                "mentioned_user_ids": "[]",
-                "like_count": 1,
-                "comment_level": "comment",
-            },
-            {
-                "comment_id": "h4",
-                "video_id": "history-scope-b",
-                "parent_comment_id": "0",
-                "commenter_user_id": "u4",
-                "mentioned_user_ids": "[]",
-                "like_count": 0,
-                "comment_level": "comment",
-            },
+            *historical_rows,
             {
                 "comment_id": "t1",
                 "video_id": TARGET_VIDEO_ID,
@@ -237,7 +263,8 @@ def _make_processed_fixture(tmp_path: Path) -> Path:
         *LATENT_COLUMNS,
     ]
     user_rows = []
-    for number, user_id in enumerate(["u1", "u2", "u3", "u4", "u5", "u6"], start=1):
+    for number in range(1, user_count + 1):
+        user_id = f"u{number}"
         user_rows.append(
             {
                 "user_id": user_id,
@@ -262,6 +289,52 @@ def _make_processed_fixture(tmp_path: Path) -> Path:
         )
     _write_csv(dataset_dir / "users.csv", user_fields, user_rows)
     return dataset_dir
+
+
+class _ScriptedProviderClient:
+    def __init__(self) -> None:
+        self.calls = 0
+        self.requests: list[list[dict[str, str]]] = []
+
+    def create_response(self, messages: list[dict[str, str]], model: str) -> dict[str, object]:
+        del model
+        self.requests.append(messages)
+        self.calls += 1
+        if self.calls == 2 or 4 <= self.calls <= 9:
+            raise TimeoutError("mocked provider timeout with sk-secret")
+        action = ("like", "share", "comment")[self.calls % 3]
+        return {
+            "engage": True,
+            "probability": 0.8,
+            "reason": "mocked deterministic engagement",
+            "confidence": 0.9,
+            "action": action,
+        }
+
+
+class _RecordingAdapter(LLMDecisionAdapter):
+    def __init__(self, wrapped: LLMDecisionAdapter) -> None:
+        self.wrapped = wrapped
+        self.calls: list[dict[str, object]] = []
+
+    def decide(
+        self,
+        post: PostContent,
+        profile: UserProfile,
+        peer_context: PeerContext,
+        platform_context: PlatformContext | None = None,
+        time_step: int = 0,
+    ) -> EngageDecision:
+        self.calls.append(
+            {
+                "post": post,
+                "profile": profile,
+                "peer_context": peer_context,
+                "platform_context": platform_context,
+                "time_step": time_step,
+            }
+        )
+        return self.wrapped.decide(post, profile, peer_context, platform_context, time_step)
 
 
 def test_offline_final_research_baseline_is_holdout_safe_and_deterministic(tmp_path: Path) -> None:
@@ -345,6 +418,162 @@ def test_offline_final_research_baseline_is_holdout_safe_and_deterministic(tmp_p
         assert (first_output / relative_path).read_bytes() == (second_output / relative_path).read_bytes()
 
 
+def test_mocked_provider_final_research_runs_fixed_batches_and_continues_after_failure(tmp_path: Path) -> None:
+    dataset_dir = _make_processed_fixture(tmp_path, user_count=80, dense_target_network=True)
+    provider_config = ProviderLLMConfig(
+        enabled=True,
+        model="mock-model",
+        require_live_env=False,
+        max_retries=5,
+        retry_backoff_seconds=0.0,
+    )
+    config = FinalResearchConfig(
+        dataset_dir=dataset_dir,
+        sample_size=70,
+        random_seed=20260713,
+        provider=provider_config,
+    )
+
+    def run(output_dir: Path) -> tuple[Path, _RecordingAdapter, _ScriptedProviderClient]:
+        client = _ScriptedProviderClient()
+        provider = OpenAICompatibleDecisionAdapter(provider_config, client=client, sleep=lambda _delay: None)
+        adapter = _RecordingAdapter(provider)
+        return FinalResearchRunner(config, adapter).run_and_write(output_dir), adapter, client
+
+    first_output, first_adapter, first_client = run(tmp_path / "runtime-a")
+    second_output, _second_adapter, _second_client = run(tmp_path / "runtime-b")
+
+    manifest = json.loads((first_output / "artifact_manifest.json").read_text(encoding="utf-8"))
+    runtime_artifacts = {
+        name: relative_path for name, relative_path in manifest["artifacts"].items() if name.startswith("runtime_")
+    }
+    assert runtime_artifacts == {
+        "runtime_actions": "runtime_actions.csv",
+        "runtime_background_events": "runtime_background_events.csv",
+        "runtime_decisions": "runtime_decisions.csv",
+        "runtime_exposures": "runtime_exposures.csv",
+        "runtime_provider_failures": "runtime_provider_failures.csv",
+        "runtime_steps": "runtime_steps.csv",
+        "runtime_summary": "runtime_summary.json",
+    }
+    assert manifest["manifest_version"] == "final-research-runtime-v1"
+    assert manifest["live_api_triggered"] is False
+
+    exposures = _read_csv(first_output / runtime_artifacts["runtime_exposures"])
+    offline_scores = _read_csv(first_output / "offline_scores.csv")
+    decisions = _read_csv(first_output / runtime_artifacts["runtime_decisions"])
+    actions = _read_csv(first_output / runtime_artifacts["runtime_actions"])
+    backgrounds = _read_csv(first_output / runtime_artifacts["runtime_background_events"])
+    failures = _read_csv(first_output / runtime_artifacts["runtime_provider_failures"])
+    steps = _read_csv(first_output / runtime_artifacts["runtime_steps"])
+
+    assert len(exposures) == 70
+    assert len(offline_scores) == 80
+    assert len({row["user_id"] for row in exposures}) == 70
+    seed_rows = [row for row in exposures if row["is_seed"] == "true"]
+    non_seed_rows = [row for row in exposures if row["is_seed"] == "false"]
+    assert seed_rows
+    assert non_seed_rows
+    assert {row["time_step"] for row in seed_rows} == {"0"}
+    assert {int(row["time_step"]) for row in non_seed_rows} <= set(range(1, 30))
+    assert all(row["exposure_outcome"] == "target_exposed" for row in seed_rows)
+    assert all(row["random_draw"] == "" for row in seed_rows)
+    assert all(row["random_draw"] != "" for row in non_seed_rows)
+
+    target_exposures = [row for row in exposures if row["exposure_outcome"] == "target_exposed"]
+    assert len(first_adapter.calls) == len(target_exposures)
+    assert len({call["profile"].user_id for call in first_adapter.calls}) == len(first_adapter.calls)  # type: ignore[union-attr]
+    assert len(decisions) == len(actions) == len(target_exposures) - len(failures)
+    assert len(backgrounds) == len(exposures) - len(target_exposures)
+    assert len(failures) == 1
+    assert failures[0]["failure_type"] == "TimeoutError"
+    assert "sk-secret" not in json.dumps(failures)
+    assert first_client.calls == len(first_adapter.calls) + 6
+    failed_position = int(failures[0]["schedule_position"])
+    assert any(int(row["schedule_position"]) > failed_position for row in decisions)
+
+    assert len(steps) == 30
+    assert steps[0]["time_step"] == "0"
+    assert int(steps[0]["assigned_users"]) == len(seed_rows)
+    assert sum(int(row["assigned_users"]) for row in steps[1:]) == len(non_seed_rows)
+    repeated_batch = next(
+        time_step for time_step in range(1, 30) if sum(int(row["time_step"]) == time_step for row in non_seed_rows) > 1
+    )
+    repeated_batch_rows = [row for row in non_seed_rows if int(row["time_step"]) == repeated_batch]
+    assert len({row["engaged_neighbor_count"] for row in repeated_batch_rows}) == 1
+
+    boosted_call = next(
+        call
+        for call in first_adapter.calls
+        if call["peer_context"].engaged_neighbors > 0  # type: ignore[union-attr]
+    )
+    boosted_profile = boosted_call["profile"]
+    boosted_peer = boosted_call["peer_context"]
+    boosted_exposure = next(row for row in exposures if row["user_id"] == boosted_profile.user_id)  # type: ignore[union-attr]
+    expected_dynamic = min(
+        1.0,
+        float(boosted_exposure["base_network_score"]) + 0.2 * boosted_peer.engaged_neighbors,  # type: ignore[union-attr]
+    )
+    assert float(boosted_exposure["dynamic_network_score"]) == pytest.approx(expected_dynamic)
+    assert float(boosted_exposure["recommendation_score"]) == pytest.approx(
+        0.7 * expected_dynamic + 0.3 * float(boosted_exposure["historical_tag_affinity"]),
+        abs=1e-6,
+    )
+
+    first_call = first_adapter.calls[0]
+    assert first_call["post"] == PostContent(
+        post_id=TARGET_VIDEO_ID,
+        text="当高端酒店开始限塑",
+        topic_tags=["锦江ESG", "乡村振兴"],
+    )
+    assert first_call["platform_context"].feed_ranking_weight == 1.0  # type: ignore[union-attr]
+    prompt_text = json.dumps(first_client.requests, ensure_ascii=False)
+    for forbidden in (
+        "recommendation_score",
+        "historical_tag_affinity",
+        "latent_class",
+        "brand_attitude",
+        "like_tendency",
+        "comment_tendency",
+        "share_tendency",
+        "age_26_35",
+        "female",
+    ):
+        assert forbidden not in prompt_text
+
+    artifact_text = "\n".join(path.read_text(encoding="utf-8") for path in first_output.iterdir() if path.is_file())
+    assert artifact_has_forbidden_terms(artifact_text) is False
+    assert "sk-secret" not in artifact_text
+    for relative_path in runtime_artifacts.values():
+        assert (first_output / relative_path).read_bytes() == (second_output / relative_path).read_bytes()
+
+
+def test_final_research_does_not_convert_unexpected_adapter_errors_to_provider_failures(tmp_path: Path) -> None:
+    class UnexpectedFailureAdapter(LLMDecisionAdapter):
+        def decide(
+            self,
+            post: PostContent,
+            profile: UserProfile,
+            peer_context: PeerContext,
+            platform_context: PlatformContext | None = None,
+            time_step: int = 0,
+        ) -> EngageDecision:
+            del post, profile, peer_context, platform_context, time_step
+            raise AssertionError("adapter programming defect")
+
+    dataset_dir = _make_processed_fixture(tmp_path)
+    config = FinalResearchConfig(
+        dataset_dir=dataset_dir,
+        sample_size=4,
+        provider=ProviderLLMConfig(enabled=True, require_live_env=False),
+    )
+
+    with pytest.raises(AssertionError, match="adapter programming defect"):
+        FinalResearchRunner(config, UnexpectedFailureAdapter()).run_and_write(tmp_path / "failed-runtime")
+
+    assert not (tmp_path / "failed-runtime" / "artifact_manifest.json").exists()
+
+
 def test_final_research_config_rejects_missing_target_and_oversized_sample(tmp_path: Path) -> None:
     dataset_dir = _make_processed_fixture(tmp_path)
     rows = list(csv.DictReader((dataset_dir / "videos.csv").open(encoding="utf-8", newline="")))
@@ -359,3 +588,25 @@ def test_final_research_config_rejects_missing_target_and_oversized_sample(tmp_p
 
     with pytest.raises(ValidationError, match="must sum to 1.0"):
         FinalResearchConfig(dataset_dir=dataset_dir, sample_size=4, network_weight=0.8, tag_affinity_weight=0.3)
+
+    with pytest.raises(ValidationError, match="fail_closed_action=raise"):
+        FinalResearchConfig(
+            dataset_dir=dataset_dir,
+            sample_size=4,
+            provider=ProviderLLMConfig(enabled=True, fail_closed_action=FailClosedAction.NO_ENGAGE),
+        )
+
+    with pytest.raises(ValidationError, match="horizon=30"):
+        FinalResearchConfig(
+            dataset_dir=dataset_dir,
+            sample_size=4,
+            horizon=29,
+            provider=ProviderLLMConfig(enabled=True),
+        )
+
+    with pytest.raises(ValidationError, match="jinjiang-green-marketing-prompt-v2"):
+        FinalResearchConfig(
+            dataset_dir=dataset_dir,
+            sample_size=4,
+            provider=ProviderLLMConfig(enabled=True, prompt_version="other-prompt"),
+        )

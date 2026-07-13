@@ -41,6 +41,14 @@ class EngageDecision(BaseModel):
         return self
 
 
+class ProviderDecisionError(RuntimeError):
+    """Raised when provider attempts are exhausted at the decision seam."""
+
+    def __init__(self, cause: Exception) -> None:
+        self.failure_type = cause.__class__.__name__
+        super().__init__(f"provider decision retries exhausted: {self.failure_type}")
+
+
 class DecisionInput(BaseModel):
     """Stable decision boundary for cache keys and future LLM prompts."""
 
@@ -74,9 +82,7 @@ def decision_profile_payload(profile: UserProfile) -> dict[str, Any]:
     """Return profile fields that are allowed to affect decisions and provider prompts."""
 
     return {
-        key: value
-        for key, value in profile.model_dump(mode="json").items()
-        if key not in LEGACY_DEMO_PRESET_FIELDS
+        key: value for key, value in profile.model_dump(mode="json").items() if key not in LEGACY_DEMO_PRESET_FIELDS
     }
 
 

@@ -276,7 +276,8 @@ class ProviderLLMConfig(BaseModel):
     require_live_env: bool = True
     api_key_env: str = "OPENAI_API_KEY"
     timeout_seconds: float = Field(default=30.0, gt=0.0)
-    max_retries: int = Field(default=0, ge=0)
+    max_retries: int = Field(default=0, ge=0, le=5)
+    retry_backoff_seconds: float = Field(default=1.0, ge=0.0)
     fail_closed_action: FailClosedAction = FailClosedAction.RAISE
     prompt_version: str = "jinjiang-green-marketing-prompt-v2"
 
@@ -294,6 +295,7 @@ class ProviderLLMConfig(BaseModel):
             "api_key_env": self.api_key_env,
             "timeout_seconds": self.timeout_seconds,
             "max_retries": self.max_retries,
+            "retry_backoff_seconds": self.retry_backoff_seconds,
             "fail_closed_action": self.fail_closed_action.value,
             "prompt_version": self.prompt_version,
         }

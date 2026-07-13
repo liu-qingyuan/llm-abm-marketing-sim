@@ -5,7 +5,7 @@ import json
 import pytest
 from pydantic import ValidationError
 
-from llm_abm_sim.decision import DecisionInput
+from llm_abm_sim.decision import DecisionInput, ProviderDecisionError
 from llm_abm_sim.prompting import build_engagement_prompt
 from llm_abm_sim.provider_config import redact_secrets
 from llm_abm_sim.providers.openai_compatible import OpenAICompatibleDecisionAdapter, ProviderRunSkipped
@@ -98,14 +98,12 @@ def test_prompt_includes_post_preference_peer_influence_and_schema():
     assert "【用户消费偏好】" in user_content
     assert (
         "说明：活跃度、全平台影响力、锦江酒店社群内的局部影响力为可观测代理指标；"
-        "活跃度：中等（0.50）；全平台影响力：高（0.90）；真实 profile 兴趣标签：skincare"
-        in user_content
+        "活跃度：中等（0.50）；全平台影响力：高（0.90）；真实 profile 兴趣标签：skincare" in user_content
     )
     assert (
         "环保意识倾向、消费价值、入住酒店类型和入住目的为虚拟实验标签，不代表真实身份或心理画像；"
         "环保意识倾向：正向（0.80）；前三个秸秆制品相关消费价值：环保消费价值（0.80）、健康价值（0.70）、功能价值（0.40）；"
-        "最近一次入住锦江旗下酒店类型：经济型酒店；最近一次入住锦江旗下酒店目的：商务出行"
-        in user_content
+        "最近一次入住锦江旗下酒店类型：经济型酒店；最近一次入住锦江旗下酒店目的：商务出行" in user_content
     )
     assert "brand_attitude" not in user_content
     assert "like_tendency" not in user_content
@@ -177,8 +175,10 @@ def test_mocked_provider_success_validates_engage_decision():
 def test_provider_malformed_or_schema_invalid_raises_by_default(response):
     adapter = OpenAICompatibleDecisionAdapter(ProviderLLMConfig(enabled=True), client=FakeProviderClient(response))
 
-    with pytest.raises((ValueError, ValidationError)):
+    with pytest.raises(ProviderDecisionError) as caught:
         adapter.decide(**sample_context())
+
+    assert isinstance(caught.value.__cause__, (ValueError, ValidationError))
 
 
 def test_fail_closed_no_engage_returns_safe_ignore_decision():
@@ -250,13 +250,38 @@ def test_provider_retries_timeout_before_success():
             return {"engage": True, "probability": 0.7, "reason": "retry ok", "confidence": 0.8, "action": "share"}
 
     client = FlakyClient()
-    adapter = OpenAICompatibleDecisionAdapter(ProviderLLMConfig(enabled=True, max_retries=1), client=client)
+    delays: list[float] = []
+    adapter = OpenAICompatibleDecisionAdapter(
+        ProviderLLMConfig(enabled=True, max_retries=1, retry_backoff_seconds=0.25),
+        client=client,
+        sleep=delays.append,
+    )
 
     decision = adapter.decide(**sample_context())
 
     assert client.calls == 2
+    assert delays == [0.25]
     assert decision.action == "share"
     assert decision.decision_source == "provider"
+
+
+def test_provider_retry_backoff_is_exponential_and_capped_at_five_retries():
+    client = FakeProviderClient(None, exc=TimeoutError("temporary"))
+    delays: list[float] = []
+    config = ProviderLLMConfig(enabled=True, max_retries=5, retry_backoff_seconds=0.1)
+    adapter = OpenAICompatibleDecisionAdapter(config, client=client, sleep=delays.append)
+
+    with pytest.raises(ProviderDecisionError, match="TimeoutError") as caught:
+        adapter.decide(**sample_context())
+
+    assert caught.value.failure_type == "TimeoutError"
+    assert isinstance(caught.value.__cause__, TimeoutError)
+    assert len(client.calls) == 6
+    assert delays == [0.1, 0.2, 0.4, 0.8, 1.6]
+    assert config.safe_metadata()["retry_backoff_seconds"] == 0.1
+
+    with pytest.raises(ValidationError, match="less than or equal to 5"):
+        ProviderLLMConfig(enabled=True, max_retries=6)
 
 
 def test_cached_provider_adapter_avoids_duplicate_provider_calls():

@@ -8,6 +8,7 @@ from .decision import (
     EngageDecision,
     InMemoryDecisionCache,
     LLMDecisionAdapter,
+    ProviderDecisionError,
     RuleBasedDecisionAdapter,
     RuleBasedDecisionConfig,
 )
@@ -32,6 +33,7 @@ __all__ = [
     "FinalResearchConfig",
     "FinalResearchRunner",
     "LLMDecisionAdapter",
+    "ProviderDecisionError",
     "PlatformEnvironment",
     "ResearchUser",
     "RuleBasedDecisionAdapter",

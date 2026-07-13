@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import time
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any, Protocol, cast
 
-from llm_abm_sim.decision import DecisionInput, EngageDecision, LLMDecisionAdapter
+from llm_abm_sim.decision import DecisionInput, EngageDecision, LLMDecisionAdapter, ProviderDecisionError
 from llm_abm_sim.prompting import build_engagement_prompt
 from llm_abm_sim.provider_config import load_codex_provider_config, resolve_runtime_credential, should_run_live_llm
 from llm_abm_sim.schemas import (
@@ -45,6 +47,7 @@ class OpenAICompatibleDecisionAdapter(LLMDecisionAdapter):
         *,
         client: ProviderClient | None = None,
         codex_home: str | Path | None = None,
+        sleep: Callable[[float], None] = time.sleep,
     ) -> None:
         self.config = config or ProviderLLMConfig(enabled=True)
         self.codex_home = codex_home
@@ -55,6 +58,8 @@ class OpenAICompatibleDecisionAdapter(LLMDecisionAdapter):
         model = self.config.model or (self.codex_provider_config.model if self.codex_provider_config else None)
         self.model = model or "gpt-5.5"
         self.client = client
+        self._sleep = sleep
+        self.live_api_triggered = False
 
     @property
     def safe_metadata(self) -> dict[str, Any]:
@@ -85,7 +90,7 @@ class OpenAICompatibleDecisionAdapter(LLMDecisionAdapter):
         messages = build_engagement_prompt(decision_input)
         client = self.client or self._build_live_client()
         last_error: Exception | None = None
-        for _attempt in range(self.config.max_retries + 1):
+        for attempt in range(self.config.max_retries + 1):
             try:
                 raw = client.create_response(messages, cast(str, self.model))
                 decision = _parse_provider_decision(raw)
@@ -97,6 +102,8 @@ class OpenAICompatibleDecisionAdapter(LLMDecisionAdapter):
                 )
             except Exception as exc:
                 last_error = exc
+                if attempt < self.config.max_retries:
+                    self._sleep(self.config.retry_backoff_seconds * (2**attempt))
         if last_error is None:  # defensive; max_retries validation keeps this unreachable.
             last_error = ProviderConfigurationError("provider request did not run")
         return self._handle_failure(last_error)
@@ -122,12 +129,14 @@ class OpenAICompatibleDecisionAdapter(LLMDecisionAdapter):
         wire_api = self.config.wire_api or (
             self.codex_provider_config.wire_api if self.codex_provider_config else "responses"
         )
-        return _OpenAISDKClient(
+        client = _OpenAISDKClient(
             api_key=credential.value,
             base_url=base_url,
             timeout=self.config.timeout_seconds,
             wire_api=wire_api,
         )
+        self.live_api_triggered = True
+        return client
 
     def _handle_failure(self, exc: Exception) -> EngageDecision:
         action = self.config.fail_closed_action
@@ -143,7 +152,7 @@ class OpenAICompatibleDecisionAdapter(LLMDecisionAdapter):
             )
         if action == FailClosedAction.SKIP_RUN:
             raise ProviderRunSkipped("provider failure configured to skip run") from exc
-        raise exc
+        raise ProviderDecisionError(exc) from exc
 
 
 class _OpenAISDKClient:

@@ -14,15 +14,19 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from .decision import LLMDecisionAdapter
+from .decision import LLMDecisionAdapter, ProviderDecisionError
 from .safe_serialization import safe_data, safe_json, safe_user_data, safe_user_json
 from .schemas import (
     LATENT_PROFILE_LABEL_FIELDS,
     LATENT_VALUE_DIMENSIONS,
     LEGACY_DEMO_PRESET_FIELDS,
     FailClosedAction,
+    PeerContext,
+    PlatformContext,
+    PostContent,
     ProviderLLMConfig,
     ReportConfig,
+    UserProfile,
 )
 
 TARGET_VIDEO_ID = "7328592728139353363"
@@ -65,6 +69,68 @@ SCORE_CSV_FIELDS = (
     "has_network_connection",
     "has_historical_tag_affinity",
 )
+RUNTIME_STEP_CSV_FIELDS = (
+    "time_step",
+    "assigned_users",
+    "seed_users",
+    "target_exposures",
+    "background_impressions",
+    "decisions",
+    "engagements",
+    "ignored",
+    "provider_failed",
+)
+RUNTIME_EXPOSURE_CSV_FIELDS = (
+    "schedule_position",
+    "user_id",
+    "video_id",
+    "time_step",
+    "assigned_step",
+    "is_seed",
+    "base_network_score",
+    "dynamic_network_score",
+    "engaged_neighbor_count",
+    "historical_tag_affinity",
+    "recommendation_score",
+    "random_draw",
+    "exposure_outcome",
+)
+RUNTIME_DECISION_CSV_FIELDS = (
+    "schedule_position",
+    "user_id",
+    "video_id",
+    "time_step",
+    "engage",
+    "probability",
+    "reason",
+    "confidence",
+    "action",
+    "decision_source",
+    "provider_metadata",
+)
+RUNTIME_ACTION_CSV_FIELDS = (
+    "schedule_position",
+    "user_id",
+    "video_id",
+    "time_step",
+    "action",
+)
+RUNTIME_BACKGROUND_CSV_FIELDS = (
+    "schedule_position",
+    "user_id",
+    "video_id",
+    "time_step",
+    "recommendation_score",
+    "random_draw",
+)
+RUNTIME_PROVIDER_FAILURE_CSV_FIELDS = (
+    "schedule_position",
+    "user_id",
+    "video_id",
+    "time_step",
+    "failure_type",
+    "provider_metadata",
+)
 
 
 class FinalResearchConfig(BaseModel):
@@ -97,8 +163,10 @@ class FinalResearchConfig(BaseModel):
         if self.provider.enabled:
             if self.provider.fail_closed_action is not FailClosedAction.RAISE:
                 raise ValueError("enabled final research provider must use fail_closed_action=raise")
-            if self.provider.max_retries > 5:
-                raise ValueError("enabled final research provider max_retries must not exceed 5")
+            if self.horizon != 30:
+                raise ValueError("enabled final research runtime requires horizon=30")
+            if self.provider.prompt_version != "jinjiang-green-marketing-prompt-v2":
+                raise ValueError("enabled final research runtime requires jinjiang-green-marketing-prompt-v2")
 
         dataset_dir = self.dataset_dir.expanduser()
         if not dataset_dir.is_dir():
@@ -212,6 +280,40 @@ class OfflineRecommendationScore(BaseModel):
         return row
 
 
+class _DynamicRecommendationScore(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    user_id: str
+    base_network_score: float
+    dynamic_network_score: float
+    engaged_neighbor_count: int
+    historical_tag_affinity: float
+    recommendation_score: float
+
+
+@dataclass(frozen=True)
+class _RuntimeArtifacts:
+    steps: list[dict[str, object]]
+    exposures: list[dict[str, object]]
+    decisions: list[dict[str, object]]
+    actions: list[dict[str, object]]
+    background_events: list[dict[str, object]]
+    provider_failures: list[dict[str, object]]
+    summary: dict[str, object]
+    decision_adapter_calls: int
+
+
+@dataclass(frozen=True)
+class _BatchRuntimeInput:
+    user_id: str
+    user: ResearchUser
+    is_seed: bool
+    dynamic_score: _DynamicRecommendationScore
+    peer_context: PeerContext
+    draw: float | None
+    target_exposed: bool
+
+
 @dataclass(frozen=True)
 class _VideoRecord:
     video_id: str
@@ -246,6 +348,7 @@ class _PreparedInputs:
     historical_interaction_user_ids: set[str]
     historical_tags_by_user: dict[str, set[str]]
     target_scope_weighted_degree: dict[str, int]
+    target_scope_neighbors: dict[str, set[str]]
     source_scope_sample_counts: dict[str, int]
 
 
@@ -278,7 +381,7 @@ class _ResearchInputBuilder:
         target_scope_comments = [
             comment for comment in historical_comments if comment.video_id in target_scope_video_ids
         ]
-        target_scope_degree = _weighted_degrees(historical_videos, target_scope_comments)
+        target_scope_degree, target_scope_neighbors = _weighted_graph(historical_videos, target_scope_comments)
         history_counts, history_likes, historical_tags_by_user = _historical_user_signals(
             historical_videos,
             historical_comments,
@@ -319,6 +422,7 @@ class _ResearchInputBuilder:
             historical_interaction_user_ids=set(history_counts),
             historical_tags_by_user=historical_tags_by_user,
             target_scope_weighted_degree=target_scope_degree,
+            target_scope_neighbors=target_scope_neighbors,
             source_scope_sample_counts=dict(sorted(Counter(sample_scope_by_user.values()).items())),
         )
 
@@ -380,7 +484,7 @@ class _ResearchInputBuilder:
 
 
 class PlatformRecommendationModel:
-    """Static recommendation scoring over historical network and tag signals."""
+    """Recommendation scoring and direct-neighbor runtime feedback."""
 
     def __init__(self, config: FinalResearchConfig, prepared: _PreparedInputs) -> None:
         self.config = config
@@ -391,10 +495,15 @@ class PlatformRecommendationModel:
             for user_id, degree in prepared.target_scope_weighted_degree.items()
         }
         self._target_tags = set(prepared.target_video.hashtags)
+        self._target_exposed_user_ids: set[str] = set()
+        self._engaged_actions: dict[str, str] = {}
+
+    def _historical_tag_affinity(self, user_id: str) -> float:
+        history_tags = self.prepared.historical_tags_by_user.get(user_id, set())
+        return len(self._target_tags & history_tags) / max(len(self._target_tags), 1)
 
     def score_static(self, user_id: str) -> OfflineRecommendationScore:
-        history_tags = self.prepared.historical_tags_by_user.get(user_id, set())
-        affinity = len(self._target_tags & history_tags) / max(len(self._target_tags), 1)
+        affinity = self._historical_tag_affinity(user_id)
         base_network_score = self._base_network_scores.get(user_id, 0.0)
         score = self.config.network_weight * base_network_score + self.config.tag_affinity_weight * affinity
         return OfflineRecommendationScore(
@@ -410,9 +519,50 @@ class PlatformRecommendationModel:
     def score_all(self) -> list[OfflineRecommendationScore]:
         return [self.score_static(user_id) for user_id in sorted(self.prepared.users_by_id)]
 
+    def score_dynamic(self, user_id: str) -> _DynamicRecommendationScore:
+        neighbors = self.prepared.target_scope_neighbors.get(user_id, set())
+        engaged_neighbor_count = len(neighbors & self._engaged_actions.keys())
+        base_network_score = self._base_network_scores.get(user_id, 0.0)
+        dynamic_network_score = min(
+            1.0,
+            base_network_score + self.config.neighbor_boost * engaged_neighbor_count,
+        )
+        affinity = self._historical_tag_affinity(user_id)
+        recommendation_score = (
+            self.config.network_weight * dynamic_network_score + self.config.tag_affinity_weight * affinity
+        )
+        return _DynamicRecommendationScore(
+            user_id=user_id,
+            base_network_score=round(base_network_score, 6),
+            dynamic_network_score=round(dynamic_network_score, 6),
+            engaged_neighbor_count=engaged_neighbor_count,
+            historical_tag_affinity=round(affinity, 6),
+            recommendation_score=round(recommendation_score, 6),
+        )
+
+    def peer_context(self, user_id: str) -> PeerContext:
+        neighbors = self.prepared.target_scope_neighbors.get(user_id, set())
+        engaged_neighbor_ids = neighbors & self._engaged_actions.keys()
+        exposed_neighbor_ids = neighbors & self._target_exposed_user_ids
+        actions = [self._engaged_actions[neighbor_id] for neighbor_id in engaged_neighbor_ids]
+        return PeerContext(
+            engaged_neighbors=len(engaged_neighbor_ids),
+            exposed_neighbors=len(exposed_neighbor_ids),
+            visible_likes=actions.count("like"),
+            visible_comments=actions.count("comment"),
+            visible_shares=actions.count("share"),
+        )
+
+    def record_target_exposure(self, user_id: str) -> None:
+        self._target_exposed_user_ids.add(user_id)
+
+    def record_engagement(self, user_id: str, action: str) -> None:
+        if action in {"like", "comment", "share"}:
+            self._engaged_actions[user_id] = action
+
 
 class FinalResearchRunner:
-    """Prepare and write the deterministic offline final-research baseline."""
+    """Write deterministic final-research diagnostics and optional provider runtime artifacts."""
 
     def __init__(self, config: FinalResearchConfig, decision_adapter: LLMDecisionAdapter) -> None:
         self.config = config
@@ -429,10 +579,12 @@ class FinalResearchRunner:
 
         builder = _ResearchInputBuilder(self.config)
         prepared = builder.prepare()
-        scores = PlatformRecommendationModel(self.config, prepared).score_all()
+        platform = PlatformRecommendationModel(self.config, prepared)
+        scores = platform.score_all()
         ranked_scores = sorted(scores, key=lambda item: (-item.recommendation_score, item.user_id))
         top_scores = ranked_scores[:20]
         scores_by_user = {score.user_id: score for score in scores}
+        runtime = self._run_runtime(prepared, platform) if self.config.provider.enabled else None
         holdout_comments = builder.reveal_holdout()
         holdout_participant_ids = sorted({comment.commenter_user_id for comment in holdout_comments})
         diagnostic = _holdout_diagnostic(holdout_participant_ids, top_scores, scores_by_user)
@@ -447,6 +599,18 @@ class FinalResearchRunner:
             "sample_manifest_json": "sample_manifest.json",
             "target_video_snapshot": "target_video_snapshot.json",
         }
+        if runtime is not None:
+            artifacts.update(
+                {
+                    "runtime_actions": "runtime_actions.csv",
+                    "runtime_background_events": "runtime_background_events.csv",
+                    "runtime_decisions": "runtime_decisions.csv",
+                    "runtime_exposures": "runtime_exposures.csv",
+                    "runtime_provider_failures": "runtime_provider_failures.csv",
+                    "runtime_steps": "runtime_steps.csv",
+                    "runtime_summary": "runtime_summary.json",
+                }
+            )
         sample_users = [prepared.users_by_id[user_id] for user_id in prepared.sample_user_ids]
         _write_json(output_path / artifacts["config_snapshot"], self.config.snapshot())
         _write_json(output_path / artifacts["target_video_snapshot"], prepared.target_video.model_dump(mode="json"))
@@ -471,6 +635,30 @@ class FinalResearchRunner:
             _score_summary(scores, ranked_scores, self.config),
         )
         _write_json(output_path / artifacts["holdout_diagnostic"], diagnostic)
+        if runtime is not None:
+            _write_csv(output_path / artifacts["runtime_steps"], list(RUNTIME_STEP_CSV_FIELDS), runtime.steps)
+            _write_csv(
+                output_path / artifacts["runtime_exposures"],
+                list(RUNTIME_EXPOSURE_CSV_FIELDS),
+                runtime.exposures,
+            )
+            _write_csv(
+                output_path / artifacts["runtime_decisions"],
+                list(RUNTIME_DECISION_CSV_FIELDS),
+                runtime.decisions,
+            )
+            _write_csv(output_path / artifacts["runtime_actions"], list(RUNTIME_ACTION_CSV_FIELDS), runtime.actions)
+            _write_csv(
+                output_path / artifacts["runtime_background_events"],
+                list(RUNTIME_BACKGROUND_CSV_FIELDS),
+                runtime.background_events,
+            )
+            _write_csv(
+                output_path / artifacts["runtime_provider_failures"],
+                list(RUNTIME_PROVIDER_FAILURE_CSV_FIELDS),
+                runtime.provider_failures,
+            )
+            _write_json(output_path / artifacts["runtime_summary"], runtime.summary)
         _write_json(
             output_path / artifacts["holdout_safe_audit"],
             {
@@ -513,19 +701,311 @@ class FinalResearchRunner:
         _write_json(
             output_path / "artifact_manifest.json",
             {
-                "manifest_version": "final-research-offline-v1",
+                "manifest_version": "final-research-runtime-v1" if runtime is not None else "final-research-offline-v1",
                 "artifacts": artifacts,
                 "counts": {
                     "historical_videos": prepared.historical_video_count,
                     "users_scored": len(scores),
                     "sample_users": len(prepared.sample_user_ids),
                     "seed_users": len(prepared.seed_user_ids),
+                    "runtime_exposures": len(runtime.exposures) if runtime is not None else 0,
+                    "runtime_decisions": len(runtime.decisions) if runtime is not None else 0,
+                    "runtime_provider_failures": len(runtime.provider_failures) if runtime is not None else 0,
                 },
-                "live_api_triggered": False,
-                "decision_adapter_calls": 0,
+                "live_api_triggered": _adapter_live_api_triggered(self.decision_adapter),
+                "decision_adapter_calls": runtime.decision_adapter_calls if runtime is not None else 0,
             },
         )
         return output_path
+
+    def _run_runtime(
+        self,
+        prepared: _PreparedInputs,
+        platform: PlatformRecommendationModel,
+    ) -> _RuntimeArtifacts:
+        assignments = _fixed_batch_assignments(prepared, self.config)
+        draw_rng = random.Random(_stable_seed(self.config.random_seed, "final-research-exposure-draws"))
+        post = PostContent(
+            post_id=prepared.target_video.video_id,
+            text=prepared.target_video.caption,
+            topic_tags=list(prepared.target_video.hashtags),
+        )
+        provider_metadata = _adapter_safe_metadata(self.decision_adapter, self.config.provider)
+        step_rows: dict[int, dict[str, object]] = {
+            time_step: {
+                "time_step": time_step,
+                "assigned_users": 0,
+                "seed_users": 0,
+                "target_exposures": 0,
+                "background_impressions": 0,
+                "decisions": 0,
+                "engagements": 0,
+                "ignored": 0,
+                "provider_failed": 0,
+            }
+            for time_step in range(self.config.horizon)
+        }
+        exposures: list[dict[str, object]] = []
+        decisions: list[dict[str, object]] = []
+        actions: list[dict[str, object]] = []
+        background_events: list[dict[str, object]] = []
+        provider_failures: list[dict[str, object]] = []
+        decision_adapter_calls = 0
+        schedule_position = 0
+
+        for time_step in range(self.config.horizon):
+            batch_inputs: list[_BatchRuntimeInput] = []
+            for user_id in assignments[time_step]:
+                user = prepared.users_by_id[user_id]
+                dynamic_score = platform.score_dynamic(user_id)
+                draw = None if user.is_seed else draw_rng.random()
+                batch_inputs.append(
+                    _BatchRuntimeInput(
+                        user_id=user_id,
+                        user=user,
+                        is_seed=user.is_seed,
+                        dynamic_score=dynamic_score,
+                        peer_context=platform.peer_context(user_id),
+                        draw=draw,
+                        target_exposed=user.is_seed
+                        or bool(draw is not None and draw < dynamic_score.recommendation_score),
+                    )
+                )
+
+            pending_target_exposures: list[str] = []
+            pending_engagements: list[tuple[str, str]] = []
+            for batch_input in batch_inputs:
+                user_id = batch_input.user_id
+                step_row = step_rows[time_step]
+                _increment_counter(step_row, "assigned_users")
+                if batch_input.is_seed:
+                    _increment_counter(step_row, "seed_users")
+                exposure_outcome = "target_exposed" if batch_input.target_exposed else "background_content"
+                exposure_row = {
+                    "schedule_position": schedule_position,
+                    "user_id": user_id,
+                    "video_id": prepared.target_video.video_id,
+                    "time_step": time_step,
+                    "assigned_step": time_step,
+                    "is_seed": _csv_bool(batch_input.is_seed),
+                    "base_network_score": batch_input.dynamic_score.base_network_score,
+                    "dynamic_network_score": batch_input.dynamic_score.dynamic_network_score,
+                    "engaged_neighbor_count": batch_input.dynamic_score.engaged_neighbor_count,
+                    "historical_tag_affinity": batch_input.dynamic_score.historical_tag_affinity,
+                    "recommendation_score": batch_input.dynamic_score.recommendation_score,
+                    "random_draw": "" if batch_input.draw is None else round(batch_input.draw, 12),
+                    "exposure_outcome": exposure_outcome,
+                }
+                exposures.append(exposure_row)
+
+                if not batch_input.target_exposed:
+                    _increment_counter(step_row, "background_impressions")
+                    background_events.append(
+                        {
+                            "schedule_position": schedule_position,
+                            "user_id": user_id,
+                            "video_id": prepared.target_video.video_id,
+                            "time_step": time_step,
+                            "recommendation_score": batch_input.dynamic_score.recommendation_score,
+                            "random_draw": round(batch_input.draw, 12) if batch_input.draw is not None else "",
+                        }
+                    )
+                    schedule_position += 1
+                    continue
+
+                _increment_counter(step_row, "target_exposures")
+                pending_target_exposures.append(user_id)
+                decision_adapter_calls += 1
+                try:
+                    decision = self.decision_adapter.decide(
+                        post,
+                        _runtime_user_profile(batch_input.user),
+                        batch_input.peer_context,
+                        PlatformContext(
+                            time_label=f"batch-{time_step}",
+                            hot_topics=list(prepared.target_video.hashtags),
+                            platform_mood="fixed final research batch",
+                        ),
+                        time_step,
+                    )
+                except ProviderDecisionError as exc:
+                    _increment_counter(step_row, "provider_failed")
+                    provider_failures.append(
+                        {
+                            "schedule_position": schedule_position,
+                            "user_id": user_id,
+                            "video_id": prepared.target_video.video_id,
+                            "time_step": time_step,
+                            "failure_type": exc.failure_type,
+                            "provider_metadata": _json_cell(provider_metadata),
+                        }
+                    )
+                    schedule_position += 1
+                    continue
+
+                _increment_counter(step_row, "decisions")
+                if decision.engage:
+                    _increment_counter(step_row, "engagements")
+                    pending_engagements.append((user_id, decision.action))
+                else:
+                    _increment_counter(step_row, "ignored")
+                decision_row = {
+                    "schedule_position": schedule_position,
+                    "user_id": user_id,
+                    "video_id": prepared.target_video.video_id,
+                    "time_step": time_step,
+                    "engage": _csv_bool(decision.engage),
+                    "probability": decision.probability,
+                    "reason": decision.reason,
+                    "confidence": decision.confidence,
+                    "action": decision.action,
+                    "decision_source": decision.decision_source,
+                    "provider_metadata": _json_cell(decision.provider_metadata),
+                }
+                decisions.append(decision_row)
+                actions.append(
+                    {
+                        "schedule_position": schedule_position,
+                        "user_id": user_id,
+                        "video_id": prepared.target_video.video_id,
+                        "time_step": time_step,
+                        "action": decision.action,
+                    }
+                )
+                schedule_position += 1
+
+            for user_id in pending_target_exposures:
+                platform.record_target_exposure(user_id)
+            for user_id, action in pending_engagements:
+                platform.record_engagement(user_id, action)
+
+        summary = {
+            "runtime_version": "final-research-runtime-v1",
+            "horizon": self.config.horizon,
+            "schedule_method": "stable_shuffle_round_robin_batches",
+            "seed_step": 0,
+            "non_seed_steps": [1, self.config.horizon - 1],
+            "user_opportunity_limit": 1,
+            "recommendation_score_usage": "single exposure probability, never user ordering",
+            "dynamic_network_formula": (
+                "min(1.0, base_network_score + neighbor_boost * engaged_direct_neighbor_count)"
+            ),
+            "decision_adapter_calls": decision_adapter_calls,
+            "provider_metadata": provider_metadata,
+            "counts": {
+                "sample_users": len(prepared.sample_user_ids),
+                "seed_users": len(prepared.seed_user_ids),
+                "target_exposures": sum(row["exposure_outcome"] == "target_exposed" for row in exposures),
+                "background_impressions": len(background_events),
+                "decisions": len(decisions),
+                "engagements": sum(row["action"] != "ignore" for row in actions),
+                "ignored": sum(row["action"] == "ignore" for row in actions),
+                "provider_failed": len(provider_failures),
+            },
+        }
+        return _RuntimeArtifacts(
+            steps=[step_rows[time_step] for time_step in range(self.config.horizon)],
+            exposures=exposures,
+            decisions=decisions,
+            actions=actions,
+            background_events=background_events,
+            provider_failures=provider_failures,
+            summary=summary,
+            decision_adapter_calls=decision_adapter_calls,
+        )
+
+
+def _fixed_batch_assignments(
+    prepared: _PreparedInputs,
+    config: FinalResearchConfig,
+) -> dict[int, list[str]]:
+    assignments: dict[int, list[str]] = {time_step: [] for time_step in range(config.horizon)}
+    seed_set = set(prepared.seed_user_ids)
+    assignments[0] = sorted(prepared.seed_user_ids)
+    remaining = [user_id for user_id in prepared.sample_user_ids if user_id not in seed_set]
+    rng = random.Random(_stable_seed(config.random_seed, "final-research-fixed-batches"))
+    rng.shuffle(remaining)
+    for index, user_id in enumerate(remaining):
+        time_step = 1 + index % (config.horizon - 1)
+        assignments[time_step].append(user_id)
+    return assignments
+
+
+def _runtime_user_profile(user: ResearchUser) -> UserProfile:
+    latent = user.latent_attributes
+    return UserProfile.model_validate(
+        {
+            "user_id": user.user_id,
+            "interest_tags": [],
+            "activity_score": user.activity_score,
+            "nickname": user.nickname,
+            "bio": user.bio,
+            "signature": user.signature,
+            "follower_count": user.follower_count,
+            "following_count": user.following_count,
+            "video_count": user.video_count,
+            "global_influence_score": user.global_influence_score,
+            "local_influence_score": user.local_influence_score,
+            "latent_attributes": {
+                "spec_id": latent["latent_attribute_spec_id"],
+                "method": latent["latent_attribute_method"],
+                "seed": latent["latent_attribute_seed"],
+                "latent_class": latent["latent_class"],
+                "environmental_consciousness_coef": latent["latent_environmental_consciousness_coef"],
+                "value_weights": {
+                    dimension: latent[f"latent_{dimension}_value_weight"] for dimension in LATENT_VALUE_DIMENSIONS
+                },
+                "profile_labels": {
+                    field_name: latent[f"latent_{field_name}"] for field_name in LATENT_PROFILE_LABEL_FIELDS
+                },
+            },
+        }
+    )
+
+
+def _adapter_safe_metadata(
+    adapter: LLMDecisionAdapter,
+    provider_config: ProviderLLMConfig,
+) -> dict[str, object]:
+    current: object = adapter
+    seen: set[int] = set()
+    while id(current) not in seen:
+        seen.add(id(current))
+        metadata = getattr(current, "safe_metadata", None)
+        if isinstance(metadata, Mapping):
+            sanitized = safe_data(dict(metadata))
+            return sanitized if isinstance(sanitized, dict) else provider_config.safe_metadata()
+        wrapped = getattr(current, "wrapped", None)
+        if wrapped is None:
+            break
+        current = wrapped
+    return provider_config.safe_metadata()
+
+
+def _adapter_live_api_triggered(adapter: LLMDecisionAdapter) -> bool:
+    current: object = adapter
+    seen: set[int] = set()
+    while id(current) not in seen:
+        seen.add(id(current))
+        if bool(getattr(current, "live_api_triggered", False)):
+            return True
+        wrapped = getattr(current, "wrapped", None)
+        if wrapped is None:
+            return False
+        current = wrapped
+    return False
+
+
+def _json_cell(payload: object) -> str:
+    sanitized = safe_data(payload)
+    return json.dumps(sanitized, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+
+
+def _increment_counter(row: dict[str, object], field_name: str) -> None:
+    value = row[field_name]
+    if not isinstance(value, int):
+        raise TypeError(f"runtime counter {field_name} must be an int")
+    row[field_name] = value + 1
 
 
 def _build_research_users(
@@ -595,14 +1075,25 @@ def _weighted_degrees(
     videos: Mapping[str, _VideoRecord],
     comments: Sequence[_CommentRecord],
 ) -> dict[str, int]:
+    degree, _neighbors = _weighted_graph(videos, comments)
+    return degree
+
+
+def _weighted_graph(
+    videos: Mapping[str, _VideoRecord],
+    comments: Sequence[_CommentRecord],
+) -> tuple[dict[str, int], dict[str, set[str]]]:
     comment_by_id = {comment.comment_id: comment for comment in comments}
     degree: dict[str, int] = defaultdict(int)
+    neighbors: dict[str, set[str]] = defaultdict(set)
 
     def add(source: str, target: str) -> None:
         if not source or not target or source == target:
             return
         degree[source] += 1
         degree[target] += 1
+        neighbors[source].add(target)
+        neighbors[target].add(source)
 
     for comment in comments:
         if comment.comment_level == "comment":
@@ -613,7 +1104,7 @@ def _weighted_degrees(
             add(comment.commenter_user_id, parent.commenter_user_id if parent is not None else "")
         for mentioned_user_id in comment.mentioned_user_ids:
             add(comment.commenter_user_id, mentioned_user_id)
-    return dict(degree)
+    return dict(degree), dict(neighbors)
 
 
 def _holdout_safe_thresholds(
