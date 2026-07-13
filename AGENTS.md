@@ -86,6 +86,7 @@ rm -rf data/raw data/processed
 - 读取脱敏 report/audit；
 - 统计 CSV 覆盖率、重复率、聚合计数；
 - 写新的独立 run、Markdown 聚合报告、offline/mock tests；
+- 展示 processed/runtime 用户明细字段，包括 `user_id`、nickname、bio、signature、清洗后的兴趣标签、观测代理指标、合成实验标签和仿真决策结果；
 - 在明确授权后运行小规模 live smoke 或指定 live 任务。
 
 不要提交：
@@ -93,9 +94,9 @@ rm -rf data/raw data/processed
 - `.env` 或任何密钥；
 - `data/raw/` 原始响应；
 - `data/processed/` 中含用户明细的大型 CSV/JSONL；
-- nickname、bio、signature、raw payload 的明细报告。
+- raw payload 明细报告。
 
-Markdown 报告默认只写聚合统计、路径、方法和限制。
+Markdown 报告可以展示聚合统计、路径、方法、限制和 processed/runtime 用户明细字段。
 
 ## 6. 测试与验证
 
