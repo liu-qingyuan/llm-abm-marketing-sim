@@ -247,6 +247,7 @@ def _make_processed_fixture(tmp_path: Path, *, user_count: int = 6, dense_target
         "nickname",
         "bio",
         "signature",
+        "interest_tags",
         "follower_count",
         "following_count",
         "video_count",
@@ -271,6 +272,7 @@ def _make_processed_fixture(tmp_path: Path, *, user_count: int = 6, dense_target
                 "nickname": f"User {number}",
                 "bio": "Bearer sk-secret" if number == 3 else f"Bio {number}",
                 "signature": f"Signature {number}",
+                "interest_tags": json.dumps(["hotel", f"scope-{number % 2}"], ensure_ascii=False),
                 "follower_count": number * 10,
                 "following_count": number,
                 "video_count": number,
@@ -355,6 +357,10 @@ def test_offline_final_research_baseline_is_holdout_safe_and_deterministic(tmp_p
     manifest = json.loads((first_output / "artifact_manifest.json").read_text(encoding="utf-8"))
     assert manifest["artifacts"] == {
         "config_snapshot": "config_snapshot.json",
+        "final_research_report": "report.html",
+        "final_research_report_payload": "final_research_report_payload.json",
+        "final_research_users_csv": "final_research_users.csv",
+        "final_research_users_json": "final_research_users.json",
         "holdout_diagnostic": "top20_holdout_diagnostic.json",
         "holdout_safe_audit": "holdout_safe_audit.json",
         "offline_score_summary": "offline_score_summary.json",
@@ -385,6 +391,10 @@ def test_offline_final_research_baseline_is_holdout_safe_and_deterministic(tmp_p
         field not in sample_rows[0]
         for field in ("brand_attitude", "like_tendency", "comment_tendency", "share_tendency")
     )
+    offline_report_rows = _read_csv(first_output / "final_research_users.csv")
+    assert len(offline_report_rows) == 4
+    assert {row["result_status"] for row in offline_report_rows} == {"runtime_not_run"}
+    assert {row["provider_status"] for row in offline_report_rows} == {"runtime_not_run"}
 
     score_rows = {row["user_id"]: row for row in _read_csv(first_output / "offline_scores.csv")}
     assert len(score_rows) == 6
@@ -458,6 +468,20 @@ def test_mocked_provider_final_research_runs_fixed_batches_and_continues_after_f
     }
     assert manifest["manifest_version"] == "final-research-runtime-v1"
     assert manifest["live_api_triggered"] is False
+    assert {
+        name: manifest["artifacts"][name]
+        for name in (
+            "final_research_report",
+            "final_research_report_payload",
+            "final_research_users_csv",
+            "final_research_users_json",
+        )
+    } == {
+        "final_research_report": "report.html",
+        "final_research_report_payload": "final_research_report_payload.json",
+        "final_research_users_csv": "final_research_users.csv",
+        "final_research_users_json": "final_research_users.json",
+    }
 
     exposures = _read_csv(first_output / runtime_artifacts["runtime_exposures"])
     offline_scores = _read_csv(first_output / "offline_scores.csv")
@@ -466,6 +490,14 @@ def test_mocked_provider_final_research_runs_fixed_batches_and_continues_after_f
     backgrounds = _read_csv(first_output / runtime_artifacts["runtime_background_events"])
     failures = _read_csv(first_output / runtime_artifacts["runtime_provider_failures"])
     steps = _read_csv(first_output / runtime_artifacts["runtime_steps"])
+    report_rows = _read_csv(first_output / manifest["artifacts"]["final_research_users_csv"])
+    report_json = json.loads(
+        (first_output / manifest["artifacts"]["final_research_users_json"]).read_text(encoding="utf-8")
+    )
+    report_payload = json.loads(
+        (first_output / manifest["artifacts"]["final_research_report_payload"]).read_text(encoding="utf-8")
+    )
+    report_html = (first_output / manifest["artifacts"]["final_research_report"]).read_text(encoding="utf-8")
 
     assert len(exposures) == 70
     assert len(offline_scores) == 80
@@ -491,6 +523,38 @@ def test_mocked_provider_final_research_runs_fixed_batches_and_continues_after_f
     assert first_client.calls == len(first_adapter.calls) + 6
     failed_position = int(failures[0]["schedule_position"])
     assert any(int(row["schedule_position"]) > failed_position for row in decisions)
+
+    assert len(report_rows) == len(report_json["users"]) == 70
+    assert [row["user_id"] for row in report_rows] == [row["user_id"] for row in report_json["users"]]
+    assert set(report_rows[0]) == set(report_json["users"][0])
+    assert {row["result_status"] for row in report_rows} == {
+        *(row["action"] for row in decisions),
+        *("background_content" for _row in backgrounds),
+        *("provider_failed" for _row in failures),
+    }
+    assert next(row for row in report_rows if row["result_status"] == "provider_failed")["provider_status"] == (
+        "provider_failed"
+    )
+    assert all(row["assigned_step"] != "" for row in report_rows)
+    assert all(row["sample_source_scope"] for row in report_rows)
+    assert all(row["report_path"] == "report.html" for row in report_rows)
+    assert all(row["manifest_path"] == "artifact_manifest.json" for row in report_rows)
+    assert "nickname" in report_rows[0]
+    assert "bio" in report_rows[0]
+    assert "signature" in report_rows[0]
+    assert "interest_tags" in report_rows[0]
+    assert "historical_tags" in report_rows[0]
+    assert "latent_attributes" in report_rows[0]
+    assert "brand_attitude" not in report_rows[0]
+    assert "authorization" not in report_rows[0]
+    assert report_payload["schema_version"] == "final-research-report-payload-v1"
+    assert report_payload["core_objects"] == ["TargetVideo", "ResearchUser", "PlatformRecommendationModel"]
+    assert report_payload["downloads"]["csv"] == "final_research_users.csv"
+    assert report_payload["downloads"]["users_json"] == "final_research_users.json"
+    assert "data-testid=\"final-research-report\"" in report_html
+    assert "final_research_users.csv" in report_html
+    assert "final_research_users.json" in report_html
+    assert "artifact_manifest.json" in report_html
 
     assert len(steps) == 30
     assert steps[0]["time_step"] == "0"
@@ -544,8 +608,28 @@ def test_mocked_provider_final_research_runs_fixed_batches_and_continues_after_f
     artifact_text = "\n".join(path.read_text(encoding="utf-8") for path in first_output.iterdir() if path.is_file())
     assert artifact_has_forbidden_terms(artifact_text) is False
     assert "sk-secret" not in artifact_text
-    for relative_path in runtime_artifacts.values():
+    for relative_path in [*manifest["artifacts"].values(), "artifact_manifest.json"]:
         assert (first_output / relative_path).read_bytes() == (second_output / relative_path).read_bytes()
+
+
+def test_final_research_report_uses_configured_formula_and_interest_tags(tmp_path: Path) -> None:
+    dataset_dir = _make_processed_fixture(tmp_path)
+    output = FinalResearchRunner(
+        FinalResearchConfig(
+            dataset_dir=dataset_dir,
+            sample_size=4,
+            network_weight=0.65,
+            tag_affinity_weight=0.35,
+            neighbor_boost=0.15,
+        ),
+        FailingIfCalledAdapter(),
+    ).run_and_write(tmp_path / "configured-report")
+
+    report_html = (output / "report.html").read_text(encoding="utf-8")
+    report_rows = _read_csv(output / "final_research_users.csv")
+    assert "0.65 network + 0.35 historical tag affinity" in report_html
+    assert "min(1, base + 0.15 × engaged direct neighbors)" in report_html
+    assert json.loads(report_rows[0]["interest_tags"])[0] == "hotel"
 
 
 def test_final_research_does_not_convert_unexpected_adapter_errors_to_provider_failures(tmp_path: Path) -> None:

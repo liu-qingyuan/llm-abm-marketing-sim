@@ -15,6 +15,11 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from .decision import LLMDecisionAdapter, ProviderDecisionError
+from .final_research_report import (
+    FINAL_RESEARCH_REPORT_ARTIFACTS,
+    FinalResearchReportSource,
+    FinalResearchReportWriter,
+)
 from .safe_serialization import safe_data, safe_json, safe_user_data, safe_user_json
 from .schemas import (
     LATENT_PROFILE_LABEL_FIELDS,
@@ -39,6 +44,7 @@ SAMPLE_CSV_FIELDS = (
     "nickname",
     "bio",
     "signature",
+    "interest_tags",
     "follower_count",
     "following_count",
     "video_count",
@@ -240,6 +246,7 @@ class ResearchUser(BaseModel):
     nickname: str = ""
     bio: str = ""
     signature: str = ""
+    interest_tags: list[str] = Field(default_factory=list)
     follower_count: int = 0
     following_count: int = 0
     video_count: int = 0
@@ -258,6 +265,7 @@ class ResearchUser(BaseModel):
     def sample_row(self) -> dict[str, object]:
         row = self.model_dump(exclude={"latent_attributes"})
         row["is_seed"] = _csv_bool(self.is_seed)
+        row["interest_tags"] = _json_cell(self.interest_tags)
         row.update(self.latent_attributes)
         return {field: row.get(field, "") for field in SAMPLE_CSV_FIELDS}
 
@@ -588,6 +596,43 @@ class FinalResearchRunner:
         holdout_comments = builder.reveal_holdout()
         holdout_participant_ids = sorted({comment.commenter_user_id for comment in holdout_comments})
         diagnostic = _holdout_diagnostic(holdout_participant_ids, top_scores, scores_by_user)
+        score_summary = _score_summary(scores, ranked_scores, self.config)
+        holdout_safe_audit = {
+            "profile_index_method": PROFILE_INDEX_METHOD,
+            "historical_video_count": prepared.historical_video_count,
+            "historical_interaction_rows": prepared.historical_interaction_rows,
+            "holdout_interaction_rows": len(holdout_comments),
+            "holdout_unique_participant_count": len(holdout_participant_ids),
+            "holdout_safe_reference_thresholds": prepared.thresholds,
+            "activity_formula": (
+                "0.25 * Norm(video_count) + 0.45 * Norm(historical_comment_count) "
+                "+ 0.30 * Norm(historical_reply_count)"
+            ),
+            "local_influence_formula": (
+                "0.60 * Norm(historical_edge_degree) + 0.40 * Norm(historical_comment_like_sum)"
+            ),
+            "reference_basis": (
+                "Historical Set P95 references with Norm(x)=min(1, log1p(x)/log1p(P95)); "
+                "global_influence_score remains the observed source value."
+            ),
+            "proxy_semantics": (
+                "Activity and local influence are observable research proxies, not true psychological traits, "
+                "third-party indices, or causal influence measurements."
+            ),
+            "limitations": (
+                "The dataset has no real exposure denominator and incomplete user-level like/share/collect data; "
+                "holdout-safe scores support simulation analysis only."
+            ),
+            "sample_size": len(prepared.sample_user_ids),
+            "source_scope_sample_counts": prepared.source_scope_sample_counts,
+            "global_top10_local_top10_seed_union": prepared.seed_user_ids,
+            "seed_count": len(prepared.seed_user_ids),
+            "source_dataset_modified": False,
+            "holdout_boundary": (
+                "Target interactions and aggregate engagement counts were excluded from profile projection, "
+                "sampling, seed selection, and recommendation scoring."
+            ),
+        }
 
         artifacts = {
             "config_snapshot": "config_snapshot.json",
@@ -598,6 +643,7 @@ class FinalResearchRunner:
             "sample_manifest_csv": "sample_manifest.csv",
             "sample_manifest_json": "sample_manifest.json",
             "target_video_snapshot": "target_video_snapshot.json",
+            **FINAL_RESEARCH_REPORT_ARTIFACTS,
         }
         if runtime is not None:
             artifacts.update(
@@ -632,7 +678,7 @@ class FinalResearchRunner:
         )
         _write_json(
             output_path / artifacts["offline_score_summary"],
-            _score_summary(scores, ranked_scores, self.config),
+            score_summary,
         )
         _write_json(output_path / artifacts["holdout_diagnostic"], diagnostic)
         if runtime is not None:
@@ -659,63 +705,44 @@ class FinalResearchRunner:
                 runtime.provider_failures,
             )
             _write_json(output_path / artifacts["runtime_summary"], runtime.summary)
-        _write_json(
-            output_path / artifacts["holdout_safe_audit"],
-            {
-                "profile_index_method": PROFILE_INDEX_METHOD,
-                "historical_video_count": prepared.historical_video_count,
-                "historical_interaction_rows": prepared.historical_interaction_rows,
-                "holdout_interaction_rows": len(holdout_comments),
-                "holdout_unique_participant_count": len(holdout_participant_ids),
-                "holdout_safe_reference_thresholds": prepared.thresholds,
-                "activity_formula": (
-                    "0.25 * Norm(video_count) + 0.45 * Norm(historical_comment_count) "
-                    "+ 0.30 * Norm(historical_reply_count)"
-                ),
-                "local_influence_formula": (
-                    "0.60 * Norm(historical_edge_degree) + 0.40 * Norm(historical_comment_like_sum)"
-                ),
-                "reference_basis": (
-                    "Historical Set P95 references with Norm(x)=min(1, log1p(x)/log1p(P95)); "
-                    "global_influence_score remains the observed source value."
-                ),
-                "proxy_semantics": (
-                    "Activity and local influence are observable research proxies, not true psychological traits, "
-                    "third-party indices, or causal influence measurements."
-                ),
-                "limitations": (
-                    "The dataset has no real exposure denominator and incomplete user-level like/share/collect data; "
-                    "holdout-safe scores support simulation analysis only."
-                ),
-                "sample_size": len(prepared.sample_user_ids),
-                "source_scope_sample_counts": prepared.source_scope_sample_counts,
-                "global_top10_local_top10_seed_union": prepared.seed_user_ids,
-                "seed_count": len(prepared.seed_user_ids),
-                "source_dataset_modified": False,
-                "holdout_boundary": (
-                    "Target interactions and aggregate engagement counts were excluded from profile projection, "
-                    "sampling, seed selection, and recommendation scoring."
-                ),
+        _write_json(output_path / artifacts["holdout_safe_audit"], holdout_safe_audit)
+        report_config = self.config.snapshot()
+        report_config["report_title"] = self.config.report.title
+        artifact_manifest = {
+            "manifest_version": "final-research-runtime-v1" if runtime is not None else "final-research-offline-v1",
+            "artifacts": artifacts,
+            "counts": {
+                "historical_videos": prepared.historical_video_count,
+                "users_scored": len(scores),
+                "sample_users": len(prepared.sample_user_ids),
+                "seed_users": len(prepared.seed_user_ids),
+                "runtime_exposures": len(runtime.exposures) if runtime is not None else 0,
+                "runtime_decisions": len(runtime.decisions) if runtime is not None else 0,
+                "runtime_provider_failures": len(runtime.provider_failures) if runtime is not None else 0,
             },
-        )
-        _write_json(
-            output_path / "artifact_manifest.json",
-            {
-                "manifest_version": "final-research-runtime-v1" if runtime is not None else "final-research-offline-v1",
-                "artifacts": artifacts,
-                "counts": {
-                    "historical_videos": prepared.historical_video_count,
-                    "users_scored": len(scores),
-                    "sample_users": len(prepared.sample_user_ids),
-                    "seed_users": len(prepared.seed_user_ids),
-                    "runtime_exposures": len(runtime.exposures) if runtime is not None else 0,
-                    "runtime_decisions": len(runtime.decisions) if runtime is not None else 0,
-                    "runtime_provider_failures": len(runtime.provider_failures) if runtime is not None else 0,
+            "live_api_triggered": _adapter_live_api_triggered(self.decision_adapter),
+            "decision_adapter_calls": runtime.decision_adapter_calls if runtime is not None else 0,
+        }
+        FinalResearchReportWriter(
+            FinalResearchReportSource(
+                target_video=prepared.target_video.model_dump(mode="json"),
+                users=[user.model_dump(mode="json") for user in sample_users],
+                historical_tags_by_user={
+                    user.user_id: sorted(prepared.historical_tags_by_user.get(user.user_id, set()))
+                    for user in sample_users
                 },
-                "live_api_triggered": _adapter_live_api_triggered(self.decision_adapter),
-                "decision_adapter_calls": runtime.decision_adapter_calls if runtime is not None else 0,
-            },
-        )
+                config=report_config,
+                offline_score_summary=score_summary,
+                holdout_diagnostic=diagnostic,
+                holdout_safe_audit=holdout_safe_audit,
+                artifact_manifest=artifact_manifest,
+                runtime_steps=runtime.steps if runtime is not None else (),
+                runtime_exposures=runtime.exposures if runtime is not None else (),
+                runtime_decisions=runtime.decisions if runtime is not None else (),
+                runtime_provider_failures=runtime.provider_failures if runtime is not None else (),
+                runtime_enabled=runtime is not None,
+            )
+        ).write(output_path)
         return output_path
 
     def _run_runtime(
@@ -1037,6 +1064,7 @@ def _build_research_users(
             nickname=_cell(row, "nickname"),
             bio=_cell(row, "bio"),
             signature=_cell(row, "signature"),
+            interest_tags=_parse_list(_cell(row, "interest_tags")),
             follower_count=_int_cell(row, "follower_count"),
             following_count=_int_cell(row, "following_count"),
             video_count=signals["video_count"],

@@ -1,5 +1,7 @@
 import { defineConfig } from '@playwright/test';
 
+const executablePath = process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE;
+
 export default defineConfig({
   testDir: './tests/playwright',
   outputDir: './test-results/playwright',
@@ -12,6 +14,7 @@ export default defineConfig({
     ['html', { outputFolder: 'playwright-report', open: 'never' }],
   ],
   use: {
+    launchOptions: executablePath ? { executablePath } : undefined,
     trace: 'retain-on-failure',
     screenshot: 'only-on-failure',
     video: 'retain-on-failure',

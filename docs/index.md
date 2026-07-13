@@ -75,7 +75,7 @@ docs/
 9. [锦江 Prompt v2 mocked provider 验收摘要](references/jinjiang-prompt-v2-mock-validation-20260708.md)
 10. [锦江酒店 Douyin 最终数据集审计](references/jinjiang-final-dataset-audit-20260624.md)
 11. [Final Research 离线基线](architecture/final-research-offline-baseline.md)
-12. [Final Research 30 批次 Runtime](architecture/final-research-runtime.md)
+12. [Final Research 30 批次 Runtime 与报告合同](architecture/final-research-runtime.md)
 13. [源码结构分析](architecture/source-tree-and-entrypoints.md)
 14. [组件清单](architecture/runtime-component-inventory.md)
 15. [测试策略](architecture/testing-strategy.md)

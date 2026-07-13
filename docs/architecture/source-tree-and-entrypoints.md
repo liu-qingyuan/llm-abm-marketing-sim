@@ -50,6 +50,7 @@ src/llm_abm_sim/
 ├── environment.py                    # 平台曝光、痕迹、peer context
 ├── events.py                         # Pydantic 事件与 run-result schema
 ├── final_research.py                 # Final Research 输入、holdout、静态评分、30 批次 runtime 和 artifacts
+├── final_research_report.py          # 独立 Final Research payload、用户 allowlist 与静态 HTML/CSV/JSON writer
 ├── graph_loader.py                   # NetworkX 边列表/数据集 loader
 ├── input_builder.py                  # 静态 input-builder 生成
 ├── metrics.py                        # 时间序列与汇总指标
@@ -153,7 +154,8 @@ npx playwright test
 - 运行时对象主要是普通 Python 类和 Pydantic 模型。
 - 状态转移集中在 `SimulationModel.step` 与 `PlatformEnvironment`。
 - Provider/live LLM 关注点隔离在 `provider_config.py`、`providers/` 和 `live_llm` marker 测试之后。
-- 输出写入隔离在 `outputs.py` / `report_payload.py`，避免核心仿真混入序列化细节。
+- 通用输出写入隔离在 `outputs.py` / `report_payload.py`；Final Research 专用输出隔离在
+  `final_research_report.py`，避免研究字段扩展通用报告合同。
 - Web 上传先在 `web/imports.py` 规范化，再走数据集 loader 的同一套校验。
 
 ## 关键文件类型
