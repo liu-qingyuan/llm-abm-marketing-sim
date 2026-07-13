@@ -11,6 +11,7 @@ from pydantic import ValidationError
 
 from llm_abm_sim import FinalResearchConfig, FinalResearchRunner
 from llm_abm_sim.decision import EngageDecision, LLMDecisionAdapter
+from llm_abm_sim.safe_serialization import artifact_has_forbidden_terms
 from llm_abm_sim.schemas import PeerContext, PlatformContext, PostContent, UserProfile
 
 TARGET_VIDEO_ID = "7328592728139353363"
@@ -112,7 +113,7 @@ def _make_processed_fixture(tmp_path: Path) -> Path:
                 "video_id": TARGET_VIDEO_ID,
                 "source_challenge_name": "锦江酒店",
                 "source_challenge_rank": 3,
-                "video_url": "https://example.test/target",
+                "video_url": "https://example.test/target?token=secret-token&cookie=secret-cookie",
                 "caption": "当高端酒店开始限塑",
                 "hashtags": '["锦江ESG", "乡村振兴"]',
                 "creator_user_id": "creator-target",
@@ -219,6 +220,7 @@ def _make_processed_fixture(tmp_path: Path) -> Path:
         "user_id",
         "nickname",
         "bio",
+        "signature",
         "follower_count",
         "following_count",
         "video_count",
@@ -227,6 +229,11 @@ def _make_processed_fixture(tmp_path: Path) -> Path:
         "like_tendency",
         "comment_tendency",
         "share_tendency",
+        "authorization",
+        "cookie",
+        "raw_prompt",
+        "raw_provider_response",
+        "credential_path",
         *LATENT_COLUMNS,
     ]
     user_rows = []
@@ -235,7 +242,8 @@ def _make_processed_fixture(tmp_path: Path) -> Path:
             {
                 "user_id": user_id,
                 "nickname": f"User {number}",
-                "bio": f"Bio {number}",
+                "bio": "Bearer sk-secret" if number == 3 else f"Bio {number}",
+                "signature": f"Signature {number}",
                 "follower_count": number * 10,
                 "following_count": number,
                 "video_count": number,
@@ -244,6 +252,11 @@ def _make_processed_fixture(tmp_path: Path) -> Path:
                 "like_tendency": 1,
                 "comment_tendency": 1,
                 "share_tendency": 1,
+                "authorization": "Bearer sk-secret",
+                "cookie": "secret-cookie",
+                "raw_prompt": "secret prompt",
+                "raw_provider_response": '{"token":"sk-secret"}',
+                "credential_path": "/Users/example/.codex/auth.json",
                 **_latent_row(number),
             }
         )
@@ -280,6 +293,7 @@ def test_offline_final_research_baseline_is_holdout_safe_and_deterministic(tmp_p
 
     target = json.loads((first_output / "target_video_snapshot.json").read_text(encoding="utf-8"))
     assert target["video_id"] == TARGET_VIDEO_ID
+    assert target["video_url"] == "https://example.test/target"
     assert "comment_count" not in target
     assert "like_count" not in target
 
@@ -291,8 +305,9 @@ def test_offline_final_research_baseline_is_holdout_safe_and_deterministic(tmp_p
 
     sample_rows = _read_csv(first_output / "sample_manifest.csv")
     assert len(sample_rows) == 4
-    assert len({row["user_id"] for row in sample_rows}) == 4
-    assert any(row["is_seed"] == "true" for row in sample_rows)
+    assert [row["user_id"] for row in sample_rows] == ["u3", "u1", "u2", "u4"]
+    assert [row["is_seed"] for row in sample_rows] == ["true", "true", "true", "true"]
+    assert audit["global_top10_local_top10_seed_union"] == ["u1", "u2", "u3", "u4"]
     assert all(
         field not in sample_rows[0]
         for field in ("brand_attitude", "like_tendency", "comment_tendency", "share_tendency")
@@ -301,7 +316,8 @@ def test_offline_final_research_baseline_is_holdout_safe_and_deterministic(tmp_p
     score_rows = {row["user_id"]: row for row in _read_csv(first_output / "offline_scores.csv")}
     assert len(score_rows) == 6
     assert float(score_rows["u1"]["historical_tag_affinity"]) == 0.5
-    assert float(score_rows["u1"]["recommendation_score"]) > 0.3
+    assert float(score_rows["u1"]["base_network_score"]) == 1.0
+    assert float(score_rows["u1"]["recommendation_score"]) == 0.85
     assert score_rows["u5"]["has_non_target_history"] == "false"
     assert float(score_rows["u5"]["recommendation_score"]) == 0.0
     assert score_rows["u3"]["has_non_target_history"] == "true"
@@ -309,11 +325,22 @@ def test_offline_final_research_baseline_is_holdout_safe_and_deterministic(tmp_p
 
     diagnostic = json.loads((first_output / "top20_holdout_diagnostic.json").read_text(encoding="utf-8"))
     assert diagnostic["observed_holdout_participant_ids"] == ["u1", "u5"]
+    assert diagnostic["intersection_count"] == 2
+    assert diagnostic["intersection_user_ids"] == ["u1", "u5"]
     assert diagnostic["unobserved_pair_semantics"] == (
         "No observed interaction is not evidence that a user saw the target video and chose ignore."
     )
 
     assert source_hashes == {path.name: _sha256(path) for path in dataset_dir.iterdir() if path.is_file()}
+    artifact_text = "\n".join(path.read_text(encoding="utf-8") for path in first_output.iterdir() if path.is_file())
+    assert artifact_has_forbidden_terms(artifact_text) is False
+    assert "secret-token" not in artifact_text
+    assert "secret-cookie" not in artifact_text
+    assert "credential_path" not in artifact_text
+    assert "User 1" in artifact_text
+    assert "Bio 1" in artifact_text
+    assert "Signature 1" in artifact_text
+    assert "<redacted>" in artifact_text
     for relative_path in manifest["artifacts"].values():
         assert (first_output / relative_path).read_bytes() == (second_output / relative_path).read_bytes()
 

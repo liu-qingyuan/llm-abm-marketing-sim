@@ -15,6 +15,7 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from .decision import LLMDecisionAdapter
+from .safe_serialization import safe_data, safe_json, safe_user_data, safe_user_json
 from .schemas import (
     LATENT_PROFILE_LABEL_FIELDS,
     LATENT_VALUE_DIMENSIONS,
@@ -241,8 +242,6 @@ class _PreparedInputs:
     seed_user_ids: list[str]
     historical_video_count: int
     historical_interaction_rows: int
-    holdout_interaction_rows: list[_CommentRecord]
-    holdout_participant_ids: list[str]
     thresholds: dict[str, float]
     historical_interaction_user_ids: set[str]
     historical_tags_by_user: dict[str, set[str]]
@@ -256,7 +255,7 @@ class _ResearchInputBuilder:
 
     def prepare(self) -> _PreparedInputs:
         videos = self._load_videos()
-        comments = self._load_comments()
+        historical_comments = self._load_comments(holdout=False)
         profile_rows = _read_csv_rows(self.config.dataset_dir / "users.csv")
         target_record = videos[self.config.target_video_id]
         target_video = TargetVideo(
@@ -269,8 +268,6 @@ class _ResearchInputBuilder:
             video_url=target_record.video_url,
         )
         historical_videos = {video_id: video for video_id, video in videos.items() if video_id != target_video.video_id}
-        historical_comments = [comment for comment in comments if comment.video_id != target_video.video_id]
-        holdout_comments = [comment for comment in comments if comment.video_id == target_video.video_id]
 
         all_history_degree = _weighted_degrees(historical_videos, historical_comments)
         target_scope_video_ids = {
@@ -318,14 +315,17 @@ class _ResearchInputBuilder:
             seed_user_ids=seed_user_ids,
             historical_video_count=len(historical_videos),
             historical_interaction_rows=len(historical_comments),
-            holdout_interaction_rows=holdout_comments,
-            holdout_participant_ids=sorted({comment.commenter_user_id for comment in holdout_comments}),
             thresholds=thresholds,
             historical_interaction_user_ids=set(history_counts),
             historical_tags_by_user=historical_tags_by_user,
             target_scope_weighted_degree=target_scope_degree,
             source_scope_sample_counts=dict(sorted(Counter(sample_scope_by_user.values()).items())),
         )
+
+    def reveal_holdout(self) -> list[_CommentRecord]:
+        """Load target interaction answers only after static scoring is complete."""
+
+        return self._load_comments(holdout=True)
 
     def _load_videos(self) -> dict[str, _VideoRecord]:
         videos: dict[str, _VideoRecord] = {}
@@ -346,7 +346,7 @@ class _ResearchInputBuilder:
             )
         return videos
 
-    def _load_comments(self) -> list[_CommentRecord]:
+    def _load_comments(self, *, holdout: bool) -> list[_CommentRecord]:
         path = self.config.dataset_dir / "all_comments.csv"
         if not path.is_file():
             path = self.config.dataset_dir / "comments.csv"
@@ -359,6 +359,9 @@ class _ResearchInputBuilder:
             if comment_id in seen_ids:
                 raise ValueError(f"{path.name} contains duplicate comment_id: {comment_id}")
             seen_ids.add(comment_id)
+            is_holdout = _cell(row, "video_id") == self.config.target_video_id
+            if is_holdout != holdout:
+                continue
             level = _cell(row, "comment_level").lower()
             if level not in {"comment", "reply"}:
                 level = "reply" if _has_parent(_cell(row, "parent_comment_id")) else "comment"
@@ -424,11 +427,15 @@ class FinalResearchRunner:
             raise FileExistsError(f"output_dir already exists and is not empty: {output_path}")
         output_path.mkdir(parents=True, exist_ok=True)
 
-        prepared = _ResearchInputBuilder(self.config).prepare()
+        builder = _ResearchInputBuilder(self.config)
+        prepared = builder.prepare()
         scores = PlatformRecommendationModel(self.config, prepared).score_all()
         ranked_scores = sorted(scores, key=lambda item: (-item.recommendation_score, item.user_id))
         top_scores = ranked_scores[:20]
-        diagnostic = _holdout_diagnostic(prepared, top_scores)
+        scores_by_user = {score.user_id: score for score in scores}
+        holdout_comments = builder.reveal_holdout()
+        holdout_participant_ids = sorted({comment.commenter_user_id for comment in holdout_comments})
+        diagnostic = _holdout_diagnostic(holdout_participant_ids, top_scores, scores_by_user)
 
         artifacts = {
             "config_snapshot": "config_snapshot.json",
@@ -444,12 +451,15 @@ class FinalResearchRunner:
         _write_json(output_path / artifacts["config_snapshot"], self.config.snapshot())
         _write_json(output_path / artifacts["target_video_snapshot"], prepared.target_video.model_dump(mode="json"))
         _write_json(
-            output_path / artifacts["sample_manifest_json"], [user.model_dump(mode="json") for user in sample_users]
+            output_path / artifacts["sample_manifest_json"],
+            [user.model_dump(mode="json") for user in sample_users],
+            preserve_user_text=True,
         )
         _write_csv(
             output_path / artifacts["sample_manifest_csv"],
             list(SAMPLE_CSV_FIELDS),
             [user.sample_row() for user in sample_users],
+            preserve_user_text=True,
         )
         _write_csv(
             output_path / artifacts["offline_scores"],
@@ -467,9 +477,28 @@ class FinalResearchRunner:
                 "profile_index_method": PROFILE_INDEX_METHOD,
                 "historical_video_count": prepared.historical_video_count,
                 "historical_interaction_rows": prepared.historical_interaction_rows,
-                "holdout_interaction_rows": len(prepared.holdout_interaction_rows),
-                "holdout_unique_participant_count": len(prepared.holdout_participant_ids),
+                "holdout_interaction_rows": len(holdout_comments),
+                "holdout_unique_participant_count": len(holdout_participant_ids),
                 "holdout_safe_reference_thresholds": prepared.thresholds,
+                "activity_formula": (
+                    "0.25 * Norm(video_count) + 0.45 * Norm(historical_comment_count) "
+                    "+ 0.30 * Norm(historical_reply_count)"
+                ),
+                "local_influence_formula": (
+                    "0.60 * Norm(historical_edge_degree) + 0.40 * Norm(historical_comment_like_sum)"
+                ),
+                "reference_basis": (
+                    "Historical Set P95 references with Norm(x)=min(1, log1p(x)/log1p(P95)); "
+                    "global_influence_score remains the observed source value."
+                ),
+                "proxy_semantics": (
+                    "Activity and local influence are observable research proxies, not true psychological traits, "
+                    "third-party indices, or causal influence measurements."
+                ),
+                "limitations": (
+                    "The dataset has no real exposure denominator and incomplete user-level like/share/collect data; "
+                    "holdout-safe scores support simulation analysis only."
+                ),
                 "sample_size": len(prepared.sample_user_ids),
                 "source_scope_sample_counts": prepared.source_scope_sample_counts,
                 "global_top10_local_top10_seed_union": prepared.seed_user_ids,
@@ -668,27 +697,22 @@ def _select_seeds(sample_user_ids: Sequence[str], users_by_id: Mapping[str, Rese
 
 
 def _holdout_diagnostic(
-    prepared: _PreparedInputs,
+    holdout_participant_ids: Sequence[str],
     top_scores: Sequence[OfflineRecommendationScore],
+    scores_by_user: Mapping[str, OfflineRecommendationScore],
 ) -> dict[str, object]:
-    observed = prepared.holdout_participant_ids[:20]
+    observed = list(holdout_participant_ids[:20])
     recommended = [score.user_id for score in top_scores]
     observed_set = set(observed)
-    participant_signals = []
-    target_tags = set(prepared.target_video.hashtags)
-    max_degree = max(prepared.target_scope_weighted_degree.values(), default=0)
-    for user_id in observed:
-        history_tags = prepared.historical_tags_by_user.get(user_id, set())
-        base_score = prepared.target_scope_weighted_degree.get(user_id, 0) / max_degree if max_degree else 0.0
-        affinity = len(target_tags & history_tags) / max(len(target_tags), 1)
-        participant_signals.append(
-            {
-                "user_id": user_id,
-                "has_non_target_history": user_id in prepared.historical_interaction_user_ids,
-                "has_network_connection": base_score > 0.0,
-                "has_historical_tag_affinity": affinity > 0.0,
-            }
-        )
+    participant_signals = [
+        {
+            "user_id": user_id,
+            "has_non_target_history": scores_by_user[user_id].has_non_target_history,
+            "has_network_connection": scores_by_user[user_id].has_network_connection,
+            "has_historical_tag_affinity": scores_by_user[user_id].has_historical_tag_affinity,
+        }
+        for user_id in observed
+    ]
     return {
         "observed_holdout_participant_count": len(observed),
         "observed_holdout_participant_ids": observed,
@@ -778,15 +802,25 @@ def _read_csv_rows(path: Path) -> list[dict[str, str]]:
         return [dict(row) for row in csv.DictReader(handle)]
 
 
-def _write_csv(path: Path, fieldnames: list[str], rows: Sequence[Mapping[str, object]]) -> None:
+def _write_csv(
+    path: Path,
+    fieldnames: list[str],
+    rows: Sequence[Mapping[str, object]],
+    *,
+    preserve_user_text: bool = False,
+) -> None:
+    safe_rows = safe_user_data(list(rows)) if preserve_user_text else safe_data(list(rows))
+    if not isinstance(safe_rows, list):  # pragma: no cover - serializers preserve list inputs.
+        raise TypeError("safe artifact rows must remain a list")
     with path.open("w", encoding="utf-8", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=fieldnames, extrasaction="ignore")
         writer.writeheader()
-        writer.writerows(rows)
+        writer.writerows(safe_rows)
 
 
-def _write_json(path: Path, payload: object) -> None:
-    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+def _write_json(path: Path, payload: object, *, preserve_user_text: bool = False) -> None:
+    serializer = safe_user_json if preserve_user_text else safe_json
+    path.write_text(serializer(payload) + "\n", encoding="utf-8")
 
 
 def _parse_list(value: str) -> list[str]:

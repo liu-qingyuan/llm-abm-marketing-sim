@@ -35,6 +35,7 @@ _DROP_KEY_FRAGMENTS = (
     "signature",
     "credential_path",
 )
+_ALLOWED_USER_TEXT_FIELDS = frozenset({"bio", "nickname", "signature"})
 
 
 def safe_data(value: Any) -> Any:
@@ -51,12 +52,26 @@ def safe_json(value: Any, *, indent: int | None = 2, sort_keys: bool = True) -> 
     return json.dumps(safe_data(value), indent=indent, sort_keys=sort_keys, ensure_ascii=False)
 
 
+def safe_user_data(value: Any) -> Any:
+    """Redact artifact data while preserving explicitly allowed processed user text."""
+
+    if isinstance(value, BaseModel):
+        value = value.model_dump(mode="json")
+    return _artifact_scrub(redact_secrets(value), allowed_text_fields=_ALLOWED_USER_TEXT_FIELDS)
+
+
+def safe_user_json(value: Any, *, indent: int | None = 2, sort_keys: bool = True) -> str:
+    """Serialize processed/runtime user rows through their explicit field allowlist."""
+
+    return json.dumps(safe_user_data(value), indent=indent, sort_keys=sort_keys, ensure_ascii=False)
+
+
 def artifact_has_forbidden_terms(text: str) -> bool:
     lowered = text.lower()
     return any(term in lowered for term in FORBIDDEN_ARTIFACT_TERMS)
 
 
-def _artifact_scrub(value: Any) -> Any:
+def _artifact_scrub(value: Any, *, allowed_text_fields: frozenset[str] = frozenset()) -> Any:
     if isinstance(value, dict):
         scrubbed: dict[str, Any] = {}
         for key, item in value.items():
@@ -66,13 +81,13 @@ def _artifact_scrub(value: Any) -> Any:
                 continue
             if key in LEGACY_DEMO_PRESET_FIELDS:
                 continue
-            if any(fragment in lowered for fragment in _DROP_KEY_FRAGMENTS):
+            if key not in allowed_text_fields and any(fragment in lowered for fragment in _DROP_KEY_FRAGMENTS):
                 continue
             if isinstance(item, str) and "url" in lowered:
                 scrubbed[key] = sanitize_url(item.strip())
                 continue
-            scrubbed[key] = _artifact_scrub(item)
+            scrubbed[key] = _artifact_scrub(item, allowed_text_fields=allowed_text_fields)
         return scrubbed
     if isinstance(value, list):
-        return [_artifact_scrub(item) for item in value]
+        return [_artifact_scrub(item, allowed_text_fields=allowed_text_fields) for item in value]
     return value
