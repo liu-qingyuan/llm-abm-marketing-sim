@@ -74,9 +74,10 @@ docs/
 8. [PRD：锦江 ABM 用户画像合同收敛与 LLM Prompt v2](prds/jinjiang-abm-profile-contract-and-llm-prompt-v2.md)
 9. [锦江 Prompt v2 mocked provider 验收摘要](references/jinjiang-prompt-v2-mock-validation-20260708.md)
 10. [锦江酒店 Douyin 最终数据集审计](references/jinjiang-final-dataset-audit-20260624.md)
-11. [源码结构分析](architecture/source-tree-and-entrypoints.md)
-12. [组件清单](architecture/runtime-component-inventory.md)
-13. [测试策略](architecture/testing-strategy.md)
+11. [Final Research 离线基线](architecture/final-research-offline-baseline.md)
+12. [源码结构分析](architecture/source-tree-and-entrypoints.md)
+13. [组件清单](architecture/runtime-component-inventory.md)
+14. [测试策略](architecture/testing-strategy.md)
 
 ## 快速命令
 

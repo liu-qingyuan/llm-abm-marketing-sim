@@ -49,6 +49,7 @@ src/llm_abm_sim/
 ├── decision.py                       # LLMDecisionAdapter、EngageDecision、cache
 ├── environment.py                    # 平台曝光、痕迹、peer context
 ├── events.py                         # Pydantic 事件与 run-result schema
+├── final_research.py                 # Final Research 离线输入、holdout、抽样、静态评分和 artifacts
 ├── graph_loader.py                   # NetworkX 边列表/数据集 loader
 ├── input_builder.py                  # 静态 input-builder 生成
 ├── metrics.py                        # 时间序列与汇总指标
@@ -129,6 +130,17 @@ from llm_abm_sim.runner import ExperimentRunner
 runner = ExperimentRunner.from_config_file("configs/default.yaml")
 result = runner.run()
 ```
+
+- Final Research 离线基线：
+
+```python
+from llm_abm_sim import FinalResearchConfig, FinalResearchRunner
+
+config = FinalResearchConfig(dataset_dir="data/processed/jinjiang_douyin/<latent-v1-run>")
+output_dir = FinalResearchRunner(config, decision_adapter).run_and_write("runs/final-research-offline")
+```
+
+该路径保留现有 `LLMDecisionAdapter` 接缝，但离线基线不调用适配器，也不触发 live API。
 
 - Browser smoke：
 

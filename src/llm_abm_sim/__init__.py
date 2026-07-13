@@ -13,6 +13,7 @@ from .decision import (
 )
 from .environment import PlatformEnvironment
 from .events import ActionEvent, DecisionEvent, ExposureEvent, SimulationRunResult, StepRecord
+from .final_research import FinalResearchConfig, FinalResearchRunner, ResearchUser, TargetVideo
 from .model import SimulationModel
 from .runner import ExperimentRunner
 from .schemas import PlatformContext
@@ -28,14 +29,18 @@ __all__ = [
     "EngageDecision",
     "ExperimentRunner",
     "ExposureEvent",
+    "FinalResearchConfig",
+    "FinalResearchRunner",
     "LLMDecisionAdapter",
     "PlatformEnvironment",
+    "ResearchUser",
     "RuleBasedDecisionAdapter",
     "RuleBasedDecisionConfig",
     "SimulationModel",
     "SimulationRunResult",
     "SocialUserAgent",
     "StepRecord",
+    "TargetVideo",
 ]
 
 __version__ = "0.1.0"

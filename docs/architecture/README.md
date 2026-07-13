@@ -17,5 +17,6 @@
 - [运行时组件清单](runtime-component-inventory.md)：运行时、输出、Provider、Web 和测试组件职责。
 - [测试策略](testing-strategy.md)：离线默认测试分层、质量命令和 live LLM 手动门禁。
 - [锦江用户数据结构 Architecture Note](jinjiang-user-profile-data-structure.md)：说明当前模型是 Observed Profile Attributes + Latent Attributes，并记录 assignment seam、processed variant Adapter、`UserProfile.latent_attributes`、`PostContent.value_dimensions`、rule-based latent score 和 aggregate group reporting 边界。
+- [Final Research 离线基线](final-research-offline-baseline.md)：记录单目标视频、Target Holdout、holdout-safe 画像投影、研究样本、静态平台推荐和离线 artifacts 的 Module 边界。
 
 `../02-架构设计/` 继续作为核心系统阅读路径保留；新增或迁移的长期架构说明默认放在本目录，并从 `../index.md` 或相关 README 指向。
