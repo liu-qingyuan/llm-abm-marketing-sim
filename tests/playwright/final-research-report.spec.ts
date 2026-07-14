@@ -87,6 +87,9 @@ async function assertReport(page: Page, outputDir: string, users: ReportUser[]):
   await expect(page.getByTestId('user-detail')).toContainText(selected.user_id);
   await expect(page.getByTestId('trace-context')).toContainText('重建的决策上下文');
   await expect(page.getByTestId('trace-context')).toContainText('完整原始 Provider Prompt 无法');
+  await expect(page.getByTestId('trace-evidence')).toContainText('action');
+  await expect(page.getByTestId('trace-evidence')).toContainText('engage');
+  await expect(page.getByTestId('trace-evidence')).toContainText('decision_source');
 
   await page.getByTestId('user-search').fill('');
   await page.getByTestId('result-filter').selectOption(selected.result_status);

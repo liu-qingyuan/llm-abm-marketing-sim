@@ -741,7 +741,7 @@ class FinalResearchReportWriter:
     <section class="content-band" id="decision" data-testid="decision-section">
       <div class="split-heading"><div><span class="eyebrow">BATCH & DECISION</span><h2>固定批次、曝光抽签与 LLM 合同</h2></div><span class="muted">每个用户最多一次 TargetVideo 机会</span></div>
       <div class="evidence-grid">
-        <article><h3>30 个固定批次</h3><p id="batch-method"></p></article>
+        <article><h3 id="batch-heading">固定批次</h3><p id="batch-method"></p></article>
         <article><h3>结构化决策字段</h3><p id="decision-fields"></p><p class="muted" id="decision-recoverability"></p></article>
         <article><h3>动态邻居信号</h3><p id="neighbor-summary"></p></article>
       </div>
@@ -838,8 +838,24 @@ def _build_explainable_payload(
         ),
         default=0.0,
     )
-    neighbor_activated = bool(positive_neighbor_rows)
+    neighbor_activated = maximum_actual_boost > 0.0
     sample_size = len(users)
+    runtime_enabled = base_payload.run.runtime_enabled
+    video_method = (
+        "仅一条真实 TargetVideo 进入 runtime，历史视频只提供信号。"
+        if runtime_enabled
+        else "Provider runtime 未启用；TargetVideo 只用于离线评分与诊断说明。"
+    )
+    batch_method = (
+        "Batch 0 分配 seeds，Batch 1–29 分配其他用户；每人只抽签一次。"
+        if runtime_enabled
+        else "Provider runtime 未启用，因此没有执行固定批次分配或曝光抽签。"
+    )
+    decision_method = (
+        "仅 Target Exposure 调用结构化 Decision Adapter。"
+        if runtime_enabled
+        else "Provider runtime 未启用，Decision Adapter 未被调用。"
+    )
 
     payload_data = base_payload.model_dump(mode="json")
     payload_data.update(
@@ -857,17 +873,21 @@ def _build_explainable_payload(
             "methodology_flow": [
                 _method_stage("data", "数据来源", "读取 processed Video Catalog、用户画像和评论派生互动证据。"),
                 _method_stage("sampling", "用户筛选", "按 source scope 配额抽样，去重后使用稳定顺序补齐。"),
-                _method_stage("video", "视频用途", "仅一条真实 TargetVideo 进入 runtime，历史视频只提供信号。"),
+                _method_stage("video", "视频用途", video_method),
                 _method_stage("network", "评论网络", "一级评论、回复和 @ mention 构成历史互动图，不等同关注关系。"),
                 _method_stage("recommendation", "推荐评分", "静态分数结合网络与标签，动态分数可加入已参与直接邻居 boost。"),
-                _method_stage("batches", "固定批次与抽签", "Batch 0 分配 seeds，Batch 1–29 分配其他用户；每人只抽签一次。"),
-                _method_stage("decision", "LLM 决策", "仅 Target Exposure 调用结构化 Decision Adapter。"),
+                _method_stage("batches", "固定批次与抽签", batch_method),
+                _method_stage("decision", "LLM 决策", decision_method),
                 _method_stage("outcome", "结果解释", "只根据持久化动作计数、结构化合同和样本规模解释结果。"),
             ],
             "video_usage": {
-                "runtime_target_video_count": 1,
+                "runtime_target_video_count": 1 if runtime_enabled else 0,
                 "historical_video_count": base_payload.sample_summary.historical_video_count,
-                "target_video_role": "唯一进入固定批次、曝光抽签和 Provider Decision 的真实 TargetVideo。",
+                "target_video_role": (
+                    "唯一进入固定批次、曝光抽签和 Provider Decision 的真实 TargetVideo。"
+                    if runtime_enabled
+                    else "Provider runtime 未启用；本次没有 TargetVideo 曝光或 Provider Decision。"
+                ),
                 "background_video_role": "仅提供评论网络、历史标签和抽样信号；本次报告不声称对背景视频完成了 runtime 排序。",
             },
             "sampling_explanation": {
@@ -876,7 +896,11 @@ def _build_explainable_payload(
                 "deduplication_and_refill": "用户按 user_id 去重；配额不足时使用稳定候选顺序补齐到固定样本数。",
                 "holdout_safe_projection": "TargetVideo 互动在画像投影、抽样、seed 选择和推荐评分完成前保持 holdout。",
                 "seed_union_method": base_payload.diagnostics.seed_method,
-                "seed_forced_exposure": "global top10 与 local top10 的去重 union 在 Batch 0 强制曝光，不参与 random draw。",
+                "seed_forced_exposure": (
+                    "global top10 与 local top10 的去重 union 在 Batch 0 强制曝光，不参与 random draw。"
+                    if runtime_enabled
+                    else "已计算 global/local top10 seed union，但 runtime 未启用，因此没有执行强制曝光。"
+                ),
             },
             "comment_network_explanation": (
                 "Comment-Derived User Interaction Graph 来自一级评论者到视频作者、回复者到被回复评论者以及 "
@@ -892,11 +916,15 @@ def _build_explainable_payload(
                 "non_seed_example": _recommendation_example(non_seed_example_row),
             },
             "batch_explanation": {
-                "batch_count": base_payload.run.horizon,
+                "batch_count": base_payload.run.horizon if runtime_enabled else 0,
                 "seed_batch": 0,
-                "non_seed_batches": [1, max(1, base_payload.run.horizon - 1)],
+                "non_seed_batches": [1, max(1, base_payload.run.horizon - 1)] if runtime_enabled else [],
                 "opportunity_limit": 1,
-                "assignment_method": "Seeds 固定属于 Batch 0；其他用户经稳定 shuffle 后 round-robin 分配到 Batch 1–29。",
+                "assignment_method": (
+                    "Seeds 固定属于 Batch 0；其他用户经稳定 shuffle 后 round-robin 分配到 Batch 1–29。"
+                    if runtime_enabled
+                    else "Provider runtime 未启用，未执行 batch assignment 或 TargetVideo opportunity。"
+                ),
             },
             "decision_contract": {
                 "fields": ["engage", "probability", "reason", "confidence", "action"],
@@ -933,6 +961,12 @@ def _validate_rebuild_evidence(
     payload: FinalResearchReportPayloadV1,
     runtime_summary: Mapping[str, object],
 ) -> None:
+    if manifest.get("manifest_version") != "final-research-runtime-v1":
+        raise ValueError("unsupported Final Research artifact manifest schema")
+    if runtime_summary.get("runtime_version") != "final-research-runtime-v1":
+        raise ValueError("unsupported Final Research runtime summary schema")
+    if not payload.run.runtime_enabled:
+        raise ValueError("report rebuild requires a provider runtime payload")
     artifacts = manifest.get("artifacts")
     if not isinstance(artifacts, Mapping):
         raise ValueError("artifact_manifest.json must contain an artifacts object")
@@ -993,6 +1027,21 @@ def _validate_rebuild_evidence(
             raise ValueError(f"artifact manifest count {key} does not match report payload")
     if _as_int(runtime_summary.get("horizon")) != payload.run.horizon:
         raise ValueError("runtime summary horizon does not match report payload")
+    expected_schedule_contract: dict[str, object] = {
+        "schedule_method": "stable_shuffle_round_robin_batches",
+        "seed_step": 0,
+        "non_seed_steps": [1, payload.run.horizon - 1],
+        "user_opportunity_limit": 1,
+        "recommendation_score_usage": "single exposure probability, never user ordering",
+        "dynamic_network_formula": (
+            "min(1.0, base_network_score + neighbor_boost * engaged_direct_neighbor_count)"
+        ),
+    }
+    for field_name, expected in expected_schedule_contract.items():
+        if runtime_summary.get(field_name) != expected:
+            raise ValueError(f"runtime summary {field_name} does not match the supported runtime contract")
+    if not isinstance(runtime_summary.get("provider_metadata"), Mapping):
+        raise ValueError("runtime summary provider_metadata must be an object")
     adapter_calls = _as_int(runtime_summary.get("decision_adapter_calls"))
     if adapter_calls != derived_counts["target_exposures"]:
         raise ValueError("runtime summary decision_adapter_calls does not match target exposures")
@@ -1041,9 +1090,12 @@ def _artifact_path(run_path: Path, relative_path: str, artifact_name: str) -> Pa
     path = Path(relative_path)
     if path.is_absolute() or ".." in path.parts:
         raise ValueError(f"artifact {artifact_name} has an unsafe path")
-    resolved = run_path / path
-    if not resolved.is_file():
+    candidate = run_path / path
+    if not candidate.is_file():
         raise FileNotFoundError(f"artifact {artifact_name} is missing: {relative_path}")
+    resolved = candidate.resolve()
+    if not resolved.is_relative_to(run_path.resolve()):
+        raise ValueError(f"artifact {artifact_name} resolves outside the run directory")
     return resolved
 
 
@@ -1277,7 +1329,7 @@ dt { color:var(--muted); font-size:.76rem; } dd { margin:6px 0 0; font-size:1.12
 .timeline-chart { min-height:250px; display:grid; grid-template-columns:repeat(30,minmax(10px,1fr)); align-items:end; gap:4px; padding-top:20px; border-bottom:1px solid var(--line); overflow-x:auto; }.step-column { min-width:10px; height:220px; display:flex; flex-direction:column; justify-content:flex-end; gap:2px; position:relative; }.step-column i { display:block; min-height:1px; }.step-column .exposure { background:var(--blue); }.step-column .engagement { background:var(--teal); }.step-column span { position:absolute; bottom:-20px; width:100%; text-align:center; color:var(--muted); font-size:.58rem; }
 .users-band { background:#fff; }.filters { display:grid; grid-template-columns:2fr repeat(3,minmax(140px,1fr)); gap:10px; margin-bottom:14px; }.filters label span { display:block; margin-bottom:5px; color:var(--muted); font-size:.75rem; font-weight:700; }.filters input,.filters select { width:100%; min-height:40px; padding:8px 10px; border:1px solid #bfcac4; border-radius:5px; background:#fff; color:var(--ink); }
 .table-wrap { width:100%; overflow:auto; border:1px solid var(--line); }.table-wrap table { width:100%; min-width:1120px; border-collapse:collapse; table-layout:fixed; }.table-wrap th,.table-wrap td { padding:11px; border-bottom:1px solid var(--line); text-align:left; vertical-align:top; overflow-wrap:anywhere; }.table-wrap th { position:sticky; top:0; z-index:1; background:#edf2ef; color:#4d5b54; font-size:.74rem; }.table-wrap td { font-size:.78rem; }.table-wrap tbody tr { cursor:pointer; }.table-wrap tbody tr:hover { background:#f1f7f4; }.profile-name { display:block; font-weight:800; }.profile-id,.mini { color:var(--muted); font-size:.72rem; }.status { display:inline-flex; margin-bottom:4px; padding:3px 6px; border-radius:999px; background:#e9effc; color:#244f9e; font-weight:800; }.status.provider_failed { background:#fdeaea; color:#9d2d2d; }.status.background_content { background:#fff0dd; color:#8b4f08; }.status.like,.status.comment,.status.share { background:#e6f5ef; color:#08644f; }.status.ignore { background:#ecefed; color:#4e5b54; }
-.user-detail { min-height:120px; margin-top:12px; padding:16px; border:1px solid var(--line); border-left:4px solid var(--violet); background:#fafbfa; overflow-wrap:anywhere; }.detail-grid { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:10px; }.detail-grid div { padding:9px; background:#fff; border:1px solid var(--line); }.detail-grid span { display:block; color:var(--muted); font-size:.7rem; }.detail-grid strong { display:block; margin-top:4px; font-size:.82rem; }.trace-note { margin-top:12px; padding:12px; border:1px solid #d9d1f1; background:#f4f1fc; }.trace-note strong { display:block; margin-bottom:5px; }.trace-note ul { margin:8px 0 0; padding-left:18px; }
+.user-detail { min-height:120px; margin-top:12px; padding:16px; border:1px solid var(--line); border-left:4px solid var(--violet); background:#fafbfa; overflow-wrap:anywhere; }.detail-grid { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:10px; }.detail-grid div { padding:9px; background:#fff; border:1px solid var(--line); }.detail-grid span { display:block; color:var(--muted); font-size:.7rem; }.detail-grid strong { display:block; margin-top:4px; font-size:.82rem; }.trace-note { margin-top:12px; padding:12px; border:1px solid #d9d1f1; background:#f4f1fc; }.trace-note > strong { display:block; margin-bottom:5px; }.trace-note ul { margin:8px 0 0; padding-left:18px; }.trace-evidence { margin:12px 0; }.trace-evidence div { background:#fff; }
 .limitations-band { padding:28px clamp(18px,4vw,56px); display:grid; grid-template-columns:240px 1fr; gap:24px; background:#fff8ed; border-bottom:1px solid #ead7bd; }.limitations-band ul { margin:0; padding-left:20px; }.limitations-band li { margin:7px 0; }
 footer { padding:24px clamp(18px,4vw,56px); display:flex; gap:18px; flex-wrap:wrap; background:#fff; }
 @media (max-width:1100px) { .funnel-grid { grid-template-columns:repeat(4,minmax(0,1fr)); }.method-grid { grid-template-columns:repeat(2,minmax(0,1fr)); }.outcome-list { grid-template-columns:repeat(3,minmax(0,1fr)); } }
@@ -1342,7 +1394,13 @@ function renderRecommendation() {
 
 function renderDecisionExplanation() {
   const batch = payload.batch_explanation;
-  byId('batch-method').textContent = `${batch.batch_count} 个批次；Batch ${batch.seed_batch} 为 seeds，Batch ${batch.non_seed_batches[0]}–${batch.non_seed_batches[1]} 为 non-seeds。${batch.assignment_method}`;
+  if (batch.batch_count > 0) {
+    byId('batch-heading').textContent = `${batch.batch_count} 个固定批次`;
+    byId('batch-method').textContent = `${batch.batch_count} 个批次；Batch ${batch.seed_batch} 为 seeds，Batch ${batch.non_seed_batches[0]}–${batch.non_seed_batches[1]} 为 non-seeds。${batch.assignment_method}`;
+  } else {
+    byId('batch-heading').textContent = 'Provider runtime 未执行';
+    byId('batch-method').textContent = batch.assignment_method;
+  }
   byId('decision-fields').textContent = `${payload.decision_contract.fields.join(' / ')}；action = ${payload.decision_contract.action_values.join(' / ')}`;
   byId('decision-recoverability').textContent = payload.decision_contract.prompt_recoverability;
   const neighbor = payload.dynamic_neighbor_summary;
@@ -1473,9 +1531,16 @@ function renderDetail(row) {
   const traceNote = document.createElement('div'); traceNote.className = 'trace-note'; traceNote.dataset.testid = 'trace-context';
   const traceTitle = document.createElement('strong'); traceTitle.textContent = trace?.context_label || '重建的决策上下文';
   const recoverability = document.createElement('p'); recoverability.textContent = trace?.prompt_recoverability || '完整原始 Provider Prompt 不可恢复。';
+  const evidence = document.createElement('div'); evidence.className = 'detail-grid trace-evidence'; evidence.dataset.testid = 'trace-evidence';
+  Object.entries(trace?.persisted_evidence || {}).forEach(([label, value]) => {
+    const box = document.createElement('div');
+    const name = document.createElement('span'); name.textContent = label;
+    const persisted = document.createElement('strong'); persisted.textContent = text(value);
+    box.append(name, persisted); evidence.appendChild(box);
+  });
   const unavailable = document.createElement('ul');
   (trace?.unrecoverable_peer_context_fields || []).forEach((field) => { const item = document.createElement('li'); item.textContent = field; unavailable.appendChild(item); });
-  traceNote.append(traceTitle, recoverability, unavailable);
+  traceNote.append(traceTitle, evidence, recoverability, unavailable);
   root.append(title,grid,latent,traceNote);
 }
 

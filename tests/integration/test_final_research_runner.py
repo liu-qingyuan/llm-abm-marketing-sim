@@ -425,6 +425,13 @@ def test_offline_final_research_baseline_is_holdout_safe_and_deterministic(tmp_p
     assert "Bio 1" in artifact_text
     assert "Signature 1" in artifact_text
     assert "<redacted>" in artifact_text
+    offline_payload = json.loads((first_output / "final_research_report_payload.json").read_text(encoding="utf-8"))
+    offline_html = (first_output / "report.html").read_text(encoding="utf-8")
+    assert offline_payload["video_usage"]["runtime_target_video_count"] == 0
+    assert offline_payload["batch_explanation"]["batch_count"] == 0
+    assert "runtime 未启用" in offline_payload["video_usage"]["target_video_role"]
+    assert "runtime 未启用" in offline_payload["batch_explanation"]["assignment_method"]
+    assert "Batch 0 为 seeds" not in offline_html
     for relative_path in manifest["artifacts"].values():
         assert (first_output / relative_path).read_bytes() == (second_output / relative_path).read_bytes()
 
@@ -709,6 +716,27 @@ def test_final_research_report_rebuild_rejects_inconsistent_summary_before_repla
     assert report_path.read_bytes() == original_report
 
 
+def test_final_research_report_rebuild_rejects_inconsistent_schedule_contract(tmp_path: Path) -> None:
+    dataset_dir = _make_processed_fixture(tmp_path)
+    provider_config = ProviderLLMConfig(enabled=True, model="mock-model", require_live_env=False)
+    provider = OpenAICompatibleDecisionAdapter(
+        provider_config,
+        client=_ScriptedProviderClient(),
+        sleep=lambda _delay: None,
+    )
+    run_dir = FinalResearchRunner(
+        FinalResearchConfig(dataset_dir=dataset_dir, sample_size=4, provider=provider_config),
+        _RecordingAdapter(provider),
+    ).run_and_write(tmp_path / "invalid-schedule-run")
+    summary_path = run_dir / "runtime_summary.json"
+    summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    summary["schedule_method"] = "tampered_schedule"
+    summary_path.write_text(json.dumps(summary, ensure_ascii=False) + "\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="schedule_method"):
+        rebuild_final_research_report(run_dir)
+
+
 @pytest.mark.parametrize(
     "corruption",
     ["missing_required", "unsupported_schema", "duplicate_user", "user_count", "missing_download"],
@@ -755,6 +783,54 @@ def test_final_research_report_rebuild_rejects_invalid_persisted_evidence(
 
     assert payload_path.read_bytes() == persisted_payload
     assert report_path.read_bytes() == persisted_report
+
+
+def test_final_research_report_rebuild_rejects_artifact_symlink_outside_run(tmp_path: Path) -> None:
+    dataset_dir = _make_processed_fixture(tmp_path)
+    provider_config = ProviderLLMConfig(enabled=True, model="mock-model", require_live_env=False)
+    provider = OpenAICompatibleDecisionAdapter(
+        provider_config,
+        client=_ScriptedProviderClient(),
+        sleep=lambda _delay: None,
+    )
+    run_dir = FinalResearchRunner(
+        FinalResearchConfig(dataset_dir=dataset_dir, sample_size=4, provider=provider_config),
+        _RecordingAdapter(provider),
+    ).run_and_write(tmp_path / "symlink-run")
+    csv_path = run_dir / "final_research_users.csv"
+    outside_path = tmp_path / "outside.csv"
+    outside_path.write_text(csv_path.read_text(encoding="utf-8"), encoding="utf-8")
+    csv_path.unlink()
+    csv_path.symlink_to(outside_path)
+
+    with pytest.raises(ValueError, match="outside the run directory"):
+        rebuild_final_research_report(run_dir)
+
+
+def test_final_research_report_dynamic_neighbor_activation_requires_actual_boost(tmp_path: Path) -> None:
+    dataset_dir = _make_processed_fixture(tmp_path, user_count=80, dense_target_network=True)
+    provider_config = ProviderLLMConfig(enabled=True, model="mock-model", require_live_env=False)
+    provider = OpenAICompatibleDecisionAdapter(
+        provider_config,
+        client=_ScriptedProviderClient(),
+        sleep=lambda _delay: None,
+    )
+    run_dir = FinalResearchRunner(
+        FinalResearchConfig(
+            dataset_dir=dataset_dir,
+            sample_size=70,
+            neighbor_boost=0.0,
+            provider=provider_config,
+        ),
+        _RecordingAdapter(provider),
+    ).run_and_write(tmp_path / "zero-neighbor-boost-run")
+    payload = json.loads((run_dir / "final_research_report_payload.json").read_text(encoding="utf-8"))
+    neighbor_summary = payload["dynamic_neighbor_summary"]
+
+    assert neighbor_summary["users_with_positive_engaged_neighbor_count"] > 0
+    assert neighbor_summary["maximum_actual_boost"] == 0.0
+    assert neighbor_summary["activated"] is False
+    assert "未实际生效" in neighbor_summary["explanation"]
 
 
 def test_final_research_report_uses_configured_formula_and_interest_tags(tmp_path: Path) -> None:
