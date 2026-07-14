@@ -248,12 +248,9 @@ class UserReportRow(BaseModel):
         return row
 
 
-class FinalResearchReportPayloadV1(BaseModel):
-    """Independent payload for the Final Research static report."""
-
+class _FinalResearchReportPayloadBase(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    schema_version: Literal["final-research-report-payload-v1"] = "final-research-report-payload-v1"
     title: str
     core_objects: tuple[Literal["TargetVideo"], Literal["ResearchUser"], Literal["PlatformRecommendationModel"]]
     target_video: FinalResearchTargetVideo
@@ -267,6 +264,12 @@ class FinalResearchReportPayloadV1(BaseModel):
     downloads: FinalResearchDownloads
     limitations: list[str]
     users: list[UserReportRow]
+
+
+class FinalResearchReportPayloadV1(_FinalResearchReportPayloadBase):
+    """Independent v1 payload accepted by the report rebuild boundary."""
+
+    schema_version: Literal["final-research-report-payload-v1"] = "final-research-report-payload-v1"
 
 
 class FinalResearchFunnelStage(BaseModel):
@@ -378,7 +381,7 @@ class FinalResearchUserTrace(BaseModel):
     prompt_recoverability: str
 
 
-class FinalResearchReportPayload(FinalResearchReportPayloadV1):
+class FinalResearchReportPayload(_FinalResearchReportPayloadBase):
     """Explainable v2 payload shared by fresh runs and report rebuilding."""
 
     schema_version: Literal["final-research-report-payload-v2"] = "final-research-report-payload-v2"
@@ -642,6 +645,16 @@ class FinalResearchReportWriter:
         opportunity_note = (
             "每个用户最多一次 TargetVideo 机会" if payload.run.runtime_enabled else "Provider runtime 未执行"
         )
+        seed_exposures = sum(row.is_seed and row.exposure_status == "target_exposed" for row in payload.users)
+        non_seed_exposures = sum(
+            not row.is_seed and row.exposure_status == "target_exposed" for row in payload.users
+        )
+        exposure_breakdown = (
+            f"{seed_exposures + non_seed_exposures} 次 Provider Decision 调用来自 "
+            f"{seed_exposures} 个强制 seed 曝光和 {non_seed_exposures} 个普通用户抽签曝光。"
+            if payload.run.runtime_enabled
+            else "Provider runtime 未执行，因此没有 Target Exposure 或 Provider Decision 调用。"
+        )
         return f"""<!doctype html>
 <html lang="zh-CN">
 <head>
@@ -728,7 +741,7 @@ class FinalResearchReportWriter:
     <section class="content-band" id="decision" data-testid="decision-section">
       <div class="split-heading"><div><span class="eyebrow">BATCH & DECISION</span><h2>固定批次、曝光抽签与 LLM 合同</h2></div><span class="muted">{opportunity_note}</span></div>
       <div class="evidence-grid">
-        <article><h3 id="batch-heading">固定批次</h3><p id="batch-method"></p></article>
+        <article><h3 id="batch-heading">固定批次</h3><p id="batch-method"></p><p class="muted" data-testid="exposure-breakdown">{escape(exposure_breakdown)}</p></article>
         <article><h3>结构化决策字段</h3><p id="decision-fields"></p><p class="muted" id="decision-recoverability"></p></article>
         <article><h3>动态邻居信号</h3><p id="neighbor-summary"></p></article>
       </div>
@@ -1104,8 +1117,8 @@ def _validate_rebuild_evidence(
         "recommendation_score_usage": FINAL_RESEARCH_SCORE_USAGE,
         "dynamic_network_formula": FINAL_RESEARCH_DYNAMIC_NETWORK_FORMULA,
     }
-    for field_name, expected in expected_schedule_contract.items():
-        if runtime_summary.get(field_name) != expected:
+    for field_name, expected_contract_value in expected_schedule_contract.items():
+        if runtime_summary.get(field_name) != expected_contract_value:
             raise ValueError(f"runtime summary {field_name} does not match the supported runtime contract")
     if not isinstance(runtime_summary.get("provider_metadata"), Mapping):
         raise ValueError("runtime summary provider_metadata must be an object")
@@ -1192,11 +1205,13 @@ def _publish_report_files(run_path: Path, payload: FinalResearchReportPayload) -
     payload_text = safe_user_json(payload) + "\n"
     html_text = FinalResearchReportWriter.render_payload(payload)
     FinalResearchReportPayload.model_validate(json.loads(payload_text))
-    staged_payload = _stage_text(run_path, payload_path.name, payload_text)
-    staged_report = _stage_text(run_path, report_path.name, html_text)
+    staged_payload: Path | None = _stage_text(run_path, payload_path.name, payload_text)
+    staged_report: Path | None = _stage_text(run_path, report_path.name, html_text)
     try:
+        assert staged_payload is not None
         os.replace(staged_payload, payload_path)
         staged_payload = None
+        assert staged_report is not None
         os.replace(staged_report, report_path)
         staged_report = None
     finally:

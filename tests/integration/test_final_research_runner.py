@@ -581,6 +581,15 @@ def test_mocked_provider_final_research_runs_fixed_batches_and_continues_after_f
     assert 'data-testid="funnel-section"' in report_html
     assert 'data-testid="recommendation-section"' in report_html
     assert 'data-testid="decision-section"' in report_html
+    non_seed_target_exposures = sum(
+        row["exposure_outcome"] == "target_exposed" for row in non_seed_rows
+    )
+    expected_exposure_breakdown = (
+        f"{len(target_exposures)} 次 Provider Decision 调用来自 {len(seed_rows)} 个强制 seed 曝光和 "
+        f"{non_seed_target_exposures} 个普通用户抽签曝光。"
+    )
+    assert 'data-testid="exposure-breakdown"' in report_html
+    assert expected_exposure_breakdown in report_html
 
     assert len(steps) == 30
     assert steps[0]["time_step"] == "0"

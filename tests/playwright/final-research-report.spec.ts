@@ -6,6 +6,7 @@ import { expect, test, type Page, type TestInfo } from '@playwright/test';
 
 type ReportUser = {
   user_id: string;
+  exposure_status: string;
   result_status: string;
   sample_source_scope: string;
   is_seed: boolean;
@@ -70,6 +71,11 @@ async function assertReport(page: Page, outputDir: string, users: ReportUser[]):
   await expect(page.getByTestId('seed-example')).toContainText('强制曝光');
   await expect(page.getByTestId('non-seed-example')).toContainText('random_draw');
   await expect(page.getByTestId('decision-section')).toContainText('30 个批次');
+  const seedExposureCount = users.filter((user) => user.is_seed && user.exposure_status === 'target_exposed').length;
+  const nonSeedExposureCount = users.filter((user) => !user.is_seed && user.exposure_status === 'target_exposed').length;
+  await expect(page.getByTestId('exposure-breakdown')).toHaveText(
+    `${seedExposureCount + nonSeedExposureCount} 次 Provider Decision 调用来自 ${seedExposureCount} 个强制 seed 曝光和 ${nonSeedExposureCount} 个普通用户抽签曝光。`,
+  );
   await expect(page.getByTestId('decision-section')).toContainText('完整原始 PeerContext 与 Provider Prompt 不可恢复');
   await expect(page.getByTestId('outcome-explanations').locator('article')).toHaveCount(5);
 
