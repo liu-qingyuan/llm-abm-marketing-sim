@@ -56,6 +56,12 @@ else:
     fixture_dir = module._make_processed_fixture(Path(fixture_path), user_count=1010)
     sample_size = 1000
     failed_user_id = "u1"
+video_rows = module._read_csv(fixture_dir / "videos.csv")
+for row in video_rows:
+    if row["video_id"] == module.TARGET_VIDEO_ID:
+        row["caption"] = "当高端酒店开始“限塑”，秸秆也能变废为宝#你我秸是阳光 #锦江酒店 #锦江ESG#乡村振兴#有光的地方"
+        row["hashtags"] = '["乡村振兴", "你我秸是阳光", "有光的地方", "锦江ESG", "锦江酒店"]'
+module._write_csv(fixture_dir / "videos.csv", list(video_rows[0]), video_rows)
 provider_config = ProviderLLMConfig(enabled=True, model="mock-model", require_live_env=False)
 adapter = module._TargetDeliveryAdapter(failed_user_id=failed_user_id)
 FinalResearchRunner(
@@ -122,7 +128,7 @@ async function assertRankingReport(
   await expect(page.getByTestId('final-research-ranking-report')).toBeVisible();
 
   const hero = page.getByTestId('ranking-hero');
-  await expect(hero).toContainText('当高端酒店开始限塑');
+  await expect(hero).toContainText('当高端酒店开始');
   await expect(hero).toContainText('1,000');
   await expect(hero).toContainText('Target exposures');
   await expect(hero).toContainText('Provider decisions');
