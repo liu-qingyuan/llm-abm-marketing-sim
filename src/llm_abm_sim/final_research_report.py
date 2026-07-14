@@ -1281,6 +1281,8 @@ def _build_ranking_report_payload(source: FinalResearchReportSource) -> FinalRes
             neutralized_fields=[
                 "peer_context.exposed_neighbors",
                 "peer_context.engaged_neighbors",
+                "peer_context.engagement_ratio",
+                "peer_context.influential_engaged_neighbors",
                 "peer_context.visible_likes",
                 "peer_context.visible_comments",
                 "peer_context.visible_shares",
@@ -2073,6 +2075,14 @@ def _validate_ranking_rebuild_evidence(
         raise ValueError("ranking user CSV does not match report payload users")
     if [row.get("result_status") for row in csv_rows] != [row.result_status for row in payload.users]:
         raise ValueError("ranking user CSV result statuses do not match report payload")
+    for csv_row, payload_row in zip(csv_rows, payload.users, strict=True):
+        for field_name in ("report_path", "payload_path", "json_path", "manifest_path"):
+            relative_path = csv_row.get(field_name)
+            if relative_path != getattr(payload_row, field_name):
+                raise ValueError(f"ranking user CSV {field_name} does not match report payload")
+            if not isinstance(relative_path, str):  # pragma: no cover
+                raise ValueError(f"ranking user CSV {field_name} must be a string")
+            _artifact_path(run_path, relative_path, f"CSV {field_name}")
 
     expected_downloads = {
         "report": artifacts.get("final_research_report"),

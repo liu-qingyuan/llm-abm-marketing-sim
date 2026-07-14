@@ -910,6 +910,10 @@ def test_target_delivery_ranking_runtime_reranks_global_top20_after_seed_engagem
     assert "random_draw" not in report_html
     assert "background_content" not in report_html
     assert report_payload["ranking_diagnostics"] == ranking_diagnostics
+    assert {
+        "peer_context.engagement_ratio",
+        "peer_context.influential_engaged_neighbors",
+    } <= set(report_payload["prompt_contract"]["neutralized_fields"])
     assert sum(len(round_row["candidates"]) for round_row in report_payload["ranking_rounds"]) == len(candidates)
     batch_one_report = report_payload["ranking_rounds"][1]
     assert batch_one_report["candidates_with_positive_engaged_neighbor_signal"] > 0
@@ -1057,6 +1061,7 @@ def test_target_delivery_ranking_report_escapes_download_paths_in_html(tmp_path:
         "duplicate_runtime_user",
         "count_mismatch",
         "diagnostic_boolean_string",
+        "csv_unsafe_link",
         "unsafe_path",
     ],
 )
@@ -1100,6 +1105,11 @@ def test_target_delivery_ranking_report_rebuild_rejects_invalid_evidence_before_
         diagnostics = json.loads(diagnostics_path.read_text(encoding="utf-8"))
         diagnostics["recommendation_signal_inclusion"]["network_signals_in_formula"] = "false"
         diagnostics_path.write_text(json.dumps(diagnostics, ensure_ascii=False) + "\n", encoding="utf-8")
+    elif corruption == "csv_unsafe_link":
+        users_path = run_dir / "final_research_users.csv"
+        users = _read_csv(users_path)
+        users[0]["report_path"] = "../outside.html"
+        _write_csv(users_path, list(users[0]), users)
     else:
         manifest_path = run_dir / "artifact_manifest.json"
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
