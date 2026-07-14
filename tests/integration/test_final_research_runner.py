@@ -432,6 +432,8 @@ def test_offline_final_research_baseline_is_holdout_safe_and_deterministic(tmp_p
     assert "runtime 未启用" in offline_payload["video_usage"]["target_video_role"]
     assert "runtime 未启用" in offline_payload["batch_explanation"]["assignment_method"]
     assert "Batch 0 为 seeds" not in offline_html
+    assert "30 个固定推荐批次" not in offline_html
+    assert "<dt>推荐批次</dt><dd>未执行</dd>" in offline_html
     for relative_path in manifest["artifacts"].values():
         assert (first_output / relative_path).read_bytes() == (second_output / relative_path).read_bytes()
 
@@ -739,7 +741,16 @@ def test_final_research_report_rebuild_rejects_inconsistent_schedule_contract(tm
 
 @pytest.mark.parametrize(
     "corruption",
-    ["missing_required", "unsupported_schema", "duplicate_user", "user_count", "missing_download"],
+    [
+        "missing_required",
+        "unsupported_schema",
+        "duplicate_user",
+        "user_count",
+        "missing_download",
+        "source_scope_counts",
+        "aggregates",
+        "trends",
+    ],
 )
 def test_final_research_report_rebuild_rejects_invalid_persisted_evidence(
     tmp_path: Path,
@@ -773,8 +784,17 @@ def test_final_research_report_rebuild_rejects_invalid_persisted_evidence(
     elif corruption == "user_count":
         payload["run"]["sample_size"] += 1
         payload_path.write_text(json.dumps(payload, ensure_ascii=False) + "\n", encoding="utf-8")
-    else:
+    elif corruption == "missing_download":
         (run_dir / "final_research_users.csv").unlink()
+    elif corruption == "source_scope_counts":
+        payload["sample_summary"]["source_scope_counts"] = {"tampered-scope": len(payload["users"])}
+        payload_path.write_text(json.dumps(payload, ensure_ascii=False) + "\n", encoding="utf-8")
+    elif corruption == "aggregates":
+        payload["aggregates"]["action_distribution"][0]["value"] += 1
+        payload_path.write_text(json.dumps(payload, ensure_ascii=False) + "\n", encoding="utf-8")
+    else:
+        payload["trends"][0]["assigned_users"] += 1
+        payload_path.write_text(json.dumps(payload, ensure_ascii=False) + "\n", encoding="utf-8")
 
     persisted_payload = payload_path.read_bytes()
     persisted_report = report_path.read_bytes()
@@ -831,6 +851,7 @@ def test_final_research_report_dynamic_neighbor_activation_requires_actual_boost
     assert neighbor_summary["maximum_actual_boost"] == 0.0
     assert neighbor_summary["activated"] is False
     assert "未实际生效" in neighbor_summary["explanation"]
+    assert "均为 0" not in neighbor_summary["explanation"]
 
 
 def test_final_research_report_uses_configured_formula_and_interest_tags(tmp_path: Path) -> None:

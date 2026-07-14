@@ -21,6 +21,14 @@ FINAL_RESEARCH_REPORT_ARTIFACTS = {
     "final_research_users_csv": "final_research_users.csv",
     "final_research_users_json": "final_research_users.json",
 }
+FINAL_RESEARCH_RUNTIME_VERSION = "final-research-runtime-v1"
+FINAL_RESEARCH_SCHEDULE_METHOD = "stable_shuffle_round_robin_batches"
+FINAL_RESEARCH_SEED_STEP = 0
+FINAL_RESEARCH_USER_OPPORTUNITY_LIMIT = 1
+FINAL_RESEARCH_SCORE_USAGE = "single exposure probability, never user ordering"
+FINAL_RESEARCH_DYNAMIC_NETWORK_FORMULA = (
+    "min(1.0, base_network_score + neighbor_boost * engaged_direct_neighbor_count)"
+)
 
 ResultStatus = Literal[
     "like",
@@ -602,37 +610,7 @@ class FinalResearchReportWriter:
         return exposure_status, _result_action(action), "succeeded"
 
     def _aggregates(self, rows: Sequence[UserReportRow]) -> FinalResearchAggregates:
-        action_counts = Counter(row.result_status for row in rows)
-        scope_counts = Counter(row.sample_source_scope or "unspecified" for row in rows)
-        provider_by_step = Counter(
-            row.assigned_step
-            for row in rows
-            if row.result_status == "provider_failed" and row.assigned_step is not None
-        )
-        neighbor_by_step: dict[int, list[int]] = {}
-        for row in rows:
-            if row.assigned_step is None or row.engaged_neighbor_count is None:
-                continue
-            neighbor_by_step.setdefault(row.assigned_step, []).append(row.engaged_neighbor_count)
-        return FinalResearchAggregates(
-            action_distribution=[
-                AggregateRow(label=label, value=count) for label, count in sorted(action_counts.items())
-            ],
-            scope_distribution=[
-                AggregateRow(label=label, value=count) for label, count in sorted(scope_counts.items())
-            ],
-            provider_failures=[
-                AggregateRow(label=f"Step {step}", value=provider_by_step.get(step, 0))
-                for step in range(_as_int(self.source.config.get("horizon")))
-            ],
-            dynamic_neighbor_signal=[
-                AggregateRow(
-                    label=f"Step {step}",
-                    value=round(sum(values) / len(values), 4) if values else 0.0,
-                )
-                for step, values in sorted(neighbor_by_step.items())
-            ],
-        )
+        return _build_report_aggregates(rows, _as_int(self.source.config.get("horizon")))
 
     def _write_csv(self, path: Path, rows: Sequence[UserReportRow]) -> None:
         safe_rows = safe_user_data([row.csv_row() for row in rows])
@@ -655,6 +633,15 @@ class FinalResearchReportWriter:
             f"{payload.recommendation_model.tag_affinity_weight:.2f} historical tag affinity"
         )
         dynamic_formula = f"min(1, base + {payload.recommendation_model.neighbor_boost:.2f} × engaged direct neighbors)"
+        batch_fact = str(payload.run.horizon) if payload.run.runtime_enabled else "未执行"
+        batch_note = (
+            f"{payload.run.horizon} 个固定推荐批次，不代表自然日"
+            if payload.run.runtime_enabled
+            else "Provider runtime 未执行"
+        )
+        opportunity_note = (
+            "每个用户最多一次 TargetVideo 机会" if payload.run.runtime_enabled else "Provider runtime 未执行"
+        )
         return f"""<!doctype html>
 <html lang="zh-CN">
 <head>
@@ -686,7 +673,7 @@ class FinalResearchReportWriter:
         <p class="tags">{escape(hashtags)}</p>
         <div class="inline-actions"><a class="primary-link" href="{target_url}" target="_blank" rel="noreferrer">查看真实视频入口</a><span>当前无可嵌入媒体文件</span></div>
       </div>
-      <dl class="target-facts"><div><dt>来源 scope</dt><dd>{escape(target.source_challenge_name)}</dd></div><div><dt>样本用户</dt><dd>{len(payload.users):,}</dd></div><div><dt>推荐批次</dt><dd>{payload.run.horizon}</dd></div><div><dt>随机种子</dt><dd>{payload.run.random_seed}</dd></div></dl>
+      <dl class="target-facts"><div><dt>来源 scope</dt><dd>{escape(target.source_challenge_name)}</dd></div><div><dt>样本用户</dt><dd>{len(payload.users):,}</dd></div><div><dt>推荐批次</dt><dd>{batch_fact}</dd></div><div><dt>随机种子</dt><dd>{payload.run.random_seed}</dd></div></dl>
     </section>
 
     <section class="object-flow" data-testid="core-objects-section">
@@ -739,7 +726,7 @@ class FinalResearchReportWriter:
     </section>
 
     <section class="content-band" id="decision" data-testid="decision-section">
-      <div class="split-heading"><div><span class="eyebrow">BATCH & DECISION</span><h2>固定批次、曝光抽签与 LLM 合同</h2></div><span class="muted">每个用户最多一次 TargetVideo 机会</span></div>
+      <div class="split-heading"><div><span class="eyebrow">BATCH & DECISION</span><h2>固定批次、曝光抽签与 LLM 合同</h2></div><span class="muted">{opportunity_note}</span></div>
       <div class="evidence-grid">
         <article><h3 id="batch-heading">固定批次</h3><p id="batch-method"></p></article>
         <article><h3>结构化决策字段</h3><p id="decision-fields"></p><p class="muted" id="decision-recoverability"></p></article>
@@ -754,7 +741,7 @@ class FinalResearchReportWriter:
     </section>
 
     <section class="content-band" data-testid="charts-section">
-      <div class="split-heading"><div><span class="eyebrow">AGGREGATES</span><h2>运行趋势与信号覆盖</h2></div><span class="muted">{payload.run.horizon} 个固定推荐批次，不代表自然日</span></div>
+      <div class="split-heading"><div><span class="eyebrow">AGGREGATES</span><h2>运行趋势与信号覆盖</h2></div><span class="muted">{batch_note}</span></div>
       <div class="chart-grid">
         <article class="wide"><h3>各批次曝光与参与趋势</h3><div class="timeline-chart" data-testid="trend-chart" id="trend-chart"></div></article>
         <article><h3>Action / result 分布</h3><div class="bar-chart" data-testid="action-chart" id="action-chart"></div></article>
@@ -784,6 +771,69 @@ class FinalResearchReportWriter:
 </body>
 </html>
 """
+
+
+def _build_report_aggregates(rows: Sequence[UserReportRow], horizon: int) -> FinalResearchAggregates:
+    action_counts = Counter(row.result_status for row in rows)
+    scope_counts = Counter(row.sample_source_scope or "unspecified" for row in rows)
+    provider_by_step = Counter(
+        row.assigned_step
+        for row in rows
+        if row.result_status == "provider_failed" and row.assigned_step is not None
+    )
+    neighbor_by_step: dict[int, list[int]] = {}
+    for row in rows:
+        if row.assigned_step is None or row.engaged_neighbor_count is None:
+            continue
+        neighbor_by_step.setdefault(row.assigned_step, []).append(row.engaged_neighbor_count)
+    return FinalResearchAggregates(
+        action_distribution=[
+            AggregateRow(label=label, value=count) for label, count in sorted(action_counts.items())
+        ],
+        scope_distribution=[
+            AggregateRow(label=label, value=count) for label, count in sorted(scope_counts.items())
+        ],
+        provider_failures=[
+            AggregateRow(label=f"Step {step}", value=provider_by_step.get(step, 0)) for step in range(horizon)
+        ],
+        dynamic_neighbor_signal=[
+            AggregateRow(
+                label=f"Step {step}",
+                value=round(sum(values) / len(values), 4) if values else 0.0,
+            )
+            for step, values in sorted(neighbor_by_step.items())
+        ],
+    )
+
+
+def _build_trends_from_users(rows: Sequence[UserReportRow], horizon: int) -> list[FinalResearchTrendRow]:
+    trends = [
+        FinalResearchTrendRow(
+            time_step=time_step,
+            assigned_users=0,
+            seed_users=0,
+            target_exposures=0,
+            background_impressions=0,
+            decisions=0,
+            engagements=0,
+            ignored=0,
+            provider_failed=0,
+        )
+        for time_step in range(horizon)
+    ]
+    for row in rows:
+        if row.assigned_step is None or not 0 <= row.assigned_step < horizon:
+            raise ValueError(f"report payload user {row.user_id} has an invalid assigned_step")
+        trend = trends[row.assigned_step]
+        trend.assigned_users += 1
+        trend.seed_users += int(row.is_seed)
+        trend.target_exposures += int(row.exposure_status == "target_exposed")
+        trend.background_impressions += int(row.result_status == "background_content")
+        trend.decisions += int(row.provider_status == "succeeded")
+        trend.engagements += int(row.result_status in {"like", "comment", "share"})
+        trend.ignored += int(row.result_status == "ignore")
+        trend.provider_failed += int(row.result_status == "provider_failed")
+    return trends
 
 
 def rebuild_final_research_report(run_dir: str | Path) -> Path:
@@ -946,7 +996,15 @@ def _build_explainable_payload(
                 "explanation": (
                     "本次运行中已有用户在批次冻结时观测到参与邻居，动态 boost 实际生效。"
                     if neighbor_activated
-                    else "配置包含动态邻居 boost，但本次所有 persisted engaged_neighbor_count 均为 0，因此未实际生效。"
+                    else (
+                        "本次存在正向 engaged_neighbor_count，但 configured neighbor_boost 为 0，因此未实际生效。"
+                        if positive_neighbor_rows and base_payload.recommendation_model.neighbor_boost == 0
+                        else (
+                            "本次存在正向 engaged_neighbor_count，但 network score 饱和后实际最大 boost 为 0，因此未实际生效。"
+                            if positive_neighbor_rows
+                            else "配置包含动态邻居 boost，但本次所有 persisted engaged_neighbor_count 均为 0，因此未实际生效。"
+                        )
+                    )
                 ),
             },
             "user_traces": [_user_trace(row) for row in users],
@@ -961,9 +1019,9 @@ def _validate_rebuild_evidence(
     payload: FinalResearchReportPayloadV1,
     runtime_summary: Mapping[str, object],
 ) -> None:
-    if manifest.get("manifest_version") != "final-research-runtime-v1":
+    if manifest.get("manifest_version") != FINAL_RESEARCH_RUNTIME_VERSION:
         raise ValueError("unsupported Final Research artifact manifest schema")
-    if runtime_summary.get("runtime_version") != "final-research-runtime-v1":
+    if runtime_summary.get("runtime_version") != FINAL_RESEARCH_RUNTIME_VERSION:
         raise ValueError("unsupported Final Research runtime summary schema")
     if not payload.run.runtime_enabled:
         raise ValueError("report rebuild requires a provider runtime payload")
@@ -992,12 +1050,23 @@ def _validate_rebuild_evidence(
         raise ValueError("report payload user count does not match run.sample_size")
     if sum(payload.sample_summary.source_scope_counts.values()) != user_count:
         raise ValueError("report payload source scope counts do not match users")
+    actual_scope_counts = dict(sorted(Counter(row.sample_source_scope for row in payload.users).items()))
+    if dict(sorted(payload.sample_summary.source_scope_counts.items())) != actual_scope_counts:
+        raise ValueError("report payload source scope distribution does not match users")
     if payload.sample_summary.seed_count != seed_count:
         raise ValueError("report payload seed count does not match users")
     if len(set(payload.sample_summary.seed_user_ids)) != payload.sample_summary.seed_count:
         raise ValueError("report payload seed_user_ids are inconsistent")
     if set(payload.sample_summary.seed_user_ids) != {row.user_id for row in payload.users if row.is_seed}:
         raise ValueError("report payload seed_user_ids do not match users")
+    expected_aggregates = _build_report_aggregates(payload.users, payload.run.horizon)
+    if payload.aggregates.model_dump(mode="json") != expected_aggregates.model_dump(mode="json"):
+        raise ValueError("report payload aggregates do not match users")
+    expected_trends = _build_trends_from_users(payload.users, payload.run.horizon)
+    if [row.model_dump(mode="json") for row in payload.trends] != [
+        row.model_dump(mode="json") for row in expected_trends
+    ]:
+        raise ValueError("report payload trends do not match users")
 
     manifest_counts = _mapping_counts(manifest, "counts", "artifact manifest")
     summary_counts = _mapping_counts(runtime_summary, "counts", "runtime summary")
@@ -1028,14 +1097,12 @@ def _validate_rebuild_evidence(
     if _as_int(runtime_summary.get("horizon")) != payload.run.horizon:
         raise ValueError("runtime summary horizon does not match report payload")
     expected_schedule_contract: dict[str, object] = {
-        "schedule_method": "stable_shuffle_round_robin_batches",
-        "seed_step": 0,
+        "schedule_method": FINAL_RESEARCH_SCHEDULE_METHOD,
+        "seed_step": FINAL_RESEARCH_SEED_STEP,
         "non_seed_steps": [1, payload.run.horizon - 1],
-        "user_opportunity_limit": 1,
-        "recommendation_score_usage": "single exposure probability, never user ordering",
-        "dynamic_network_formula": (
-            "min(1.0, base_network_score + neighbor_boost * engaged_direct_neighbor_count)"
-        ),
+        "user_opportunity_limit": FINAL_RESEARCH_USER_OPPORTUNITY_LIMIT,
+        "recommendation_score_usage": FINAL_RESEARCH_SCORE_USAGE,
+        "dynamic_network_formula": FINAL_RESEARCH_DYNAMIC_NETWORK_FORMULA,
     }
     for field_name, expected in expected_schedule_contract.items():
         if runtime_summary.get(field_name) != expected:

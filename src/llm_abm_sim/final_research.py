@@ -16,7 +16,13 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 from .decision import LLMDecisionAdapter, ProviderDecisionError
 from .final_research_report import (
+    FINAL_RESEARCH_DYNAMIC_NETWORK_FORMULA,
     FINAL_RESEARCH_REPORT_ARTIFACTS,
+    FINAL_RESEARCH_RUNTIME_VERSION,
+    FINAL_RESEARCH_SCHEDULE_METHOD,
+    FINAL_RESEARCH_SCORE_USAGE,
+    FINAL_RESEARCH_SEED_STEP,
+    FINAL_RESEARCH_USER_OPPORTUNITY_LIMIT,
     FinalResearchReportSource,
     FinalResearchReportWriter,
 )
@@ -709,7 +715,7 @@ class FinalResearchRunner:
         report_config = self.config.snapshot()
         report_config["report_title"] = self.config.report.title
         artifact_manifest = {
-            "manifest_version": "final-research-runtime-v1" if runtime is not None else "final-research-offline-v1",
+            "manifest_version": FINAL_RESEARCH_RUNTIME_VERSION if runtime is not None else "final-research-offline-v1",
             "artifacts": artifacts,
             "counts": {
                 "historical_videos": prepared.historical_video_count,
@@ -908,16 +914,14 @@ class FinalResearchRunner:
                 platform.record_engagement(user_id, action)
 
         summary = {
-            "runtime_version": "final-research-runtime-v1",
+            "runtime_version": FINAL_RESEARCH_RUNTIME_VERSION,
             "horizon": self.config.horizon,
-            "schedule_method": "stable_shuffle_round_robin_batches",
-            "seed_step": 0,
+            "schedule_method": FINAL_RESEARCH_SCHEDULE_METHOD,
+            "seed_step": FINAL_RESEARCH_SEED_STEP,
             "non_seed_steps": [1, self.config.horizon - 1],
-            "user_opportunity_limit": 1,
-            "recommendation_score_usage": "single exposure probability, never user ordering",
-            "dynamic_network_formula": (
-                "min(1.0, base_network_score + neighbor_boost * engaged_direct_neighbor_count)"
-            ),
+            "user_opportunity_limit": FINAL_RESEARCH_USER_OPPORTUNITY_LIMIT,
+            "recommendation_score_usage": FINAL_RESEARCH_SCORE_USAGE,
+            "dynamic_network_formula": FINAL_RESEARCH_DYNAMIC_NETWORK_FORMULA,
             "decision_adapter_calls": decision_adapter_calls,
             "provider_metadata": provider_metadata,
             "counts": {
