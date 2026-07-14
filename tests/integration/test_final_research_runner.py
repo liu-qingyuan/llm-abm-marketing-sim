@@ -905,8 +905,19 @@ def test_target_delivery_ranking_runtime_reranks_global_top20_after_seed_engagem
         assert "LLM Prompt" not in lineage[excluded_field]["usage_stages"]
     assert 'data-testid="final-research-ranking-report"' in report_html
     assert 'data-testid="ranking-funnel-section"' in report_html
+    assert 'data-testid="ranking-hero"' in report_html
+    assert 'data-testid="target-video-link"' in report_html
+    assert 'data-testid="core-objects-section"' in report_html
+    assert 'data-testid="sample-comparison-section"' in report_html
     assert 'data-testid="field-lineage-section"' in report_html
+    assert 'data-testid="ranking-rounds-section"' in report_html
+    assert 'data-testid="network-effect-section"' in report_html
+    assert 'data-testid="paired-ablation-section"' in report_html
+    assert 'data-testid="sensitivity-section"' in report_html
+    assert 'data-testid="prompt-contract-section"' in report_html
     assert 'data-testid="ranking-users-section"' in report_html
+    assert 'data-testid="user-detail"' in report_html
+    assert 'data-testid="download-ranking-diagnostics"' in report_html
     assert "random_draw" not in report_html
     assert "background_content" not in report_html
     assert report_payload["ranking_diagnostics"] == ranking_diagnostics
