@@ -740,6 +740,7 @@ class FinalResearchRunner:
                 runtime_exposures=runtime.exposures if runtime is not None else (),
                 runtime_decisions=runtime.decisions if runtime is not None else (),
                 runtime_provider_failures=runtime.provider_failures if runtime is not None else (),
+                runtime_summary=runtime.summary if runtime is not None else None,
                 runtime_enabled=runtime is not None,
             )
         ).write(output_path)

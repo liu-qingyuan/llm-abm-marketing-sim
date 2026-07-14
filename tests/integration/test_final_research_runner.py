@@ -3,13 +3,14 @@ from __future__ import annotations
 import csv
 import hashlib
 import json
+import shutil
 from pathlib import Path
 from typing import Any
 
 import pytest
 from pydantic import ValidationError
 
-from llm_abm_sim import FinalResearchConfig, FinalResearchRunner
+from llm_abm_sim import FinalResearchConfig, FinalResearchRunner, rebuild_final_research_report
 from llm_abm_sim.decision import EngageDecision, LLMDecisionAdapter
 from llm_abm_sim.providers.openai_compatible import OpenAICompatibleDecisionAdapter
 from llm_abm_sim.safe_serialization import artifact_has_forbidden_terms
@@ -547,14 +548,30 @@ def test_mocked_provider_final_research_runs_fixed_batches_and_continues_after_f
     assert "latent_attributes" in report_rows[0]
     assert "brand_attitude" not in report_rows[0]
     assert "authorization" not in report_rows[0]
-    assert report_payload["schema_version"] == "final-research-report-payload-v1"
+    assert report_payload["schema_version"] == "final-research-report-payload-v2"
     assert report_payload["core_objects"] == ["TargetVideo", "ResearchUser", "PlatformRecommendationModel"]
+    assert [stage["key"] for stage in report_payload["run_funnel"]] == [
+        "offline_scoring",
+        "research_sample",
+        "recommendation_opportunity",
+        "target_exposure",
+        "provider_decision",
+        "engagement",
+        "background_content",
+    ]
+    assert report_payload["recommendation_explanation"]["seed_example"]["random_draw"] is None
+    assert report_payload["recommendation_explanation"]["non_seed_example"]["random_draw"] is not None
+    assert len(report_payload["user_traces"]) == len(report_rows)
+    assert report_payload["decision_contract"]["persisted_context_label"] == "重建的决策上下文"
     assert report_payload["downloads"]["csv"] == "final_research_users.csv"
     assert report_payload["downloads"]["users_json"] == "final_research_users.json"
     assert "data-testid=\"final-research-report\"" in report_html
     assert "final_research_users.csv" in report_html
     assert "final_research_users.json" in report_html
     assert "artifact_manifest.json" in report_html
+    assert 'data-testid="funnel-section"' in report_html
+    assert 'data-testid="recommendation-section"' in report_html
+    assert 'data-testid="decision-section"' in report_html
 
     assert len(steps) == 30
     assert steps[0]["time_step"] == "0"
@@ -610,6 +627,134 @@ def test_mocked_provider_final_research_runs_fixed_batches_and_continues_after_f
     assert "sk-secret" not in artifact_text
     for relative_path in [*manifest["artifacts"].values(), "artifact_manifest.json"]:
         assert (first_output / relative_path).read_bytes() == (second_output / relative_path).read_bytes()
+
+
+def test_final_research_report_rebuild_is_deterministic_and_upgrades_v1_payload(tmp_path: Path) -> None:
+    dataset_dir = _make_processed_fixture(tmp_path)
+    provider_config = ProviderLLMConfig(enabled=True, model="mock-model", require_live_env=False)
+    client = _ScriptedProviderClient()
+    provider = OpenAICompatibleDecisionAdapter(provider_config, client=client, sleep=lambda _delay: None)
+    adapter = _RecordingAdapter(provider)
+    run_dir = FinalResearchRunner(
+        FinalResearchConfig(dataset_dir=dataset_dir, sample_size=4, provider=provider_config),
+        adapter,
+    ).run_and_write(tmp_path / "rebuildable-run")
+    calls_before_rebuild = len(adapter.calls)
+    payload_path = run_dir / "final_research_report_payload.json"
+    preserved_artifacts = {
+        name: (run_dir / name).read_bytes()
+        for name in ("final_research_users.csv", "final_research_users.json", "artifact_manifest.json")
+    }
+    legacy_payload = json.loads(payload_path.read_text(encoding="utf-8"))
+    legacy_payload["schema_version"] = "final-research-report-payload-v1"
+    for field_name in (
+        "run_funnel",
+        "methodology_flow",
+        "video_usage",
+        "sampling_explanation",
+        "comment_network_explanation",
+        "recommendation_explanation",
+        "batch_explanation",
+        "decision_contract",
+        "outcome_explanations",
+        "dynamic_neighbor_summary",
+        "user_traces",
+    ):
+        legacy_payload.pop(field_name)
+    payload_path.write_text(json.dumps(legacy_payload, ensure_ascii=False) + "\n", encoding="utf-8")
+
+    report_path = rebuild_final_research_report(run_dir)
+    first_payload = payload_path.read_bytes()
+    first_html = report_path.read_bytes()
+    rebuilt_payload = json.loads(first_payload)
+
+    assert report_path == run_dir / "report.html"
+    assert rebuilt_payload["schema_version"] == "final-research-report-payload-v2"
+    assert len(adapter.calls) == calls_before_rebuild
+
+    assert rebuild_final_research_report(run_dir) == report_path
+    assert payload_path.read_bytes() == first_payload
+    assert report_path.read_bytes() == first_html
+    assert {
+        name: (run_dir / name).read_bytes()
+        for name in ("final_research_users.csv", "final_research_users.json", "artifact_manifest.json")
+    } == preserved_artifacts
+
+
+def test_final_research_report_rebuild_rejects_inconsistent_summary_before_replacing_report(tmp_path: Path) -> None:
+    dataset_dir = _make_processed_fixture(tmp_path)
+    provider_config = ProviderLLMConfig(enabled=True, model="mock-model", require_live_env=False)
+    provider = OpenAICompatibleDecisionAdapter(
+        provider_config,
+        client=_ScriptedProviderClient(),
+        sleep=lambda _delay: None,
+    )
+    run_dir = FinalResearchRunner(
+        FinalResearchConfig(dataset_dir=dataset_dir, sample_size=4, provider=provider_config),
+        _RecordingAdapter(provider),
+    ).run_and_write(tmp_path / "inconsistent-run")
+    payload_path = run_dir / "final_research_report_payload.json"
+    report_path = run_dir / "report.html"
+    original_payload = payload_path.read_bytes()
+    original_report = report_path.read_bytes()
+    summary_path = run_dir / "runtime_summary.json"
+    summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    summary["counts"]["sample_users"] += 1
+    summary_path.write_text(json.dumps(summary, ensure_ascii=False) + "\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="sample_users"):
+        rebuild_final_research_report(run_dir)
+
+    assert payload_path.read_bytes() == original_payload
+    assert report_path.read_bytes() == original_report
+
+
+@pytest.mark.parametrize(
+    "corruption",
+    ["missing_required", "unsupported_schema", "duplicate_user", "user_count", "missing_download"],
+)
+def test_final_research_report_rebuild_rejects_invalid_persisted_evidence(
+    tmp_path: Path,
+    corruption: str,
+) -> None:
+    dataset_dir = _make_processed_fixture(tmp_path)
+    provider_config = ProviderLLMConfig(enabled=True, model="mock-model", require_live_env=False)
+    provider = OpenAICompatibleDecisionAdapter(
+        provider_config,
+        client=_ScriptedProviderClient(),
+        sleep=lambda _delay: None,
+    )
+    source_run = FinalResearchRunner(
+        FinalResearchConfig(dataset_dir=dataset_dir, sample_size=4, provider=provider_config),
+        _RecordingAdapter(provider),
+    ).run_and_write(tmp_path / "valid-run")
+    run_dir = tmp_path / f"invalid-{corruption}"
+    shutil.copytree(source_run, run_dir)
+    payload_path = run_dir / "final_research_report_payload.json"
+    report_path = run_dir / "report.html"
+    payload = json.loads(payload_path.read_text(encoding="utf-8"))
+
+    if corruption == "missing_required":
+        (run_dir / "runtime_summary.json").unlink()
+    elif corruption == "unsupported_schema":
+        payload["schema_version"] = "final-research-report-payload-v999"
+        payload_path.write_text(json.dumps(payload, ensure_ascii=False) + "\n", encoding="utf-8")
+    elif corruption == "duplicate_user":
+        payload["users"][1]["user_id"] = payload["users"][0]["user_id"]
+        payload_path.write_text(json.dumps(payload, ensure_ascii=False) + "\n", encoding="utf-8")
+    elif corruption == "user_count":
+        payload["run"]["sample_size"] += 1
+        payload_path.write_text(json.dumps(payload, ensure_ascii=False) + "\n", encoding="utf-8")
+    else:
+        (run_dir / "final_research_users.csv").unlink()
+
+    persisted_payload = payload_path.read_bytes()
+    persisted_report = report_path.read_bytes()
+    with pytest.raises((FileNotFoundError, ValueError, ValidationError)):
+        rebuild_final_research_report(run_dir)
+
+    assert payload_path.read_bytes() == persisted_payload
+    assert report_path.read_bytes() == persisted_report
 
 
 def test_final_research_report_uses_configured_formula_and_interest_tags(tmp_path: Path) -> None:

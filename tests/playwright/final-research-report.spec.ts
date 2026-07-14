@@ -58,6 +58,20 @@ async function assertReport(page: Page, outputDir: string, users: ReportUser[]):
   await expect(page.getByTestId('core-objects-section')).toContainText('TargetVideo');
   await expect(page.getByTestId('core-objects-section')).toContainText('ResearchUser');
   await expect(page.getByTestId('core-objects-section')).toContainText('PlatformRecommendationModel');
+  await expect(page.getByTestId('workflow-nav')).toContainText('运行漏斗');
+  await page.getByRole('link', { name: '推荐与抽签' }).click();
+  await expect(page).toHaveURL(/#recommendation$/);
+  await expect(page.getByTestId('funnel-section').locator('article')).toHaveCount(7);
+  await expect(page.getByTestId('funnel-section')).toContainText('Offline scoring');
+  await expect(page.getByTestId('funnel-section')).toContainText('Background Content');
+  await expect(page.getByTestId('methodology-section')).toContainText('唯一进入固定批次');
+  await expect(page.getByTestId('methodology-section')).toContainText('不声称对背景视频完成了 runtime 排序');
+  await expect(page.getByTestId('recommendation-section')).toContainText('dynamic_network_score');
+  await expect(page.getByTestId('seed-example')).toContainText('强制曝光');
+  await expect(page.getByTestId('non-seed-example')).toContainText('random_draw');
+  await expect(page.getByTestId('decision-section')).toContainText('30 个批次');
+  await expect(page.getByTestId('decision-section')).toContainText('完整原始 PeerContext 与 Provider Prompt 不可恢复');
+  await expect(page.getByTestId('outcome-explanations').locator('article')).toHaveCount(5);
 
   for (const testId of ['trend-chart', 'action-chart', 'scope-chart', 'provider-chart', 'neighbor-chart']) {
     const chart = page.getByTestId(testId);
@@ -71,6 +85,8 @@ async function assertReport(page: Page, outputDir: string, users: ReportUser[]):
   await expect(page.getByTestId('user-table')).toContainText(selected.user_id);
   await page.getByTestId('user-table').locator('tbody tr').click();
   await expect(page.getByTestId('user-detail')).toContainText(selected.user_id);
+  await expect(page.getByTestId('trace-context')).toContainText('重建的决策上下文');
+  await expect(page.getByTestId('trace-context')).toContainText('完整原始 Provider Prompt 无法');
 
   await page.getByTestId('user-search').fill('');
   await page.getByTestId('result-filter').selectOption(selected.result_status);
@@ -86,7 +102,7 @@ async function assertReport(page: Page, outputDir: string, users: ReportUser[]):
     users.filter((user) => user.is_seed).length,
   );
 
-  for (const fileName of ['report.html', 'final_research_users.csv', 'final_research_users.json', 'artifact_manifest.json']) {
+  for (const fileName of ['report.html', 'final_research_report_payload.json', 'final_research_users.csv', 'final_research_users.json', 'artifact_manifest.json']) {
     expect(existsSync(path.join(outputDir, fileName))).toBeTruthy();
   }
   const bodyHasHorizontalOverflow = await page.evaluate(
@@ -98,6 +114,12 @@ async function assertReport(page: Page, outputDir: string, users: ReportUser[]):
       '.topbar > *',
       '.downloads > a',
       '.target-facts > div',
+      '.funnel-grid > article',
+      '.method-grid > article',
+      '.evidence-grid > article',
+      '.formula-stack > article',
+      '.example-grid > article',
+      '.outcome-list > article',
       '.metrics-band > article',
       '.diagnostic-grid > article',
       '.chart-grid > article',

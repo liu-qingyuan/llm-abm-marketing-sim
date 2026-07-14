@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import csv
 import json
+import os
+import tempfile
 from collections import Counter
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
@@ -238,12 +240,12 @@ class UserReportRow(BaseModel):
         return row
 
 
-class FinalResearchReportPayload(BaseModel):
+class FinalResearchReportPayloadV1(BaseModel):
     """Independent payload for the Final Research static report."""
 
     model_config = ConfigDict(extra="forbid")
 
-    schema_version: str = "final-research-report-payload-v1"
+    schema_version: Literal["final-research-report-payload-v1"] = "final-research-report-payload-v1"
     title: str
     core_objects: tuple[Literal["TargetVideo"], Literal["ResearchUser"], Literal["PlatformRecommendationModel"]]
     target_video: FinalResearchTargetVideo
@@ -257,6 +259,132 @@ class FinalResearchReportPayload(BaseModel):
     downloads: FinalResearchDownloads
     limitations: list[str]
     users: list[UserReportRow]
+
+
+class FinalResearchFunnelStage(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    key: str
+    label: str
+    count: int
+    description: str
+
+
+class FinalResearchMethodStage(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    key: str
+    title: str
+    summary: str
+
+
+class FinalResearchVideoUsage(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    runtime_target_video_count: int
+    historical_video_count: int
+    target_video_role: str
+    background_video_role: str
+
+
+class FinalResearchSamplingExplanation(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    source_scope_counts: dict[str, int]
+    quota_method: str
+    deduplication_and_refill: str
+    holdout_safe_projection: str
+    seed_union_method: str
+    seed_forced_exposure: str
+
+
+class FinalResearchRecommendationExample(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    user_id: str
+    is_seed: bool
+    recommendation_score: float | None
+    random_draw: float | None
+    outcome: str
+    explanation: str
+
+
+class FinalResearchRecommendationExplanation(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    static_formula: str
+    dynamic_formula: str
+    network_weight: float
+    tag_affinity_weight: float
+    neighbor_boost: float
+    seed_example: FinalResearchRecommendationExample | None
+    non_seed_example: FinalResearchRecommendationExample | None
+
+
+class FinalResearchBatchExplanation(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    batch_count: int
+    seed_batch: int
+    non_seed_batches: list[int]
+    opportunity_limit: int
+    assignment_method: str
+
+
+class FinalResearchDecisionContract(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    fields: list[str]
+    action_values: list[str]
+    single_most_likely_action: bool
+    persisted_context_label: str
+    prompt_recoverability: str
+
+
+class FinalResearchOutcomeExplanation(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    action: str
+    count: int
+    explanation: str
+
+
+class FinalResearchDynamicNeighborSummary(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    users_with_positive_engaged_neighbor_count: int
+    maximum_engaged_neighbor_count: int
+    configured_neighbor_boost: float
+    maximum_actual_boost: float
+    activated: bool
+    explanation: str
+
+
+class FinalResearchUserTrace(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    user_id: str
+    context_label: str
+    persisted_evidence: dict[str, str | int | float | bool | None]
+    unrecoverable_peer_context_fields: list[str]
+    prompt_recoverability: str
+
+
+class FinalResearchReportPayload(FinalResearchReportPayloadV1):
+    """Explainable v2 payload shared by fresh runs and report rebuilding."""
+
+    schema_version: Literal["final-research-report-payload-v2"] = "final-research-report-payload-v2"
+    run_funnel: list[FinalResearchFunnelStage]
+    methodology_flow: list[FinalResearchMethodStage]
+    video_usage: FinalResearchVideoUsage
+    sampling_explanation: FinalResearchSamplingExplanation
+    comment_network_explanation: str
+    recommendation_explanation: FinalResearchRecommendationExplanation
+    batch_explanation: FinalResearchBatchExplanation
+    decision_contract: FinalResearchDecisionContract
+    outcome_explanations: list[FinalResearchOutcomeExplanation]
+    dynamic_neighbor_summary: FinalResearchDynamicNeighborSummary
+    user_traces: list[FinalResearchUserTrace]
 
 
 @dataclass(frozen=True)
@@ -273,6 +401,7 @@ class FinalResearchReportSource:
     runtime_exposures: Sequence[Mapping[str, object]] = ()
     runtime_decisions: Sequence[Mapping[str, object]] = ()
     runtime_provider_failures: Sequence[Mapping[str, object]] = ()
+    runtime_summary: Mapping[str, object] | None = None
     runtime_enabled: bool = False
 
 
@@ -300,12 +429,7 @@ class FinalResearchReportWriter:
             safe_user_json(user_document) + "\n",
             encoding="utf-8",
         )
-        (output_path / FINAL_RESEARCH_REPORT_ARTIFACTS["final_research_report_payload"]).write_text(
-            safe_user_json(payload) + "\n",
-            encoding="utf-8",
-        )
-        report_path = output_path / FINAL_RESEARCH_REPORT_ARTIFACTS["final_research_report"]
-        report_path.write_text(self._render_html(payload), encoding="utf-8")
+        report_path = _publish_report_files(output_path, payload)
         (output_path / "artifact_manifest.json").write_text(
             safe_json(dict(self.source.artifact_manifest)) + "\n",
             encoding="utf-8",
@@ -326,7 +450,7 @@ class FinalResearchReportWriter:
         target_video = safe_user_data(dict(self.source.target_video))
         if not isinstance(target_video, dict):  # pragma: no cover
             raise TypeError("safe target video must remain an object")
-        return FinalResearchReportPayload(
+        base_payload = FinalResearchReportPayloadV1(
             title=title,
             core_objects=("TargetVideo", "ResearchUser", "PlatformRecommendationModel"),
             target_video=FinalResearchTargetVideo.model_validate(target_video),
@@ -390,6 +514,7 @@ class FinalResearchReportWriter:
             ],
             users=rows,
         )
+        return _build_explainable_payload(base_payload, self.source.runtime_summary)
 
     def _build_user_rows(self) -> list[UserReportRow]:
         exposures = {str(row.get("user_id", "")): row for row in self.source.runtime_exposures}
@@ -519,7 +644,8 @@ class FinalResearchReportWriter:
             writer.writeheader()
             writer.writerows(safe_rows)
 
-    def _render_html(self, payload: FinalResearchReportPayload) -> str:
+    @staticmethod
+    def render_payload(payload: FinalResearchReportPayload) -> str:
         payload_json = safe_user_json(payload, indent=None).replace("</", "<\\/")
         target = payload.target_video
         target_url = escape(target.video_url, quote=True)
@@ -534,6 +660,7 @@ class FinalResearchReportWriter:
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="icon" href="data:,">
   <title>{escape(payload.title)}</title>
   <style>{_REPORT_CSS}</style>
 </head>
@@ -547,6 +674,10 @@ class FinalResearchReportWriter:
         <a href="{payload.downloads.manifest}">Manifest</a>
       </nav>
     </header>
+
+    <nav class="workflow-nav" data-testid="workflow-nav" aria-label="研究流程导航">
+      <a href="#funnel">运行漏斗</a><a href="#methodology">数据与抽样</a><a href="#recommendation">推荐与抽签</a><a href="#decision">LLM 决策</a><a href="#users">用户追踪</a>
+    </nav>
 
     <section class="target-band" data-testid="target-video-section">
       <div class="target-copy">
@@ -566,6 +697,21 @@ class FinalResearchReportWriter:
       <article><span>03</span><h3>PlatformRecommendationModel</h3><p>网络信号、历史标签与动态邻居反馈</p></article>
     </section>
 
+    <section class="content-band" id="funnel" data-testid="funnel-section">
+      <div class="split-heading"><div><span class="eyebrow">RUN FUNNEL</span><h2>从离线评分到最终结果</h2></div><span class="muted">所有数字均来自本次持久化 artifacts</span></div>
+      <div class="funnel-grid" id="run-funnel"></div>
+    </section>
+
+    <section class="content-band" id="methodology" data-testid="methodology-section">
+      <div class="split-heading"><div><span class="eyebrow">METHOD</span><h2>数据、抽样、视频与评论网络</h2></div><span class="quiet-badge">holdout-safe</span></div>
+      <div class="method-grid" id="methodology-flow"></div>
+      <div class="evidence-grid">
+        <article><h3>视频用途</h3><p id="target-video-role"></p><p class="muted" id="background-video-role"></p></article>
+        <article><h3>Source-scope 配额与补齐</h3><p id="sampling-method"></p><p class="muted" id="sampling-counts"></p></article>
+        <article><h3>评论派生网络</h3><p id="comment-network"></p><p class="muted" id="holdout-projection"></p></article>
+      </div>
+    </section>
+
     <section class="metrics-band" data-testid="summary-metrics">
       <article><span>Target exposures</span><strong id="metric-exposures">0</strong></article>
       <article><span>Engagements</span><strong id="metric-engagements">0</strong></article>
@@ -574,14 +720,32 @@ class FinalResearchReportWriter:
       <article><span>Seed users</span><strong>{payload.sample_summary.seed_count}</strong></article>
     </section>
 
-    <section class="content-band" data-testid="model-boundary-section">
+    <section class="content-band" id="recommendation" data-testid="recommendation-section">
       <div class="split-heading"><div><span class="eyebrow">RESEARCH CONTRACT</span><h2>推荐模型与字段边界</h2></div><code>{escape(static_formula)}</code></div>
+      <div class="formula-stack">
+        <article><span>静态公式</span><code id="static-formula"></code></article>
+        <article><span>动态公式</span><code id="dynamic-formula"></code></article>
+      </div>
+      <div class="example-grid">
+        <article data-testid="seed-example"><h3>Seed 强制曝光示例</h3><div id="seed-example"></div></article>
+        <article data-testid="non-seed-example"><h3>Non-seed 抽签示例</h3><div id="non-seed-example"></div></article>
+      </div>
       <div class="boundary-grid">
         <article><h3>Observed</h3><p>来源事实与可复算代理指标</p><ul id="observed-list"></ul></article>
         <article><h3>Latent</h3><p>只用于受控仿真实验</p><ul id="latent-list"></ul></article>
         <article><h3>Dynamic signal</h3><p><code>{escape(dynamic_formula)}</code></p><p class="muted">只影响尚未进入固定批次的直接邻居。</p></article>
       </div>
       <p class="boundary-statement">{escape(payload.observed_latent_boundary.statement)}</p>
+    </section>
+
+    <section class="content-band" id="decision" data-testid="decision-section">
+      <div class="split-heading"><div><span class="eyebrow">BATCH & DECISION</span><h2>固定批次、曝光抽签与 LLM 合同</h2></div><span class="muted">每个用户最多一次 TargetVideo 机会</span></div>
+      <div class="evidence-grid">
+        <article><h3>30 个固定批次</h3><p id="batch-method"></p></article>
+        <article><h3>结构化决策字段</h3><p id="decision-fields"></p><p class="muted" id="decision-recoverability"></p></article>
+        <article><h3>动态邻居信号</h3><p id="neighbor-summary"></p></article>
+      </div>
+      <div class="outcome-list" id="outcome-explanations" data-testid="outcome-explanations"></div>
     </section>
 
     <section class="content-band" data-testid="diagnostics-section">
@@ -600,7 +764,7 @@ class FinalResearchReportWriter:
       </div>
     </section>
 
-    <section class="users-band" data-testid="users-section">
+    <section class="users-band" id="users" data-testid="users-section">
       <div class="split-heading"><div><span class="eyebrow">ALL RESEARCH USERS</span><h2>完整用户级结果</h2></div><strong id="visible-user-count"></strong></div>
       <div class="filters">
         <label><span>搜索</span><input data-testid="user-search" id="user-search" type="search" placeholder="user_id / 昵称 / 标签 / reason"></label>
@@ -620,6 +784,378 @@ class FinalResearchReportWriter:
 </body>
 </html>
 """
+
+
+def rebuild_final_research_report(run_dir: str | Path) -> Path:
+    """Validate an existing safe run and atomically rebuild its explainable report."""
+
+    run_path = Path(run_dir)
+    if not run_path.is_dir():
+        raise FileNotFoundError(f"Final Research run directory does not exist: {run_path}")
+    manifest_path = run_path / "artifact_manifest.json"
+    payload_path = run_path / FINAL_RESEARCH_REPORT_ARTIFACTS["final_research_report_payload"]
+    summary_path = run_path / "runtime_summary.json"
+    for required_path in (manifest_path, payload_path, summary_path):
+        if not required_path.is_file():
+            raise FileNotFoundError(f"Final Research rebuild requires {required_path.name}")
+
+    manifest = _read_json_object(manifest_path)
+    payload_document = _read_json_object(payload_path)
+    runtime_summary = _read_json_object(summary_path)
+    base_payload = _parse_report_payload(payload_document)
+    _validate_rebuild_evidence(run_path, manifest, base_payload, runtime_summary)
+
+    payload = _build_explainable_payload(base_payload, runtime_summary)
+    return _publish_report_files(run_path, payload)
+
+
+def _build_explainable_payload(
+    base_payload: FinalResearchReportPayloadV1,
+    runtime_summary: Mapping[str, object] | None,
+) -> FinalResearchReportPayload:
+    users = base_payload.users
+    action_counts = Counter(row.result_status for row in users)
+    target_exposures = sum(row.exposure_status == "target_exposed" for row in users)
+    background_count = action_counts["background_content"]
+    provider_decisions = target_exposures
+    engagements = sum(action_counts[action] for action in ("like", "comment", "share"))
+    opportunities = len(users) if base_payload.run.runtime_enabled else 0
+    if runtime_summary is not None:
+        provider_decisions = _as_int(runtime_summary.get("decision_adapter_calls")) or target_exposures
+
+    seed_example_row = next(
+        (row for row in users if row.is_seed and row.exposure_status == "target_exposed"),
+        None,
+    )
+    non_seed_example_row = next((row for row in users if not row.is_seed and row.random_draw is not None), None)
+    positive_neighbor_rows = [row for row in users if (row.engaged_neighbor_count or 0) > 0]
+    maximum_neighbors = max((row.engaged_neighbor_count or 0 for row in users), default=0)
+    maximum_actual_boost = max(
+        (
+            max(0.0, row.dynamic_network_score - row.base_network_score)
+            for row in users
+            if row.dynamic_network_score is not None and row.base_network_score is not None
+        ),
+        default=0.0,
+    )
+    neighbor_activated = bool(positive_neighbor_rows)
+    sample_size = len(users)
+
+    payload_data = base_payload.model_dump(mode="json")
+    payload_data.update(
+        {
+            "schema_version": "final-research-report-payload-v2",
+            "run_funnel": [
+                _funnel_stage("offline_scoring", "Offline scoring", base_payload.recommendation_model.score_summary.user_count, "使用 holdout-safe 历史信号计算静态推荐分数。"),
+                _funnel_stage("research_sample", "Research Sample", sample_size, "按 source scope 配额、去重与稳定补齐形成研究样本。"),
+                _funnel_stage("recommendation_opportunity", "Recommendation Opportunity", opportunities, "每个样本用户只属于一个固定批次，最多获得一次目标视频机会。"),
+                _funnel_stage("target_exposure", "Target Exposure", target_exposures, "Seed 强制曝光；non-seed 仅在 random_draw < recommendation_score 时曝光。"),
+                _funnel_stage("provider_decision", "Provider Decision", provider_decisions, "目标曝光后才调用 Decision Adapter；背景内容不会调用。"),
+                _funnel_stage("engagement", "Engagement", engagements, "like、comment 或 share 计为参与。"),
+                _funnel_stage("background_content", "Background Content", background_count, "抽签失败时记录背景内容占用机会，不对历史视频执行 runtime 排序。"),
+            ],
+            "methodology_flow": [
+                _method_stage("data", "数据来源", "读取 processed Video Catalog、用户画像和评论派生互动证据。"),
+                _method_stage("sampling", "用户筛选", "按 source scope 配额抽样，去重后使用稳定顺序补齐。"),
+                _method_stage("video", "视频用途", "仅一条真实 TargetVideo 进入 runtime，历史视频只提供信号。"),
+                _method_stage("network", "评论网络", "一级评论、回复和 @ mention 构成历史互动图，不等同关注关系。"),
+                _method_stage("recommendation", "推荐评分", "静态分数结合网络与标签，动态分数可加入已参与直接邻居 boost。"),
+                _method_stage("batches", "固定批次与抽签", "Batch 0 分配 seeds，Batch 1–29 分配其他用户；每人只抽签一次。"),
+                _method_stage("decision", "LLM 决策", "仅 Target Exposure 调用结构化 Decision Adapter。"),
+                _method_stage("outcome", "结果解释", "只根据持久化动作计数、结构化合同和样本规模解释结果。"),
+            ],
+            "video_usage": {
+                "runtime_target_video_count": 1,
+                "historical_video_count": base_payload.sample_summary.historical_video_count,
+                "target_video_role": "唯一进入固定批次、曝光抽签和 Provider Decision 的真实 TargetVideo。",
+                "background_video_role": "仅提供评论网络、历史标签和抽样信号；本次报告不声称对背景视频完成了 runtime 排序。",
+            },
+            "sampling_explanation": {
+                "source_scope_counts": base_payload.sample_summary.source_scope_counts,
+                "quota_method": "按 source_challenge_name 分配 Research Sample 配额。",
+                "deduplication_and_refill": "用户按 user_id 去重；配额不足时使用稳定候选顺序补齐到固定样本数。",
+                "holdout_safe_projection": "TargetVideo 互动在画像投影、抽样、seed 选择和推荐评分完成前保持 holdout。",
+                "seed_union_method": base_payload.diagnostics.seed_method,
+                "seed_forced_exposure": "global top10 与 local top10 的去重 union 在 Batch 0 强制曝光，不参与 random draw。",
+            },
+            "comment_network_explanation": (
+                "Comment-Derived User Interaction Graph 来自一级评论者到视频作者、回复者到被回复评论者以及 "
+                "@ mention 关系；它是历史互动代理，不是好友或关注网络。"
+            ),
+            "recommendation_explanation": {
+                "static_formula": base_payload.recommendation_model.formula,
+                "dynamic_formula": "dynamic_network_score = min(1.0, base_network_score + neighbor_boost * engaged_neighbor_count); recommendation_score = network_weight * dynamic_network_score + tag_affinity_weight * historical_tag_affinity",
+                "network_weight": base_payload.recommendation_model.network_weight,
+                "tag_affinity_weight": base_payload.recommendation_model.tag_affinity_weight,
+                "neighbor_boost": base_payload.recommendation_model.neighbor_boost,
+                "seed_example": _recommendation_example(seed_example_row),
+                "non_seed_example": _recommendation_example(non_seed_example_row),
+            },
+            "batch_explanation": {
+                "batch_count": base_payload.run.horizon,
+                "seed_batch": 0,
+                "non_seed_batches": [1, max(1, base_payload.run.horizon - 1)],
+                "opportunity_limit": 1,
+                "assignment_method": "Seeds 固定属于 Batch 0；其他用户经稳定 shuffle 后 round-robin 分配到 Batch 1–29。",
+            },
+            "decision_contract": {
+                "fields": ["engage", "probability", "reason", "confidence", "action"],
+                "action_values": ["like", "comment", "share", "ignore"],
+                "single_most_likely_action": True,
+                "persisted_context_label": "重建的决策上下文",
+                "prompt_recoverability": "当前安全 artifacts 只保留 allowlisted evidence；完整原始 PeerContext 与 Provider Prompt 不可恢复。",
+            },
+            "outcome_explanations": [
+                _outcome_explanation(action, action_counts[action], sample_size)
+                for action in ("like", "comment", "share", "ignore", "provider_failed")
+            ],
+            "dynamic_neighbor_summary": {
+                "users_with_positive_engaged_neighbor_count": len(positive_neighbor_rows),
+                "maximum_engaged_neighbor_count": maximum_neighbors,
+                "configured_neighbor_boost": base_payload.recommendation_model.neighbor_boost,
+                "maximum_actual_boost": round(maximum_actual_boost, 6),
+                "activated": neighbor_activated,
+                "explanation": (
+                    "本次运行中已有用户在批次冻结时观测到参与邻居，动态 boost 实际生效。"
+                    if neighbor_activated
+                    else "配置包含动态邻居 boost，但本次所有 persisted engaged_neighbor_count 均为 0，因此未实际生效。"
+                ),
+            },
+            "user_traces": [_user_trace(row) for row in users],
+        }
+    )
+    return FinalResearchReportPayload.model_validate(payload_data)
+
+
+def _validate_rebuild_evidence(
+    run_path: Path,
+    manifest: Mapping[str, object],
+    payload: FinalResearchReportPayloadV1,
+    runtime_summary: Mapping[str, object],
+) -> None:
+    artifacts = manifest.get("artifacts")
+    if not isinstance(artifacts, Mapping):
+        raise ValueError("artifact_manifest.json must contain an artifacts object")
+    expected_artifacts = {
+        "final_research_report": "report.html",
+        "final_research_report_payload": "final_research_report_payload.json",
+        "runtime_summary": "runtime_summary.json",
+    }
+    for name, expected_path in expected_artifacts.items():
+        if artifacts.get(name) != expected_path:
+            raise ValueError(f"artifact manifest has invalid {name} path")
+    for name, relative_path in artifacts.items():
+        if not isinstance(name, str) or not isinstance(relative_path, str):
+            raise ValueError("artifact manifest names and paths must be strings")
+        _artifact_path(run_path, relative_path, name)
+
+    user_ids = [row.user_id for row in payload.users]
+    if len(user_ids) != len(set(user_ids)):
+        raise ValueError("report payload contains duplicate user_id")
+    user_count = len(user_ids)
+    seed_count = sum(row.is_seed for row in payload.users)
+    if payload.run.sample_size != user_count:
+        raise ValueError("report payload user count does not match run.sample_size")
+    if sum(payload.sample_summary.source_scope_counts.values()) != user_count:
+        raise ValueError("report payload source scope counts do not match users")
+    if payload.sample_summary.seed_count != seed_count:
+        raise ValueError("report payload seed count does not match users")
+    if len(set(payload.sample_summary.seed_user_ids)) != payload.sample_summary.seed_count:
+        raise ValueError("report payload seed_user_ids are inconsistent")
+    if set(payload.sample_summary.seed_user_ids) != {row.user_id for row in payload.users if row.is_seed}:
+        raise ValueError("report payload seed_user_ids do not match users")
+
+    manifest_counts = _mapping_counts(manifest, "counts", "artifact manifest")
+    summary_counts = _mapping_counts(runtime_summary, "counts", "runtime summary")
+    derived_counts = {
+        "sample_users": user_count,
+        "seed_users": seed_count,
+        "target_exposures": sum(row.exposure_status == "target_exposed" for row in payload.users),
+        "background_impressions": sum(row.result_status == "background_content" for row in payload.users),
+        "decisions": sum(row.provider_status == "succeeded" for row in payload.users),
+        "engagements": sum(row.result_status in {"like", "comment", "share"} for row in payload.users),
+        "ignored": sum(row.result_status == "ignore" for row in payload.users),
+        "provider_failed": sum(row.result_status == "provider_failed" for row in payload.users),
+    }
+    for key, expected in derived_counts.items():
+        if _as_int(summary_counts.get(key)) != expected:
+            raise ValueError(f"runtime summary count {key} does not match report payload")
+    manifest_expectations = {
+        "sample_users": user_count,
+        "seed_users": seed_count,
+        "users_scored": payload.recommendation_model.score_summary.user_count,
+        "runtime_exposures": user_count,
+        "runtime_decisions": derived_counts["decisions"],
+        "runtime_provider_failures": derived_counts["provider_failed"],
+    }
+    for key, expected in manifest_expectations.items():
+        if _as_int(manifest_counts.get(key)) != expected:
+            raise ValueError(f"artifact manifest count {key} does not match report payload")
+    if _as_int(runtime_summary.get("horizon")) != payload.run.horizon:
+        raise ValueError("runtime summary horizon does not match report payload")
+    adapter_calls = _as_int(runtime_summary.get("decision_adapter_calls"))
+    if adapter_calls != derived_counts["target_exposures"]:
+        raise ValueError("runtime summary decision_adapter_calls does not match target exposures")
+    if _as_int(manifest.get("decision_adapter_calls")) != adapter_calls:
+        raise ValueError("artifact manifest decision_adapter_calls does not match runtime summary")
+
+    expected_downloads = {
+        "report": artifacts.get("final_research_report"),
+        "payload": artifacts.get("final_research_report_payload"),
+        "csv": artifacts.get("final_research_users_csv"),
+        "users_json": artifacts.get("final_research_users_json"),
+        "manifest": "artifact_manifest.json",
+    }
+    for field_name, relative_path in expected_downloads.items():
+        if getattr(payload.downloads, field_name) != relative_path:
+            raise ValueError(f"report payload download {field_name} does not match artifact manifest")
+        if not isinstance(relative_path, str):
+            raise ValueError(f"artifact manifest is missing download target {field_name}")
+        _artifact_path(run_path, relative_path, field_name)
+
+
+def _parse_report_payload(document: Mapping[str, object]) -> FinalResearchReportPayloadV1:
+    schema_version = document.get("schema_version")
+    if schema_version == "final-research-report-payload-v1":
+        return FinalResearchReportPayloadV1.model_validate(document)
+    if schema_version == "final-research-report-payload-v2":
+        payload_v2 = FinalResearchReportPayload.model_validate(document)
+        base_fields = set(FinalResearchReportPayloadV1.model_fields)
+        base_document = payload_v2.model_dump(include=base_fields, mode="json")
+        base_document["schema_version"] = "final-research-report-payload-v1"
+        return FinalResearchReportPayloadV1.model_validate(base_document)
+    raise ValueError(f"unsupported Final Research report payload schema: {schema_version!r}")
+
+
+def _read_json_object(path: Path) -> dict[str, object]:
+    try:
+        document = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise ValueError(f"cannot read valid JSON from {path.name}") from exc
+    if not isinstance(document, dict):
+        raise ValueError(f"{path.name} must contain a JSON object")
+    return document
+
+
+def _artifact_path(run_path: Path, relative_path: str, artifact_name: str) -> Path:
+    path = Path(relative_path)
+    if path.is_absolute() or ".." in path.parts:
+        raise ValueError(f"artifact {artifact_name} has an unsafe path")
+    resolved = run_path / path
+    if not resolved.is_file():
+        raise FileNotFoundError(f"artifact {artifact_name} is missing: {relative_path}")
+    return resolved
+
+
+def _mapping_counts(document: Mapping[str, object], key: str, label: str) -> Mapping[str, object]:
+    counts = document.get(key)
+    if not isinstance(counts, Mapping):
+        raise ValueError(f"{label} must contain a {key} object")
+    return counts
+
+
+def _stage_text(run_path: Path, target_name: str, content: str) -> Path:
+    with tempfile.NamedTemporaryFile(
+        mode="w",
+        encoding="utf-8",
+        dir=run_path,
+        prefix=f".{target_name}.",
+        suffix=".tmp",
+        delete=False,
+    ) as handle:
+        handle.write(content)
+        return Path(handle.name)
+
+
+def _publish_report_files(run_path: Path, payload: FinalResearchReportPayload) -> Path:
+    payload_path = run_path / FINAL_RESEARCH_REPORT_ARTIFACTS["final_research_report_payload"]
+    report_path = run_path / FINAL_RESEARCH_REPORT_ARTIFACTS["final_research_report"]
+    payload_text = safe_user_json(payload) + "\n"
+    html_text = FinalResearchReportWriter.render_payload(payload)
+    FinalResearchReportPayload.model_validate(json.loads(payload_text))
+    staged_payload = _stage_text(run_path, payload_path.name, payload_text)
+    staged_report = _stage_text(run_path, report_path.name, html_text)
+    try:
+        os.replace(staged_payload, payload_path)
+        staged_payload = None
+        os.replace(staged_report, report_path)
+        staged_report = None
+    finally:
+        for staged_path in (staged_payload, staged_report):
+            if staged_path is not None:
+                staged_path.unlink(missing_ok=True)
+    return report_path
+
+
+def _funnel_stage(key: str, label: str, count: int, description: str) -> dict[str, object]:
+    return {"key": key, "label": label, "count": count, "description": description}
+
+
+def _method_stage(key: str, title: str, summary: str) -> dict[str, str]:
+    return {"key": key, "title": title, "summary": summary}
+
+
+def _recommendation_example(row: UserReportRow | None) -> dict[str, object] | None:
+    if row is None:
+        return None
+    if row.is_seed:
+        explanation = "Seed 属于 global/local top10 union，在 Batch 0 强制曝光，不生成 random draw。"
+    else:
+        operator = "<" if (row.random_draw or 0.0) < (row.recommendation_score or 0.0) else ">="
+        explanation = f"non-seed 抽签：random_draw {operator} recommendation_score，因此结果为 {row.exposure_status}。"
+    return {
+        "user_id": row.user_id,
+        "is_seed": row.is_seed,
+        "recommendation_score": row.recommendation_score,
+        "random_draw": row.random_draw,
+        "outcome": row.exposure_status,
+        "explanation": explanation,
+    }
+
+
+def _outcome_explanation(action: str, count: int, sample_size: int) -> dict[str, object]:
+    if count == 0:
+        explanation = (
+            f"本次 {sample_size} 名 Research Sample 中没有记录到 {action}；Provider Prompt 合同要求每次决策只返回一个最可能 action，"
+            "该结论仅来自动作计数，不分析 reason 文本，也未调用额外 LLM。"
+        )
+    else:
+        explanation = f"本次记录到 {count} 次 {action}；计数来自 persisted structured decisions，不对 reason 文本做关键词推断。"
+    return {"action": action, "count": count, "explanation": explanation}
+
+
+def _user_trace(row: UserReportRow) -> dict[str, object]:
+    return {
+        "user_id": row.user_id,
+        "context_label": "重建的决策上下文",
+        "persisted_evidence": {
+            "sample_source_scope": row.sample_source_scope,
+            "is_seed": row.is_seed,
+            "assigned_step": row.assigned_step,
+            "base_network_score": row.base_network_score,
+            "dynamic_network_score": row.dynamic_network_score,
+            "engaged_neighbor_count": row.engaged_neighbor_count,
+            "historical_tag_affinity": row.historical_tag_affinity,
+            "recommendation_score": row.recommendation_score,
+            "random_draw": row.random_draw,
+            "exposure_status": row.exposure_status,
+            "result_status": row.result_status,
+            "action": row.action,
+            "engage": row.engage,
+            "reason": row.reason,
+            "confidence": row.confidence,
+            "decision_source": row.decision_source,
+        },
+        "unrecoverable_peer_context_fields": [
+            "PeerContext.exposed_neighbors",
+            "PeerContext.influential_engaged_neighbors",
+            "PeerContext.visible_likes",
+            "PeerContext.visible_comments",
+            "PeerContext.visible_shares",
+            "original Provider Prompt messages",
+        ],
+        "prompt_recoverability": "完整原始 Provider Prompt 无法从当前安全 artifacts 恢复。",
+    }
 
 
 def _string_list(value: object) -> list[str]:
@@ -707,6 +1243,7 @@ h3 { margin-bottom:6px; font-size:.98rem; }
 .downloads { display:flex; gap:8px; flex-wrap:wrap; }
 .downloads a,.primary-link { min-height:36px; display:inline-flex; align-items:center; padding:7px 11px; border:1px solid var(--line); border-radius:6px; background:#fff; font-weight:700; }
 .downloads a:first-child,.primary-link { background:var(--teal); border-color:var(--teal); color:#fff; }
+.workflow-nav { min-height:44px; padding:0 clamp(18px,4vw,56px); display:flex; align-items:center; gap:20px; overflow-x:auto; white-space:nowrap; background:#18211d; border-bottom:1px solid #425048; }.workflow-nav a { padding:12px 0; color:#dce6e1; font-size:.78rem; font-weight:800; }
 .target-band { padding:34px clamp(18px,4vw,56px); display:grid; grid-template-columns:minmax(0,1.4fr) minmax(280px,.8fr); gap:40px; background:#eaf3ef; border-bottom:1px solid var(--line); }
 .target-copy h2 { max-width:900px; margin-bottom:10px; font-size:clamp(1.55rem,3vw,2.6rem); line-height:1.2; }
 .tags { color:var(--teal); font-weight:700; }
@@ -725,6 +1262,12 @@ dt { color:var(--muted); font-size:.76rem; } dd { margin:6px 0 0; font-size:1.12
 .content-band,.users-band { padding:34px clamp(18px,4vw,56px); border-bottom:1px solid var(--line); }
 .content-band:nth-of-type(even) { background:#fff; }
 .split-heading { display:flex; align-items:flex-end; justify-content:space-between; gap:20px; margin-bottom:20px; }.split-heading code { max-width:520px; padding:8px 10px; background:#edf2f8; border:1px solid var(--line); overflow-wrap:anywhere; }
+.funnel-grid { display:grid; grid-template-columns:repeat(7,minmax(0,1fr)); gap:1px; border:1px solid var(--line); background:var(--line); }.funnel-grid article { min-width:0; min-height:154px; padding:15px; background:#fff; }.funnel-grid span,.formula-stack span { display:block; color:var(--muted); font-size:.7rem; font-weight:800; text-transform:uppercase; }.funnel-grid strong { display:block; margin:10px 0; font-size:1.65rem; }.funnel-grid p { margin:0; color:var(--muted); font-size:.76rem; overflow-wrap:anywhere; }
+.method-grid { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:8px; margin-bottom:12px; }.method-grid article { min-height:126px; padding:14px; border-top:3px solid var(--teal); background:#fff; }.method-grid span { color:var(--muted); font-size:.7rem; font-weight:800; }.method-grid p { margin:8px 0 0; color:var(--muted); font-size:.8rem; }
+.evidence-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:10px; }.evidence-grid article { min-height:158px; padding:17px; border:1px solid var(--line); background:#fff; }.evidence-grid p { margin-bottom:9px; font-size:.86rem; }
+.formula-stack { display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-bottom:10px; }.formula-stack article { min-width:0; padding:14px; border:1px solid var(--line); background:#edf2f8; }.formula-stack code { display:block; margin-top:8px; white-space:normal; overflow-wrap:anywhere; }
+.example-grid { display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-bottom:10px; }.example-grid article { min-height:130px; padding:16px; border:1px solid var(--line); border-left:4px solid var(--blue); background:#fff; }.example-grid article:last-child { border-left-color:var(--amber); }.example-grid p { margin:6px 0; font-size:.84rem; }.example-grid strong { overflow-wrap:anywhere; }
+.outcome-list { display:grid; grid-template-columns:repeat(5,minmax(0,1fr)); gap:8px; margin-top:12px; }.outcome-list article { min-height:150px; padding:14px; border:1px solid var(--line); background:#fff; }.outcome-list strong { display:block; margin:7px 0; font-size:1.45rem; }.outcome-list p { margin:0; color:var(--muted); font-size:.78rem; }
 .boundary-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); border:1px solid var(--line); background:var(--line); gap:1px; }.boundary-grid article { min-height:180px; padding:18px; background:#fff; }.boundary-grid ul { margin:12px 0 0; padding-left:18px; }.boundary-grid li { margin:7px 0; }
 .boundary-statement { margin:14px 0 0; padding-left:12px; border-left:3px solid var(--violet); color:var(--muted); }
 .muted { color:var(--muted); }.quiet-badge { padding:5px 8px; border:1px solid var(--amber); color:#7c460a; background:#fff5e8; border-radius:999px; font-size:.76rem; font-weight:800; }
@@ -734,20 +1277,85 @@ dt { color:var(--muted); font-size:.76rem; } dd { margin:6px 0 0; font-size:1.12
 .timeline-chart { min-height:250px; display:grid; grid-template-columns:repeat(30,minmax(10px,1fr)); align-items:end; gap:4px; padding-top:20px; border-bottom:1px solid var(--line); overflow-x:auto; }.step-column { min-width:10px; height:220px; display:flex; flex-direction:column; justify-content:flex-end; gap:2px; position:relative; }.step-column i { display:block; min-height:1px; }.step-column .exposure { background:var(--blue); }.step-column .engagement { background:var(--teal); }.step-column span { position:absolute; bottom:-20px; width:100%; text-align:center; color:var(--muted); font-size:.58rem; }
 .users-band { background:#fff; }.filters { display:grid; grid-template-columns:2fr repeat(3,minmax(140px,1fr)); gap:10px; margin-bottom:14px; }.filters label span { display:block; margin-bottom:5px; color:var(--muted); font-size:.75rem; font-weight:700; }.filters input,.filters select { width:100%; min-height:40px; padding:8px 10px; border:1px solid #bfcac4; border-radius:5px; background:#fff; color:var(--ink); }
 .table-wrap { width:100%; overflow:auto; border:1px solid var(--line); }.table-wrap table { width:100%; min-width:1120px; border-collapse:collapse; table-layout:fixed; }.table-wrap th,.table-wrap td { padding:11px; border-bottom:1px solid var(--line); text-align:left; vertical-align:top; overflow-wrap:anywhere; }.table-wrap th { position:sticky; top:0; z-index:1; background:#edf2ef; color:#4d5b54; font-size:.74rem; }.table-wrap td { font-size:.78rem; }.table-wrap tbody tr { cursor:pointer; }.table-wrap tbody tr:hover { background:#f1f7f4; }.profile-name { display:block; font-weight:800; }.profile-id,.mini { color:var(--muted); font-size:.72rem; }.status { display:inline-flex; margin-bottom:4px; padding:3px 6px; border-radius:999px; background:#e9effc; color:#244f9e; font-weight:800; }.status.provider_failed { background:#fdeaea; color:#9d2d2d; }.status.background_content { background:#fff0dd; color:#8b4f08; }.status.like,.status.comment,.status.share { background:#e6f5ef; color:#08644f; }.status.ignore { background:#ecefed; color:#4e5b54; }
-.user-detail { min-height:120px; margin-top:12px; padding:16px; border:1px solid var(--line); border-left:4px solid var(--violet); background:#fafbfa; overflow-wrap:anywhere; }.detail-grid { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:10px; }.detail-grid div { padding:9px; background:#fff; border:1px solid var(--line); }.detail-grid span { display:block; color:var(--muted); font-size:.7rem; }.detail-grid strong { display:block; margin-top:4px; font-size:.82rem; }
+.user-detail { min-height:120px; margin-top:12px; padding:16px; border:1px solid var(--line); border-left:4px solid var(--violet); background:#fafbfa; overflow-wrap:anywhere; }.detail-grid { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:10px; }.detail-grid div { padding:9px; background:#fff; border:1px solid var(--line); }.detail-grid span { display:block; color:var(--muted); font-size:.7rem; }.detail-grid strong { display:block; margin-top:4px; font-size:.82rem; }.trace-note { margin-top:12px; padding:12px; border:1px solid #d9d1f1; background:#f4f1fc; }.trace-note strong { display:block; margin-bottom:5px; }.trace-note ul { margin:8px 0 0; padding-left:18px; }
 .limitations-band { padding:28px clamp(18px,4vw,56px); display:grid; grid-template-columns:240px 1fr; gap:24px; background:#fff8ed; border-bottom:1px solid #ead7bd; }.limitations-band ul { margin:0; padding-left:20px; }.limitations-band li { margin:7px 0; }
 footer { padding:24px clamp(18px,4vw,56px); display:flex; gap:18px; flex-wrap:wrap; background:#fff; }
-@media (max-width:900px) { .target-band { grid-template-columns:1fr; }.object-flow { grid-template-columns:1fr; }.object-flow i { transform:rotate(90deg); justify-self:center; }.metrics-band { grid-template-columns:repeat(2,1fr); }.metrics-band article { border-bottom:1px solid #425048; }.boundary-grid,.diagnostic-grid { grid-template-columns:1fr 1fr; }.filters { grid-template-columns:1fr 1fr; }.detail-grid { grid-template-columns:1fr 1fr; } }
-@media (max-width:600px) { .topbar,.split-heading { align-items:flex-start; flex-direction:column; }.target-band,.content-band,.users-band { padding-top:24px; padding-bottom:24px; }.target-facts,.metrics-band,.boundary-grid,.diagnostic-grid,.chart-grid,.filters,.detail-grid { grid-template-columns:1fr; }.chart-grid .wide { grid-column:auto; }.metrics-band article { min-height:86px; }.limitations-band { grid-template-columns:1fr; }.downloads { width:100%; }.downloads a { flex:1; justify-content:center; }.inline-actions { align-items:flex-start; flex-direction:column; } }
+@media (max-width:1100px) { .funnel-grid { grid-template-columns:repeat(4,minmax(0,1fr)); }.method-grid { grid-template-columns:repeat(2,minmax(0,1fr)); }.outcome-list { grid-template-columns:repeat(3,minmax(0,1fr)); } }
+@media (max-width:900px) { .target-band { grid-template-columns:1fr; }.object-flow { grid-template-columns:1fr; }.object-flow i { transform:rotate(90deg); justify-self:center; }.metrics-band { grid-template-columns:repeat(2,1fr); }.metrics-band article { border-bottom:1px solid #425048; }.boundary-grid,.diagnostic-grid,.evidence-grid { grid-template-columns:1fr 1fr; }.filters { grid-template-columns:1fr 1fr; }.detail-grid { grid-template-columns:1fr 1fr; } }
+@media (max-width:600px) { .topbar,.split-heading { align-items:flex-start; flex-direction:column; }.target-band,.content-band,.users-band { padding-top:24px; padding-bottom:24px; }.target-facts,.metrics-band,.funnel-grid,.method-grid,.evidence-grid,.formula-stack,.example-grid,.outcome-list,.boundary-grid,.diagnostic-grid,.chart-grid,.filters,.detail-grid { grid-template-columns:1fr; }.chart-grid .wide { grid-column:auto; }.metrics-band article { min-height:86px; }.limitations-band { grid-template-columns:1fr; }.downloads { width:100%; }.downloads a { flex:1; justify-content:center; }.inline-actions { align-items:flex-start; flex-direction:column; } }
 """
 
 
 _REPORT_JS = r"""
 const payload = JSON.parse(document.getElementById('final-research-payload').textContent);
 const users = payload.users;
+const tracesById = new Map(payload.user_traces.map((trace) => [trace.user_id, trace]));
 const byId = (id) => document.getElementById(id);
 const text = (value) => value === null || value === undefined || value === '' ? '—' : String(value);
 const pct = (value) => value === null || value === undefined ? '—' : Number(value).toFixed(3);
+
+function renderFunnel() {
+  const root = byId('run-funnel');
+  payload.run_funnel.forEach((stage, index) => {
+    const article = document.createElement('article');
+    const key = document.createElement('span'); key.textContent = `${String(index + 1).padStart(2, '0')} · ${stage.label}`;
+    const count = document.createElement('strong'); count.textContent = Number(stage.count).toLocaleString();
+    const description = document.createElement('p'); description.textContent = stage.description;
+    article.append(key, count, description); root.appendChild(article);
+  });
+}
+
+function renderMethodology() {
+  const root = byId('methodology-flow');
+  payload.methodology_flow.forEach((stage, index) => {
+    const article = document.createElement('article');
+    const number = document.createElement('span'); number.textContent = String(index + 1).padStart(2, '0');
+    const title = document.createElement('h3'); title.textContent = stage.title;
+    const summary = document.createElement('p'); summary.textContent = stage.summary;
+    article.append(number, title, summary); root.appendChild(article);
+  });
+  byId('target-video-role').textContent = payload.video_usage.target_video_role;
+  byId('background-video-role').textContent = payload.video_usage.background_video_role;
+  const sampling = payload.sampling_explanation;
+  byId('sampling-method').textContent = `${sampling.quota_method} ${sampling.deduplication_and_refill}`;
+  byId('sampling-counts').textContent = Object.entries(sampling.source_scope_counts).map(([scope, count]) => `${scope}: ${count}`).join(' · ');
+  byId('comment-network').textContent = payload.comment_network_explanation;
+  byId('holdout-projection').textContent = sampling.holdout_safe_projection;
+}
+
+function renderExample(id, example) {
+  const root = byId(id);
+  if (!example) { root.textContent = '当前运行没有可展示记录'; root.classList.add('muted'); return; }
+  const user = document.createElement('strong'); user.textContent = example.user_id;
+  const values = document.createElement('p'); values.textContent = `score ${pct(example.recommendation_score)} · draw ${pct(example.random_draw)} · ${example.outcome}`;
+  const explanation = document.createElement('p'); explanation.className = 'muted'; explanation.textContent = example.explanation;
+  root.append(user, values, explanation);
+}
+
+function renderRecommendation() {
+  const recommendation = payload.recommendation_explanation;
+  byId('static-formula').textContent = recommendation.static_formula;
+  byId('dynamic-formula').textContent = recommendation.dynamic_formula;
+  renderExample('seed-example', recommendation.seed_example);
+  renderExample('non-seed-example', recommendation.non_seed_example);
+}
+
+function renderDecisionExplanation() {
+  const batch = payload.batch_explanation;
+  byId('batch-method').textContent = `${batch.batch_count} 个批次；Batch ${batch.seed_batch} 为 seeds，Batch ${batch.non_seed_batches[0]}–${batch.non_seed_batches[1]} 为 non-seeds。${batch.assignment_method}`;
+  byId('decision-fields').textContent = `${payload.decision_contract.fields.join(' / ')}；action = ${payload.decision_contract.action_values.join(' / ')}`;
+  byId('decision-recoverability').textContent = payload.decision_contract.prompt_recoverability;
+  const neighbor = payload.dynamic_neighbor_summary;
+  byId('neighbor-summary').textContent = `${neighbor.explanation} 正向邻居用户 ${neighbor.users_with_positive_engaged_neighbor_count}，最大邻居数 ${neighbor.maximum_engaged_neighbor_count}，实际最大 boost ${pct(neighbor.maximum_actual_boost)}。`;
+  const root = byId('outcome-explanations');
+  payload.outcome_explanations.forEach((outcome) => {
+    const article = document.createElement('article');
+    const action = document.createElement('h3'); action.textContent = outcome.action;
+    const count = document.createElement('strong'); count.textContent = Number(outcome.count).toLocaleString();
+    const explanation = document.createElement('p'); explanation.textContent = outcome.explanation;
+    article.append(action, count, explanation); root.appendChild(article);
+  });
+}
 
 function setMetrics() {
   byId('metric-exposures').textContent = users.filter((row) => row.exposure_status === 'target_exposed').length;
@@ -861,9 +1469,20 @@ function renderDetail(row) {
   ];
   values.forEach(([label,value]) => { const box = document.createElement('div'); const span = document.createElement('span'); span.textContent = label; const strong = document.createElement('strong'); strong.textContent = value; box.append(span,strong); grid.appendChild(box); });
   const latent = document.createElement('p'); latent.className = 'muted'; latent.textContent = `Latent experiment labels: ${JSON.stringify(row.latent_attributes)}`;
-  root.append(title,grid,latent);
+  const trace = tracesById.get(row.user_id);
+  const traceNote = document.createElement('div'); traceNote.className = 'trace-note'; traceNote.dataset.testid = 'trace-context';
+  const traceTitle = document.createElement('strong'); traceTitle.textContent = trace?.context_label || '重建的决策上下文';
+  const recoverability = document.createElement('p'); recoverability.textContent = trace?.prompt_recoverability || '完整原始 Provider Prompt 不可恢复。';
+  const unavailable = document.createElement('ul');
+  (trace?.unrecoverable_peer_context_fields || []).forEach((field) => { const item = document.createElement('li'); item.textContent = field; unavailable.appendChild(item); });
+  traceNote.append(traceTitle, recoverability, unavailable);
+  root.append(title,grid,latent,traceNote);
 }
 
+renderFunnel();
+renderMethodology();
+renderRecommendation();
+renderDecisionExplanation();
 setMetrics();
 fillList('observed-list', payload.observed_latent_boundary.observed_fields);
 fillList('latent-list', payload.observed_latent_boundary.latent_fields);
