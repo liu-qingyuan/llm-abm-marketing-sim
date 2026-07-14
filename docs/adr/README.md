@@ -20,3 +20,4 @@
 ## 当前 ADR
 
 - [ADR 0001: Deterministic Event-Sourced ABM MVP](0001-deterministic-event-sourced-abm-mvp.md)：选择确定性、事件溯源、自定义 ABM MVP，并把真实 Provider 调用保留为显式 opt-in 边界。
+- [ADR 0002: 使用目标投放排序替代概率曝光抽签](0002-use-target-delivery-ranking.md)：使用 Network-Augmented Research Sample 和逐轮全局 Top20 排序，使评论网络信号能够产生可观测的投放影响。
