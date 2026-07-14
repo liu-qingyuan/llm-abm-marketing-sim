@@ -15,6 +15,17 @@ OBSERVED_SCORE_FIELDS: tuple[tuple[str, str], ...] = (
     ("local_influence_score", "锦江酒店社群内的局部影响力"),
 )
 
+JINJIANG_PROMPT_V2_PROFILE_FIELDS: tuple[str, ...] = (
+    "interest_tags",
+    "activity_score",
+    "global_influence_score",
+    "local_influence_score",
+    "latent_environmental_consciousness_coef",
+    *(f"latent_{dimension}_value_weight" for dimension in LATENT_VALUE_DIMENSIONS),
+    "latent_hotel_class",
+    "latent_travel_purpose",
+)
+
 VALUE_LABELS: dict[str, str] = {
     "epistemic": "认知探索价值",
     "environmental": "环保消费价值",
@@ -92,14 +103,8 @@ def summarize_consumption_preference_fields(profile: UserProfile) -> str:
         f"（{attributes.environmental_consciousness_coef:.2f}）"
     )
     parts.append(_top_value_weights_summary(attributes.value_weights))
-    parts.append(
-        "最近一次入住锦江旗下酒店类型："
-        f"{HOTEL_CLASS_LABELS[attributes.profile_labels.hotel_class]}"
-    )
-    parts.append(
-        "最近一次入住锦江旗下酒店目的："
-        f"{TRAVEL_PURPOSE_LABELS[attributes.profile_labels.travel_purpose]}"
-    )
+    parts.append(f"最近一次入住锦江旗下酒店类型：{HOTEL_CLASS_LABELS[attributes.profile_labels.hotel_class]}")
+    parts.append(f"最近一次入住锦江旗下酒店目的：{TRAVEL_PURPOSE_LABELS[attributes.profile_labels.travel_purpose]}")
     return "；".join(parts)
 
 

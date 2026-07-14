@@ -11,8 +11,9 @@ from html import escape
 from pathlib import Path
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from .prompt_field_summary import JINJIANG_PROMPT_V2_PROFILE_FIELDS
 from .safe_serialization import safe_json, safe_user_data, safe_user_json
 
 FINAL_RESEARCH_REPORT_ARTIFACTS = {
@@ -22,13 +23,12 @@ FINAL_RESEARCH_REPORT_ARTIFACTS = {
     "final_research_users_json": "final_research_users.json",
 }
 FINAL_RESEARCH_RUNTIME_VERSION = "final-research-runtime-v1"
+FINAL_RESEARCH_RANKING_RUNTIME_VERSION = "final-research-ranking-runtime-v2"
 FINAL_RESEARCH_SCHEDULE_METHOD = "stable_shuffle_round_robin_batches"
 FINAL_RESEARCH_SEED_STEP = 0
 FINAL_RESEARCH_USER_OPPORTUNITY_LIMIT = 1
 FINAL_RESEARCH_SCORE_USAGE = "single exposure probability, never user ordering"
-FINAL_RESEARCH_DYNAMIC_NETWORK_FORMULA = (
-    "min(1.0, base_network_score + neighbor_boost * engaged_direct_neighbor_count)"
-)
+FINAL_RESEARCH_DYNAMIC_NETWORK_FORMULA = "min(1.0, base_network_score + neighbor_boost * engaged_direct_neighbor_count)"
 
 ResultStatus = Literal[
     "like",
@@ -43,6 +43,22 @@ ResultStatus = Literal[
 ExposureStatus = Literal["target_exposed", "background_content", "missing_exposure", "runtime_not_run"]
 ReportAction = Literal["", "like", "comment", "share", "ignore"]
 ProviderStatus = Literal["not_called", "succeeded", "provider_failed", "missing_decision", "runtime_not_run"]
+RankingResultStatus = Literal[
+    "like",
+    "comment",
+    "share",
+    "ignore",
+    "provider_failed",
+    "below_delivery_capacity",
+]
+FieldProvenance = Literal[
+    "Direct Observed Profile Field",
+    "Historical Behavioral Evidence",
+    "Derived Proxy Metric",
+    "Synthetic Experiment Label",
+    "Runtime Simulation Result",
+]
+FieldUsageStage = Literal["Sampling", "Seed Selection", "Ranking", "LLM Prompt", "Report Only"]
 
 
 class FinalResearchTargetVideo(BaseModel):
@@ -398,6 +414,197 @@ class FinalResearchReportPayload(_FinalResearchReportPayloadBase):
     user_traces: list[FinalResearchUserTrace]
 
 
+class RankingReportRun(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    sample_size: int
+    horizon: int
+    random_seed: int
+    delivery_capacity: int
+    maximum_target_exposures: int
+    ranking_formula: str
+    engaged_neighbor_formula: str
+
+
+class RankingSampleComparison(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    base_sample_count: int
+    final_sample_count: int
+    seed_count: int
+    network_cohort_count: int
+    network_cohort_added_count: int
+    replacement_count: int
+    base_source_scope_counts: dict[str, int]
+    final_source_scope_counts: dict[str, int]
+
+
+class FieldLineageEntry(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    field_name: str
+    provenance: FieldProvenance
+    usage_stages: list[FieldUsageStage]
+
+    @model_validator(mode="after")
+    def _validate_usage_stages(self) -> FieldLineageEntry:
+        if not self.usage_stages:
+            raise ValueError("field lineage requires at least one usage stage")
+        if len(self.usage_stages) != len(set(self.usage_stages)):
+            raise ValueError("field lineage usage stages must be unique")
+        return self
+
+
+class RankingRoundSummary(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    time_step: int
+    eligible_count: int
+    delivery_capacity: int
+    selected_count: int
+    selected_user_ids: list[str]
+    target_exposures: int
+    decisions: int
+    engagements: int
+    ignored: int
+    provider_failed: int
+    below_delivery_capacity: int
+
+
+class RankingPromptContract(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    allowed_profile_fields: list[str]
+    neutralized_fields: list[str]
+    excluded_fields: list[str]
+    statement: str
+
+
+class RankingDiagnosticSummary(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    network_signals_in_formula: bool
+    main_weights: dict[str, float]
+    top_selection_changed: bool
+    batches_with_top_selection_change: int
+    diagnostic_decision_adapter_calls: int
+
+
+class RankingReportDownloads(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    report: str
+    payload: str
+    csv: str
+    users_json: str
+    manifest: str
+    ranking_diagnostics: str
+    ranking_ablation_csv: str
+    ranking_sensitivity_csv: str
+
+
+class RankingUserReportRow(BaseModel):
+    """Explicit user-level allowlist for Target Delivery Ranking reports."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    user_id: str
+    nickname: str = ""
+    bio: str = ""
+    signature: str = ""
+    interest_tags: list[str] = Field(default_factory=list)
+    historical_tags: list[str] = Field(default_factory=list)
+    follower_count: int = 0
+    following_count: int = 0
+    video_count: int = 0
+    activity_score: float = 0.0
+    activity_video_score: float = 0.0
+    activity_comment_score: float = 0.0
+    activity_reply_score: float = 0.0
+    global_influence_score: float = 0.0
+    local_influence_score: float = 0.0
+    local_network_score: float = 0.0
+    local_recognition_score: float = 0.0
+    latent_attribute_spec_id: str
+    latent_attribute_method: str
+    latent_attribute_seed: int
+    latent_class: str
+    latent_environmental_consciousness_coef: float
+    latent_epistemic_value_weight: float
+    latent_environmental_value_weight: float
+    latent_functional_value_weight: float
+    latent_health_value_weight: float
+    latent_emotional_value_weight: float
+    latent_social_value_weight: float
+    latent_hotel_class: str
+    latent_travel_purpose: str
+    latent_gender: str
+    latent_age: str
+    latent_education: str
+    latent_monthly_income: str
+    sample_source_scope: str
+    in_base_sample: bool
+    is_seed: bool
+    is_network_cohort: bool
+    sample_role: Literal["seed", "network_cohort", "ordinary"]
+    historical_comment_network_weighted_degree: int
+    latest_ranking_time_step: int
+    latest_ranking_position: int
+    selected_for_exposure: bool
+    base_network_relevance: float
+    engaged_neighbor_count: int
+    engaged_neighbor_signal: float
+    historical_tag_affinity: float
+    recommendation_score: float
+    exposure_time_step: int | None
+    result_status: RankingResultStatus
+    provider_status: Literal["not_called", "succeeded", "provider_failed"]
+    action: ReportAction = ""
+    engage: bool | None = None
+    probability: float | None = None
+    reason: str = ""
+    confidence: float | None = None
+    decision_source: str = ""
+    provider_failure_type: str = ""
+
+    def csv_row(self) -> dict[str, object]:
+        row = self.model_dump(mode="json")
+        row["interest_tags"] = json.dumps(row["interest_tags"], ensure_ascii=False, separators=(",", ":"))
+        row["historical_tags"] = json.dumps(row["historical_tags"], ensure_ascii=False, separators=(",", ":"))
+        return row
+
+
+class FinalResearchRankingReportPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal["final-research-ranking-report-payload-v3"] = "final-research-ranking-report-payload-v3"
+    title: str
+    core_objects: tuple[Literal["TargetVideo"], Literal["ResearchUser"], Literal["PlatformRecommendationModel"]]
+    target_video: FinalResearchTargetVideo
+    run: RankingReportRun
+    run_funnel: list[FinalResearchFunnelStage]
+    sample_comparison: RankingSampleComparison
+    field_lineage: list[FieldLineageEntry]
+    prompt_contract: RankingPromptContract
+    ranking_rounds: list[RankingRoundSummary]
+    ranking_diagnostics: RankingDiagnosticSummary
+    downloads: RankingReportDownloads
+    limitations: list[str]
+    users: list[RankingUserReportRow]
+
+    @model_validator(mode="after")
+    def _validate_field_lineage(self) -> FinalResearchRankingReportPayload:
+        declared = [entry.field_name for entry in self.field_lineage]
+        if len(declared) != len(set(declared)):
+            raise ValueError("field lineage must declare each field exactly once")
+        expected = set(RankingUserReportRow.model_fields)
+        if set(declared) != expected:
+            missing = sorted(expected - set(declared))
+            extra = sorted(set(declared) - expected)
+            raise ValueError(f"field lineage does not match ranking user fields; missing={missing}, extra={extra}")
+        return self
+
+
 @dataclass(frozen=True)
 class FinalResearchReportSource:
     target_video: Mapping[str, object]
@@ -414,6 +621,13 @@ class FinalResearchReportSource:
     runtime_provider_failures: Sequence[Mapping[str, object]] = ()
     runtime_summary: Mapping[str, object] | None = None
     runtime_enabled: bool = False
+    offline_scores: Sequence[Mapping[str, object]] = ()
+    network_sample_audit: Mapping[str, object] | None = None
+    ranking_steps: Sequence[Mapping[str, object]] = ()
+    ranking_candidates: Sequence[Mapping[str, object]] = ()
+    ranking_outcomes: Sequence[Mapping[str, object]] = ()
+    ranking_diagnostics_summary: Mapping[str, object] | None = None
+    ranking_runtime_summary: Mapping[str, object] | None = None
 
 
 class FinalResearchReportWriter:
@@ -427,7 +641,11 @@ class FinalResearchReportWriter:
         payload = self._build_payload()
         user_records = [row.model_dump(mode="json") for row in payload.users]
         user_document = {
-            "schema_version": "final-research-users-v1",
+            "schema_version": (
+                "final-research-ranking-users-v3"
+                if isinstance(payload, FinalResearchRankingReportPayload)
+                else "final-research-users-v1"
+            ),
             "links": payload.downloads.model_dump(mode="json"),
             "users": user_records,
         }
@@ -447,7 +665,9 @@ class FinalResearchReportWriter:
         )
         return report_path
 
-    def _build_payload(self) -> FinalResearchReportPayload:
+    def _build_payload(self) -> FinalResearchReportPayload | FinalResearchRankingReportPayload:
+        if self.source.ranking_runtime_summary is not None:
+            return _build_ranking_report_payload(self.source)
         rows = self._build_user_rows()
         configured_title = str(self.source.config.get("report_title") or "")
         title = (
@@ -615,18 +835,28 @@ class FinalResearchReportWriter:
     def _aggregates(self, rows: Sequence[UserReportRow]) -> FinalResearchAggregates:
         return _build_report_aggregates(rows, _as_int(self.source.config.get("horizon")))
 
-    def _write_csv(self, path: Path, rows: Sequence[UserReportRow]) -> None:
+    def _write_csv(
+        self,
+        path: Path,
+        rows: Sequence[UserReportRow] | Sequence[RankingUserReportRow],
+    ) -> None:
         safe_rows = safe_user_data([row.csv_row() for row in rows])
         if not isinstance(safe_rows, list):  # pragma: no cover
             raise TypeError("safe user rows must remain a list")
-        fieldnames = list(UserReportRow.model_fields)
+        fieldnames = (
+            list(RankingUserReportRow.model_fields)
+            if rows and isinstance(rows[0], RankingUserReportRow)
+            else list(UserReportRow.model_fields)
+        )
         with path.open("w", encoding="utf-8", newline="") as handle:
             writer = csv.DictWriter(handle, fieldnames=fieldnames, extrasaction="ignore")
             writer.writeheader()
             writer.writerows(safe_rows)
 
     @staticmethod
-    def render_payload(payload: FinalResearchReportPayload) -> str:
+    def render_payload(payload: FinalResearchReportPayload | FinalResearchRankingReportPayload) -> str:
+        if isinstance(payload, FinalResearchRankingReportPayload):
+            return _render_ranking_report(payload)
         payload_json = safe_user_json(payload, indent=None).replace("</", "<\\/")
         target = payload.target_video
         target_url = escape(target.video_url, quote=True)
@@ -646,9 +876,7 @@ class FinalResearchReportWriter:
             "每个用户最多一次 TargetVideo 机会" if payload.run.runtime_enabled else "Provider runtime 未执行"
         )
         seed_exposures = sum(row.is_seed and row.exposure_status == "target_exposed" for row in payload.users)
-        non_seed_exposures = sum(
-            not row.is_seed and row.exposure_status == "target_exposed" for row in payload.users
-        )
+        non_seed_exposures = sum(not row.is_seed and row.exposure_status == "target_exposed" for row in payload.users)
         exposure_breakdown = (
             f"{seed_exposures + non_seed_exposures} 次 Provider Decision 调用来自 "
             f"{seed_exposures} 个强制 seed 曝光和 {non_seed_exposures} 个普通用户抽签曝光。"
@@ -786,13 +1014,488 @@ class FinalResearchReportWriter:
 """
 
 
+def _build_ranking_report_payload(source: FinalResearchReportSource) -> FinalResearchRankingReportPayload:
+    if source.network_sample_audit is None:
+        raise ValueError("ranking report requires network sample audit evidence")
+    if source.ranking_runtime_summary is None:
+        raise ValueError("ranking report requires ranking runtime summary evidence")
+    if source.ranking_diagnostics_summary is None:
+        raise ValueError("ranking report requires ranking diagnostics summary evidence")
+
+    audit = source.network_sample_audit
+    runtime_summary = source.ranking_runtime_summary
+    diagnostic_summary = source.ranking_diagnostics_summary
+    manifest_artifacts = _required_mapping(source.artifact_manifest, "artifacts", "artifact manifest")
+    base_sample = _required_mapping(audit, "base_sample", "network sample audit")
+    network_cohort = _required_mapping(audit, "network_cohort", "network sample audit")
+    replacement = _required_mapping(audit, "ordinary_replacement", "network sample audit")
+    final_sample = _required_mapping(audit, "final_sample", "network sample audit")
+    runtime_counts = _mapping_counts(runtime_summary, "counts", "ranking runtime summary")
+
+    outcomes = _unique_user_rows(source.ranking_outcomes, "ranking outcomes")
+    decisions = _unique_user_rows(source.runtime_decisions, "runtime decisions")
+    failures = _unique_user_rows(source.runtime_provider_failures, "runtime provider failures")
+    offline_scores = _unique_user_rows(source.offline_scores, "offline scores")
+    candidates_by_user: dict[str, list[Mapping[str, object]]] = {}
+    candidate_keys: set[tuple[int, str]] = set()
+    candidates_by_step: dict[int, list[Mapping[str, object]]] = {}
+    for candidate in source.ranking_candidates:
+        user_id = str(candidate.get("user_id", ""))
+        time_step = _as_int(candidate.get("time_step"))
+        key = (time_step, user_id)
+        if not user_id or key in candidate_keys:
+            raise ValueError("ranking candidates must contain unique non-empty user ids per batch")
+        candidate_keys.add(key)
+        candidates_by_user.setdefault(user_id, []).append(candidate)
+        candidates_by_step.setdefault(time_step, []).append(candidate)
+
+    base_user_ids = {str(value) for value in _required_list(base_sample, "user_ids", "base sample")}
+    cohort_user_ids = {str(value) for value in _required_list(network_cohort, "user_ids", "network cohort")}
+    rows: list[RankingUserReportRow] = []
+    for raw_user in source.users:
+        safe_user = safe_user_data(dict(raw_user))
+        if not isinstance(safe_user, dict):  # pragma: no cover
+            raise TypeError("safe ranking user must remain an object")
+        user_id = str(safe_user.get("user_id", ""))
+        outcome = outcomes.get(user_id)
+        score = offline_scores.get(user_id)
+        user_candidates = candidates_by_user.get(user_id, [])
+        if outcome is None or score is None or not user_candidates:
+            raise ValueError(f"ranking report evidence is incomplete for user {user_id!r}")
+        exposure_time_step = _optional_int(outcome, "exposure_time_step")
+        latest_candidate = max(user_candidates, key=lambda row: _as_int(row.get("time_step")))
+        if exposure_time_step is not None:
+            latest_candidate = next(
+                (
+                    candidate
+                    for candidate in user_candidates
+                    if _as_int(candidate.get("time_step")) == exposure_time_step
+                ),
+                latest_candidate,
+            )
+        latent = safe_user.get("latent_attributes")
+        if not isinstance(latent, Mapping):
+            raise ValueError(f"ranking report user {user_id!r} has no latent_attributes object")
+        decision = decisions.get(user_id)
+        failure = failures.get(user_id)
+        result_status = _ranking_result_status(outcome.get("result_status"))
+        is_seed = bool(safe_user.get("is_seed", False))
+        is_network_cohort = user_id in cohort_user_ids
+        sample_role: Literal["seed", "network_cohort", "ordinary"] = (
+            "seed" if is_seed else "network_cohort" if is_network_cohort else "ordinary"
+        )
+        rows.append(
+            RankingUserReportRow(
+                user_id=user_id,
+                nickname=str(safe_user.get("nickname", "")),
+                bio=str(safe_user.get("bio", "")),
+                signature=str(safe_user.get("signature", "")),
+                interest_tags=_string_list(safe_user.get("interest_tags")),
+                historical_tags=sorted({str(tag) for tag in source.historical_tags_by_user.get(user_id, ())}),
+                follower_count=_as_int(safe_user.get("follower_count")),
+                following_count=_as_int(safe_user.get("following_count")),
+                video_count=_as_int(safe_user.get("video_count")),
+                activity_score=_as_float(safe_user.get("activity_score")),
+                activity_video_score=_as_float(safe_user.get("activity_video_score")),
+                activity_comment_score=_as_float(safe_user.get("activity_comment_score")),
+                activity_reply_score=_as_float(safe_user.get("activity_reply_score")),
+                global_influence_score=_as_float(safe_user.get("global_influence_score")),
+                local_influence_score=_as_float(safe_user.get("local_influence_score")),
+                local_network_score=_as_float(safe_user.get("local_network_score")),
+                local_recognition_score=_as_float(safe_user.get("local_recognition_score")),
+                latent_attribute_spec_id=str(latent.get("latent_attribute_spec_id", "")),
+                latent_attribute_method=str(latent.get("latent_attribute_method", "")),
+                latent_attribute_seed=_as_int(latent.get("latent_attribute_seed")),
+                latent_class=str(latent.get("latent_class", "")),
+                latent_environmental_consciousness_coef=_as_float(
+                    latent.get("latent_environmental_consciousness_coef")
+                ),
+                latent_epistemic_value_weight=_as_float(latent.get("latent_epistemic_value_weight")),
+                latent_environmental_value_weight=_as_float(latent.get("latent_environmental_value_weight")),
+                latent_functional_value_weight=_as_float(latent.get("latent_functional_value_weight")),
+                latent_health_value_weight=_as_float(latent.get("latent_health_value_weight")),
+                latent_emotional_value_weight=_as_float(latent.get("latent_emotional_value_weight")),
+                latent_social_value_weight=_as_float(latent.get("latent_social_value_weight")),
+                latent_hotel_class=str(latent.get("latent_hotel_class", "")),
+                latent_travel_purpose=str(latent.get("latent_travel_purpose", "")),
+                latent_gender=str(latent.get("latent_gender", "")),
+                latent_age=str(latent.get("latent_age", "")),
+                latent_education=str(latent.get("latent_education", "")),
+                latent_monthly_income=str(latent.get("latent_monthly_income", "")),
+                sample_source_scope=str(safe_user.get("sample_source_scope", "")),
+                in_base_sample=user_id in base_user_ids,
+                is_seed=is_seed,
+                is_network_cohort=is_network_cohort,
+                sample_role=sample_role,
+                historical_comment_network_weighted_degree=_as_int(score.get("target_scope_weighted_degree")),
+                latest_ranking_time_step=_as_int(latest_candidate.get("time_step")),
+                latest_ranking_position=_as_int(latest_candidate.get("ranking_position")),
+                selected_for_exposure=result_status != "below_delivery_capacity",
+                base_network_relevance=_as_float(latest_candidate.get("base_network_relevance")),
+                engaged_neighbor_count=_as_int(latest_candidate.get("engaged_neighbor_count")),
+                engaged_neighbor_signal=_as_float(latest_candidate.get("engaged_neighbor_signal")),
+                historical_tag_affinity=_as_float(latest_candidate.get("historical_tag_affinity")),
+                recommendation_score=_as_float(latest_candidate.get("recommendation_score")),
+                exposure_time_step=exposure_time_step,
+                result_status=result_status,
+                provider_status=_ranking_provider_status(outcome.get("provider_status")),
+                action=_report_action(decision.get("action") if decision else ""),
+                engage=_optional_bool(decision, "engage"),
+                probability=_optional_float(decision, "probability"),
+                reason=str(decision.get("reason", "")) if decision else "",
+                confidence=_optional_float(decision, "confidence"),
+                decision_source=str(decision.get("decision_source", "")) if decision else "",
+                provider_failure_type=str(failure.get("failure_type", "")) if failure else "",
+            )
+        )
+
+    target_video = safe_user_data(dict(source.target_video))
+    if not isinstance(target_video, dict):  # pragma: no cover
+        raise TypeError("safe target video must remain an object")
+    configured_title = str(source.config.get("report_title") or "")
+    title = (
+        "锦江酒店 Target Delivery Ranking Research Report"
+        if not configured_title or configured_title == "LLM-ABM Simulation Report"
+        else configured_title
+    )
+    rounds = _ranking_round_summaries(
+        source.ranking_steps,
+        candidates_by_step,
+        _as_int(runtime_summary.get("delivery_capacity")),
+    )
+    inclusion = _required_mapping(
+        diagnostic_summary,
+        "recommendation_signal_inclusion",
+        "ranking diagnostics summary",
+    )
+    effect = _required_mapping(
+        diagnostic_summary,
+        "observed_recommendation_signal_effect",
+        "ranking diagnostics summary",
+    )
+    lineage = _ranking_field_lineage()
+    allowed_prompt_fields = list(JINJIANG_PROMPT_V2_PROFILE_FIELDS)
+    return FinalResearchRankingReportPayload(
+        title=title,
+        core_objects=("TargetVideo", "ResearchUser", "PlatformRecommendationModel"),
+        target_video=FinalResearchTargetVideo.model_validate(target_video),
+        run=RankingReportRun(
+            sample_size=len(rows),
+            horizon=_as_int(runtime_summary.get("horizon")),
+            random_seed=_as_int(source.config.get("random_seed")),
+            delivery_capacity=_as_int(runtime_summary.get("delivery_capacity")),
+            maximum_target_exposures=_as_int(runtime_summary.get("maximum_target_exposures")),
+            ranking_formula=str(runtime_summary.get("ranking_formula", "")),
+            engaged_neighbor_formula=str(runtime_summary.get("engaged_neighbor_formula", "")),
+        ),
+        run_funnel=[
+            _funnel_stage(
+                "processed_users",
+                "Processed users scored",
+                _as_int(source.offline_score_summary.get("user_count")),
+                "权威 processed variant 中完成 holdout-safe 离线评分的用户。",
+            ),
+            _funnel_stage(
+                "base_sample",
+                "Base Sample",
+                _as_int(base_sample.get("count")),
+                "按 source scope 配额、去重与固定随机种子形成。",
+            ),
+            _funnel_stage("seeds", "Seeds", _as_int(audit.get("seed_count")), "从 Base Sample 选出的 seed union。"),
+            _funnel_stage(
+                "network_cohort",
+                "Network Cohort",
+                _as_int(network_cohort.get("count")),
+                "Historical Set 评论网络中的 seed 直接邻居。",
+            ),
+            _funnel_stage(
+                "final_sample",
+                "Network-Augmented Research Sample",
+                len(rows),
+                "保持总量不变并替换等量普通用户后的最终样本。",
+            ),
+            _funnel_stage(
+                "target_exposures",
+                "Target exposures",
+                _as_int(runtime_counts.get("target_exposures")),
+                "实际进入 Delivery Capacity 并调用 Decision Adapter 的用户。",
+            ),
+            _funnel_stage(
+                "provider_decisions",
+                "Provider decisions",
+                _as_int(runtime_counts.get("decisions")),
+                "成功返回结构化 Decision 的 provider 调用。",
+            ),
+            _funnel_stage(
+                "provider_failed",
+                "Provider failed",
+                _as_int(runtime_counts.get("provider_failed")),
+                "重试耗尽后保留的独立失败状态。",
+            ),
+            _funnel_stage(
+                "below_delivery_capacity",
+                "Below delivery capacity",
+                _as_int(runtime_counts.get("below_delivery_capacity")),
+                "最终批次结束仍未获得目标曝光，不等于 ignore。",
+            ),
+        ],
+        sample_comparison=RankingSampleComparison(
+            base_sample_count=_as_int(base_sample.get("count")),
+            final_sample_count=_as_int(final_sample.get("count")),
+            seed_count=_as_int(audit.get("seed_count")),
+            network_cohort_count=_as_int(network_cohort.get("count")),
+            network_cohort_added_count=len(_required_list(network_cohort, "added_user_ids", "network cohort")),
+            replacement_count=_as_int(replacement.get("count")),
+            base_source_scope_counts=_int_mapping(base_sample.get("source_scope_counts")),
+            final_source_scope_counts=_int_mapping(final_sample.get("source_scope_counts")),
+        ),
+        field_lineage=lineage,
+        prompt_contract=RankingPromptContract(
+            allowed_profile_fields=allowed_prompt_fields,
+            neutralized_fields=[
+                "peer_context.exposed_neighbors",
+                "peer_context.engaged_neighbors",
+                "peer_context.visible_likes",
+                "peer_context.visible_comments",
+                "peer_context.visible_shares",
+            ],
+            excluded_fields=[
+                "historical_comment_network_weighted_degree",
+                "base_network_relevance",
+                "engaged_neighbor_count",
+                "engaged_neighbor_signal",
+                "historical_tag_affinity",
+                "recommendation_score",
+                "latest_ranking_position",
+                "Target Holdout answers",
+            ],
+            statement=(
+                "Ranking, comment-network runtime state and Target Holdout evidence are excluded from the LLM "
+                "Prompt; the compatibility PeerContext is neutral."
+            ),
+        ),
+        ranking_rounds=rounds,
+        ranking_diagnostics=RankingDiagnosticSummary(
+            network_signals_in_formula=bool(inclusion.get("network_signals_in_formula", False)),
+            main_weights={
+                str(key): _as_float(value)
+                for key, value in _required_mapping(inclusion, "main_weights", "ranking signal inclusion").items()
+            },
+            top_selection_changed=bool(effect.get("top_selection_changed", False)),
+            batches_with_top_selection_change=_as_int(effect.get("batches_with_top_selection_change")),
+            diagnostic_decision_adapter_calls=_as_int(diagnostic_summary.get("diagnostic_decision_adapter_calls")),
+        ),
+        downloads=RankingReportDownloads(
+            report=FINAL_RESEARCH_REPORT_ARTIFACTS["final_research_report"],
+            payload=FINAL_RESEARCH_REPORT_ARTIFACTS["final_research_report_payload"],
+            csv=FINAL_RESEARCH_REPORT_ARTIFACTS["final_research_users_csv"],
+            users_json=FINAL_RESEARCH_REPORT_ARTIFACTS["final_research_users_json"],
+            manifest="artifact_manifest.json",
+            ranking_diagnostics=str(manifest_artifacts["ranking_diagnostics"]),
+            ranking_ablation_csv=str(manifest_artifacts["ranking_ablation_diagnostics_csv"]),
+            ranking_sensitivity_csv=str(manifest_artifacts["ranking_weight_sensitivity_csv"]),
+        ),
+        limitations=[
+            "Network Cohort supports propagation identification and is not a representative random sample.",
+            "Ranking weights are predeclared research assumptions, not learned Douyin platform parameters.",
+            "Paired ablation is a frozen-evidence shadow ranking, not a second user-state trajectory.",
+            "No real exposure denominator is available; below delivery capacity is not a user ignore decision.",
+        ],
+        users=rows,
+    )
+
+
+def _ranking_round_summaries(
+    step_rows: Sequence[Mapping[str, object]],
+    candidates_by_step: Mapping[int, Sequence[Mapping[str, object]]],
+    delivery_capacity: int,
+) -> list[RankingRoundSummary]:
+    rounds: list[RankingRoundSummary] = []
+    for step in step_rows:
+        time_step = _as_int(step.get("time_step"))
+        candidates = candidates_by_step.get(time_step, ())
+        selected = [
+            row
+            for row in sorted(candidates, key=lambda row: _as_int(row.get("ranking_position")))
+            if _as_bool(row.get("selected"))
+        ]
+        rounds.append(
+            RankingRoundSummary(
+                time_step=time_step,
+                eligible_count=_as_int(step.get("eligible_users")),
+                delivery_capacity=delivery_capacity,
+                selected_count=_as_int(step.get("selected_users")),
+                selected_user_ids=[str(row.get("user_id", "")) for row in selected],
+                target_exposures=_as_int(step.get("target_exposures")),
+                decisions=_as_int(step.get("decisions")),
+                engagements=_as_int(step.get("engagements")),
+                ignored=_as_int(step.get("ignored")),
+                provider_failed=_as_int(step.get("provider_failed")),
+                below_delivery_capacity=_as_int(step.get("below_delivery_capacity")),
+            )
+        )
+    return rounds
+
+
+def _ranking_field_lineage() -> list[FieldLineageEntry]:
+    direct = {
+        "user_id",
+        "nickname",
+        "bio",
+        "signature",
+        "interest_tags",
+        "follower_count",
+        "following_count",
+        "video_count",
+    }
+    historical = {
+        "historical_tags",
+        "sample_source_scope",
+        "historical_comment_network_weighted_degree",
+    }
+    derived = {
+        "activity_score",
+        "activity_video_score",
+        "activity_comment_score",
+        "activity_reply_score",
+        "global_influence_score",
+        "local_influence_score",
+        "local_network_score",
+        "local_recognition_score",
+        "base_network_relevance",
+        "engaged_neighbor_count",
+        "engaged_neighbor_signal",
+        "historical_tag_affinity",
+        "recommendation_score",
+    }
+    synthetic = {field for field in RankingUserReportRow.model_fields if field.startswith("latent_")}
+    stages: dict[str, list[FieldUsageStage]] = {field: ["Report Only"] for field in RankingUserReportRow.model_fields}
+    stages["user_id"] = ["Sampling", "Seed Selection", "Ranking", "Report Only"]
+    stages["sample_source_scope"] = ["Sampling", "Report Only"]
+    stages["in_base_sample"] = ["Sampling", "Report Only"]
+    stages["is_network_cohort"] = ["Sampling", "Ranking", "Report Only"]
+    stages["sample_role"] = ["Sampling", "Report Only"]
+    stages["is_seed"] = ["Seed Selection", "Ranking", "Report Only"]
+    stages["global_influence_score"] = ["Seed Selection", "LLM Prompt", "Report Only"]
+    stages["local_influence_score"] = ["Seed Selection", "LLM Prompt", "Report Only"]
+    stages["activity_score"] = ["LLM Prompt", "Report Only"]
+    stages["interest_tags"] = ["LLM Prompt", "Report Only"]
+    for field in JINJIANG_PROMPT_V2_PROFILE_FIELDS:
+        stages[field] = ["LLM Prompt", "Report Only"]
+    for field in (
+        "historical_tags",
+        "historical_comment_network_weighted_degree",
+        "base_network_relevance",
+        "engaged_neighbor_count",
+        "engaged_neighbor_signal",
+        "historical_tag_affinity",
+        "recommendation_score",
+        "latest_ranking_time_step",
+        "latest_ranking_position",
+        "selected_for_exposure",
+    ):
+        stages[field] = ["Ranking", "Report Only"]
+
+    entries: list[FieldLineageEntry] = []
+    for field_name in RankingUserReportRow.model_fields:
+        provenance: FieldProvenance
+        if field_name in direct:
+            provenance = "Direct Observed Profile Field"
+        elif field_name in historical:
+            provenance = "Historical Behavioral Evidence"
+        elif field_name in derived:
+            provenance = "Derived Proxy Metric"
+        elif field_name in synthetic:
+            provenance = "Synthetic Experiment Label"
+        else:
+            provenance = "Runtime Simulation Result"
+        entries.append(
+            FieldLineageEntry(
+                field_name=field_name,
+                provenance=provenance,
+                usage_stages=stages[field_name],
+            )
+        )
+    return entries
+
+
+def _render_ranking_report(payload: FinalResearchRankingReportPayload) -> str:
+    target = payload.target_video
+    target_url = escape(target.video_url, quote=True)
+    funnel_html = "".join(
+        f"<article><strong>{stage.count:,}</strong><span>{escape(stage.label)}</span><p>{escape(stage.description)}</p></article>"
+        for stage in payload.run_funnel
+    )
+    lineage_html = "".join(
+        "<tr>"
+        f"<td><code>{escape(entry.field_name)}</code></td>"
+        f"<td>{escape(entry.provenance)}</td>"
+        f"<td>{escape(', '.join(entry.usage_stages))}</td>"
+        "</tr>"
+        for entry in payload.field_lineage
+    )
+    users_html = "".join(
+        "<tr>"
+        f"<td><strong>{escape(row.nickname or row.user_id)}</strong><small>{escape(row.user_id)}</small></td>"
+        f"<td>{escape(row.sample_role)}<small>{escape(row.sample_source_scope)}</small></td>"
+        f"<td>{row.latest_ranking_time_step} / {row.latest_ranking_position}</td>"
+        f"<td>{row.recommendation_score:.6f}</td>"
+        f'<td><span class="status">{escape(row.result_status)}</span><small>{escape(row.provider_status)}</small></td>'
+        f"<td>{escape(row.reason)}</td>"
+        "</tr>"
+        for row in payload.users
+    )
+    scope_rows = "".join(
+        f"<tr><td>{escape(scope)}</td><td>{payload.sample_comparison.base_source_scope_counts.get(scope, 0)}</td>"
+        f"<td>{payload.sample_comparison.final_source_scope_counts.get(scope, 0)}</td></tr>"
+        for scope in sorted(
+            set(payload.sample_comparison.base_source_scope_counts)
+            | set(payload.sample_comparison.final_source_scope_counts)
+        )
+    )
+    payload_json = safe_user_json(payload, indent=None).replace("</", "<\\/")
+    return f"""<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{escape(payload.title)}</title>
+  <style>
+    :root {{ color-scheme:light; --ink:#18201c; --muted:#5b6861; --line:#d7dfda; --paper:#f7f9f7; --accent:#075f4c; --warm:#9c5b16; }}
+    * {{ box-sizing:border-box; }} body {{ margin:0; color:var(--ink); background:white; font:15px/1.5 system-ui,sans-serif; }}
+    main {{ width:min(1180px,100%); margin:auto; }} header,section,footer {{ padding:28px clamp(18px,4vw,46px); border-bottom:1px solid var(--line); }}
+    header {{ display:flex; justify-content:space-between; gap:24px; align-items:end; background:#eaf1ed; }} h1,h2,p {{ margin-top:0; }} h1 {{ font-size:clamp(1.8rem,4vw,3.2rem); margin-bottom:8px; }}
+    a {{ color:var(--accent); }} .downloads {{ display:flex; flex-wrap:wrap; gap:12px; }} .eyebrow,small {{ display:block; color:var(--muted); font-size:.78rem; }}
+    .target {{ display:grid; grid-template-columns:2fr 1fr; gap:28px; }} .funnel {{ display:grid; grid-template-columns:repeat(auto-fit,minmax(170px,1fr)); gap:12px; }}
+    .funnel article {{ padding:16px; border:1px solid var(--line); border-radius:6px; background:var(--paper); }} .funnel strong {{ display:block; font-size:1.6rem; }}
+    .funnel span {{ font-weight:700; }} .funnel p {{ color:var(--muted); font-size:.82rem; margin:8px 0 0; }}
+    .table-wrap {{ width:100%; overflow:auto; border:1px solid var(--line); }} table {{ width:100%; min-width:820px; border-collapse:collapse; }}
+    th,td {{ padding:10px 12px; border-bottom:1px solid var(--line); text-align:left; vertical-align:top; overflow-wrap:anywhere; }} th {{ background:var(--paper); position:sticky; top:0; }}
+    code {{ color:var(--accent); }} .status {{ color:var(--warm); font-weight:700; }} footer {{ display:flex; flex-wrap:wrap; gap:16px; }}
+    @media (max-width:720px) {{ header,.target {{ display:block; }} .downloads {{ margin-top:18px; }} }}
+  </style>
+</head>
+<body>
+<main data-testid="final-research-ranking-report">
+  <header><div><span class="eyebrow">TARGET DELIVERY RANKING · PAYLOAD V3</span><h1>{escape(payload.title)}</h1><p>{escape(payload.run.ranking_formula)}</p></div><nav class="downloads"><a href="{payload.downloads.csv}">CSV</a><a href="{payload.downloads.users_json}">JSON</a><a href="{payload.downloads.payload}">Payload</a><a href="{payload.downloads.manifest}">Manifest</a></nav></header>
+  <section class="target"><div><span class="eyebrow">TargetVideo · {escape(target.video_id)}</span><h2>{escape(target.caption)}</h2><p>{escape(" ".join("#" + tag.lstrip("#") for tag in target.hashtags))}</p><a href="{target_url}">查看真实视频入口</a></div><dl><dt>研究用户</dt><dd>{payload.run.sample_size:,}</dd><dt>批次</dt><dd>{payload.run.horizon}</dd><dt>每轮容量</dt><dd>{payload.run.delivery_capacity}</dd></dl></section>
+  <section data-testid="ranking-funnel-section"><h2>运行漏斗</h2><div class="funnel">{funnel_html}</div></section>
+  <section><h2>Base Sample 与最终样本</h2><p>Seeds {payload.sample_comparison.seed_count}，Network Cohort {payload.sample_comparison.network_cohort_count}，替换普通用户 {payload.sample_comparison.replacement_count}。</p><div class="table-wrap"><table><thead><tr><th>Source scope</th><th>Base Sample</th><th>Final Sample</th></tr></thead><tbody>{scope_rows}</tbody></table></div></section>
+  <section data-testid="field-lineage-section"><h2>Field Lineage Matrix</h2><div class="table-wrap"><table><thead><tr><th>Field</th><th>Field Provenance</th><th>Field Usage Stage</th></tr></thead><tbody>{lineage_html}</tbody></table></div></section>
+  <section data-testid="ranking-users-section"><h2>完整用户表</h2><p>{len(payload.users):,} 条唯一用户记录；未曝光、ignore 与 provider failure 保持独立状态。</p><div class="table-wrap"><table><thead><tr><th>User</th><th>Sample role</th><th>Latest batch / rank</th><th>Score</th><th>Result</th><th>Reason</th></tr></thead><tbody>{users_html}</tbody></table></div></section>
+  <footer><a href="{payload.downloads.ranking_diagnostics}">Ranking diagnostics</a><a href="{payload.downloads.ranking_ablation_csv}">Ablation CSV</a><a href="{payload.downloads.ranking_sensitivity_csv}">Sensitivity CSV</a></footer>
+</main>
+<script id="final-research-ranking-payload" type="application/json">{payload_json}</script>
+</body>
+</html>
+"""
+
+
 def _build_report_aggregates(rows: Sequence[UserReportRow], horizon: int) -> FinalResearchAggregates:
     action_counts = Counter(row.result_status for row in rows)
     scope_counts = Counter(row.sample_source_scope or "unspecified" for row in rows)
     provider_by_step = Counter(
-        row.assigned_step
-        for row in rows
-        if row.result_status == "provider_failed" and row.assigned_step is not None
+        row.assigned_step for row in rows if row.result_status == "provider_failed" and row.assigned_step is not None
     )
     neighbor_by_step: dict[int, list[int]] = {}
     for row in rows:
@@ -800,12 +1503,8 @@ def _build_report_aggregates(rows: Sequence[UserReportRow], horizon: int) -> Fin
             continue
         neighbor_by_step.setdefault(row.assigned_step, []).append(row.engaged_neighbor_count)
     return FinalResearchAggregates(
-        action_distribution=[
-            AggregateRow(label=label, value=count) for label, count in sorted(action_counts.items())
-        ],
-        scope_distribution=[
-            AggregateRow(label=label, value=count) for label, count in sorted(scope_counts.items())
-        ],
+        action_distribution=[AggregateRow(label=label, value=count) for label, count in sorted(action_counts.items())],
+        scope_distribution=[AggregateRow(label=label, value=count) for label, count in sorted(scope_counts.items())],
         provider_failures=[
             AggregateRow(label=f"Step {step}", value=provider_by_step.get(step, 0)) for step in range(horizon)
         ],
@@ -857,13 +1556,20 @@ def rebuild_final_research_report(run_dir: str | Path) -> Path:
         raise FileNotFoundError(f"Final Research run directory does not exist: {run_path}")
     manifest_path = run_path / "artifact_manifest.json"
     payload_path = run_path / FINAL_RESEARCH_REPORT_ARTIFACTS["final_research_report_payload"]
-    summary_path = run_path / "runtime_summary.json"
-    for required_path in (manifest_path, payload_path, summary_path):
+    for required_path in (manifest_path, payload_path):
         if not required_path.is_file():
             raise FileNotFoundError(f"Final Research rebuild requires {required_path.name}")
 
     manifest = _read_json_object(manifest_path)
     payload_document = _read_json_object(payload_path)
+    if manifest.get("manifest_version") == FINAL_RESEARCH_RANKING_RUNTIME_VERSION:
+        payload = FinalResearchRankingReportPayload.model_validate(payload_document)
+        _validate_ranking_rebuild_evidence(run_path, manifest, payload)
+        return _publish_report_files(run_path, payload)
+
+    summary_path = run_path / "runtime_summary.json"
+    if not summary_path.is_file():
+        raise FileNotFoundError(f"Final Research rebuild requires {summary_path.name}")
     runtime_summary = _read_json_object(summary_path)
     base_payload = _parse_report_payload(payload_document)
     _validate_rebuild_evidence(run_path, manifest, base_payload, runtime_summary)
@@ -925,20 +1631,52 @@ def _build_explainable_payload(
         {
             "schema_version": "final-research-report-payload-v2",
             "run_funnel": [
-                _funnel_stage("offline_scoring", "Offline scoring", base_payload.recommendation_model.score_summary.user_count, "使用 holdout-safe 历史信号计算静态推荐分数。"),
-                _funnel_stage("research_sample", "Research Sample", sample_size, "按 source scope 配额、去重与稳定补齐形成研究样本。"),
-                _funnel_stage("recommendation_opportunity", "Recommendation Opportunity", opportunities, "每个样本用户只属于一个固定批次，最多获得一次目标视频机会。"),
-                _funnel_stage("target_exposure", "Target Exposure", target_exposures, "Seed 强制曝光；non-seed 仅在 random_draw < recommendation_score 时曝光。"),
-                _funnel_stage("provider_decision", "Provider Decision", provider_decisions, "目标曝光后才调用 Decision Adapter；背景内容不会调用。"),
+                _funnel_stage(
+                    "offline_scoring",
+                    "Offline scoring",
+                    base_payload.recommendation_model.score_summary.user_count,
+                    "使用 holdout-safe 历史信号计算静态推荐分数。",
+                ),
+                _funnel_stage(
+                    "research_sample",
+                    "Research Sample",
+                    sample_size,
+                    "按 source scope 配额、去重与稳定补齐形成研究样本。",
+                ),
+                _funnel_stage(
+                    "recommendation_opportunity",
+                    "Recommendation Opportunity",
+                    opportunities,
+                    "每个样本用户只属于一个固定批次，最多获得一次目标视频机会。",
+                ),
+                _funnel_stage(
+                    "target_exposure",
+                    "Target Exposure",
+                    target_exposures,
+                    "Seed 强制曝光；non-seed 仅在 random_draw < recommendation_score 时曝光。",
+                ),
+                _funnel_stage(
+                    "provider_decision",
+                    "Provider Decision",
+                    provider_decisions,
+                    "目标曝光后才调用 Decision Adapter；背景内容不会调用。",
+                ),
                 _funnel_stage("engagement", "Engagement", engagements, "like、comment 或 share 计为参与。"),
-                _funnel_stage("background_content", "Background Content", background_count, "抽签失败时记录背景内容占用机会，不对历史视频执行 runtime 排序。"),
+                _funnel_stage(
+                    "background_content",
+                    "Background Content",
+                    background_count,
+                    "抽签失败时记录背景内容占用机会，不对历史视频执行 runtime 排序。",
+                ),
             ],
             "methodology_flow": [
                 _method_stage("data", "数据来源", "读取 processed Video Catalog、用户画像和评论派生互动证据。"),
                 _method_stage("sampling", "用户筛选", "按 source scope 配额抽样，去重后使用稳定顺序补齐。"),
                 _method_stage("video", "视频用途", video_method),
                 _method_stage("network", "评论网络", "一级评论、回复和 @ mention 构成历史互动图，不等同关注关系。"),
-                _method_stage("recommendation", "推荐评分", "静态分数结合网络与标签，动态分数可加入已参与直接邻居 boost。"),
+                _method_stage(
+                    "recommendation", "推荐评分", "静态分数结合网络与标签，动态分数可加入已参与直接邻居 boost。"
+                ),
                 _method_stage("batches", "固定批次与抽签", batch_method),
                 _method_stage("decision", "LLM 决策", decision_method),
                 _method_stage("outcome", "结果解释", "只根据持久化动作计数、结构化合同和样本规模解释结果。"),
@@ -1024,6 +1762,219 @@ def _build_explainable_payload(
         }
     )
     return FinalResearchReportPayload.model_validate(payload_data)
+
+
+def _validate_ranking_rebuild_evidence(
+    run_path: Path,
+    manifest: Mapping[str, object],
+    payload: FinalResearchRankingReportPayload,
+) -> None:
+    if manifest.get("manifest_version") != FINAL_RESEARCH_RANKING_RUNTIME_VERSION:
+        raise ValueError("unsupported Target Delivery Ranking artifact manifest schema")
+    artifacts = _required_mapping(manifest, "artifacts", "artifact manifest")
+    required_artifacts = {
+        "final_research_report": "report.html",
+        "final_research_report_payload": "final_research_report_payload.json",
+        "final_research_users_csv": "final_research_users.csv",
+        "final_research_users_json": "final_research_users.json",
+        "network_augmented_sample_audit": "network_augmented_sample_audit.json",
+        "ranking_runtime_candidates": "ranking_runtime_candidates.csv",
+        "ranking_runtime_outcomes": "ranking_runtime_outcomes.csv",
+        "ranking_runtime_steps": "ranking_runtime_steps.csv",
+        "ranking_runtime_summary": "ranking_runtime_summary.json",
+        "ranking_diagnostics_summary": "ranking_diagnostics_summary.json",
+    }
+    for name, expected_path in required_artifacts.items():
+        if artifacts.get(name) != expected_path:
+            raise ValueError(f"artifact manifest has invalid {name} path")
+    artifact_paths: dict[str, Path] = {}
+    for name, relative_path in artifacts.items():
+        if not isinstance(name, str) or not isinstance(relative_path, str):
+            raise ValueError("artifact manifest names and paths must be strings")
+        artifact_paths[name] = _artifact_path(run_path, relative_path, name)
+
+    user_ids = [row.user_id for row in payload.users]
+    if len(user_ids) != len(set(user_ids)):
+        raise ValueError("ranking report payload contains duplicate user_id")
+    if payload.run.sample_size != len(user_ids):
+        raise ValueError("ranking report payload user count does not match run.sample_size")
+    actual_scope_counts = dict(sorted(Counter(row.sample_source_scope for row in payload.users).items()))
+    if dict(sorted(payload.sample_comparison.final_source_scope_counts.items())) != actual_scope_counts:
+        raise ValueError("ranking report final source scope distribution does not match users")
+
+    audit = _read_json_object(artifact_paths["network_augmented_sample_audit"])
+    if audit.get("schema_version") != "network-augmented-sample-audit-v1":
+        raise ValueError("unsupported network augmented sample audit schema")
+    base_sample = _required_mapping(audit, "base_sample", "network sample audit")
+    final_sample = _required_mapping(audit, "final_sample", "network sample audit")
+    network_cohort = _required_mapping(audit, "network_cohort", "network sample audit")
+    replacement = _required_mapping(audit, "ordinary_replacement", "network sample audit")
+    base_ids = [str(value) for value in _required_list(base_sample, "user_ids", "base sample")]
+    final_ids = [str(value) for value in _required_list(final_sample, "user_ids", "final sample")]
+    cohort_ids = [str(value) for value in _required_list(network_cohort, "user_ids", "network cohort")]
+    seed_ids = [str(value) for value in _required_list(audit, "seed_user_ids", "network sample audit")]
+    for label, values in (
+        ("base sample", base_ids),
+        ("final sample", final_ids),
+        ("network cohort", cohort_ids),
+        ("seed", seed_ids),
+    ):
+        if len(values) != len(set(values)):
+            raise ValueError(f"{label} contains duplicate user ids")
+    if set(final_ids) != set(user_ids):
+        raise ValueError("network sample audit final users do not match ranking report users")
+    comparison_expectations = {
+        "base_sample_count": _as_int(base_sample.get("count")),
+        "final_sample_count": _as_int(final_sample.get("count")),
+        "seed_count": _as_int(audit.get("seed_count")),
+        "network_cohort_count": _as_int(network_cohort.get("count")),
+        "network_cohort_added_count": len(_required_list(network_cohort, "added_user_ids", "network cohort")),
+        "replacement_count": _as_int(replacement.get("count")),
+    }
+    comparison_document = payload.sample_comparison.model_dump(mode="json")
+    for key, expected in comparison_expectations.items():
+        if comparison_document[key] != expected:
+            raise ValueError(f"ranking report sample comparison {key} does not match audit")
+    if payload.sample_comparison.base_source_scope_counts != _int_mapping(base_sample.get("source_scope_counts")):
+        raise ValueError("ranking report Base Sample source scope counts do not match audit")
+    if payload.sample_comparison.final_source_scope_counts != _int_mapping(final_sample.get("source_scope_counts")):
+        raise ValueError("ranking report final sample source scope counts do not match audit")
+    if {row.user_id for row in payload.users if row.in_base_sample} != set(base_ids) & set(final_ids):
+        raise ValueError("ranking report Base Sample membership does not match audit")
+    if {row.user_id for row in payload.users if row.is_seed} != set(seed_ids):
+        raise ValueError("ranking report seed membership does not match audit")
+    if {row.user_id for row in payload.users if row.is_network_cohort} != set(cohort_ids):
+        raise ValueError("ranking report Network Cohort membership does not match audit")
+
+    summary = _read_json_object(artifact_paths["ranking_runtime_summary"])
+    if summary.get("runtime_version") != FINAL_RESEARCH_RANKING_RUNTIME_VERSION:
+        raise ValueError("unsupported Target Delivery Ranking runtime summary schema")
+    summary_counts = _mapping_counts(summary, "counts", "ranking runtime summary")
+    derived_counts = {
+        "sample_users": len(payload.users),
+        "seed_users": sum(row.is_seed for row in payload.users),
+        "target_exposures": sum(row.selected_for_exposure for row in payload.users),
+        "decisions": sum(row.provider_status == "succeeded" for row in payload.users),
+        "engagements": sum(row.result_status in {"like", "comment", "share"} for row in payload.users),
+        "ignored": sum(row.result_status == "ignore" for row in payload.users),
+        "provider_failed": sum(row.result_status == "provider_failed" for row in payload.users),
+        "below_delivery_capacity": sum(row.result_status == "below_delivery_capacity" for row in payload.users),
+    }
+    for key, expected in derived_counts.items():
+        if _as_int(summary_counts.get(key)) != expected:
+            raise ValueError(f"ranking runtime summary count {key} does not match report payload")
+    if _as_int(summary.get("horizon")) != payload.run.horizon:
+        raise ValueError("ranking runtime summary horizon does not match report payload")
+    if _as_int(summary.get("delivery_capacity")) != payload.run.delivery_capacity:
+        raise ValueError("ranking runtime summary delivery capacity does not match report payload")
+    if summary.get("ranking_formula") != payload.run.ranking_formula:
+        raise ValueError("ranking runtime summary formula does not match report payload")
+    if summary.get("engaged_neighbor_formula") != payload.run.engaged_neighbor_formula:
+        raise ValueError("ranking runtime engaged-neighbor formula does not match report payload")
+
+    manifest_counts = _mapping_counts(manifest, "counts", "artifact manifest")
+    manifest_expectations = {
+        "sample_users": derived_counts["sample_users"],
+        "seed_users": derived_counts["seed_users"],
+        "runtime_exposures": derived_counts["target_exposures"],
+        "runtime_decisions": derived_counts["decisions"],
+        "runtime_provider_failures": derived_counts["provider_failed"],
+    }
+    for key, expected in manifest_expectations.items():
+        if _as_int(manifest_counts.get(key)) != expected:
+            raise ValueError(f"artifact manifest count {key} does not match ranking report payload")
+    if _as_int(manifest.get("decision_adapter_calls")) != derived_counts["target_exposures"]:
+        raise ValueError("artifact manifest decision_adapter_calls does not match ranking report payload")
+
+    outcome_rows = _unique_user_rows(
+        _read_csv_rows(artifact_paths["ranking_runtime_outcomes"]),
+        "ranking runtime outcomes",
+    )
+    if set(outcome_rows) != set(user_ids):
+        raise ValueError("ranking runtime outcomes do not match ranking report users")
+    for user_row in payload.users:
+        outcome = outcome_rows[user_row.user_id]
+        if outcome.get("result_status") != user_row.result_status:
+            raise ValueError(f"ranking outcome status does not match report user {user_row.user_id}")
+        if outcome.get("provider_status") != user_row.provider_status:
+            raise ValueError(f"ranking provider status does not match report user {user_row.user_id}")
+        if _optional_int(outcome, "exposure_time_step") != user_row.exposure_time_step:
+            raise ValueError(f"ranking exposure batch does not match report user {user_row.user_id}")
+
+    candidate_rows = _read_csv_rows(artifact_paths["ranking_runtime_candidates"])
+    candidates_by_step: dict[int, list[Mapping[str, object]]] = {}
+    candidate_keys: set[tuple[int, str]] = set()
+    for candidate_row in candidate_rows:
+        candidate_key = (
+            _as_int(candidate_row.get("time_step")),
+            str(candidate_row.get("user_id", "")),
+        )
+        if not candidate_key[1] or candidate_key in candidate_keys:
+            raise ValueError("ranking runtime candidates contain duplicate batch user evidence")
+        candidate_keys.add(candidate_key)
+        candidates_by_step.setdefault(candidate_key[0], []).append(candidate_row)
+    expected_rounds = _ranking_round_summaries(
+        _read_csv_rows(artifact_paths["ranking_runtime_steps"]),
+        candidates_by_step,
+        payload.run.delivery_capacity,
+    )
+    if [row.model_dump(mode="json") for row in expected_rounds] != [
+        row.model_dump(mode="json") for row in payload.ranking_rounds
+    ]:
+        raise ValueError("ranking report round summaries do not match runtime artifacts")
+
+    diagnostics = _read_json_object(artifact_paths["ranking_diagnostics_summary"])
+    inclusion = _required_mapping(diagnostics, "recommendation_signal_inclusion", "ranking diagnostics summary")
+    effect = _required_mapping(
+        diagnostics,
+        "observed_recommendation_signal_effect",
+        "ranking diagnostics summary",
+    )
+    expected_diagnostics = RankingDiagnosticSummary(
+        network_signals_in_formula=bool(inclusion.get("network_signals_in_formula", False)),
+        main_weights={
+            str(key): _as_float(value)
+            for key, value in _required_mapping(inclusion, "main_weights", "ranking signal inclusion").items()
+        },
+        top_selection_changed=bool(effect.get("top_selection_changed", False)),
+        batches_with_top_selection_change=_as_int(effect.get("batches_with_top_selection_change")),
+        diagnostic_decision_adapter_calls=_as_int(diagnostics.get("diagnostic_decision_adapter_calls")),
+    )
+    if expected_diagnostics != payload.ranking_diagnostics:
+        raise ValueError("ranking diagnostics summary does not match report payload")
+
+    expected_prompt_fields = {entry.field_name for entry in payload.field_lineage if "LLM Prompt" in entry.usage_stages}
+    if expected_prompt_fields != set(JINJIANG_PROMPT_V2_PROFILE_FIELDS):
+        raise ValueError("ranking report Prompt usage declarations do not match Prompt Field Summary")
+    if set(payload.prompt_contract.allowed_profile_fields) != set(JINJIANG_PROMPT_V2_PROFILE_FIELDS):
+        raise ValueError("ranking report Prompt contract does not match Prompt Field Summary")
+
+    user_document = _read_json_object(artifact_paths["final_research_users_json"])
+    if user_document.get("schema_version") != "final-research-ranking-users-v3":
+        raise ValueError("unsupported ranking user JSON schema")
+    if user_document.get("links") != payload.downloads.model_dump(mode="json"):
+        raise ValueError("ranking user JSON links do not match report payload")
+    if user_document.get("users") != [row.model_dump(mode="json") for row in payload.users]:
+        raise ValueError("ranking user JSON does not match report payload users")
+    csv_rows = _read_csv_rows(artifact_paths["final_research_users_csv"])
+    if [row.get("user_id") for row in csv_rows] != user_ids:
+        raise ValueError("ranking user CSV does not match report payload users")
+    if [row.get("result_status") for row in csv_rows] != [row.result_status for row in payload.users]:
+        raise ValueError("ranking user CSV result statuses do not match report payload")
+
+    expected_downloads = {
+        "report": artifacts.get("final_research_report"),
+        "payload": artifacts.get("final_research_report_payload"),
+        "csv": artifacts.get("final_research_users_csv"),
+        "users_json": artifacts.get("final_research_users_json"),
+        "manifest": "artifact_manifest.json",
+        "ranking_diagnostics": artifacts.get("ranking_diagnostics"),
+        "ranking_ablation_csv": artifacts.get("ranking_ablation_diagnostics_csv"),
+        "ranking_sensitivity_csv": artifacts.get("ranking_weight_sensitivity_csv"),
+    }
+    for field_name, relative_path in expected_downloads.items():
+        if getattr(payload.downloads, field_name) != relative_path:
+            raise ValueError(f"ranking report download {field_name} does not match artifact manifest")
 
 
 def _validate_rebuild_evidence(
@@ -1166,6 +2117,14 @@ def _read_json_object(path: Path) -> dict[str, object]:
     return document
 
 
+def _read_csv_rows(path: Path) -> list[dict[str, object]]:
+    try:
+        with path.open(encoding="utf-8", newline="") as handle:
+            return [dict(row) for row in csv.DictReader(handle)]
+    except (OSError, UnicodeError, csv.Error) as exc:
+        raise ValueError(f"cannot read valid CSV from {path.name}") from exc
+
+
 def _artifact_path(run_path: Path, relative_path: str, artifact_name: str) -> Path:
     path = Path(relative_path)
     if path.is_absolute() or ".." in path.parts:
@@ -1199,12 +2158,20 @@ def _stage_text(run_path: Path, target_name: str, content: str) -> Path:
         return Path(handle.name)
 
 
-def _publish_report_files(run_path: Path, payload: FinalResearchReportPayload) -> Path:
+def _publish_report_files(
+    run_path: Path,
+    payload: FinalResearchReportPayload | FinalResearchRankingReportPayload,
+) -> Path:
     payload_path = run_path / FINAL_RESEARCH_REPORT_ARTIFACTS["final_research_report_payload"]
     report_path = run_path / FINAL_RESEARCH_REPORT_ARTIFACTS["final_research_report"]
     payload_text = safe_user_json(payload) + "\n"
     html_text = FinalResearchReportWriter.render_payload(payload)
-    FinalResearchReportPayload.model_validate(json.loads(payload_text))
+    payload_model = (
+        FinalResearchRankingReportPayload
+        if isinstance(payload, FinalResearchRankingReportPayload)
+        else FinalResearchReportPayload
+    )
+    payload_model.model_validate(json.loads(payload_text))
     staged_payload: Path | None = _stage_text(run_path, payload_path.name, payload_text)
     staged_report: Path | None = _stage_text(run_path, report_path.name, html_text)
     try:
@@ -1254,7 +2221,9 @@ def _outcome_explanation(action: str, count: int, sample_size: int) -> dict[str,
             "该结论仅来自动作计数，不分析 reason 文本，也未调用额外 LLM。"
         )
     else:
-        explanation = f"本次记录到 {count} 次 {action}；计数来自 persisted structured decisions，不对 reason 文本做关键词推断。"
+        explanation = (
+            f"本次记录到 {count} 次 {action}；计数来自 persisted structured decisions，不对 reason 文本做关键词推断。"
+        )
     return {"action": action, "count": count, "explanation": explanation}
 
 
@@ -1290,6 +2259,63 @@ def _user_trace(row: UserReportRow) -> dict[str, object]:
         ],
         "prompt_recoverability": "完整原始 Provider Prompt 无法从当前安全 artifacts 恢复。",
     }
+
+
+def _required_mapping(source: Mapping[str, object], key: str, label: str) -> Mapping[str, object]:
+    value = source.get(key)
+    if not isinstance(value, Mapping):
+        raise ValueError(f"{label} must contain a {key} object")
+    return value
+
+
+def _required_list(source: Mapping[str, object], key: str, label: str) -> list[object]:
+    value = source.get(key)
+    if not isinstance(value, list):
+        raise ValueError(f"{label} must contain a {key} list")
+    return value
+
+
+def _unique_user_rows(
+    rows: Sequence[Mapping[str, object]],
+    label: str,
+) -> dict[str, Mapping[str, object]]:
+    indexed: dict[str, Mapping[str, object]] = {}
+    for row in rows:
+        user_id = str(row.get("user_id", ""))
+        if not user_id:
+            raise ValueError(f"{label} contains an empty user_id")
+        if user_id in indexed:
+            raise ValueError(f"{label} contains duplicate user_id: {user_id}")
+        indexed[user_id] = row
+    return indexed
+
+
+def _int_mapping(value: object) -> dict[str, int]:
+    if not isinstance(value, Mapping):
+        raise ValueError("expected an object containing integer counts")
+    return {str(key): _as_int(item) for key, item in value.items()}
+
+
+def _as_bool(value: object) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str) and value.lower() in {"true", "false"}:
+        return value.lower() == "true"
+    raise ValueError(f"expected boolean value, got {value!r}")
+
+
+def _ranking_result_status(value: object) -> RankingResultStatus:
+    status = str(value)
+    if status not in {"like", "comment", "share", "ignore", "provider_failed", "below_delivery_capacity"}:
+        raise ValueError(f"unsupported ranking result status: {status!r}")
+    return status  # type: ignore[return-value]
+
+
+def _ranking_provider_status(value: object) -> Literal["not_called", "succeeded", "provider_failed"]:
+    status = str(value)
+    if status not in {"not_called", "succeeded", "provider_failed"}:
+        raise ValueError(f"unsupported ranking provider status: {status!r}")
+    return status  # type: ignore[return-value]
 
 
 def _string_list(value: object) -> list[str]:

@@ -719,6 +719,10 @@ def test_target_delivery_ranking_runtime_reranks_global_top20_after_seed_engagem
     assert manifest["manifest_version"] == "final-research-ranking-runtime-v2"
     assert manifest["artifacts"] == {
         "config_snapshot": "config_snapshot.json",
+        "final_research_report": "report.html",
+        "final_research_report_payload": "final_research_report_payload.json",
+        "final_research_users_csv": "final_research_users.csv",
+        "final_research_users_json": "final_research_users.json",
         "holdout_diagnostic": "top20_holdout_diagnostic.json",
         "holdout_safe_audit": "holdout_safe_audit.json",
         "network_augmented_sample_audit": "network_augmented_sample_audit.json",
@@ -749,11 +753,13 @@ def test_target_delivery_ranking_runtime_reranks_global_top20_after_seed_engagem
     audit = json.loads((first_output / "network_augmented_sample_audit.json").read_text(encoding="utf-8"))
     summary = json.loads((first_output / "ranking_runtime_summary.json").read_text(encoding="utf-8"))
     ranking_diagnostics = json.loads((first_output / "ranking_diagnostics.json").read_text(encoding="utf-8"))
-    diagnostic_summary = json.loads(
-        (first_output / "ranking_diagnostics_summary.json").read_text(encoding="utf-8")
-    )
+    diagnostic_summary = json.loads((first_output / "ranking_diagnostics_summary.json").read_text(encoding="utf-8"))
     ablation_rows = _read_csv(first_output / "ranking_ablation_diagnostics.csv")
     sensitivity_rows = _read_csv(first_output / "ranking_weight_sensitivity.csv")
+    report_rows = _read_csv(first_output / "final_research_users.csv")
+    report_users = json.loads((first_output / "final_research_users.json").read_text(encoding="utf-8"))
+    report_payload = json.loads((first_output / "final_research_report_payload.json").read_text(encoding="utf-8"))
+    report_html = (first_output / "report.html").read_text(encoding="utf-8")
 
     assert "u80" in audit["seed_user_ids"]
     assert "u60" not in audit["base_sample"]["user_ids"]
@@ -817,17 +823,17 @@ def test_target_delivery_ranking_runtime_reranks_global_top20_after_seed_engagem
     assert ranking_diagnostics["paired_ablation"]["advances_user_state"] is False
     assert ranking_diagnostics["paired_ablation"]["calls_decision_adapter"] is False
     assert ranking_diagnostics["paired_ablation"]["complete_counterfactual_trajectory"] is False
-    assert [
-        variant["variant_id"] for variant in ranking_diagnostics["weight_sensitivity"]["variants"]
-    ] == ["main_50_30_20", "weaker_network_40_20_40", "no_network_0_0_100"]
+    assert [variant["variant_id"] for variant in ranking_diagnostics["weight_sensitivity"]["variants"]] == [
+        "main_50_30_20",
+        "weaker_network_40_20_40",
+        "no_network_0_0_100",
+    ]
     batch_one_diagnostic = ranking_diagnostics["paired_ablation"]["batches"][1]
     assert batch_one_diagnostic["full_top_user_ids"] == [
         row["user_id"] for row in batch_one if row["selected"] == "true"
     ]
     assert "u60" in batch_one_diagnostic["network_added_user_ids"]
-    diagnostic_batches = {
-        int(batch["time_step"]): batch for batch in ranking_diagnostics["paired_ablation"]["batches"]
-    }
+    diagnostic_batches = {int(batch["time_step"]): batch for batch in ranking_diagnostics["paired_ablation"]["batches"]}
     for step in steps:
         time_step = int(step["time_step"])
         persisted_batch = [row for row in candidates if int(row["time_step"]) == time_step]
@@ -841,10 +847,59 @@ def test_target_delivery_ranking_runtime_reranks_global_top20_after_seed_engagem
     assert manifest["counts"]["ranking_diagnostic_batches"] == len(steps)
     assert manifest["counts"]["ranking_ablation_rows"] == len(ablation_rows) == len(candidates)
     assert manifest["counts"]["ranking_sensitivity_rows"] == len(sensitivity_rows) == 3 * len(steps)
-    assert manifest["counts"]["ranking_batches_with_network_top20_effect"] == diagnostic_summary[
-        "observed_recommendation_signal_effect"
-    ]["batches_with_top_selection_change"]
+    assert (
+        manifest["counts"]["ranking_batches_with_network_top20_effect"]
+        == diagnostic_summary["observed_recommendation_signal_effect"]["batches_with_top_selection_change"]
+    )
     assert len(first_adapter.calls) == summary["counts"]["decision_adapter_calls"]
+
+    assert report_payload["schema_version"] == "final-research-ranking-report-payload-v3"
+    assert report_payload["sample_comparison"]["base_sample_count"] == audit["base_sample"]["count"]
+    assert report_payload["sample_comparison"]["final_sample_count"] == audit["final_sample"]["count"]
+    assert report_payload["sample_comparison"]["seed_count"] == audit["seed_count"]
+    assert report_payload["sample_comparison"]["network_cohort_count"] == audit["network_cohort"]["count"]
+    assert report_payload["sample_comparison"]["replacement_count"] == audit["ordinary_replacement"]["count"]
+    assert (
+        report_payload["sample_comparison"]["base_source_scope_counts"] == audit["base_sample"]["source_scope_counts"]
+    )
+    assert (
+        report_payload["sample_comparison"]["final_source_scope_counts"] == audit["final_sample"]["source_scope_counts"]
+    )
+    assert len(report_rows) == len(report_users["users"]) == len(report_payload["users"]) == 70
+    assert [row["user_id"] for row in report_payload["users"]] == [row["user_id"] for row in report_users["users"]]
+    assert {row["result_status"] for row in report_payload["users"]} == {"like", "ignore", "provider_failed"}
+    lineage = {entry["field_name"]: entry for entry in report_payload["field_lineage"]}
+    assert set(lineage) == set(report_payload["users"][0])
+    assert {entry["provenance"] for entry in lineage.values()} <= {
+        "Direct Observed Profile Field",
+        "Historical Behavioral Evidence",
+        "Derived Proxy Metric",
+        "Synthetic Experiment Label",
+        "Runtime Simulation Result",
+    }
+    assert all(entry["usage_stages"] for entry in lineage.values())
+    assert {stage for entry in lineage.values() for stage in entry["usage_stages"]} <= {
+        "Sampling",
+        "Seed Selection",
+        "Ranking",
+        "LLM Prompt",
+        "Report Only",
+    }
+    for excluded_field in (
+        "base_network_relevance",
+        "engaged_neighbor_count",
+        "engaged_neighbor_signal",
+        "historical_tag_affinity",
+        "recommendation_score",
+        "latest_ranking_position",
+    ):
+        assert "LLM Prompt" not in lineage[excluded_field]["usage_stages"]
+    assert 'data-testid="final-research-ranking-report"' in report_html
+    assert 'data-testid="ranking-funnel-section"' in report_html
+    assert 'data-testid="field-lineage-section"' in report_html
+    assert 'data-testid="ranking-users-section"' in report_html
+    assert "random_draw" not in report_html
+    assert "background_content" not in report_html
 
     runtime_text = "\n".join(
         (first_output / relative_path).read_text(encoding="utf-8")
@@ -879,13 +934,13 @@ def test_target_delivery_ranking_runtime_reranks_global_top20_after_seed_engagem
 
 
 def test_target_delivery_ranking_runtime_caps_delivery_and_marks_final_below_capacity(tmp_path: Path) -> None:
-    dataset_dir = _make_processed_fixture(tmp_path, user_count=630)
+    dataset_dir = _make_processed_fixture(tmp_path, user_count=1010)
     provider_config = ProviderLLMConfig(enabled=True, model="mock-model", require_live_env=False)
     adapter = _TargetDeliveryAdapter()
     output = FinalResearchRunner(
         FinalResearchConfig(
             dataset_dir=dataset_dir,
-            sample_size=620,
+            sample_size=1000,
             provider=provider_config,
         ),
         adapter,
@@ -896,14 +951,125 @@ def test_target_delivery_ranking_runtime_caps_delivery_and_marks_final_below_cap
     summary = json.loads((output / "ranking_runtime_summary.json").read_text(encoding="utf-8"))
     exposed = [row for row in outcomes if row["result_status"] != "below_delivery_capacity"]
     below_capacity = [row for row in outcomes if row["result_status"] == "below_delivery_capacity"]
+    report_rows = _read_csv(output / "final_research_users.csv")
+    report_users = json.loads((output / "final_research_users.json").read_text(encoding="utf-8"))["users"]
+    report_payload = json.loads((output / "final_research_report_payload.json").read_text(encoding="utf-8"))
 
-    assert len(outcomes) == 620
+    assert len(outcomes) == 1000
     assert len(exposed) == len(adapter.calls) == summary["counts"]["target_exposures"] <= 600
-    assert len(below_capacity) == 620 - len(exposed)
+    assert len(below_capacity) == 1000 - len(exposed)
     assert below_capacity
     assert all(int(row["selected_users"]) <= 20 for row in steps)
     assert all(row["provider_status"] == "not_called" for row in below_capacity)
     assert all(row["exposure_time_step"] == "" for row in below_capacity)
+    assert len(report_rows) == len(report_users) == len(report_payload["users"]) == 1000
+    assert {row["result_status"] for row in report_payload["users"]} == {
+        "ignore",
+        "below_delivery_capacity",
+    }
+    assert sum(row["result_status"] == "below_delivery_capacity" for row in report_payload["users"]) == len(
+        below_capacity
+    )
+    assert next(stage for stage in report_payload["run_funnel"] if stage["key"] == "below_delivery_capacity")[
+        "count"
+    ] == len(below_capacity)
+    assert {row["provider_status"] for row in report_payload["users"] if row["result_status"] == "ignore"} == {
+        "succeeded"
+    }
+    assert {
+        row["provider_status"] for row in report_payload["users"] if row["result_status"] == "below_delivery_capacity"
+    } == {"not_called"}
+
+
+def test_target_delivery_ranking_report_rebuild_is_deterministic(tmp_path: Path) -> None:
+    dataset_dir = _make_target_delivery_fixture(tmp_path)
+    provider_config = ProviderLLMConfig(enabled=True, model="mock-model", require_live_env=False)
+    adapter = _TargetDeliveryAdapter(failed_user_id="u79")
+    run_dir = FinalResearchRunner(
+        FinalResearchConfig(dataset_dir=dataset_dir, sample_size=70, provider=provider_config),
+        adapter,
+    ).run_and_write(tmp_path / "ranking-rebuildable")
+    calls_before_rebuild = len(adapter.calls)
+    report_path = run_dir / "report.html"
+    payload_path = run_dir / "final_research_report_payload.json"
+    preserved_artifacts = {
+        name: (run_dir / name).read_bytes()
+        for name in ("final_research_users.csv", "final_research_users.json", "artifact_manifest.json")
+    }
+
+    assert rebuild_final_research_report(run_dir) == report_path
+    first_payload = payload_path.read_bytes()
+    first_report = report_path.read_bytes()
+    assert len(adapter.calls) == calls_before_rebuild
+
+    assert rebuild_final_research_report(run_dir) == report_path
+    assert payload_path.read_bytes() == first_payload
+    assert report_path.read_bytes() == first_report
+    assert {
+        name: (run_dir / name).read_bytes()
+        for name in ("final_research_users.csv", "final_research_users.json", "artifact_manifest.json")
+    } == preserved_artifacts
+
+
+@pytest.mark.parametrize(
+    "corruption",
+    [
+        "missing_required",
+        "unsupported_schema",
+        "duplicate_payload_user",
+        "duplicate_runtime_user",
+        "count_mismatch",
+        "unsafe_path",
+    ],
+)
+def test_target_delivery_ranking_report_rebuild_rejects_invalid_evidence_before_publish(
+    tmp_path: Path,
+    corruption: str,
+) -> None:
+    dataset_dir = _make_target_delivery_fixture(tmp_path)
+    provider_config = ProviderLLMConfig(enabled=True, model="mock-model", require_live_env=False)
+    source_run = FinalResearchRunner(
+        FinalResearchConfig(dataset_dir=dataset_dir, sample_size=70, provider=provider_config),
+        _TargetDeliveryAdapter(failed_user_id="u79"),
+    ).run_and_write(tmp_path / "ranking-valid")
+    run_dir = tmp_path / f"ranking-invalid-{corruption}"
+    shutil.copytree(source_run, run_dir)
+    payload_path = run_dir / "final_research_report_payload.json"
+    report_path = run_dir / "report.html"
+
+    if corruption == "missing_required":
+        (run_dir / "ranking_runtime_summary.json").unlink()
+    elif corruption == "unsupported_schema":
+        payload = json.loads(payload_path.read_text(encoding="utf-8"))
+        payload["schema_version"] = "final-research-ranking-report-payload-v999"
+        payload_path.write_text(json.dumps(payload, ensure_ascii=False) + "\n", encoding="utf-8")
+    elif corruption == "duplicate_payload_user":
+        payload = json.loads(payload_path.read_text(encoding="utf-8"))
+        payload["users"][1]["user_id"] = payload["users"][0]["user_id"]
+        payload_path.write_text(json.dumps(payload, ensure_ascii=False) + "\n", encoding="utf-8")
+    elif corruption == "duplicate_runtime_user":
+        outcomes_path = run_dir / "ranking_runtime_outcomes.csv"
+        outcomes = _read_csv(outcomes_path)
+        outcomes[1]["user_id"] = outcomes[0]["user_id"]
+        _write_csv(outcomes_path, list(outcomes[0]), outcomes)
+    elif corruption == "count_mismatch":
+        summary_path = run_dir / "ranking_runtime_summary.json"
+        summary = json.loads(summary_path.read_text(encoding="utf-8"))
+        summary["counts"]["sample_users"] += 1
+        summary_path.write_text(json.dumps(summary, ensure_ascii=False) + "\n", encoding="utf-8")
+    else:
+        manifest_path = run_dir / "artifact_manifest.json"
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest["artifacts"]["final_research_users_csv"] = "../outside.csv"
+        manifest_path.write_text(json.dumps(manifest, ensure_ascii=False) + "\n", encoding="utf-8")
+
+    persisted_payload = payload_path.read_bytes()
+    persisted_report = report_path.read_bytes()
+    with pytest.raises((FileNotFoundError, ValueError, ValidationError)):
+        rebuild_final_research_report(run_dir)
+
+    assert payload_path.read_bytes() == persisted_payload
+    assert report_path.read_bytes() == persisted_report
 
 
 def test_target_delivery_ranking_provider_prompt_excludes_ranking_evidence(tmp_path: Path) -> None:

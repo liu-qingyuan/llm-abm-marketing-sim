@@ -18,6 +18,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from .decision import EngageDecision, LLMDecisionAdapter, ProviderDecisionError
 from .final_research_report import (
     FINAL_RESEARCH_DYNAMIC_NETWORK_FORMULA,
+    FINAL_RESEARCH_RANKING_RUNTIME_VERSION,
     FINAL_RESEARCH_REPORT_ARTIFACTS,
     FINAL_RESEARCH_RUNTIME_VERSION,
     FINAL_RESEARCH_SCHEDULE_METHOD,
@@ -51,7 +52,7 @@ TARGET_DELIVERY_BASE_NETWORK_WEIGHT = MAIN_RANKING_WEIGHTS.base_network
 TARGET_DELIVERY_ENGAGED_NEIGHBOR_WEIGHT = MAIN_RANKING_WEIGHTS.engaged_neighbor
 TARGET_DELIVERY_TAG_AFFINITY_WEIGHT = MAIN_RANKING_WEIGHTS.tag_affinity
 TARGET_DELIVERY_CAPACITY = 20
-TARGET_DELIVERY_RUNTIME_VERSION = "final-research-ranking-runtime-v2"
+TARGET_DELIVERY_RUNTIME_VERSION = FINAL_RESEARCH_RANKING_RUNTIME_VERSION
 TARGET_DELIVERY_SCHEDULE_METHOD = "global_stable_reranking_top20"
 TARGET_DELIVERY_RANKING_FORMULA = (
     "0.50 * base_network_relevance + 0.30 * engaged_neighbor_signal + 0.20 * historical_tag_affinity"
@@ -953,8 +954,7 @@ class FinalResearchRunner:
             "sample_manifest_json": "sample_manifest.json",
             "target_video_snapshot": "target_video_snapshot.json",
         }
-        if ranking_runtime is None:
-            artifacts.update(FINAL_RESEARCH_REPORT_ARTIFACTS)
+        artifacts.update(FINAL_RESEARCH_REPORT_ARTIFACTS)
         if probability_runtime is not None:
             artifacts.update(
                 {
@@ -1141,9 +1141,7 @@ class FinalResearchRunner:
                     "ranking_diagnostic_batches": ranking_diagnostics.summary["counts"]["batches"],
                     "ranking_ablation_rows": len(ranking_diagnostics.ablation_rows),
                     "ranking_sensitivity_rows": len(ranking_diagnostics.sensitivity_rows),
-                    "ranking_batches_with_network_top20_effect": observed_effect[
-                        "batches_with_top_selection_change"
-                    ],
+                    "ranking_batches_with_network_top20_effect": observed_effect["batches_with_top_selection_change"],
                 }
             )
         runtime_manifest_version = (
@@ -1171,32 +1169,50 @@ class FinalResearchRunner:
             artifact_manifest["diagnostic_decision_adapter_calls"] = ranking_diagnostics.summary[
                 "diagnostic_decision_adapter_calls"
             ]
-        if ranking_runtime is not None:
-            _write_json(output_path / "artifact_manifest.json", artifact_manifest)
-        else:
-            FinalResearchReportWriter(
-                FinalResearchReportSource(
-                    target_video=prepared.target_video.model_dump(mode="json"),
-                    users=[user.model_dump(mode="json") for user in sample_users],
-                    historical_tags_by_user={
-                        user.user_id: sorted(prepared.historical_tags_by_user.get(user.user_id, set()))
-                        for user in sample_users
-                    },
-                    config=report_config,
-                    offline_score_summary=score_summary,
-                    holdout_diagnostic=diagnostic,
-                    holdout_safe_audit=holdout_safe_audit,
-                    artifact_manifest=artifact_manifest,
-                    runtime_steps=probability_runtime.steps if probability_runtime is not None else (),
-                    runtime_exposures=probability_runtime.exposures if probability_runtime is not None else (),
-                    runtime_decisions=probability_runtime.decisions if probability_runtime is not None else (),
-                    runtime_provider_failures=(
-                        probability_runtime.provider_failures if probability_runtime is not None else ()
-                    ),
-                    runtime_summary=probability_runtime.summary if probability_runtime is not None else None,
-                    runtime_enabled=probability_runtime is not None,
-                )
-            ).write(output_path)
+        FinalResearchReportWriter(
+            FinalResearchReportSource(
+                target_video=prepared.target_video.model_dump(mode="json"),
+                users=[user.model_dump(mode="json") for user in sample_users],
+                historical_tags_by_user={
+                    user.user_id: sorted(prepared.historical_tags_by_user.get(user.user_id, set()))
+                    for user in sample_users
+                },
+                config=report_config,
+                offline_score_summary=score_summary,
+                holdout_diagnostic=diagnostic,
+                holdout_safe_audit=holdout_safe_audit,
+                artifact_manifest=artifact_manifest,
+                runtime_steps=probability_runtime.steps if probability_runtime is not None else (),
+                runtime_exposures=probability_runtime.exposures if probability_runtime is not None else (),
+                runtime_decisions=(
+                    ranking_runtime.decisions
+                    if ranking_runtime is not None
+                    else probability_runtime.decisions
+                    if probability_runtime is not None
+                    else ()
+                ),
+                runtime_provider_failures=(
+                    ranking_runtime.provider_failures
+                    if ranking_runtime is not None
+                    else probability_runtime.provider_failures
+                    if probability_runtime is not None
+                    else ()
+                ),
+                runtime_summary=probability_runtime.summary if probability_runtime is not None else None,
+                runtime_enabled=probability_runtime is not None or ranking_runtime is not None,
+                offline_scores=[score.model_dump(mode="json") for score in scores],
+                network_sample_audit=(
+                    _network_augmented_sample_audit(prepared, self.config)
+                    if model_policy.augment_network_sample
+                    else None
+                ),
+                ranking_steps=ranking_runtime.steps if ranking_runtime is not None else (),
+                ranking_candidates=ranking_runtime.candidates if ranking_runtime is not None else (),
+                ranking_outcomes=ranking_runtime.outcomes if ranking_runtime is not None else (),
+                ranking_diagnostics_summary=(ranking_diagnostics.summary if ranking_diagnostics is not None else None),
+                ranking_runtime_summary=ranking_runtime.summary if ranking_runtime is not None else None,
+            )
+        ).write(output_path)
         return output_path
 
     def _run_target_delivery_runtime(
