@@ -43,6 +43,11 @@ from .schemas import (
 TARGET_VIDEO_ID = "7328592728139353363"
 TARGET_NETWORK_SCOPE = "锦江酒店"
 PROFILE_INDEX_METHOD = "log1p_p95_reference_weighted_v2"
+NETWORK_AUGMENTED_SAMPLE_AUDIT_VERSION = "network-augmented-sample-audit-v1"
+OFFLINE_BASELINE_VERSION = "final-research-offline-v2"
+TARGET_DELIVERY_BASE_NETWORK_WEIGHT = 0.50
+TARGET_DELIVERY_ENGAGED_NEIGHBOR_WEIGHT = 0.30
+TARGET_DELIVERY_TAG_AFFINITY_WEIGHT = 0.20
 UNOBSERVED_PAIR_SEMANTICS = "No observed interaction is not evidence that a user saw the target video and chose ignore."
 REQUIRED_DATASET_FILES = ("videos.csv", "users.csv")
 SAMPLE_CSV_FIELDS = (
@@ -74,6 +79,8 @@ SAMPLE_CSV_FIELDS = (
 )
 SCORE_CSV_FIELDS = (
     "user_id",
+    "target_scope_weighted_degree",
+    "base_network_relevance",
     "base_network_score",
     "historical_tag_affinity",
     "recommendation_score",
@@ -224,6 +231,11 @@ class FinalResearchConfig(BaseModel):
             "network_weight": self.network_weight,
             "tag_affinity_weight": self.tag_affinity_weight,
             "neighbor_boost": self.neighbor_boost,
+            "target_delivery_ranking_weights": {
+                "base_network_relevance": TARGET_DELIVERY_BASE_NETWORK_WEIGHT,
+                "engaged_neighbor_signal": TARGET_DELIVERY_ENGAGED_NEIGHBOR_WEIGHT,
+                "historical_tag_affinity": TARGET_DELIVERY_TAG_AFFINITY_WEIGHT,
+            },
             "provider": self.provider.safe_metadata(),
             "report": self.report.model_dump(mode="json"),
         }
@@ -280,6 +292,8 @@ class OfflineRecommendationScore(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     user_id: str
+    target_scope_weighted_degree: int
+    base_network_relevance: float
     base_network_score: float
     historical_tag_affinity: float
     recommendation_score: float
@@ -355,7 +369,12 @@ class _PreparedInputs:
     target_video: TargetVideo
     users_by_id: dict[str, ResearchUser]
     sample_user_ids: list[str]
+    base_sample_user_ids: list[str]
     seed_user_ids: list[str]
+    network_cohort_user_ids: list[str]
+    network_cohort_added_user_ids: list[str]
+    replaced_ordinary_user_ids: list[str]
+    final_sample_user_ids: list[str]
     historical_video_count: int
     historical_interaction_rows: int
     thresholds: dict[str, float]
@@ -364,6 +383,9 @@ class _PreparedInputs:
     target_scope_weighted_degree: dict[str, int]
     target_scope_neighbors: dict[str, set[str]]
     source_scope_sample_counts: dict[str, int]
+    base_source_scope_sample_counts: dict[str, int]
+    final_source_scope_sample_counts: dict[str, int]
+    target_scope_p95_weighted_degree: float
 
 
 class _ResearchInputBuilder:
@@ -408,28 +430,81 @@ class _ResearchInputBuilder:
             all_history_degree=all_history_degree,
             thresholds=thresholds,
         )
-        sample_user_ids, sample_scope_by_user = _sample_users(
+        base_sample_user_ids, base_scope_by_user = _sample_users(
             videos=historical_videos,
             comments=historical_comments,
             available_user_ids=set(users_by_id),
             sample_size=self.config.sample_size,
             random_seed=self.config.random_seed,
         )
-        seed_user_ids = _select_seeds(sample_user_ids, users_by_id)
+        seed_user_ids = _select_seeds(base_sample_user_ids, users_by_id)
         seed_set = set(seed_user_ids)
-        for user_id in sample_user_ids:
+        base_sample_set = set(base_sample_user_ids)
+        network_cohort_user_ids = sorted(
+            {
+                neighbor_user_id
+                for seed_user_id in seed_user_ids
+                for neighbor_user_id in target_scope_neighbors.get(seed_user_id, set())
+                if neighbor_user_id in users_by_id and neighbor_user_id not in seed_set
+            }
+        )
+        network_cohort_set = set(network_cohort_user_ids)
+        network_cohort_added_user_ids = sorted(network_cohort_set - base_sample_set)
+        if self.config.provider.enabled:
+            replaced_ordinary_user_ids: list[str] = []
+            final_sample_user_ids = list(base_sample_user_ids)
+            final_scope_by_user = dict(base_scope_by_user)
+        else:
+            ordinary_replacement_candidates = sorted(base_sample_set - seed_set - network_cohort_set)
+            if len(ordinary_replacement_candidates) < len(network_cohort_added_user_ids):
+                raise ValueError(
+                    "network cohort cannot fit while preserving all seeds and cohort users: "
+                    f"need {len(network_cohort_added_user_ids)} replacements but only "
+                    f"{len(ordinary_replacement_candidates)} ordinary non-seed users are available"
+                )
+            replacement_rng = random.Random(_stable_seed(self.config.random_seed, "network-cohort-replacement"))
+            replacement_rng.shuffle(ordinary_replacement_candidates)
+            replaced_ordinary_user_ids = sorted(ordinary_replacement_candidates[: len(network_cohort_added_user_ids)])
+            replaced_set = set(replaced_ordinary_user_ids)
+            final_sample_user_ids = [
+                user_id for user_id in base_sample_user_ids if user_id not in replaced_set
+            ] + network_cohort_added_user_ids
+            if len(final_sample_user_ids) != self.config.sample_size or len(set(final_sample_user_ids)) != len(
+                final_sample_user_ids
+            ):
+                raise ValueError("network-augmented sample must contain sample_size unique users")
+            final_scope_by_user = {
+                user_id: scope_name for user_id, scope_name in base_scope_by_user.items() if user_id not in replaced_set
+            }
+            final_scope_by_user.update({user_id: TARGET_NETWORK_SCOPE for user_id in network_cohort_added_user_ids})
+        use_network_augmented_sample = not self.config.provider.enabled
+        sample_user_ids = final_sample_user_ids if use_network_augmented_sample else base_sample_user_ids
+        sample_scope_by_user = final_scope_by_user if use_network_augmented_sample else base_scope_by_user
+        for user_id in set(base_sample_user_ids) | set(network_cohort_added_user_ids):
             user = users_by_id[user_id]
             users_by_id[user_id] = user.model_copy(
                 update={
-                    "sample_source_scope": sample_scope_by_user[user_id],
+                    "sample_source_scope": final_scope_by_user.get(user_id, base_scope_by_user.get(user_id, "")),
                     "is_seed": user_id in seed_set,
                 }
             )
+        target_scope_p95_weighted_degree = round(
+            _percentile(
+                (target_scope_degree.get(user_id, 0) for user_id in users_by_id),
+                0.95,
+            ),
+            6,
+        )
         return _PreparedInputs(
             target_video=target_video,
             users_by_id=users_by_id,
             sample_user_ids=sample_user_ids,
+            base_sample_user_ids=base_sample_user_ids,
             seed_user_ids=seed_user_ids,
+            network_cohort_user_ids=network_cohort_user_ids,
+            network_cohort_added_user_ids=network_cohort_added_user_ids,
+            replaced_ordinary_user_ids=replaced_ordinary_user_ids,
+            final_sample_user_ids=final_sample_user_ids,
             historical_video_count=len(historical_videos),
             historical_interaction_rows=len(historical_comments),
             thresholds=thresholds,
@@ -438,6 +513,9 @@ class _ResearchInputBuilder:
             target_scope_weighted_degree=target_scope_degree,
             target_scope_neighbors=target_scope_neighbors,
             source_scope_sample_counts=dict(sorted(Counter(sample_scope_by_user.values()).items())),
+            base_source_scope_sample_counts=dict(sorted(Counter(base_scope_by_user.values()).items())),
+            final_source_scope_sample_counts=dict(sorted(Counter(final_scope_by_user.values()).items())),
+            target_scope_p95_weighted_degree=target_scope_p95_weighted_degree,
         )
 
     def reveal_holdout(self) -> list[_CommentRecord]:
@@ -500,14 +578,27 @@ class _ResearchInputBuilder:
 class PlatformRecommendationModel:
     """Recommendation scoring and direct-neighbor runtime feedback."""
 
-    def __init__(self, config: FinalResearchConfig, prepared: _PreparedInputs) -> None:
+    def __init__(
+        self,
+        config: FinalResearchConfig,
+        prepared: _PreparedInputs,
+        *,
+        use_target_delivery_baseline: bool,
+    ) -> None:
         self.config = config
         self.prepared = prepared
-        max_degree = max(prepared.target_scope_weighted_degree.values(), default=0)
-        self._base_network_scores = {
-            user_id: (degree / max_degree if max_degree > 0 else 0.0)
-            for user_id, degree in prepared.target_scope_weighted_degree.items()
-        }
+        self._use_target_delivery_baseline = use_target_delivery_baseline
+        if use_target_delivery_baseline:
+            self._base_network_scores = {
+                user_id: _log_p95_score(degree, prepared.target_scope_p95_weighted_degree)
+                for user_id, degree in prepared.target_scope_weighted_degree.items()
+            }
+        else:
+            max_degree = max(prepared.target_scope_weighted_degree.values(), default=0)
+            self._base_network_scores = {
+                user_id: (degree / max_degree if max_degree > 0 else 0.0)
+                for user_id, degree in prepared.target_scope_weighted_degree.items()
+            }
         self._target_tags = set(prepared.target_video.hashtags)
         self._target_exposed_user_ids: set[str] = set()
         self._engaged_actions: dict[str, str] = {}
@@ -519,9 +610,17 @@ class PlatformRecommendationModel:
     def score_static(self, user_id: str) -> OfflineRecommendationScore:
         affinity = self._historical_tag_affinity(user_id)
         base_network_score = self._base_network_scores.get(user_id, 0.0)
-        score = self.config.network_weight * base_network_score + self.config.tag_affinity_weight * affinity
+        if self._use_target_delivery_baseline:
+            score = (
+                TARGET_DELIVERY_BASE_NETWORK_WEIGHT * base_network_score
+                + TARGET_DELIVERY_TAG_AFFINITY_WEIGHT * affinity
+            )
+        else:
+            score = self.config.network_weight * base_network_score + self.config.tag_affinity_weight * affinity
         return OfflineRecommendationScore(
             user_id=user_id,
+            target_scope_weighted_degree=self.prepared.target_scope_weighted_degree.get(user_id, 0),
+            base_network_relevance=round(base_network_score, 6),
             base_network_score=round(base_network_score, 6),
             historical_tag_affinity=round(affinity, 6),
             recommendation_score=round(score, 6),
@@ -593,7 +692,12 @@ class FinalResearchRunner:
 
         builder = _ResearchInputBuilder(self.config)
         prepared = builder.prepare()
-        platform = PlatformRecommendationModel(self.config, prepared)
+        use_target_delivery_baseline = not self.config.provider.enabled
+        platform = PlatformRecommendationModel(
+            self.config,
+            prepared,
+            use_target_delivery_baseline=use_target_delivery_baseline,
+        )
         scores = platform.score_all()
         ranked_scores = sorted(scores, key=lambda item: (-item.recommendation_score, item.user_id))
         top_scores = ranked_scores[:20]
@@ -602,7 +706,13 @@ class FinalResearchRunner:
         holdout_comments = builder.reveal_holdout()
         holdout_participant_ids = sorted({comment.commenter_user_id for comment in holdout_comments})
         diagnostic = _holdout_diagnostic(holdout_participant_ids, top_scores, scores_by_user)
-        score_summary = _score_summary(scores, ranked_scores, self.config)
+        score_summary = _score_summary(
+            scores,
+            ranked_scores,
+            self.config,
+            use_target_delivery_baseline=use_target_delivery_baseline,
+        )
+        network_augmented_sample_audit = _network_augmented_sample_audit(prepared, self.config)
         holdout_safe_audit = {
             "profile_index_method": PROFILE_INDEX_METHOD,
             "historical_video_count": prepared.historical_video_count,
@@ -611,8 +721,7 @@ class FinalResearchRunner:
             "holdout_unique_participant_count": len(holdout_participant_ids),
             "holdout_safe_reference_thresholds": prepared.thresholds,
             "activity_formula": (
-                "0.25 * Norm(video_count) + 0.45 * Norm(historical_comment_count) "
-                "+ 0.30 * Norm(historical_reply_count)"
+                "0.25 * Norm(video_count) + 0.45 * Norm(historical_comment_count) + 0.30 * Norm(historical_reply_count)"
             ),
             "local_influence_formula": (
                 "0.60 * Norm(historical_edge_degree) + 0.40 * Norm(historical_comment_like_sum)"
@@ -631,8 +740,18 @@ class FinalResearchRunner:
             ),
             "sample_size": len(prepared.sample_user_ids),
             "source_scope_sample_counts": prepared.source_scope_sample_counts,
+            "base_source_scope_sample_counts": prepared.base_source_scope_sample_counts,
+            "final_source_scope_sample_counts": prepared.final_source_scope_sample_counts,
             "global_top10_local_top10_seed_union": prepared.seed_user_ids,
             "seed_count": len(prepared.seed_user_ids),
+            "base_network_relevance": {
+                "formula": "min(1, log1p(weighted_degree) / log1p(P95_weighted_degree))",
+                "target_source_scope": TARGET_NETWORK_SCOPE,
+                "p95_weighted_degree": prepared.target_scope_p95_weighted_degree,
+                "reference_user_count": len(prepared.users_by_id),
+                "holdout_safe": True,
+                "zero_degree_relevance": 0.0,
+            },
             "source_dataset_modified": False,
             "holdout_boundary": (
                 "Target interactions and aggregate engagement counts were excluded from profile projection, "
@@ -663,6 +782,8 @@ class FinalResearchRunner:
                     "runtime_summary": "runtime_summary.json",
                 }
             )
+        else:
+            artifacts["network_augmented_sample_audit"] = "network_augmented_sample_audit.json"
         sample_users = [prepared.users_by_id[user_id] for user_id in prepared.sample_user_ids]
         _write_json(output_path / artifacts["config_snapshot"], self.config.snapshot())
         _write_json(output_path / artifacts["target_video_snapshot"], prepared.target_video.model_dump(mode="json"))
@@ -687,6 +808,11 @@ class FinalResearchRunner:
             score_summary,
         )
         _write_json(output_path / artifacts["holdout_diagnostic"], diagnostic)
+        if runtime is None:
+            _write_json(
+                output_path / artifacts["network_augmented_sample_audit"],
+                network_augmented_sample_audit,
+            )
         if runtime is not None:
             _write_csv(output_path / artifacts["runtime_steps"], list(RUNTIME_STEP_CSV_FIELDS), runtime.steps)
             _write_csv(
@@ -714,18 +840,28 @@ class FinalResearchRunner:
         _write_json(output_path / artifacts["holdout_safe_audit"], holdout_safe_audit)
         report_config = self.config.snapshot()
         report_config["report_title"] = self.config.report.title
+        manifest_counts = {
+            "historical_videos": prepared.historical_video_count,
+            "users_scored": len(scores),
+            "sample_users": len(prepared.sample_user_ids),
+            "seed_users": len(prepared.seed_user_ids),
+            "runtime_exposures": len(runtime.exposures) if runtime is not None else 0,
+            "runtime_decisions": len(runtime.decisions) if runtime is not None else 0,
+            "runtime_provider_failures": len(runtime.provider_failures) if runtime is not None else 0,
+        }
+        if runtime is None:
+            manifest_counts.update(
+                {
+                    "base_sample_users": len(prepared.base_sample_user_ids),
+                    "network_cohort_users": len(prepared.network_cohort_user_ids),
+                    "network_cohort_added_users": len(prepared.network_cohort_added_user_ids),
+                    "replaced_ordinary_users": len(prepared.replaced_ordinary_user_ids),
+                }
+            )
         artifact_manifest = {
-            "manifest_version": FINAL_RESEARCH_RUNTIME_VERSION if runtime is not None else "final-research-offline-v1",
+            "manifest_version": FINAL_RESEARCH_RUNTIME_VERSION if runtime is not None else OFFLINE_BASELINE_VERSION,
             "artifacts": artifacts,
-            "counts": {
-                "historical_videos": prepared.historical_video_count,
-                "users_scored": len(scores),
-                "sample_users": len(prepared.sample_user_ids),
-                "seed_users": len(prepared.seed_user_ids),
-                "runtime_exposures": len(runtime.exposures) if runtime is not None else 0,
-                "runtime_decisions": len(runtime.decisions) if runtime is not None else 0,
-                "runtime_provider_failures": len(runtime.provider_failures) if runtime is not None else 0,
-            },
+            "counts": manifest_counts,
             "live_api_triggered": _adapter_live_api_triggered(self.decision_adapter),
             "decision_adapter_calls": runtime.decision_adapter_calls if runtime is not None else 0,
         }
@@ -1258,17 +1394,72 @@ def _holdout_diagnostic(
     }
 
 
+def _network_augmented_sample_audit(
+    prepared: _PreparedInputs,
+    config: FinalResearchConfig,
+) -> dict[str, object]:
+    base_sample_set = set(prepared.base_sample_user_ids)
+    cohort_set = set(prepared.network_cohort_user_ids)
+    return {
+        "schema_version": NETWORK_AUGMENTED_SAMPLE_AUDIT_VERSION,
+        "sample_size": config.sample_size,
+        "base_sample": {
+            "user_ids": sorted(prepared.base_sample_user_ids),
+            "count": len(prepared.base_sample_user_ids),
+            "source_scope_counts": prepared.base_source_scope_sample_counts,
+        },
+        "seed_user_ids": prepared.seed_user_ids,
+        "seed_count": len(prepared.seed_user_ids),
+        "network_cohort": {
+            "user_ids": prepared.network_cohort_user_ids,
+            "count": len(prepared.network_cohort_user_ids),
+            "already_in_base_user_ids": sorted(cohort_set & base_sample_set),
+            "added_user_ids": prepared.network_cohort_added_user_ids,
+            "target_source_scope": TARGET_NETWORK_SCOPE,
+            "historical_set_only": True,
+            "direct_neighbors_only": True,
+        },
+        "ordinary_replacement": {
+            "removed_user_ids": prepared.replaced_ordinary_user_ids,
+            "count": len(prepared.replaced_ordinary_user_ids),
+            "random_seed": _stable_seed(config.random_seed, "network-cohort-replacement"),
+            "eligible_role": "base sample ordinary non-seed outside network cohort",
+        },
+        "final_sample": {
+            "user_ids": sorted(prepared.final_sample_user_ids),
+            "count": len(prepared.final_sample_user_ids),
+            "unique_user_count": len(set(prepared.final_sample_user_ids)),
+            "source_scope_counts": prepared.final_source_scope_sample_counts,
+        },
+        "seed_selection_stage": "base_sample_before_network_augmentation",
+        "source_dataset_modified": False,
+    }
+
+
 def _score_summary(
     scores: Sequence[OfflineRecommendationScore],
     ranked_scores: Sequence[OfflineRecommendationScore],
     config: FinalResearchConfig,
+    *,
+    use_target_delivery_baseline: bool,
 ) -> dict[str, object]:
     values = [score.recommendation_score for score in scores]
+    if use_target_delivery_baseline:
+        formula = (
+            "0.50 * base_network_relevance + 0.20 * historical_tag_affinity "
+            "(static portion of the predeclared 0.50/0.30/0.20 ranking model)"
+        )
+        network_weight = TARGET_DELIVERY_BASE_NETWORK_WEIGHT
+        tag_affinity_weight = TARGET_DELIVERY_TAG_AFFINITY_WEIGHT
+    else:
+        formula = "network_weight * base_network_score + tag_affinity_weight * historical_tag_affinity"
+        network_weight = config.network_weight
+        tag_affinity_weight = config.tag_affinity_weight
     return {
         "user_count": len(scores),
-        "formula": "network_weight * base_network_score + tag_affinity_weight * historical_tag_affinity",
-        "network_weight": config.network_weight,
-        "tag_affinity_weight": config.tag_affinity_weight,
+        "formula": formula,
+        "network_weight": network_weight,
+        "tag_affinity_weight": tag_affinity_weight,
         "minimum_score": min(values, default=0.0),
         "maximum_score": max(values, default=0.0),
         "mean_score": round(sum(values) / len(values), 6) if values else 0.0,

@@ -3,6 +3,7 @@ from __future__ import annotations
 import csv
 import hashlib
 import json
+import math
 import shutil
 from pathlib import Path
 from typing import Any
@@ -294,6 +295,74 @@ def _make_processed_fixture(tmp_path: Path, *, user_count: int = 6, dense_target
     return dataset_dir
 
 
+def _make_network_augmented_fixture(tmp_path: Path) -> Path:
+    dataset_dir = _make_processed_fixture(tmp_path, user_count=22)
+    video_rows = _read_csv(dataset_dir / "videos.csv")
+    for row in video_rows:
+        if row["video_id"] == "history-jinjiang":
+            row["creator_user_id"] = "u11"
+    _write_csv(dataset_dir / "videos.csv", list(video_rows[0]), video_rows)
+
+    historical_rows = [
+        {
+            "comment_id": f"scope-a-{number}",
+            "video_id": "history-scope-a",
+            "parent_comment_id": "0",
+            "commenter_user_id": f"u{number}",
+            "mentioned_user_ids": "[]",
+            "like_count": number,
+            "comment_level": "comment",
+        }
+        for number in range(1, 12)
+    ]
+    historical_rows.extend(
+        {
+            "comment_id": f"target-scope-{number}",
+            "video_id": "history-jinjiang",
+            "parent_comment_id": "0",
+            "commenter_user_id": f"u{number}",
+            "mentioned_user_ids": '["u21", "u22"]' if number == 20 else "[]",
+            "like_count": number,
+            "comment_level": "comment",
+        }
+        for number in range(12, 21)
+    )
+    _write_csv(
+        dataset_dir / "all_comments.csv",
+        [
+            "comment_id",
+            "video_id",
+            "parent_comment_id",
+            "commenter_user_id",
+            "mentioned_user_ids",
+            "like_count",
+            "comment_level",
+        ],
+        [
+            *historical_rows,
+            {
+                "comment_id": "target-holdout-1",
+                "video_id": TARGET_VIDEO_ID,
+                "parent_comment_id": "0",
+                "commenter_user_id": "u1",
+                "mentioned_user_ids": "[]",
+                "like_count": 999,
+                "comment_level": "comment",
+            },
+            {
+                "comment_id": "target-holdout-2",
+                "video_id": TARGET_VIDEO_ID,
+                "parent_comment_id": "target-holdout-1",
+                "commenter_user_id": "u5",
+                "mentioned_user_ids": "[]",
+                "like_count": 999,
+                "comment_level": "reply",
+            },
+        ],
+    )
+    return dataset_dir
+
+
 class _ScriptedProviderClient:
     def __init__(self) -> None:
         self.calls = 0
@@ -356,6 +425,7 @@ def test_offline_final_research_baseline_is_holdout_safe_and_deterministic(tmp_p
     assert first_output == tmp_path / "run-a"
     assert adapter.calls == 0
     manifest = json.loads((first_output / "artifact_manifest.json").read_text(encoding="utf-8"))
+    assert manifest["manifest_version"] == "final-research-offline-v2"
     assert manifest["artifacts"] == {
         "config_snapshot": "config_snapshot.json",
         "final_research_report": "report.html",
@@ -364,6 +434,7 @@ def test_offline_final_research_baseline_is_holdout_safe_and_deterministic(tmp_p
         "final_research_users_json": "final_research_users.json",
         "holdout_diagnostic": "top20_holdout_diagnostic.json",
         "holdout_safe_audit": "holdout_safe_audit.json",
+        "network_augmented_sample_audit": "network_augmented_sample_audit.json",
         "offline_score_summary": "offline_score_summary.json",
         "offline_scores": "offline_scores.csv",
         "sample_manifest_csv": "sample_manifest.csv",
@@ -400,8 +471,9 @@ def test_offline_final_research_baseline_is_holdout_safe_and_deterministic(tmp_p
     score_rows = {row["user_id"]: row for row in _read_csv(first_output / "offline_scores.csv")}
     assert len(score_rows) == 6
     assert float(score_rows["u1"]["historical_tag_affinity"]) == 0.5
+    assert float(score_rows["u1"]["base_network_relevance"]) == 1.0
     assert float(score_rows["u1"]["base_network_score"]) == 1.0
-    assert float(score_rows["u1"]["recommendation_score"]) == 0.85
+    assert float(score_rows["u1"]["recommendation_score"]) == 0.6
     assert score_rows["u5"]["has_non_target_history"] == "false"
     assert float(score_rows["u5"]["recommendation_score"]) == 0.0
     assert score_rows["u3"]["has_non_target_history"] == "true"
@@ -436,6 +508,79 @@ def test_offline_final_research_baseline_is_holdout_safe_and_deterministic(tmp_p
     assert "<dt>推荐批次</dt><dd>未执行</dd>" in offline_html
     for relative_path in manifest["artifacts"].values():
         assert (first_output / relative_path).read_bytes() == (second_output / relative_path).read_bytes()
+
+
+def test_offline_final_research_builds_network_augmented_sample_and_log_p95_scores(tmp_path: Path) -> None:
+    dataset_dir = _make_network_augmented_fixture(tmp_path)
+    adapter = FailingIfCalledAdapter()
+    config = FinalResearchConfig(dataset_dir=dataset_dir, sample_size=20, random_seed=20260713)
+
+    first_output = FinalResearchRunner(config, adapter).run_and_write(tmp_path / "network-run-a")
+    second_output = FinalResearchRunner(config, adapter).run_and_write(tmp_path / "network-run-b")
+
+    assert adapter.calls == 0
+    manifest = json.loads((first_output / "artifact_manifest.json").read_text(encoding="utf-8"))
+    assert manifest["manifest_version"] == "final-research-offline-v2"
+    assert manifest["artifacts"]["network_augmented_sample_audit"] == "network_augmented_sample_audit.json"
+
+    audit = json.loads((first_output / "network_augmented_sample_audit.json").read_text(encoding="utf-8"))
+    assert audit["schema_version"] == "network-augmented-sample-audit-v1"
+    assert audit["base_sample"]["user_ids"] == sorted(f"u{number}" for number in range(1, 21))
+    assert audit["seed_user_ids"] == [f"u{number}" for number in range(11, 21)]
+    assert audit["network_cohort"]["user_ids"] == ["u21", "u22"]
+    assert audit["network_cohort"]["added_user_ids"] == ["u21", "u22"]
+    assert audit["ordinary_replacement"]["count"] == 2
+    assert set(audit["ordinary_replacement"]["removed_user_ids"]) <= {f"u{number}" for number in range(1, 11)}
+    assert audit["base_sample"]["source_scope_counts"] == {"锦江酒店": 9, "锦江都城酒店": 11}
+    assert audit["final_sample"]["source_scope_counts"] == {"锦江酒店": 11, "锦江都城酒店": 9}
+
+    final_user_ids = audit["final_sample"]["user_ids"]
+    assert len(final_user_ids) == len(set(final_user_ids)) == 20
+    assert set(audit["seed_user_ids"]) <= set(final_user_ids)
+    assert set(audit["network_cohort"]["user_ids"]) <= set(final_user_ids)
+    assert not set(audit["ordinary_replacement"]["removed_user_ids"]) & set(final_user_ids)
+    assert {row["user_id"] for row in _read_csv(first_output / "sample_manifest.csv")} == set(final_user_ids)
+
+    holdout_audit = json.loads((first_output / "holdout_safe_audit.json").read_text(encoding="utf-8"))
+    p95_degree = holdout_audit["base_network_relevance"]["p95_weighted_degree"]
+    assert p95_degree == pytest.approx(2.9)
+    score_rows = {row["user_id"]: row for row in _read_csv(first_output / "offline_scores.csv")}
+    assert int(score_rows["u12"]["target_scope_weighted_degree"]) == 1
+    assert float(score_rows["u12"]["base_network_relevance"]) == pytest.approx(
+        min(1.0, math.log1p(1) / math.log1p(p95_degree)), abs=1e-6
+    )
+    assert float(score_rows["u1"]["base_network_relevance"]) == 0.0
+    assert float(score_rows["u12"]["recommendation_score"]) == pytest.approx(
+        0.50 * float(score_rows["u12"]["base_network_relevance"])
+        + 0.20 * float(score_rows["u12"]["historical_tag_affinity"]),
+        abs=1e-6,
+    )
+
+    for relative_path in manifest["artifacts"].values():
+        assert (first_output / relative_path).read_bytes() == (second_output / relative_path).read_bytes()
+
+
+def test_offline_final_research_handles_zero_target_scope_network_without_holdout_leakage(tmp_path: Path) -> None:
+    dataset_dir = _make_processed_fixture(tmp_path)
+    video_rows = _read_csv(dataset_dir / "videos.csv")
+    for row in video_rows:
+        if row["video_id"] == "history-jinjiang":
+            row["source_challenge_name"] = "其他历史来源"
+    _write_csv(dataset_dir / "videos.csv", list(video_rows[0]), video_rows)
+
+    adapter = FailingIfCalledAdapter()
+    output_dir = FinalResearchRunner(
+        FinalResearchConfig(dataset_dir=dataset_dir, sample_size=4),
+        adapter,
+    ).run_and_write(tmp_path / "zero-network-run")
+
+    assert adapter.calls == 0
+    holdout_audit = json.loads((output_dir / "holdout_safe_audit.json").read_text(encoding="utf-8"))
+    assert holdout_audit["holdout_interaction_rows"] == 2
+    assert holdout_audit["base_network_relevance"]["p95_weighted_degree"] == 0.0
+    score_rows = _read_csv(output_dir / "offline_scores.csv")
+    assert {int(row["target_scope_weighted_degree"]) for row in score_rows} == {0}
+    assert {float(row["base_network_relevance"]) for row in score_rows} == {0.0}
 
 
 def test_mocked_provider_final_research_runs_fixed_batches_and_continues_after_failure(tmp_path: Path) -> None:
@@ -574,16 +719,14 @@ def test_mocked_provider_final_research_runs_fixed_batches_and_continues_after_f
     assert report_payload["decision_contract"]["persisted_context_label"] == "重建的决策上下文"
     assert report_payload["downloads"]["csv"] == "final_research_users.csv"
     assert report_payload["downloads"]["users_json"] == "final_research_users.json"
-    assert "data-testid=\"final-research-report\"" in report_html
+    assert 'data-testid="final-research-report"' in report_html
     assert "final_research_users.csv" in report_html
     assert "final_research_users.json" in report_html
     assert "artifact_manifest.json" in report_html
     assert 'data-testid="funnel-section"' in report_html
     assert 'data-testid="recommendation-section"' in report_html
     assert 'data-testid="decision-section"' in report_html
-    non_seed_target_exposures = sum(
-        row["exposure_outcome"] == "target_exposed" for row in non_seed_rows
-    )
+    non_seed_target_exposures = sum(row["exposure_outcome"] == "target_exposed" for row in non_seed_rows)
     expected_exposure_breakdown = (
         f"{len(target_exposures)} 次 Provider Decision 调用来自 {len(seed_rows)} 个强制 seed 曝光和 "
         f"{non_seed_target_exposures} 个普通用户抽签曝光。"
