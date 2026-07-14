@@ -1209,6 +1209,7 @@ class FinalResearchRunner:
                 ranking_steps=ranking_runtime.steps if ranking_runtime is not None else (),
                 ranking_candidates=ranking_runtime.candidates if ranking_runtime is not None else (),
                 ranking_outcomes=ranking_runtime.outcomes if ranking_runtime is not None else (),
+                ranking_diagnostics=(ranking_diagnostics.payload if ranking_diagnostics is not None else None),
                 ranking_diagnostics_summary=(ranking_diagnostics.summary if ranking_diagnostics is not None else None),
                 ranking_runtime_summary=ranking_runtime.summary if ranking_runtime is not None else None,
             )

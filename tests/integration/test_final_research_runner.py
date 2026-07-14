@@ -13,6 +13,7 @@ from pydantic import ValidationError
 
 from llm_abm_sim import FinalResearchConfig, FinalResearchModel, FinalResearchRunner, rebuild_final_research_report
 from llm_abm_sim.decision import EngageDecision, LLMDecisionAdapter, ProviderDecisionError
+from llm_abm_sim.final_research_report import FinalResearchRankingReportPayload, FinalResearchReportWriter
 from llm_abm_sim.providers.openai_compatible import OpenAICompatibleDecisionAdapter
 from llm_abm_sim.safe_serialization import artifact_has_forbidden_terms
 from llm_abm_sim.schemas import (
@@ -869,7 +870,15 @@ def test_target_delivery_ranking_runtime_reranks_global_top20_after_seed_engagem
     assert [row["user_id"] for row in report_payload["users"]] == [row["user_id"] for row in report_users["users"]]
     assert {row["result_status"] for row in report_payload["users"]} == {"like", "ignore", "provider_failed"}
     lineage = {entry["field_name"]: entry for entry in report_payload["field_lineage"]}
-    assert set(lineage) == set(report_payload["users"][0])
+    assert set(report_payload["users"][0]) <= set(lineage)
+    assert {
+        "target_video.caption",
+        "run.ranking_formula",
+        "sample_comparison.network_cohort_count",
+        "ranking_rounds.candidates.recommendation_score",
+        "ranking_diagnostics.paired_ablation",
+        "ranking_diagnostics.weight_sensitivity",
+    } <= set(lineage)
     assert {entry["provenance"] for entry in lineage.values()} <= {
         "Direct Observed Profile Field",
         "Historical Behavioral Evidence",
@@ -900,6 +909,16 @@ def test_target_delivery_ranking_runtime_reranks_global_top20_after_seed_engagem
     assert 'data-testid="ranking-users-section"' in report_html
     assert "random_draw" not in report_html
     assert "background_content" not in report_html
+    assert report_payload["ranking_diagnostics"] == ranking_diagnostics
+    assert sum(len(round_row["candidates"]) for round_row in report_payload["ranking_rounds"]) == len(candidates)
+    batch_one_report = report_payload["ranking_rounds"][1]
+    assert batch_one_report["candidates_with_positive_engaged_neighbor_signal"] > 0
+    assert batch_one_report["selected_with_positive_engaged_neighbor_signal"] > 0
+    assert batch_one_report["maximum_engaged_neighbor_signal"] == pytest.approx(1 / 3, abs=1e-6)
+    assert all(row["report_path"] == "report.html" for row in report_rows)
+    assert all(row["payload_path"] == "final_research_report_payload.json" for row in report_rows)
+    assert all(row["json_path"] == "final_research_users.json" for row in report_rows)
+    assert all(row["manifest_path"] == "artifact_manifest.json" for row in report_rows)
 
     runtime_text = "\n".join(
         (first_output / relative_path).read_text(encoding="utf-8")
@@ -1011,6 +1030,24 @@ def test_target_delivery_ranking_report_rebuild_is_deterministic(tmp_path: Path)
     } == preserved_artifacts
 
 
+def test_target_delivery_ranking_report_escapes_download_paths_in_html(tmp_path: Path) -> None:
+    dataset_dir = _make_target_delivery_fixture(tmp_path)
+    provider_config = ProviderLLMConfig(enabled=True, model="mock-model", require_live_env=False)
+    run_dir = FinalResearchRunner(
+        FinalResearchConfig(dataset_dir=dataset_dir, sample_size=70, provider=provider_config),
+        _TargetDeliveryAdapter(),
+    ).run_and_write(tmp_path / "ranking-download-escaping")
+    payload = FinalResearchRankingReportPayload.model_validate_json(
+        (run_dir / "final_research_report_payload.json").read_text(encoding="utf-8")
+    )
+    payload.downloads.csv = 'users" onmouseover="alert(1).csv'
+
+    html = FinalResearchReportWriter.render_payload(payload)
+
+    assert 'href="users&quot; onmouseover=&quot;alert(1).csv"' in html
+    assert 'href="users" onmouseover="alert(1).csv"' not in html
+
+
 @pytest.mark.parametrize(
     "corruption",
     [
@@ -1019,6 +1056,7 @@ def test_target_delivery_ranking_report_rebuild_is_deterministic(tmp_path: Path)
         "duplicate_payload_user",
         "duplicate_runtime_user",
         "count_mismatch",
+        "diagnostic_boolean_string",
         "unsafe_path",
     ],
 )
@@ -1057,6 +1095,11 @@ def test_target_delivery_ranking_report_rebuild_rejects_invalid_evidence_before_
         summary = json.loads(summary_path.read_text(encoding="utf-8"))
         summary["counts"]["sample_users"] += 1
         summary_path.write_text(json.dumps(summary, ensure_ascii=False) + "\n", encoding="utf-8")
+    elif corruption == "diagnostic_boolean_string":
+        diagnostics_path = run_dir / "ranking_diagnostics_summary.json"
+        diagnostics = json.loads(diagnostics_path.read_text(encoding="utf-8"))
+        diagnostics["recommendation_signal_inclusion"]["network_signals_in_formula"] = "false"
+        diagnostics_path.write_text(json.dumps(diagnostics, ensure_ascii=False) + "\n", encoding="utf-8")
     else:
         manifest_path = run_dir / "artifact_manifest.json"
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))

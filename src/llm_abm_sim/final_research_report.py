@@ -455,6 +455,20 @@ class FieldLineageEntry(BaseModel):
         return self
 
 
+class RankingCandidateEvidence(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    ranking_position: int
+    user_id: str
+    is_seed: bool
+    selected: bool
+    base_network_relevance: float
+    engaged_neighbor_count: int
+    engaged_neighbor_signal: float
+    historical_tag_affinity: float
+    recommendation_score: float
+
+
 class RankingRoundSummary(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -469,6 +483,10 @@ class RankingRoundSummary(BaseModel):
     ignored: int
     provider_failed: int
     below_delivery_capacity: int
+    candidates_with_positive_engaged_neighbor_signal: int
+    selected_with_positive_engaged_neighbor_signal: int
+    maximum_engaged_neighbor_signal: float
+    candidates: list[RankingCandidateEvidence]
 
 
 class RankingPromptContract(BaseModel):
@@ -566,6 +584,10 @@ class RankingUserReportRow(BaseModel):
     confidence: float | None = None
     decision_source: str = ""
     provider_failure_type: str = ""
+    report_path: str = FINAL_RESEARCH_REPORT_ARTIFACTS["final_research_report"]
+    payload_path: str = FINAL_RESEARCH_REPORT_ARTIFACTS["final_research_report_payload"]
+    json_path: str = FINAL_RESEARCH_REPORT_ARTIFACTS["final_research_users_json"]
+    manifest_path: str = "artifact_manifest.json"
 
     def csv_row(self) -> dict[str, object]:
         row = self.model_dump(mode="json")
@@ -587,7 +609,8 @@ class FinalResearchRankingReportPayload(BaseModel):
     field_lineage: list[FieldLineageEntry]
     prompt_contract: RankingPromptContract
     ranking_rounds: list[RankingRoundSummary]
-    ranking_diagnostics: RankingDiagnosticSummary
+    ranking_diagnostics: dict[str, object]
+    ranking_diagnostics_summary: RankingDiagnosticSummary
     downloads: RankingReportDownloads
     limitations: list[str]
     users: list[RankingUserReportRow]
@@ -597,7 +620,7 @@ class FinalResearchRankingReportPayload(BaseModel):
         declared = [entry.field_name for entry in self.field_lineage]
         if len(declared) != len(set(declared)):
             raise ValueError("field lineage must declare each field exactly once")
-        expected = set(RankingUserReportRow.model_fields)
+        expected = _ranking_lineage_field_names()
         if set(declared) != expected:
             missing = sorted(expected - set(declared))
             extra = sorted(set(declared) - expected)
@@ -626,6 +649,7 @@ class FinalResearchReportSource:
     ranking_steps: Sequence[Mapping[str, object]] = ()
     ranking_candidates: Sequence[Mapping[str, object]] = ()
     ranking_outcomes: Sequence[Mapping[str, object]] = ()
+    ranking_diagnostics: Mapping[str, object] | None = None
     ranking_diagnostics_summary: Mapping[str, object] | None = None
     ranking_runtime_summary: Mapping[str, object] | None = None
 
@@ -1019,6 +1043,8 @@ def _build_ranking_report_payload(source: FinalResearchReportSource) -> FinalRes
         raise ValueError("ranking report requires network sample audit evidence")
     if source.ranking_runtime_summary is None:
         raise ValueError("ranking report requires ranking runtime summary evidence")
+    if source.ranking_diagnostics is None:
+        raise ValueError("ranking report requires ranking diagnostics evidence")
     if source.ranking_diagnostics_summary is None:
         raise ValueError("ranking report requires ranking diagnostics summary evidence")
 
@@ -1275,13 +1301,14 @@ def _build_ranking_report_payload(source: FinalResearchReportSource) -> FinalRes
             ),
         ),
         ranking_rounds=rounds,
-        ranking_diagnostics=RankingDiagnosticSummary(
-            network_signals_in_formula=bool(inclusion.get("network_signals_in_formula", False)),
+        ranking_diagnostics=dict(source.ranking_diagnostics),
+        ranking_diagnostics_summary=RankingDiagnosticSummary(
+            network_signals_in_formula=_strict_bool(inclusion.get("network_signals_in_formula")),
             main_weights={
                 str(key): _as_float(value)
                 for key, value in _required_mapping(inclusion, "main_weights", "ranking signal inclusion").items()
             },
-            top_selection_changed=bool(effect.get("top_selection_changed", False)),
+            top_selection_changed=_strict_bool(effect.get("top_selection_changed")),
             batches_with_top_selection_change=_as_int(effect.get("batches_with_top_selection_change")),
             diagnostic_decision_adapter_calls=_as_int(diagnostic_summary.get("diagnostic_decision_adapter_calls")),
         ),
@@ -1313,28 +1340,63 @@ def _ranking_round_summaries(
     rounds: list[RankingRoundSummary] = []
     for step in step_rows:
         time_step = _as_int(step.get("time_step"))
-        candidates = candidates_by_step.get(time_step, ())
-        selected = [
-            row
-            for row in sorted(candidates, key=lambda row: _as_int(row.get("ranking_position")))
-            if _as_bool(row.get("selected"))
+        candidates = [
+            RankingCandidateEvidence(
+                ranking_position=_as_int(row.get("ranking_position")),
+                user_id=str(row.get("user_id", "")),
+                is_seed=_as_bool(row.get("is_seed")),
+                selected=_as_bool(row.get("selected")),
+                base_network_relevance=_as_float(row.get("base_network_relevance")),
+                engaged_neighbor_count=_as_int(row.get("engaged_neighbor_count")),
+                engaged_neighbor_signal=_as_float(row.get("engaged_neighbor_signal")),
+                historical_tag_affinity=_as_float(row.get("historical_tag_affinity")),
+                recommendation_score=_as_float(row.get("recommendation_score")),
+            )
+            for row in sorted(
+                candidates_by_step.get(time_step, ()),
+                key=lambda row: _as_int(row.get("ranking_position")),
+            )
         ]
+        selected = [row for row in candidates if row.selected]
+        positive_signal = [row for row in candidates if row.engaged_neighbor_signal > 0.0]
         rounds.append(
             RankingRoundSummary(
                 time_step=time_step,
                 eligible_count=_as_int(step.get("eligible_users")),
                 delivery_capacity=delivery_capacity,
                 selected_count=_as_int(step.get("selected_users")),
-                selected_user_ids=[str(row.get("user_id", "")) for row in selected],
+                selected_user_ids=[row.user_id for row in selected],
                 target_exposures=_as_int(step.get("target_exposures")),
                 decisions=_as_int(step.get("decisions")),
                 engagements=_as_int(step.get("engagements")),
                 ignored=_as_int(step.get("ignored")),
                 provider_failed=_as_int(step.get("provider_failed")),
                 below_delivery_capacity=_as_int(step.get("below_delivery_capacity")),
+                candidates_with_positive_engaged_neighbor_signal=len(positive_signal),
+                selected_with_positive_engaged_neighbor_signal=sum(row.selected for row in positive_signal),
+                maximum_engaged_neighbor_signal=max(
+                    (row.engaged_neighbor_signal for row in candidates),
+                    default=0.0,
+                ),
+                candidates=candidates,
             )
         )
     return rounds
+
+
+def _ranking_lineage_field_names() -> set[str]:
+    return {
+        *RankingUserReportRow.model_fields,
+        *(f"target_video.{field}" for field in FinalResearchTargetVideo.model_fields),
+        *(f"run.{field}" for field in RankingReportRun.model_fields),
+        *(f"sample_comparison.{field}" for field in RankingSampleComparison.model_fields),
+        *(f"ranking_rounds.{field}" for field in RankingRoundSummary.model_fields if field != "candidates"),
+        *(f"ranking_rounds.candidates.{field}" for field in RankingCandidateEvidence.model_fields),
+        "ranking_diagnostics.paired_ablation",
+        "ranking_diagnostics.weight_sensitivity",
+        "ranking_diagnostics.historical_top20_diagnostic",
+        "ranking_diagnostics.summary",
+    }
 
 
 def _ranking_field_lineage() -> list[FieldLineageEntry]:
@@ -1347,6 +1409,8 @@ def _ranking_field_lineage() -> list[FieldLineageEntry]:
         "follower_count",
         "following_count",
         "video_count",
+        *(f"target_video.{field}" for field in FinalResearchTargetVideo.model_fields),
+        "ranking_rounds.candidates.user_id",
     }
     historical = {
         "historical_tags",
@@ -1367,9 +1431,18 @@ def _ranking_field_lineage() -> list[FieldLineageEntry]:
         "engaged_neighbor_signal",
         "historical_tag_affinity",
         "recommendation_score",
+        "run.ranking_formula",
+        "run.engaged_neighbor_formula",
+        "ranking_rounds.candidates.base_network_relevance",
+        "ranking_rounds.candidates.engaged_neighbor_count",
+        "ranking_rounds.candidates.engaged_neighbor_signal",
+        "ranking_rounds.candidates.historical_tag_affinity",
+        "ranking_rounds.candidates.recommendation_score",
     }
     synthetic = {field for field in RankingUserReportRow.model_fields if field.startswith("latent_")}
-    stages: dict[str, list[FieldUsageStage]] = {field: ["Report Only"] for field in RankingUserReportRow.model_fields}
+    synthetic.update({"run.random_seed", "run.delivery_capacity", "run.maximum_target_exposures"})
+    all_fields = _ranking_lineage_field_names()
+    stages: dict[str, list[FieldUsageStage]] = {field: ["Report Only"] for field in all_fields}
     stages["user_id"] = ["Sampling", "Seed Selection", "Ranking", "Report Only"]
     stages["sample_source_scope"] = ["Sampling", "Report Only"]
     stages["in_base_sample"] = ["Sampling", "Report Only"]
@@ -1395,9 +1468,29 @@ def _ranking_field_lineage() -> list[FieldLineageEntry]:
         "selected_for_exposure",
     ):
         stages[field] = ["Ranking", "Report Only"]
+    stages["target_video.caption"] = ["LLM Prompt", "Report Only"]
+    stages["target_video.hashtags"] = ["Ranking", "LLM Prompt", "Report Only"]
+    stages["run.random_seed"] = ["Sampling", "Report Only"]
+    for field in RankingSampleComparison.model_fields:
+        stages[f"sample_comparison.{field}"] = ["Sampling", "Report Only"]
+    for field in RankingReportRun.model_fields:
+        if field != "random_seed":
+            stages[f"run.{field}"] = ["Ranking", "Report Only"]
+    for field in RankingRoundSummary.model_fields:
+        if field != "candidates":
+            stages[f"ranking_rounds.{field}"] = ["Ranking", "Report Only"]
+    for field in RankingCandidateEvidence.model_fields:
+        stages[f"ranking_rounds.candidates.{field}"] = ["Ranking", "Report Only"]
+    for field in (
+        "ranking_diagnostics.paired_ablation",
+        "ranking_diagnostics.weight_sensitivity",
+        "ranking_diagnostics.historical_top20_diagnostic",
+        "ranking_diagnostics.summary",
+    ):
+        stages[field] = ["Ranking", "Report Only"]
 
     entries: list[FieldLineageEntry] = []
-    for field_name in RankingUserReportRow.model_fields:
+    for field_name in sorted(all_fields):
         provenance: FieldProvenance
         if field_name in direct:
             provenance = "Direct Observed Profile Field"
@@ -1422,6 +1515,13 @@ def _ranking_field_lineage() -> list[FieldLineageEntry]:
 def _render_ranking_report(payload: FinalResearchRankingReportPayload) -> str:
     target = payload.target_video
     target_url = escape(target.video_url, quote=True)
+    download_csv = escape(payload.downloads.csv, quote=True)
+    download_users_json = escape(payload.downloads.users_json, quote=True)
+    download_payload = escape(payload.downloads.payload, quote=True)
+    download_manifest = escape(payload.downloads.manifest, quote=True)
+    download_diagnostics = escape(payload.downloads.ranking_diagnostics, quote=True)
+    download_ablation = escape(payload.downloads.ranking_ablation_csv, quote=True)
+    download_sensitivity = escape(payload.downloads.ranking_sensitivity_csv, quote=True)
     funnel_html = "".join(
         f"<article><strong>{stage.count:,}</strong><span>{escape(stage.label)}</span><p>{escape(stage.description)}</p></article>"
         for stage in payload.run_funnel
@@ -1477,13 +1577,13 @@ def _render_ranking_report(payload: FinalResearchRankingReportPayload) -> str:
 </head>
 <body>
 <main data-testid="final-research-ranking-report">
-  <header><div><span class="eyebrow">TARGET DELIVERY RANKING · PAYLOAD V3</span><h1>{escape(payload.title)}</h1><p>{escape(payload.run.ranking_formula)}</p></div><nav class="downloads"><a href="{payload.downloads.csv}">CSV</a><a href="{payload.downloads.users_json}">JSON</a><a href="{payload.downloads.payload}">Payload</a><a href="{payload.downloads.manifest}">Manifest</a></nav></header>
+  <header><div><span class="eyebrow">TARGET DELIVERY RANKING · PAYLOAD V3</span><h1>{escape(payload.title)}</h1><p>{escape(payload.run.ranking_formula)}</p></div><nav class="downloads"><a href="{download_csv}">CSV</a><a href="{download_users_json}">JSON</a><a href="{download_payload}">Payload</a><a href="{download_manifest}">Manifest</a></nav></header>
   <section class="target"><div><span class="eyebrow">TargetVideo · {escape(target.video_id)}</span><h2>{escape(target.caption)}</h2><p>{escape(" ".join("#" + tag.lstrip("#") for tag in target.hashtags))}</p><a href="{target_url}">查看真实视频入口</a></div><dl><dt>研究用户</dt><dd>{payload.run.sample_size:,}</dd><dt>批次</dt><dd>{payload.run.horizon}</dd><dt>每轮容量</dt><dd>{payload.run.delivery_capacity}</dd></dl></section>
   <section data-testid="ranking-funnel-section"><h2>运行漏斗</h2><div class="funnel">{funnel_html}</div></section>
   <section><h2>Base Sample 与最终样本</h2><p>Seeds {payload.sample_comparison.seed_count}，Network Cohort {payload.sample_comparison.network_cohort_count}，替换普通用户 {payload.sample_comparison.replacement_count}。</p><div class="table-wrap"><table><thead><tr><th>Source scope</th><th>Base Sample</th><th>Final Sample</th></tr></thead><tbody>{scope_rows}</tbody></table></div></section>
   <section data-testid="field-lineage-section"><h2>Field Lineage Matrix</h2><div class="table-wrap"><table><thead><tr><th>Field</th><th>Field Provenance</th><th>Field Usage Stage</th></tr></thead><tbody>{lineage_html}</tbody></table></div></section>
   <section data-testid="ranking-users-section"><h2>完整用户表</h2><p>{len(payload.users):,} 条唯一用户记录；未曝光、ignore 与 provider failure 保持独立状态。</p><div class="table-wrap"><table><thead><tr><th>User</th><th>Sample role</th><th>Latest batch / rank</th><th>Score</th><th>Result</th><th>Reason</th></tr></thead><tbody>{users_html}</tbody></table></div></section>
-  <footer><a href="{payload.downloads.ranking_diagnostics}">Ranking diagnostics</a><a href="{payload.downloads.ranking_ablation_csv}">Ablation CSV</a><a href="{payload.downloads.ranking_sensitivity_csv}">Sensitivity CSV</a></footer>
+  <footer><a href="{download_diagnostics}">Ranking diagnostics</a><a href="{download_ablation}">Ablation CSV</a><a href="{download_sensitivity}">Sensitivity CSV</a></footer>
 </main>
 <script id="final-research-ranking-payload" type="application/json">{payload_json}</script>
 </body>
@@ -1782,6 +1882,7 @@ def _validate_ranking_rebuild_evidence(
         "ranking_runtime_outcomes": "ranking_runtime_outcomes.csv",
         "ranking_runtime_steps": "ranking_runtime_steps.csv",
         "ranking_runtime_summary": "ranking_runtime_summary.json",
+        "ranking_diagnostics": "ranking_diagnostics.json",
         "ranking_diagnostics_summary": "ranking_diagnostics_summary.json",
     }
     for name, expected_path in required_artifacts.items():
@@ -1923,7 +2024,14 @@ def _validate_ranking_rebuild_evidence(
     ]:
         raise ValueError("ranking report round summaries do not match runtime artifacts")
 
+    full_diagnostics = _read_json_object(artifact_paths["ranking_diagnostics"])
+    if full_diagnostics.get("schema_version") != "ranking-diagnostics-v1":
+        raise ValueError("unsupported ranking diagnostics schema")
+    if full_diagnostics != payload.ranking_diagnostics:
+        raise ValueError("ranking diagnostics artifact does not match report payload")
     diagnostics = _read_json_object(artifact_paths["ranking_diagnostics_summary"])
+    if full_diagnostics.get("summary") != diagnostics:
+        raise ValueError("ranking diagnostics artifacts do not share the same summary")
     inclusion = _required_mapping(diagnostics, "recommendation_signal_inclusion", "ranking diagnostics summary")
     effect = _required_mapping(
         diagnostics,
@@ -1931,19 +2039,23 @@ def _validate_ranking_rebuild_evidence(
         "ranking diagnostics summary",
     )
     expected_diagnostics = RankingDiagnosticSummary(
-        network_signals_in_formula=bool(inclusion.get("network_signals_in_formula", False)),
+        network_signals_in_formula=_strict_bool(inclusion.get("network_signals_in_formula")),
         main_weights={
             str(key): _as_float(value)
             for key, value in _required_mapping(inclusion, "main_weights", "ranking signal inclusion").items()
         },
-        top_selection_changed=bool(effect.get("top_selection_changed", False)),
+        top_selection_changed=_strict_bool(effect.get("top_selection_changed")),
         batches_with_top_selection_change=_as_int(effect.get("batches_with_top_selection_change")),
         diagnostic_decision_adapter_calls=_as_int(diagnostics.get("diagnostic_decision_adapter_calls")),
     )
-    if expected_diagnostics != payload.ranking_diagnostics:
+    if expected_diagnostics != payload.ranking_diagnostics_summary:
         raise ValueError("ranking diagnostics summary does not match report payload")
 
-    expected_prompt_fields = {entry.field_name for entry in payload.field_lineage if "LLM Prompt" in entry.usage_stages}
+    expected_prompt_fields = {
+        entry.field_name
+        for entry in payload.field_lineage
+        if entry.field_name in RankingUserReportRow.model_fields and "LLM Prompt" in entry.usage_stages
+    }
     if expected_prompt_fields != set(JINJIANG_PROMPT_V2_PROFILE_FIELDS):
         raise ValueError("ranking report Prompt usage declarations do not match Prompt Field Summary")
     if set(payload.prompt_contract.allowed_profile_fields) != set(JINJIANG_PROMPT_V2_PROFILE_FIELDS):
@@ -2302,6 +2414,12 @@ def _as_bool(value: object) -> bool:
     if isinstance(value, str) and value.lower() in {"true", "false"}:
         return value.lower() == "true"
     raise ValueError(f"expected boolean value, got {value!r}")
+
+
+def _strict_bool(value: object) -> bool:
+    if not isinstance(value, bool):
+        raise ValueError(f"expected JSON boolean value, got {value!r}")
+    return value
 
 
 def _ranking_result_status(value: object) -> RankingResultStatus:
