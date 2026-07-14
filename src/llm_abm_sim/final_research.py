@@ -27,6 +27,7 @@ from .final_research_report import (
     FinalResearchReportSource,
     FinalResearchReportWriter,
 )
+from .ranking_diagnostics import MAIN_RANKING_WEIGHTS, RankingDiagnosticArtifacts, RankingDiagnostics
 from .safe_serialization import safe_data, safe_json, safe_user_data, safe_user_json
 from .schemas import (
     LATENT_PROFILE_LABEL_FIELDS,
@@ -46,9 +47,9 @@ TARGET_NETWORK_SCOPE = "锦江酒店"
 PROFILE_INDEX_METHOD = "log1p_p95_reference_weighted_v2"
 NETWORK_AUGMENTED_SAMPLE_AUDIT_VERSION = "network-augmented-sample-audit-v1"
 OFFLINE_BASELINE_VERSION = "final-research-offline-v2"
-TARGET_DELIVERY_BASE_NETWORK_WEIGHT = 0.50
-TARGET_DELIVERY_ENGAGED_NEIGHBOR_WEIGHT = 0.30
-TARGET_DELIVERY_TAG_AFFINITY_WEIGHT = 0.20
+TARGET_DELIVERY_BASE_NETWORK_WEIGHT = MAIN_RANKING_WEIGHTS.base_network
+TARGET_DELIVERY_ENGAGED_NEIGHBOR_WEIGHT = MAIN_RANKING_WEIGHTS.engaged_neighbor
+TARGET_DELIVERY_TAG_AFFINITY_WEIGHT = MAIN_RANKING_WEIGHTS.tag_affinity
 TARGET_DELIVERY_CAPACITY = 20
 TARGET_DELIVERY_RUNTIME_VERSION = "final-research-ranking-runtime-v2"
 TARGET_DELIVERY_SCHEDULE_METHOD = "global_stable_reranking_top20"
@@ -191,6 +192,33 @@ RANKING_RUNTIME_OUTCOME_CSV_FIELDS = (
     "ranking_position",
     "result_status",
     "provider_status",
+)
+RANKING_ABLATION_DIAGNOSTIC_CSV_FIELDS = (
+    "time_step",
+    "user_id",
+    "full_rank",
+    "no_network_rank",
+    "network_rank_delta",
+    "full_selected",
+    "no_network_selected",
+    "selection_effect",
+    "base_network_relevance",
+    "engaged_neighbor_signal",
+    "historical_tag_affinity",
+)
+RANKING_WEIGHT_SENSITIVITY_CSV_FIELDS = (
+    "time_step",
+    "variant_id",
+    "base_network_weight",
+    "engaged_neighbor_weight",
+    "tag_affinity_weight",
+    "eligible_count",
+    "selected_count",
+    "top_user_ids",
+    "overlap_with_main_count",
+    "overlap_with_main_user_ids",
+    "added_vs_main_user_ids",
+    "removed_vs_main_user_ids",
 )
 
 
@@ -850,6 +878,15 @@ class FinalResearchRunner:
         holdout_comments = builder.reveal_holdout()
         holdout_participant_ids = sorted({comment.commenter_user_id for comment in holdout_comments})
         diagnostic = _holdout_diagnostic(holdout_participant_ids, top_scores, scores_by_user)
+        ranking_diagnostics: RankingDiagnosticArtifacts | None = None
+        if ranking_runtime is not None:
+            ranking_diagnostics = RankingDiagnostics(
+                delivery_capacity=TARGET_DELIVERY_CAPACITY,
+            ).build(
+                candidate_rows=ranking_runtime.candidates,
+                holdout_diagnostic=diagnostic,
+                batch_time_steps=[int(str(step["time_step"])) for step in ranking_runtime.steps],
+            )
         score_summary = _score_summary(
             scores,
             ranked_scores,
@@ -934,10 +971,14 @@ class FinalResearchRunner:
             artifacts.update(
                 {
                     "network_augmented_sample_audit": "network_augmented_sample_audit.json",
+                    "ranking_ablation_diagnostics_csv": "ranking_ablation_diagnostics.csv",
+                    "ranking_diagnostics": "ranking_diagnostics.json",
+                    "ranking_diagnostics_summary": "ranking_diagnostics_summary.json",
                     "ranking_runtime_candidates": "ranking_runtime_candidates.csv",
                     "ranking_runtime_outcomes": "ranking_runtime_outcomes.csv",
                     "ranking_runtime_steps": "ranking_runtime_steps.csv",
                     "ranking_runtime_summary": "ranking_runtime_summary.json",
+                    "ranking_weight_sensitivity_csv": "ranking_weight_sensitivity.csv",
                     "runtime_actions": "runtime_actions.csv",
                     "runtime_decisions": "runtime_decisions.csv",
                     "runtime_provider_failures": "runtime_provider_failures.csv",
@@ -1007,6 +1048,7 @@ class FinalResearchRunner:
             )
             _write_json(output_path / artifacts["runtime_summary"], probability_runtime.summary)
         if ranking_runtime is not None:
+            assert ranking_diagnostics is not None
             _write_csv(
                 output_path / artifacts["ranking_runtime_steps"],
                 list(RANKING_RUNTIME_STEP_CSV_FIELDS),
@@ -1038,6 +1080,18 @@ class FinalResearchRunner:
                 ranking_runtime.provider_failures,
             )
             _write_json(output_path / artifacts["ranking_runtime_summary"], ranking_runtime.summary)
+            _write_csv(
+                output_path / artifacts["ranking_ablation_diagnostics_csv"],
+                list(RANKING_ABLATION_DIAGNOSTIC_CSV_FIELDS),
+                ranking_diagnostics.ablation_rows,
+            )
+            _write_csv(
+                output_path / artifacts["ranking_weight_sensitivity_csv"],
+                list(RANKING_WEIGHT_SENSITIVITY_CSV_FIELDS),
+                ranking_diagnostics.sensitivity_rows,
+            )
+            _write_json(output_path / artifacts["ranking_diagnostics"], ranking_diagnostics.payload)
+            _write_json(output_path / artifacts["ranking_diagnostics_summary"], ranking_diagnostics.summary)
         _write_json(output_path / artifacts["holdout_safe_audit"], holdout_safe_audit)
         report_config = self.config.snapshot()
         report_config["report_title"] = self.config.report.title
@@ -1079,6 +1133,19 @@ class FinalResearchRunner:
                     "replaced_ordinary_users": len(prepared.replaced_ordinary_user_ids),
                 }
             )
+        if ranking_diagnostics is not None:
+            observed_effect = ranking_diagnostics.summary["observed_recommendation_signal_effect"]
+            assert isinstance(observed_effect, Mapping)
+            manifest_counts.update(
+                {
+                    "ranking_diagnostic_batches": ranking_diagnostics.summary["counts"]["batches"],
+                    "ranking_ablation_rows": len(ranking_diagnostics.ablation_rows),
+                    "ranking_sensitivity_rows": len(ranking_diagnostics.sensitivity_rows),
+                    "ranking_batches_with_network_top20_effect": observed_effect[
+                        "batches_with_top_selection_change"
+                    ],
+                }
+            )
         runtime_manifest_version = (
             TARGET_DELIVERY_RUNTIME_VERSION
             if ranking_runtime is not None
@@ -1100,6 +1167,10 @@ class FinalResearchRunner:
             "live_api_triggered": _adapter_live_api_triggered(self.decision_adapter),
             "decision_adapter_calls": decision_adapter_calls,
         }
+        if ranking_diagnostics is not None:
+            artifact_manifest["diagnostic_decision_adapter_calls"] = ranking_diagnostics.summary[
+                "diagnostic_decision_adapter_calls"
+            ]
         if ranking_runtime is not None:
             _write_json(output_path / "artifact_manifest.json", artifact_manifest)
         else:

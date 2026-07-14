@@ -724,10 +724,14 @@ def test_target_delivery_ranking_runtime_reranks_global_top20_after_seed_engagem
         "network_augmented_sample_audit": "network_augmented_sample_audit.json",
         "offline_score_summary": "offline_score_summary.json",
         "offline_scores": "offline_scores.csv",
+        "ranking_ablation_diagnostics_csv": "ranking_ablation_diagnostics.csv",
+        "ranking_diagnostics": "ranking_diagnostics.json",
+        "ranking_diagnostics_summary": "ranking_diagnostics_summary.json",
         "ranking_runtime_candidates": "ranking_runtime_candidates.csv",
         "ranking_runtime_outcomes": "ranking_runtime_outcomes.csv",
         "ranking_runtime_steps": "ranking_runtime_steps.csv",
         "ranking_runtime_summary": "ranking_runtime_summary.json",
+        "ranking_weight_sensitivity_csv": "ranking_weight_sensitivity.csv",
         "runtime_actions": "runtime_actions.csv",
         "runtime_decisions": "runtime_decisions.csv",
         "runtime_provider_failures": "runtime_provider_failures.csv",
@@ -744,6 +748,12 @@ def test_target_delivery_ranking_runtime_reranks_global_top20_after_seed_engagem
     failures = _read_csv(first_output / "runtime_provider_failures.csv")
     audit = json.loads((first_output / "network_augmented_sample_audit.json").read_text(encoding="utf-8"))
     summary = json.loads((first_output / "ranking_runtime_summary.json").read_text(encoding="utf-8"))
+    ranking_diagnostics = json.loads((first_output / "ranking_diagnostics.json").read_text(encoding="utf-8"))
+    diagnostic_summary = json.loads(
+        (first_output / "ranking_diagnostics_summary.json").read_text(encoding="utf-8")
+    )
+    ablation_rows = _read_csv(first_output / "ranking_ablation_diagnostics.csv")
+    sensitivity_rows = _read_csv(first_output / "ranking_weight_sensitivity.csv")
 
     assert "u80" in audit["seed_user_ids"]
     assert "u60" not in audit["base_sample"]["user_ids"]
@@ -801,6 +811,40 @@ def test_target_delivery_ranking_runtime_reranks_global_top20_after_seed_engagem
     assert summary["maximum_target_exposures"] == 600
     assert "background_impressions" not in summary["counts"]
     assert summary["counts"]["decision_adapter_calls"] == len(first_adapter.calls)
+    assert ranking_diagnostics["schema_version"] == "ranking-diagnostics-v1"
+    assert len(ranking_diagnostics["paired_ablation"]["batches"]) == len(steps) == 30
+    assert ranking_diagnostics["paired_ablation"]["same_candidate_set_and_frozen_state"] is True
+    assert ranking_diagnostics["paired_ablation"]["advances_user_state"] is False
+    assert ranking_diagnostics["paired_ablation"]["calls_decision_adapter"] is False
+    assert ranking_diagnostics["paired_ablation"]["complete_counterfactual_trajectory"] is False
+    assert [
+        variant["variant_id"] for variant in ranking_diagnostics["weight_sensitivity"]["variants"]
+    ] == ["main_50_30_20", "weaker_network_40_20_40", "no_network_0_0_100"]
+    batch_one_diagnostic = ranking_diagnostics["paired_ablation"]["batches"][1]
+    assert batch_one_diagnostic["full_top_user_ids"] == [
+        row["user_id"] for row in batch_one if row["selected"] == "true"
+    ]
+    assert "u60" in batch_one_diagnostic["network_added_user_ids"]
+    diagnostic_batches = {
+        int(batch["time_step"]): batch for batch in ranking_diagnostics["paired_ablation"]["batches"]
+    }
+    for step in steps:
+        time_step = int(step["time_step"])
+        persisted_batch = [row for row in candidates if int(row["time_step"]) == time_step]
+        diagnostic_batch = diagnostic_batches[time_step]
+        assert diagnostic_batch["eligible_count"] == int(step["eligible_users"])
+        assert diagnostic_batch["candidate_user_ids"] == [row["user_id"] for row in persisted_batch]
+    assert diagnostic_summary["diagnostic_decision_adapter_calls"] == 0
+    assert diagnostic_summary["recommendation_signal_inclusion"]["network_signals_in_formula"] is True
+    assert diagnostic_summary["observed_recommendation_signal_effect"]["top_selection_changed"] is True
+    assert manifest["diagnostic_decision_adapter_calls"] == 0
+    assert manifest["counts"]["ranking_diagnostic_batches"] == len(steps)
+    assert manifest["counts"]["ranking_ablation_rows"] == len(ablation_rows) == len(candidates)
+    assert manifest["counts"]["ranking_sensitivity_rows"] == len(sensitivity_rows) == 3 * len(steps)
+    assert manifest["counts"]["ranking_batches_with_network_top20_effect"] == diagnostic_summary[
+        "observed_recommendation_signal_effect"
+    ]["batches_with_top_selection_change"]
+    assert len(first_adapter.calls) == summary["counts"]["decision_adapter_calls"]
 
     runtime_text = "\n".join(
         (first_output / relative_path).read_text(encoding="utf-8")
