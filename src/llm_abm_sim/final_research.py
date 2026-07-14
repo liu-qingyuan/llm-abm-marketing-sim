@@ -9,6 +9,7 @@ import random
 from collections import Counter, defaultdict
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
+from enum import Enum
 from pathlib import Path
 from typing import Any
 
@@ -152,6 +153,36 @@ RUNTIME_PROVIDER_FAILURE_CSV_FIELDS = (
 )
 
 
+class FinalResearchModel(str, Enum):
+    PROBABILITY_V1 = "probability_v1"
+    TARGET_DELIVERY_RANKING_V2 = "target_delivery_ranking_v2"
+
+
+@dataclass(frozen=True)
+class _ResearchModelPolicy:
+    model: FinalResearchModel
+    augment_network_sample: bool
+    network_normalization: str
+    network_weight: float
+    tag_affinity_weight: float
+    static_formula: str
+    offline_manifest_version: str
+
+
+_TARGET_DELIVERY_RANKING_POLICY = _ResearchModelPolicy(
+    model=FinalResearchModel.TARGET_DELIVERY_RANKING_V2,
+    augment_network_sample=True,
+    network_normalization="log_p95_weighted_degree",
+    network_weight=TARGET_DELIVERY_BASE_NETWORK_WEIGHT,
+    tag_affinity_weight=TARGET_DELIVERY_TAG_AFFINITY_WEIGHT,
+    static_formula=(
+        "0.50 * base_network_relevance + 0.20 * historical_tag_affinity "
+        "(static portion of the predeclared 0.50/0.30/0.20 ranking model)"
+    ),
+    offline_manifest_version=OFFLINE_BASELINE_VERSION,
+)
+
+
 class FinalResearchConfig(BaseModel):
     """Validated inputs for the single-target final research workflow."""
 
@@ -159,6 +190,7 @@ class FinalResearchConfig(BaseModel):
 
     dataset_dir: Path
     target_video_id: str = TARGET_VIDEO_ID
+    research_model: FinalResearchModel = FinalResearchModel.TARGET_DELIVERY_RANKING_V2
     sample_size: int = Field(default=1000, ge=1)
     horizon: int = Field(default=30, ge=1)
     random_seed: int = 20260713
@@ -186,6 +218,10 @@ class FinalResearchConfig(BaseModel):
                 raise ValueError("enabled final research runtime requires horizon=30")
             if self.provider.prompt_version != "jinjiang-green-marketing-prompt-v2":
                 raise ValueError("enabled final research runtime requires jinjiang-green-marketing-prompt-v2")
+            if self.research_model is not FinalResearchModel.PROBABILITY_V1:
+                raise ValueError(
+                    "target_delivery_ranking_v2 provider runtime is not available until the ranking runtime is implemented"
+                )
 
         dataset_dir = self.dataset_dir.expanduser()
         if not dataset_dir.is_dir():
@@ -223,6 +259,7 @@ class FinalResearchConfig(BaseModel):
         return {
             "dataset_dir": str(self.dataset_dir),
             "target_video_id": self.target_video_id,
+            "research_model": self.research_model.value,
             "sample_size": self.sample_size,
             "horizon": self.horizon,
             "horizon_semantics": "fixed recommendation batches, not natural days",
@@ -239,6 +276,20 @@ class FinalResearchConfig(BaseModel):
             "provider": self.provider.safe_metadata(),
             "report": self.report.model_dump(mode="json"),
         }
+
+
+def _research_model_policy(config: FinalResearchConfig) -> _ResearchModelPolicy:
+    if config.research_model is FinalResearchModel.PROBABILITY_V1:
+        return _ResearchModelPolicy(
+            model=FinalResearchModel.PROBABILITY_V1,
+            augment_network_sample=False,
+            network_normalization="max_weighted_degree",
+            network_weight=config.network_weight,
+            tag_affinity_weight=config.tag_affinity_weight,
+            static_formula=("network_weight * base_network_score + tag_affinity_weight * historical_tag_affinity"),
+            offline_manifest_version="final-research-offline-v1",
+        )
+    return _TARGET_DELIVERY_RANKING_POLICY
 
 
 class TargetVideo(BaseModel):
@@ -293,7 +344,7 @@ class OfflineRecommendationScore(BaseModel):
 
     user_id: str
     target_scope_weighted_degree: int
-    base_network_relevance: float
+    base_network_relevance: float | None = None
     base_network_score: float
     historical_tag_affinity: float
     recommendation_score: float
@@ -389,8 +440,9 @@ class _PreparedInputs:
 
 
 class _ResearchInputBuilder:
-    def __init__(self, config: FinalResearchConfig) -> None:
+    def __init__(self, config: FinalResearchConfig, model_policy: _ResearchModelPolicy) -> None:
         self.config = config
+        self.model_policy = model_policy
 
     def prepare(self) -> _PreparedInputs:
         videos = self._load_videos()
@@ -450,7 +502,7 @@ class _ResearchInputBuilder:
         )
         network_cohort_set = set(network_cohort_user_ids)
         network_cohort_added_user_ids = sorted(network_cohort_set - base_sample_set)
-        if self.config.provider.enabled:
+        if not self.model_policy.augment_network_sample:
             replaced_ordinary_user_ids: list[str] = []
             final_sample_user_ids = list(base_sample_user_ids)
             final_scope_by_user = dict(base_scope_by_user)
@@ -477,9 +529,8 @@ class _ResearchInputBuilder:
                 user_id: scope_name for user_id, scope_name in base_scope_by_user.items() if user_id not in replaced_set
             }
             final_scope_by_user.update({user_id: TARGET_NETWORK_SCOPE for user_id in network_cohort_added_user_ids})
-        use_network_augmented_sample = not self.config.provider.enabled
-        sample_user_ids = final_sample_user_ids if use_network_augmented_sample else base_sample_user_ids
-        sample_scope_by_user = final_scope_by_user if use_network_augmented_sample else base_scope_by_user
+        sample_user_ids = final_sample_user_ids if self.model_policy.augment_network_sample else base_sample_user_ids
+        sample_scope_by_user = final_scope_by_user if self.model_policy.augment_network_sample else base_scope_by_user
         for user_id in set(base_sample_user_ids) | set(network_cohort_added_user_ids):
             user = users_by_id[user_id]
             users_by_id[user_id] = user.model_copy(
@@ -582,13 +633,12 @@ class PlatformRecommendationModel:
         self,
         config: FinalResearchConfig,
         prepared: _PreparedInputs,
-        *,
-        use_target_delivery_baseline: bool,
+        model_policy: _ResearchModelPolicy,
     ) -> None:
         self.config = config
         self.prepared = prepared
-        self._use_target_delivery_baseline = use_target_delivery_baseline
-        if use_target_delivery_baseline:
+        self.model_policy = model_policy
+        if model_policy.network_normalization == "log_p95_weighted_degree":
             self._base_network_scores = {
                 user_id: _log_p95_score(degree, prepared.target_scope_p95_weighted_degree)
                 for user_id, degree in prepared.target_scope_weighted_degree.items()
@@ -610,17 +660,14 @@ class PlatformRecommendationModel:
     def score_static(self, user_id: str) -> OfflineRecommendationScore:
         affinity = self._historical_tag_affinity(user_id)
         base_network_score = self._base_network_scores.get(user_id, 0.0)
-        if self._use_target_delivery_baseline:
-            score = (
-                TARGET_DELIVERY_BASE_NETWORK_WEIGHT * base_network_score
-                + TARGET_DELIVERY_TAG_AFFINITY_WEIGHT * affinity
-            )
-        else:
-            score = self.config.network_weight * base_network_score + self.config.tag_affinity_weight * affinity
+        score = self.model_policy.network_weight * base_network_score + self.model_policy.tag_affinity_weight * affinity
+        base_network_relevance = (
+            base_network_score if self.model_policy.model is FinalResearchModel.TARGET_DELIVERY_RANKING_V2 else None
+        )
         return OfflineRecommendationScore(
             user_id=user_id,
             target_scope_weighted_degree=self.prepared.target_scope_weighted_degree.get(user_id, 0),
-            base_network_relevance=round(base_network_score, 6),
+            base_network_relevance=round(base_network_relevance, 6) if base_network_relevance is not None else None,
             base_network_score=round(base_network_score, 6),
             historical_tag_affinity=round(affinity, 6),
             recommendation_score=round(score, 6),
@@ -690,14 +737,10 @@ class FinalResearchRunner:
             raise FileExistsError(f"output_dir already exists and is not empty: {output_path}")
         output_path.mkdir(parents=True, exist_ok=True)
 
-        builder = _ResearchInputBuilder(self.config)
+        model_policy = _research_model_policy(self.config)
+        builder = _ResearchInputBuilder(self.config, model_policy)
         prepared = builder.prepare()
-        use_target_delivery_baseline = not self.config.provider.enabled
-        platform = PlatformRecommendationModel(
-            self.config,
-            prepared,
-            use_target_delivery_baseline=use_target_delivery_baseline,
-        )
+        platform = PlatformRecommendationModel(self.config, prepared, model_policy)
         scores = platform.score_all()
         ranked_scores = sorted(scores, key=lambda item: (-item.recommendation_score, item.user_id))
         top_scores = ranked_scores[:20]
@@ -709,10 +752,8 @@ class FinalResearchRunner:
         score_summary = _score_summary(
             scores,
             ranked_scores,
-            self.config,
-            use_target_delivery_baseline=use_target_delivery_baseline,
+            model_policy,
         )
-        network_augmented_sample_audit = _network_augmented_sample_audit(prepared, self.config)
         holdout_safe_audit = {
             "profile_index_method": PROFILE_INDEX_METHOD,
             "historical_video_count": prepared.historical_video_count,
@@ -740,24 +781,29 @@ class FinalResearchRunner:
             ),
             "sample_size": len(prepared.sample_user_ids),
             "source_scope_sample_counts": prepared.source_scope_sample_counts,
-            "base_source_scope_sample_counts": prepared.base_source_scope_sample_counts,
-            "final_source_scope_sample_counts": prepared.final_source_scope_sample_counts,
             "global_top10_local_top10_seed_union": prepared.seed_user_ids,
             "seed_count": len(prepared.seed_user_ids),
-            "base_network_relevance": {
-                "formula": "min(1, log1p(weighted_degree) / log1p(P95_weighted_degree))",
-                "target_source_scope": TARGET_NETWORK_SCOPE,
-                "p95_weighted_degree": prepared.target_scope_p95_weighted_degree,
-                "reference_user_count": len(prepared.users_by_id),
-                "holdout_safe": True,
-                "zero_degree_relevance": 0.0,
-            },
             "source_dataset_modified": False,
             "holdout_boundary": (
                 "Target interactions and aggregate engagement counts were excluded from profile projection, "
                 "sampling, seed selection, and recommendation scoring."
             ),
         }
+        if model_policy.augment_network_sample:
+            holdout_safe_audit.update(
+                {
+                    "base_source_scope_sample_counts": prepared.base_source_scope_sample_counts,
+                    "final_source_scope_sample_counts": prepared.final_source_scope_sample_counts,
+                    "base_network_relevance": {
+                        "formula": "min(1, log1p(weighted_degree) / log1p(P95_weighted_degree))",
+                        "target_source_scope": TARGET_NETWORK_SCOPE,
+                        "p95_weighted_degree": prepared.target_scope_p95_weighted_degree,
+                        "reference_user_count": len(prepared.users_by_id),
+                        "holdout_safe": True,
+                        "zero_degree_relevance": 0.0,
+                    },
+                }
+            )
 
         artifacts = {
             "config_snapshot": "config_snapshot.json",
@@ -782,7 +828,7 @@ class FinalResearchRunner:
                     "runtime_summary": "runtime_summary.json",
                 }
             )
-        else:
+        elif model_policy.augment_network_sample:
             artifacts["network_augmented_sample_audit"] = "network_augmented_sample_audit.json"
         sample_users = [prepared.users_by_id[user_id] for user_id in prepared.sample_user_ids]
         _write_json(output_path / artifacts["config_snapshot"], self.config.snapshot())
@@ -808,10 +854,10 @@ class FinalResearchRunner:
             score_summary,
         )
         _write_json(output_path / artifacts["holdout_diagnostic"], diagnostic)
-        if runtime is None:
+        if runtime is None and model_policy.augment_network_sample:
             _write_json(
                 output_path / artifacts["network_augmented_sample_audit"],
-                network_augmented_sample_audit,
+                _network_augmented_sample_audit(prepared, self.config),
             )
         if runtime is not None:
             _write_csv(output_path / artifacts["runtime_steps"], list(RUNTIME_STEP_CSV_FIELDS), runtime.steps)
@@ -840,6 +886,8 @@ class FinalResearchRunner:
         _write_json(output_path / artifacts["holdout_safe_audit"], holdout_safe_audit)
         report_config = self.config.snapshot()
         report_config["report_title"] = self.config.report.title
+        report_config["network_weight"] = model_policy.network_weight
+        report_config["tag_affinity_weight"] = model_policy.tag_affinity_weight
         manifest_counts = {
             "historical_videos": prepared.historical_video_count,
             "users_scored": len(scores),
@@ -849,7 +897,7 @@ class FinalResearchRunner:
             "runtime_decisions": len(runtime.decisions) if runtime is not None else 0,
             "runtime_provider_failures": len(runtime.provider_failures) if runtime is not None else 0,
         }
-        if runtime is None:
+        if runtime is None and model_policy.augment_network_sample:
             manifest_counts.update(
                 {
                     "base_sample_users": len(prepared.base_sample_user_ids),
@@ -859,7 +907,9 @@ class FinalResearchRunner:
                 }
             )
         artifact_manifest = {
-            "manifest_version": FINAL_RESEARCH_RUNTIME_VERSION if runtime is not None else OFFLINE_BASELINE_VERSION,
+            "manifest_version": (
+                FINAL_RESEARCH_RUNTIME_VERSION if runtime is not None else model_policy.offline_manifest_version
+            ),
             "artifacts": artifacts,
             "counts": manifest_counts,
             "live_api_triggered": _adapter_live_api_triggered(self.decision_adapter),
@@ -1439,27 +1489,14 @@ def _network_augmented_sample_audit(
 def _score_summary(
     scores: Sequence[OfflineRecommendationScore],
     ranked_scores: Sequence[OfflineRecommendationScore],
-    config: FinalResearchConfig,
-    *,
-    use_target_delivery_baseline: bool,
+    model_policy: _ResearchModelPolicy,
 ) -> dict[str, object]:
     values = [score.recommendation_score for score in scores]
-    if use_target_delivery_baseline:
-        formula = (
-            "0.50 * base_network_relevance + 0.20 * historical_tag_affinity "
-            "(static portion of the predeclared 0.50/0.30/0.20 ranking model)"
-        )
-        network_weight = TARGET_DELIVERY_BASE_NETWORK_WEIGHT
-        tag_affinity_weight = TARGET_DELIVERY_TAG_AFFINITY_WEIGHT
-    else:
-        formula = "network_weight * base_network_score + tag_affinity_weight * historical_tag_affinity"
-        network_weight = config.network_weight
-        tag_affinity_weight = config.tag_affinity_weight
     return {
         "user_count": len(scores),
-        "formula": formula,
-        "network_weight": network_weight,
-        "tag_affinity_weight": tag_affinity_weight,
+        "formula": model_policy.static_formula,
+        "network_weight": model_policy.network_weight,
+        "tag_affinity_weight": model_policy.tag_affinity_weight,
         "minimum_score": min(values, default=0.0),
         "maximum_score": max(values, default=0.0),
         "mean_score": round(sum(values) / len(values), 6) if values else 0.0,

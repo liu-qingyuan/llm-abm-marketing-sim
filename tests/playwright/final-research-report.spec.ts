@@ -21,7 +21,7 @@ import importlib.util
 import sys
 from pathlib import Path
 
-from llm_abm_sim import FinalResearchConfig, FinalResearchRunner
+from llm_abm_sim import FinalResearchConfig, FinalResearchModel, FinalResearchRunner
 from llm_abm_sim.providers.openai_compatible import OpenAICompatibleDecisionAdapter
 from llm_abm_sim.schemas import ProviderLLMConfig
 
@@ -42,6 +42,7 @@ provider = OpenAICompatibleDecisionAdapter(provider_config, client=client, sleep
 adapter = module._RecordingAdapter(provider)
 config = FinalResearchConfig(
     dataset_dir=fixture_dir,
+    research_model=FinalResearchModel.PROBABILITY_V1,
     sample_size=70,
     random_seed=20260713,
     provider=provider_config,

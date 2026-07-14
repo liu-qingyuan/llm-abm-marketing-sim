@@ -15,6 +15,8 @@ FinalResearchRunner(config: FinalResearchConfig, decision_adapter: LLMDecisionAd
 
 离线基线保留 `decision_adapter` 参数以稳定后续 Final Research Interface，但本阶段不得调用它。artifact manifest 会显式记录 `decision_adapter_calls=0` 和 `live_api_triggered=false`。
 
+`FinalResearchConfig.research_model` 显式选择研究语义。默认 `target_delivery_ranking_v2` 产生本说明的离线基线；历史概率模型必须显式使用 `probability_v1`。`provider.enabled` 只控制 Decision Adapter 是否执行，不再隐式切换采样或评分模型。Target Delivery Ranking provider runtime 在后续 Ticket 落地前失败关闭。
+
 ## Network-Augmented Research Sample
 
 离线 v2 先完全复用既有 `source_challenge_name` 配额、去重、固定随机种子和稳定补齐规则形成 Base Sample。global influence top10 与 holdout-safe local influence top10 的 seed union 只从 Base Sample 选择，后续增强不重新选 seed。
@@ -65,4 +67,4 @@ Holdout Set = 目标视频的真实评论/回复答案
 
 这些产物不包含 `.env`、凭证、headers、raw provider payload、raw Douyin payload或旧 demo preset 字段。
 
-离线 v2 manifest 使用 `final-research-offline-v2`。现有 `provider.enabled=true` 概率抽签路径在新的 Target Delivery Ranking runtime 落地前继续保留 `final-research-runtime-v1`、Base Sample 和 max-normalized network score；旧 run 目录及其报告不被覆盖或重新解释。
+离线 v2 manifest 使用 `final-research-offline-v2`。显式 `research_model=probability_v1` 的现有概率抽签路径在新的 Target Delivery Ranking runtime 落地前继续保留 `final-research-runtime-v1`、Base Sample 和 max-normalized `base_network_score`；该版本的 `base_network_relevance` 列留空，也不声明 log-P95 audit。旧 run 目录及其报告不被覆盖或重新解释。

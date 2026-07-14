@@ -14,7 +14,7 @@ from .decision import (
 )
 from .environment import PlatformEnvironment
 from .events import ActionEvent, DecisionEvent, ExposureEvent, SimulationRunResult, StepRecord
-from .final_research import FinalResearchConfig, FinalResearchRunner, ResearchUser, TargetVideo
+from .final_research import FinalResearchConfig, FinalResearchModel, FinalResearchRunner, ResearchUser, TargetVideo
 from .final_research_report import rebuild_final_research_report
 from .model import SimulationModel
 from .runner import ExperimentRunner
@@ -32,6 +32,7 @@ __all__ = [
     "ExperimentRunner",
     "ExposureEvent",
     "FinalResearchConfig",
+    "FinalResearchModel",
     "FinalResearchRunner",
     "rebuild_final_research_report",
     "LLMDecisionAdapter",

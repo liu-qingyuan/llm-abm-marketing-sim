@@ -11,7 +11,7 @@ from typing import Any
 import pytest
 from pydantic import ValidationError
 
-from llm_abm_sim import FinalResearchConfig, FinalResearchRunner, rebuild_final_research_report
+from llm_abm_sim import FinalResearchConfig, FinalResearchModel, FinalResearchRunner, rebuild_final_research_report
 from llm_abm_sim.decision import EngageDecision, LLMDecisionAdapter
 from llm_abm_sim.providers.openai_compatible import OpenAICompatibleDecisionAdapter
 from llm_abm_sim.safe_serialization import artifact_has_forbidden_terms
@@ -499,6 +499,8 @@ def test_offline_final_research_baseline_is_holdout_safe_and_deterministic(tmp_p
     assert "<redacted>" in artifact_text
     offline_payload = json.loads((first_output / "final_research_report_payload.json").read_text(encoding="utf-8"))
     offline_html = (first_output / "report.html").read_text(encoding="utf-8")
+    assert offline_payload["recommendation_model"]["network_weight"] == 0.5
+    assert offline_payload["recommendation_model"]["tag_affinity_weight"] == 0.2
     assert offline_payload["video_usage"]["runtime_target_video_count"] == 0
     assert offline_payload["batch_explanation"]["batch_count"] == 0
     assert "runtime 未启用" in offline_payload["video_usage"]["target_video_role"]
@@ -594,6 +596,7 @@ def test_mocked_provider_final_research_runs_fixed_batches_and_continues_after_f
     )
     config = FinalResearchConfig(
         dataset_dir=dataset_dir,
+        research_model=FinalResearchModel.PROBABILITY_V1,
         sample_size=70,
         random_seed=20260713,
         provider=provider_config,
@@ -640,6 +643,7 @@ def test_mocked_provider_final_research_runs_fixed_batches_and_continues_after_f
 
     exposures = _read_csv(first_output / runtime_artifacts["runtime_exposures"])
     offline_scores = _read_csv(first_output / "offline_scores.csv")
+    legacy_audit = json.loads((first_output / "holdout_safe_audit.json").read_text(encoding="utf-8"))
     decisions = _read_csv(first_output / runtime_artifacts["runtime_decisions"])
     actions = _read_csv(first_output / runtime_artifacts["runtime_actions"])
     backgrounds = _read_csv(first_output / runtime_artifacts["runtime_background_events"])
@@ -656,6 +660,9 @@ def test_mocked_provider_final_research_runs_fixed_batches_and_continues_after_f
 
     assert len(exposures) == 70
     assert len(offline_scores) == 80
+    assert {row["base_network_relevance"] for row in offline_scores} == {""}
+    assert "base_network_relevance" not in legacy_audit
+    assert "network_augmented_sample_audit" not in manifest["artifacts"]
     assert len({row["user_id"] for row in exposures}) == 70
     seed_rows = [row for row in exposures if row["is_seed"] == "true"]
     non_seed_rows = [row for row in exposures if row["is_seed"] == "false"]
@@ -797,7 +804,12 @@ def test_final_research_report_rebuild_is_deterministic_and_upgrades_v1_payload(
     provider = OpenAICompatibleDecisionAdapter(provider_config, client=client, sleep=lambda _delay: None)
     adapter = _RecordingAdapter(provider)
     run_dir = FinalResearchRunner(
-        FinalResearchConfig(dataset_dir=dataset_dir, sample_size=4, provider=provider_config),
+        FinalResearchConfig(
+            dataset_dir=dataset_dir,
+            research_model=FinalResearchModel.PROBABILITY_V1,
+            sample_size=4,
+            provider=provider_config,
+        ),
         adapter,
     ).run_and_write(tmp_path / "rebuildable-run")
     calls_before_rebuild = len(adapter.calls)
@@ -851,7 +863,12 @@ def test_final_research_report_rebuild_rejects_inconsistent_summary_before_repla
         sleep=lambda _delay: None,
     )
     run_dir = FinalResearchRunner(
-        FinalResearchConfig(dataset_dir=dataset_dir, sample_size=4, provider=provider_config),
+        FinalResearchConfig(
+            dataset_dir=dataset_dir,
+            research_model=FinalResearchModel.PROBABILITY_V1,
+            sample_size=4,
+            provider=provider_config,
+        ),
         _RecordingAdapter(provider),
     ).run_and_write(tmp_path / "inconsistent-run")
     payload_path = run_dir / "final_research_report_payload.json"
@@ -879,7 +896,12 @@ def test_final_research_report_rebuild_rejects_inconsistent_schedule_contract(tm
         sleep=lambda _delay: None,
     )
     run_dir = FinalResearchRunner(
-        FinalResearchConfig(dataset_dir=dataset_dir, sample_size=4, provider=provider_config),
+        FinalResearchConfig(
+            dataset_dir=dataset_dir,
+            research_model=FinalResearchModel.PROBABILITY_V1,
+            sample_size=4,
+            provider=provider_config,
+        ),
         _RecordingAdapter(provider),
     ).run_and_write(tmp_path / "invalid-schedule-run")
     summary_path = run_dir / "runtime_summary.json"
@@ -916,7 +938,12 @@ def test_final_research_report_rebuild_rejects_invalid_persisted_evidence(
         sleep=lambda _delay: None,
     )
     source_run = FinalResearchRunner(
-        FinalResearchConfig(dataset_dir=dataset_dir, sample_size=4, provider=provider_config),
+        FinalResearchConfig(
+            dataset_dir=dataset_dir,
+            research_model=FinalResearchModel.PROBABILITY_V1,
+            sample_size=4,
+            provider=provider_config,
+        ),
         _RecordingAdapter(provider),
     ).run_and_write(tmp_path / "valid-run")
     run_dir = tmp_path / f"invalid-{corruption}"
@@ -966,7 +993,12 @@ def test_final_research_report_rebuild_rejects_artifact_symlink_outside_run(tmp_
         sleep=lambda _delay: None,
     )
     run_dir = FinalResearchRunner(
-        FinalResearchConfig(dataset_dir=dataset_dir, sample_size=4, provider=provider_config),
+        FinalResearchConfig(
+            dataset_dir=dataset_dir,
+            research_model=FinalResearchModel.PROBABILITY_V1,
+            sample_size=4,
+            provider=provider_config,
+        ),
         _RecordingAdapter(provider),
     ).run_and_write(tmp_path / "symlink-run")
     csv_path = run_dir / "final_research_users.csv"
@@ -990,6 +1022,7 @@ def test_final_research_report_dynamic_neighbor_activation_requires_actual_boost
     run_dir = FinalResearchRunner(
         FinalResearchConfig(
             dataset_dir=dataset_dir,
+            research_model=FinalResearchModel.PROBABILITY_V1,
             sample_size=70,
             neighbor_boost=0.0,
             provider=provider_config,
@@ -1011,6 +1044,7 @@ def test_final_research_report_uses_configured_formula_and_interest_tags(tmp_pat
     output = FinalResearchRunner(
         FinalResearchConfig(
             dataset_dir=dataset_dir,
+            research_model=FinalResearchModel.PROBABILITY_V1,
             sample_size=4,
             network_weight=0.65,
             tag_affinity_weight=0.35,
@@ -1042,6 +1076,7 @@ def test_final_research_does_not_convert_unexpected_adapter_errors_to_provider_f
     dataset_dir = _make_processed_fixture(tmp_path)
     config = FinalResearchConfig(
         dataset_dir=dataset_dir,
+        research_model=FinalResearchModel.PROBABILITY_V1,
         sample_size=4,
         provider=ProviderLLMConfig(enabled=True, require_live_env=False),
     )
@@ -1087,4 +1122,11 @@ def test_final_research_config_rejects_missing_target_and_oversized_sample(tmp_p
             dataset_dir=dataset_dir,
             sample_size=4,
             provider=ProviderLLMConfig(enabled=True, prompt_version="other-prompt"),
+        )
+
+    with pytest.raises(ValidationError, match="ranking_v2 provider runtime is not available"):
+        FinalResearchConfig(
+            dataset_dir=dataset_dir,
+            sample_size=4,
+            provider=ProviderLLMConfig(enabled=True, require_live_env=False),
         )
