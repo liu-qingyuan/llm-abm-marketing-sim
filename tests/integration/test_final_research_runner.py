@@ -6,13 +6,13 @@ import json
 import math
 import shutil
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pytest
 from pydantic import ValidationError
 
 from llm_abm_sim import FinalResearchConfig, FinalResearchModel, FinalResearchRunner, rebuild_final_research_report
-from llm_abm_sim.decision import EngageDecision, LLMDecisionAdapter
+from llm_abm_sim.decision import EngageDecision, LLMDecisionAdapter, ProviderDecisionError
 from llm_abm_sim.providers.openai_compatible import OpenAICompatibleDecisionAdapter
 from llm_abm_sim.safe_serialization import artifact_has_forbidden_terms
 from llm_abm_sim.schemas import (
@@ -363,6 +363,76 @@ def _make_network_augmented_fixture(tmp_path: Path) -> Path:
     return dataset_dir
 
 
+def _make_target_delivery_fixture(tmp_path: Path) -> Path:
+    dataset_dir = _make_processed_fixture(tmp_path, user_count=80)
+    video_rows = _read_csv(dataset_dir / "videos.csv")
+    for row in video_rows:
+        if row["video_id"] == "history-scope-b":
+            row["hashtags"] = "[]"
+    _write_csv(dataset_dir / "videos.csv", list(video_rows[0]), video_rows)
+
+    historical_rows = [
+        {
+            "comment_id": f"scope-a-{number}",
+            "video_id": "history-scope-a",
+            "parent_comment_id": "0",
+            "commenter_user_id": f"u{number}",
+            "mentioned_user_ids": "[]",
+            "like_count": 0,
+            "comment_level": "comment",
+        }
+        for number in range(1, 51)
+    ]
+    historical_rows.append(
+        {
+            "comment_id": "target-scope-seed",
+            "video_id": "history-jinjiang",
+            "parent_comment_id": "0",
+            "commenter_user_id": "u80",
+            "mentioned_user_ids": '["u60"]',
+            "like_count": 0,
+            "comment_level": "comment",
+        }
+    )
+    historical_rows.extend(
+        {
+            "comment_id": f"scope-b-{number}",
+            "video_id": "history-scope-b",
+            "parent_comment_id": "0",
+            "commenter_user_id": f"u{number}",
+            "mentioned_user_ids": "[]",
+            "like_count": 0,
+            "comment_level": "comment",
+        }
+        for number in range(51, 80)
+    )
+    _write_csv(
+        dataset_dir / "all_comments.csv",
+        [
+            "comment_id",
+            "video_id",
+            "parent_comment_id",
+            "commenter_user_id",
+            "mentioned_user_ids",
+            "like_count",
+            "comment_level",
+        ],
+        [
+            *historical_rows,
+            {
+                "comment_id": "target-holdout-1",
+                "video_id": TARGET_VIDEO_ID,
+                "parent_comment_id": "0",
+                "commenter_user_id": "u1",
+                "mentioned_user_ids": "[]",
+                "like_count": 999,
+                "comment_level": "comment",
+            },
+        ],
+    )
+    return dataset_dir
+
+
 class _ScriptedProviderClient:
     def __init__(self) -> None:
         self.calls = 0
@@ -407,6 +477,49 @@ class _RecordingAdapter(LLMDecisionAdapter):
             }
         )
         return self.wrapped.decide(post, profile, peer_context, platform_context, time_step)
+
+
+class _TargetDeliveryAdapter(LLMDecisionAdapter):
+    def __init__(self, *, failed_user_id: str | None = None) -> None:
+        self.failed_user_id = failed_user_id
+        self.calls: list[dict[str, object]] = []
+
+    def decide(
+        self,
+        post: PostContent,
+        profile: UserProfile,
+        peer_context: PeerContext,
+        platform_context: PlatformContext | None = None,
+        time_step: int = 0,
+    ) -> EngageDecision:
+        self.calls.append(
+            {
+                "post": post,
+                "profile": profile,
+                "peer_context": peer_context,
+                "platform_context": platform_context,
+                "time_step": time_step,
+            }
+        )
+        if profile.user_id == self.failed_user_id:
+            raise ProviderDecisionError(TimeoutError("mocked exhausted provider failure"))
+        if profile.user_id == "u80":
+            return EngageDecision(
+                engage=True,
+                probability=0.9,
+                reason="controlled seed engagement",
+                confidence=1.0,
+                action="like",
+                decision_source="mocked_provider",
+            )
+        return EngageDecision(
+            engage=False,
+            probability=0.1,
+            reason="controlled ignore",
+            confidence=1.0,
+            action="ignore",
+            decision_source="mocked_provider",
+        )
 
 
 def test_offline_final_research_baseline_is_holdout_safe_and_deterministic(tmp_path: Path) -> None:
@@ -583,6 +696,202 @@ def test_offline_final_research_handles_zero_target_scope_network_without_holdou
     score_rows = _read_csv(output_dir / "offline_scores.csv")
     assert {int(row["target_scope_weighted_degree"]) for row in score_rows} == {0}
     assert {float(row["base_network_relevance"]) for row in score_rows} == {0.0}
+
+
+def test_target_delivery_ranking_runtime_reranks_global_top20_after_seed_engagement(tmp_path: Path) -> None:
+    dataset_dir = _make_target_delivery_fixture(tmp_path)
+    provider_config = ProviderLLMConfig(enabled=True, model="mock-model", require_live_env=False)
+    config = FinalResearchConfig(
+        dataset_dir=dataset_dir,
+        sample_size=70,
+        random_seed=20260713,
+        provider=provider_config,
+    )
+
+    def run(output_dir: Path) -> tuple[Path, _TargetDeliveryAdapter]:
+        adapter = _TargetDeliveryAdapter(failed_user_id="u79")
+        return FinalResearchRunner(config, adapter).run_and_write(output_dir), adapter
+
+    first_output, first_adapter = run(tmp_path / "ranking-runtime-a")
+    second_output, second_adapter = run(tmp_path / "ranking-runtime-b")
+
+    manifest = json.loads((first_output / "artifact_manifest.json").read_text(encoding="utf-8"))
+    assert manifest["manifest_version"] == "final-research-ranking-runtime-v2"
+    assert manifest["artifacts"] == {
+        "config_snapshot": "config_snapshot.json",
+        "holdout_diagnostic": "top20_holdout_diagnostic.json",
+        "holdout_safe_audit": "holdout_safe_audit.json",
+        "network_augmented_sample_audit": "network_augmented_sample_audit.json",
+        "offline_score_summary": "offline_score_summary.json",
+        "offline_scores": "offline_scores.csv",
+        "ranking_runtime_candidates": "ranking_runtime_candidates.csv",
+        "ranking_runtime_outcomes": "ranking_runtime_outcomes.csv",
+        "ranking_runtime_steps": "ranking_runtime_steps.csv",
+        "ranking_runtime_summary": "ranking_runtime_summary.json",
+        "runtime_actions": "runtime_actions.csv",
+        "runtime_decisions": "runtime_decisions.csv",
+        "runtime_provider_failures": "runtime_provider_failures.csv",
+        "sample_manifest_csv": "sample_manifest.csv",
+        "sample_manifest_json": "sample_manifest.json",
+        "target_video_snapshot": "target_video_snapshot.json",
+    }
+    assert manifest["live_api_triggered"] is False
+
+    candidates = _read_csv(first_output / "ranking_runtime_candidates.csv")
+    outcomes = _read_csv(first_output / "ranking_runtime_outcomes.csv")
+    steps = _read_csv(first_output / "ranking_runtime_steps.csv")
+    decisions = _read_csv(first_output / "runtime_decisions.csv")
+    failures = _read_csv(first_output / "runtime_provider_failures.csv")
+    audit = json.loads((first_output / "network_augmented_sample_audit.json").read_text(encoding="utf-8"))
+    summary = json.loads((first_output / "ranking_runtime_summary.json").read_text(encoding="utf-8"))
+
+    assert "u80" in audit["seed_user_ids"]
+    assert "u60" not in audit["base_sample"]["user_ids"]
+    assert "u60" in audit["network_cohort"]["added_user_ids"]
+    batch_zero = [row for row in candidates if row["time_step"] == "0"]
+    assert {row["user_id"] for row in batch_zero} == set(audit["seed_user_ids"])
+    assert all(row["selected"] == "true" for row in batch_zero)
+
+    batch_one = [row for row in candidates if row["time_step"] == "1"]
+    assert len(batch_one) == int(steps[1]["eligible_users"])
+    assert sum(row["selected"] == "true" for row in batch_one) == 20
+    assert [int(row["ranking_position"]) for row in batch_one] == list(range(1, len(batch_one) + 1))
+    u60 = next(row for row in batch_one if row["user_id"] == "u60")
+    assert u60["selected"] == "true"
+    assert int(u60["engaged_neighbor_count"]) == 1
+    assert float(u60["engaged_neighbor_signal"]) == pytest.approx(1 / 3, abs=1e-6)
+    assert float(u60["recommendation_score"]) == pytest.approx(0.1, abs=1e-6)
+    static_order = sorted(
+        batch_one,
+        key=lambda row: (
+            -(0.50 * float(row["base_network_relevance"]) + 0.20 * float(row["historical_tag_affinity"])),
+            row["user_id"],
+        ),
+    )
+    assert int(u60["ranking_position"]) < 1 + next(
+        index for index, row in enumerate(static_order) if row["user_id"] == "u60"
+    )
+
+    exposed_outcomes = [row for row in outcomes if row["result_status"] != "below_delivery_capacity"]
+    assert len(first_adapter.calls) == len(exposed_outcomes) == manifest["decision_adapter_calls"]
+    assert len({row["user_id"] for row in exposed_outcomes}) == len(exposed_outcomes)
+    assert len(first_adapter.calls) <= 600
+    assert failures == [
+        {
+            "schedule_position": failures[0]["schedule_position"],
+            "user_id": "u79",
+            "video_id": TARGET_VIDEO_ID,
+            "time_step": "0",
+            "failure_type": "TimeoutError",
+            "provider_metadata": failures[0]["provider_metadata"],
+        }
+    ]
+    failed_position = int(failures[0]["schedule_position"])
+    assert any(int(row["schedule_position"]) > failed_position for row in decisions)
+    assert all(call["peer_context"] == PeerContext() for call in first_adapter.calls)
+    assert all(call["peer_context"] == PeerContext() for call in second_adapter.calls)
+
+    assert summary["runtime_version"] == "final-research-ranking-runtime-v2"
+    assert summary["schedule_method"] == "global_stable_reranking_top20"
+    assert summary["delivery_capacity"] == 20
+    assert summary["ranking_formula"] == (
+        "0.50 * base_network_relevance + 0.30 * engaged_neighbor_signal + 0.20 * historical_tag_affinity"
+    )
+    assert summary["engaged_neighbor_formula"] == "min(1, engaged_neighbor_count / 3)"
+    assert summary["maximum_target_exposures"] == 600
+    assert "background_impressions" not in summary["counts"]
+    assert summary["counts"]["decision_adapter_calls"] == len(first_adapter.calls)
+
+    runtime_text = "\n".join(
+        (first_output / relative_path).read_text(encoding="utf-8")
+        for name, relative_path in manifest["artifacts"].items()
+        if name.startswith("ranking_runtime_") or name.startswith("runtime_")
+    )
+    assert "random_draw" not in runtime_text
+    assert "background_content" not in runtime_text
+    assert "sk-secret" not in runtime_text
+    prompt_inputs = json.dumps(
+        [
+            {
+                "peer_context": cast(PeerContext, call["peer_context"]).model_dump(mode="json"),
+                "platform_context": cast(PlatformContext, call["platform_context"]).model_dump(mode="json"),
+            }
+            for call in first_adapter.calls
+        ],
+        ensure_ascii=False,
+    )
+    for forbidden in (
+        "base_network_relevance",
+        "engaged_neighbor_count",
+        "engaged_neighbor_signal",
+        "historical_tag_affinity",
+        "recommendation_score",
+        "ranking_position",
+    ):
+        assert forbidden not in prompt_inputs
+
+    for relative_path in [*manifest["artifacts"].values(), "artifact_manifest.json"]:
+        assert (first_output / relative_path).read_bytes() == (second_output / relative_path).read_bytes()
+
+
+def test_target_delivery_ranking_runtime_caps_delivery_and_marks_final_below_capacity(tmp_path: Path) -> None:
+    dataset_dir = _make_processed_fixture(tmp_path, user_count=630)
+    provider_config = ProviderLLMConfig(enabled=True, model="mock-model", require_live_env=False)
+    adapter = _TargetDeliveryAdapter()
+    output = FinalResearchRunner(
+        FinalResearchConfig(
+            dataset_dir=dataset_dir,
+            sample_size=620,
+            provider=provider_config,
+        ),
+        adapter,
+    ).run_and_write(tmp_path / "capacity-runtime")
+
+    outcomes = _read_csv(output / "ranking_runtime_outcomes.csv")
+    steps = _read_csv(output / "ranking_runtime_steps.csv")
+    summary = json.loads((output / "ranking_runtime_summary.json").read_text(encoding="utf-8"))
+    exposed = [row for row in outcomes if row["result_status"] != "below_delivery_capacity"]
+    below_capacity = [row for row in outcomes if row["result_status"] == "below_delivery_capacity"]
+
+    assert len(outcomes) == 620
+    assert len(exposed) == len(adapter.calls) == summary["counts"]["target_exposures"] <= 600
+    assert len(below_capacity) == 620 - len(exposed)
+    assert below_capacity
+    assert all(int(row["selected_users"]) <= 20 for row in steps)
+    assert all(row["provider_status"] == "not_called" for row in below_capacity)
+    assert all(row["exposure_time_step"] == "" for row in below_capacity)
+
+
+def test_target_delivery_ranking_provider_prompt_excludes_ranking_evidence(tmp_path: Path) -> None:
+    dataset_dir = _make_processed_fixture(tmp_path)
+    provider_config = ProviderLLMConfig(enabled=True, model="mock-model", require_live_env=False)
+    client = _ScriptedProviderClient()
+    provider = OpenAICompatibleDecisionAdapter(provider_config, client=client, sleep=lambda _delay: None)
+    adapter = _RecordingAdapter(provider)
+
+    FinalResearchRunner(
+        FinalResearchConfig(
+            dataset_dir=dataset_dir,
+            sample_size=4,
+            provider=provider_config,
+        ),
+        adapter,
+    ).run_and_write(tmp_path / "ranking-prompt-runtime")
+
+    assert adapter.calls
+    assert all(call["peer_context"] == PeerContext() for call in adapter.calls)
+    prompt_text = json.dumps(client.requests, ensure_ascii=False)
+    for forbidden in (
+        "base_network_relevance",
+        "dynamic_network",
+        "engaged_neighbor_count",
+        "engaged_neighbor_signal",
+        "historical_tag_affinity",
+        "recommendation_score",
+        "ranking_position",
+        "target-holdout",
+    ):
+        assert forbidden not in prompt_text
 
 
 def test_mocked_provider_final_research_runs_fixed_batches_and_continues_after_failure(tmp_path: Path) -> None:
@@ -1060,7 +1369,14 @@ def test_final_research_report_uses_configured_formula_and_interest_tags(tmp_pat
     assert json.loads(report_rows[0]["interest_tags"])[0] == "hotel"
 
 
-def test_final_research_does_not_convert_unexpected_adapter_errors_to_provider_failures(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    "research_model",
+    [FinalResearchModel.PROBABILITY_V1, FinalResearchModel.TARGET_DELIVERY_RANKING_V2],
+)
+def test_final_research_does_not_convert_unexpected_adapter_errors_to_provider_failures(
+    tmp_path: Path,
+    research_model: FinalResearchModel,
+) -> None:
     class UnexpectedFailureAdapter(LLMDecisionAdapter):
         def decide(
             self,
@@ -1076,15 +1392,17 @@ def test_final_research_does_not_convert_unexpected_adapter_errors_to_provider_f
     dataset_dir = _make_processed_fixture(tmp_path)
     config = FinalResearchConfig(
         dataset_dir=dataset_dir,
-        research_model=FinalResearchModel.PROBABILITY_V1,
+        research_model=research_model,
         sample_size=4,
         provider=ProviderLLMConfig(enabled=True, require_live_env=False),
     )
 
     with pytest.raises(AssertionError, match="adapter programming defect"):
-        FinalResearchRunner(config, UnexpectedFailureAdapter()).run_and_write(tmp_path / "failed-runtime")
+        FinalResearchRunner(config, UnexpectedFailureAdapter()).run_and_write(
+            tmp_path / f"failed-runtime-{research_model.value}"
+        )
 
-    assert not (tmp_path / "failed-runtime" / "artifact_manifest.json").exists()
+    assert not (tmp_path / f"failed-runtime-{research_model.value}" / "artifact_manifest.json").exists()
 
 
 def test_final_research_config_rejects_missing_target_and_oversized_sample(tmp_path: Path) -> None:
@@ -1124,9 +1442,9 @@ def test_final_research_config_rejects_missing_target_and_oversized_sample(tmp_p
             provider=ProviderLLMConfig(enabled=True, prompt_version="other-prompt"),
         )
 
-    with pytest.raises(ValidationError, match="ranking_v2 provider runtime is not available"):
-        FinalResearchConfig(
-            dataset_dir=dataset_dir,
-            sample_size=4,
-            provider=ProviderLLMConfig(enabled=True, require_live_env=False),
-        )
+    ranking_config = FinalResearchConfig(
+        dataset_dir=dataset_dir,
+        sample_size=4,
+        provider=ProviderLLMConfig(enabled=True, require_live_env=False),
+    )
+    assert ranking_config.research_model is FinalResearchModel.TARGET_DELIVERY_RANKING_V2

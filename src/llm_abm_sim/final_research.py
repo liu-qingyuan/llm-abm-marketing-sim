@@ -15,7 +15,7 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from .decision import LLMDecisionAdapter, ProviderDecisionError
+from .decision import EngageDecision, LLMDecisionAdapter, ProviderDecisionError
 from .final_research_report import (
     FINAL_RESEARCH_DYNAMIC_NETWORK_FORMULA,
     FINAL_RESEARCH_REPORT_ARTIFACTS,
@@ -49,6 +49,13 @@ OFFLINE_BASELINE_VERSION = "final-research-offline-v2"
 TARGET_DELIVERY_BASE_NETWORK_WEIGHT = 0.50
 TARGET_DELIVERY_ENGAGED_NEIGHBOR_WEIGHT = 0.30
 TARGET_DELIVERY_TAG_AFFINITY_WEIGHT = 0.20
+TARGET_DELIVERY_CAPACITY = 20
+TARGET_DELIVERY_RUNTIME_VERSION = "final-research-ranking-runtime-v2"
+TARGET_DELIVERY_SCHEDULE_METHOD = "global_stable_reranking_top20"
+TARGET_DELIVERY_RANKING_FORMULA = (
+    "0.50 * base_network_relevance + 0.30 * engaged_neighbor_signal + 0.20 * historical_tag_affinity"
+)
+TARGET_DELIVERY_ENGAGED_NEIGHBOR_FORMULA = "min(1, engaged_neighbor_count / 3)"
 UNOBSERVED_PAIR_SEMANTICS = "No observed interaction is not evidence that a user saw the target video and chose ignore."
 REQUIRED_DATASET_FILES = ("videos.csv", "users.csv")
 SAMPLE_CSV_FIELDS = (
@@ -151,6 +158,40 @@ RUNTIME_PROVIDER_FAILURE_CSV_FIELDS = (
     "failure_type",
     "provider_metadata",
 )
+RANKING_RUNTIME_STEP_CSV_FIELDS = (
+    "time_step",
+    "eligible_users",
+    "ranked_candidates",
+    "selected_users",
+    "seed_users",
+    "target_exposures",
+    "decisions",
+    "engagements",
+    "ignored",
+    "provider_failed",
+    "below_delivery_capacity",
+)
+RANKING_RUNTIME_CANDIDATE_CSV_FIELDS = (
+    "time_step",
+    "ranking_position",
+    "user_id",
+    "is_seed",
+    "selected",
+    "base_network_relevance",
+    "engaged_neighbor_count",
+    "engaged_neighbor_signal",
+    "historical_tag_affinity",
+    "recommendation_score",
+)
+RANKING_RUNTIME_OUTCOME_CSV_FIELDS = (
+    "user_id",
+    "video_id",
+    "is_seed",
+    "exposure_time_step",
+    "ranking_position",
+    "result_status",
+    "provider_status",
+)
 
 
 class FinalResearchModel(str, Enum):
@@ -218,10 +259,6 @@ class FinalResearchConfig(BaseModel):
                 raise ValueError("enabled final research runtime requires horizon=30")
             if self.provider.prompt_version != "jinjiang-green-marketing-prompt-v2":
                 raise ValueError("enabled final research runtime requires jinjiang-green-marketing-prompt-v2")
-            if self.research_model is not FinalResearchModel.PROBABILITY_V1:
-                raise ValueError(
-                    "target_delivery_ranking_v2 provider runtime is not available until the ranking runtime is implemented"
-                )
 
         dataset_dir = self.dataset_dir.expanduser()
         if not dataset_dir.is_dir():
@@ -370,6 +407,17 @@ class _DynamicRecommendationScore(BaseModel):
     recommendation_score: float
 
 
+class RankingCandidate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    user_id: str
+    base_network_relevance: float
+    engaged_neighbor_count: int
+    engaged_neighbor_signal: float
+    historical_tag_affinity: float
+    recommendation_score: float
+
+
 @dataclass(frozen=True)
 class _RuntimeArtifacts:
     steps: list[dict[str, object]]
@@ -377,6 +425,18 @@ class _RuntimeArtifacts:
     decisions: list[dict[str, object]]
     actions: list[dict[str, object]]
     background_events: list[dict[str, object]]
+    provider_failures: list[dict[str, object]]
+    summary: dict[str, object]
+    decision_adapter_calls: int
+
+
+@dataclass(frozen=True)
+class _RankingRuntimeArtifacts:
+    steps: list[dict[str, object]]
+    candidates: list[dict[str, object]]
+    outcomes: list[dict[str, object]]
+    decisions: list[dict[str, object]]
+    actions: list[dict[str, object]]
     provider_failures: list[dict[str, object]]
     summary: dict[str, object]
     decision_adapter_calls: int
@@ -391,6 +451,12 @@ class _BatchRuntimeInput:
     peer_context: PeerContext
     draw: float | None
     target_exposed: bool
+
+
+@dataclass(frozen=True)
+class _RuntimeDecisionAttempt:
+    decision: EngageDecision | None
+    provider_failure: dict[str, object] | None
 
 
 @dataclass(frozen=True)
@@ -700,6 +766,35 @@ class PlatformRecommendationModel:
             recommendation_score=round(recommendation_score, 6),
         )
 
+    @staticmethod
+    def rank_candidates(candidates: Iterable[RankingCandidate]) -> list[RankingCandidate]:
+        return sorted(candidates, key=lambda candidate: (-candidate.recommendation_score, candidate.user_id))
+
+    def rank_eligible_users(self, user_ids: Iterable[str]) -> list[RankingCandidate]:
+        candidates: list[RankingCandidate] = []
+        for user_id in user_ids:
+            neighbors = self.prepared.target_scope_neighbors.get(user_id, set())
+            engaged_neighbor_count = len(neighbors & self._engaged_actions.keys())
+            engaged_neighbor_signal = min(1.0, engaged_neighbor_count / 3)
+            base_network_relevance = self._base_network_scores.get(user_id, 0.0)
+            historical_tag_affinity = self._historical_tag_affinity(user_id)
+            recommendation_score = (
+                TARGET_DELIVERY_BASE_NETWORK_WEIGHT * base_network_relevance
+                + TARGET_DELIVERY_ENGAGED_NEIGHBOR_WEIGHT * engaged_neighbor_signal
+                + TARGET_DELIVERY_TAG_AFFINITY_WEIGHT * historical_tag_affinity
+            )
+            candidates.append(
+                RankingCandidate(
+                    user_id=user_id,
+                    base_network_relevance=base_network_relevance,
+                    engaged_neighbor_count=engaged_neighbor_count,
+                    engaged_neighbor_signal=engaged_neighbor_signal,
+                    historical_tag_affinity=historical_tag_affinity,
+                    recommendation_score=recommendation_score,
+                )
+            )
+        return self.rank_candidates(candidates)
+
     def peer_context(self, user_id: str) -> PeerContext:
         neighbors = self.prepared.target_scope_neighbors.get(user_id, set())
         engaged_neighbor_ids = neighbors & self._engaged_actions.keys()
@@ -745,7 +840,13 @@ class FinalResearchRunner:
         ranked_scores = sorted(scores, key=lambda item: (-item.recommendation_score, item.user_id))
         top_scores = ranked_scores[:20]
         scores_by_user = {score.user_id: score for score in scores}
-        runtime = self._run_runtime(prepared, platform) if self.config.provider.enabled else None
+        probability_runtime: _RuntimeArtifacts | None = None
+        ranking_runtime: _RankingRuntimeArtifacts | None = None
+        if self.config.provider.enabled:
+            if model_policy.model is FinalResearchModel.TARGET_DELIVERY_RANKING_V2:
+                ranking_runtime = self._run_target_delivery_runtime(prepared, platform)
+            else:
+                probability_runtime = self._run_runtime(prepared, platform)
         holdout_comments = builder.reveal_holdout()
         holdout_participant_ids = sorted({comment.commenter_user_id for comment in holdout_comments})
         diagnostic = _holdout_diagnostic(holdout_participant_ids, top_scores, scores_by_user)
@@ -814,9 +915,10 @@ class FinalResearchRunner:
             "sample_manifest_csv": "sample_manifest.csv",
             "sample_manifest_json": "sample_manifest.json",
             "target_video_snapshot": "target_video_snapshot.json",
-            **FINAL_RESEARCH_REPORT_ARTIFACTS,
         }
-        if runtime is not None:
+        if ranking_runtime is None:
+            artifacts.update(FINAL_RESEARCH_REPORT_ARTIFACTS)
+        if probability_runtime is not None:
             artifacts.update(
                 {
                     "runtime_actions": "runtime_actions.csv",
@@ -826,6 +928,19 @@ class FinalResearchRunner:
                     "runtime_provider_failures": "runtime_provider_failures.csv",
                     "runtime_steps": "runtime_steps.csv",
                     "runtime_summary": "runtime_summary.json",
+                }
+            )
+        elif ranking_runtime is not None:
+            artifacts.update(
+                {
+                    "network_augmented_sample_audit": "network_augmented_sample_audit.json",
+                    "ranking_runtime_candidates": "ranking_runtime_candidates.csv",
+                    "ranking_runtime_outcomes": "ranking_runtime_outcomes.csv",
+                    "ranking_runtime_steps": "ranking_runtime_steps.csv",
+                    "ranking_runtime_summary": "ranking_runtime_summary.json",
+                    "runtime_actions": "runtime_actions.csv",
+                    "runtime_decisions": "runtime_decisions.csv",
+                    "runtime_provider_failures": "runtime_provider_failures.csv",
                 }
             )
         elif model_policy.augment_network_sample:
@@ -854,35 +969,75 @@ class FinalResearchRunner:
             score_summary,
         )
         _write_json(output_path / artifacts["holdout_diagnostic"], diagnostic)
-        if runtime is None and model_policy.augment_network_sample:
+        if model_policy.augment_network_sample:
             _write_json(
                 output_path / artifacts["network_augmented_sample_audit"],
                 _network_augmented_sample_audit(prepared, self.config),
             )
-        if runtime is not None:
-            _write_csv(output_path / artifacts["runtime_steps"], list(RUNTIME_STEP_CSV_FIELDS), runtime.steps)
+        if probability_runtime is not None:
+            _write_csv(
+                output_path / artifacts["runtime_steps"],
+                list(RUNTIME_STEP_CSV_FIELDS),
+                probability_runtime.steps,
+            )
             _write_csv(
                 output_path / artifacts["runtime_exposures"],
                 list(RUNTIME_EXPOSURE_CSV_FIELDS),
-                runtime.exposures,
+                probability_runtime.exposures,
             )
             _write_csv(
                 output_path / artifacts["runtime_decisions"],
                 list(RUNTIME_DECISION_CSV_FIELDS),
-                runtime.decisions,
+                probability_runtime.decisions,
             )
-            _write_csv(output_path / artifacts["runtime_actions"], list(RUNTIME_ACTION_CSV_FIELDS), runtime.actions)
+            _write_csv(
+                output_path / artifacts["runtime_actions"],
+                list(RUNTIME_ACTION_CSV_FIELDS),
+                probability_runtime.actions,
+            )
             _write_csv(
                 output_path / artifacts["runtime_background_events"],
                 list(RUNTIME_BACKGROUND_CSV_FIELDS),
-                runtime.background_events,
+                probability_runtime.background_events,
             )
             _write_csv(
                 output_path / artifacts["runtime_provider_failures"],
                 list(RUNTIME_PROVIDER_FAILURE_CSV_FIELDS),
-                runtime.provider_failures,
+                probability_runtime.provider_failures,
             )
-            _write_json(output_path / artifacts["runtime_summary"], runtime.summary)
+            _write_json(output_path / artifacts["runtime_summary"], probability_runtime.summary)
+        if ranking_runtime is not None:
+            _write_csv(
+                output_path / artifacts["ranking_runtime_steps"],
+                list(RANKING_RUNTIME_STEP_CSV_FIELDS),
+                ranking_runtime.steps,
+            )
+            _write_csv(
+                output_path / artifacts["ranking_runtime_candidates"],
+                list(RANKING_RUNTIME_CANDIDATE_CSV_FIELDS),
+                ranking_runtime.candidates,
+            )
+            _write_csv(
+                output_path / artifacts["ranking_runtime_outcomes"],
+                list(RANKING_RUNTIME_OUTCOME_CSV_FIELDS),
+                ranking_runtime.outcomes,
+            )
+            _write_csv(
+                output_path / artifacts["runtime_decisions"],
+                list(RUNTIME_DECISION_CSV_FIELDS),
+                ranking_runtime.decisions,
+            )
+            _write_csv(
+                output_path / artifacts["runtime_actions"],
+                list(RUNTIME_ACTION_CSV_FIELDS),
+                ranking_runtime.actions,
+            )
+            _write_csv(
+                output_path / artifacts["runtime_provider_failures"],
+                list(RUNTIME_PROVIDER_FAILURE_CSV_FIELDS),
+                ranking_runtime.provider_failures,
+            )
+            _write_json(output_path / artifacts["ranking_runtime_summary"], ranking_runtime.summary)
         _write_json(output_path / artifacts["holdout_safe_audit"], holdout_safe_audit)
         report_config = self.config.snapshot()
         report_config["report_title"] = self.config.report.title
@@ -893,11 +1048,29 @@ class FinalResearchRunner:
             "users_scored": len(scores),
             "sample_users": len(prepared.sample_user_ids),
             "seed_users": len(prepared.seed_user_ids),
-            "runtime_exposures": len(runtime.exposures) if runtime is not None else 0,
-            "runtime_decisions": len(runtime.decisions) if runtime is not None else 0,
-            "runtime_provider_failures": len(runtime.provider_failures) if runtime is not None else 0,
+            "runtime_exposures": (
+                len(probability_runtime.exposures)
+                if probability_runtime is not None
+                else sum(row["result_status"] != "below_delivery_capacity" for row in ranking_runtime.outcomes)
+                if ranking_runtime is not None
+                else 0
+            ),
+            "runtime_decisions": (
+                len(probability_runtime.decisions)
+                if probability_runtime is not None
+                else len(ranking_runtime.decisions)
+                if ranking_runtime is not None
+                else 0
+            ),
+            "runtime_provider_failures": (
+                len(probability_runtime.provider_failures)
+                if probability_runtime is not None
+                else len(ranking_runtime.provider_failures)
+                if ranking_runtime is not None
+                else 0
+            ),
         }
-        if runtime is None and model_policy.augment_network_sample:
+        if model_policy.augment_network_sample:
             manifest_counts.update(
                 {
                     "base_sample_users": len(prepared.base_sample_user_ids),
@@ -906,37 +1079,239 @@ class FinalResearchRunner:
                     "replaced_ordinary_users": len(prepared.replaced_ordinary_user_ids),
                 }
             )
+        runtime_manifest_version = (
+            TARGET_DELIVERY_RUNTIME_VERSION
+            if ranking_runtime is not None
+            else FINAL_RESEARCH_RUNTIME_VERSION
+            if probability_runtime is not None
+            else model_policy.offline_manifest_version
+        )
+        decision_adapter_calls = (
+            ranking_runtime.decision_adapter_calls
+            if ranking_runtime is not None
+            else probability_runtime.decision_adapter_calls
+            if probability_runtime is not None
+            else 0
+        )
         artifact_manifest = {
-            "manifest_version": (
-                FINAL_RESEARCH_RUNTIME_VERSION if runtime is not None else model_policy.offline_manifest_version
-            ),
+            "manifest_version": runtime_manifest_version,
             "artifacts": artifacts,
             "counts": manifest_counts,
             "live_api_triggered": _adapter_live_api_triggered(self.decision_adapter),
-            "decision_adapter_calls": runtime.decision_adapter_calls if runtime is not None else 0,
+            "decision_adapter_calls": decision_adapter_calls,
         }
-        FinalResearchReportWriter(
-            FinalResearchReportSource(
-                target_video=prepared.target_video.model_dump(mode="json"),
-                users=[user.model_dump(mode="json") for user in sample_users],
-                historical_tags_by_user={
-                    user.user_id: sorted(prepared.historical_tags_by_user.get(user.user_id, set()))
-                    for user in sample_users
-                },
-                config=report_config,
-                offline_score_summary=score_summary,
-                holdout_diagnostic=diagnostic,
-                holdout_safe_audit=holdout_safe_audit,
-                artifact_manifest=artifact_manifest,
-                runtime_steps=runtime.steps if runtime is not None else (),
-                runtime_exposures=runtime.exposures if runtime is not None else (),
-                runtime_decisions=runtime.decisions if runtime is not None else (),
-                runtime_provider_failures=runtime.provider_failures if runtime is not None else (),
-                runtime_summary=runtime.summary if runtime is not None else None,
-                runtime_enabled=runtime is not None,
-            )
-        ).write(output_path)
+        if ranking_runtime is not None:
+            _write_json(output_path / "artifact_manifest.json", artifact_manifest)
+        else:
+            FinalResearchReportWriter(
+                FinalResearchReportSource(
+                    target_video=prepared.target_video.model_dump(mode="json"),
+                    users=[user.model_dump(mode="json") for user in sample_users],
+                    historical_tags_by_user={
+                        user.user_id: sorted(prepared.historical_tags_by_user.get(user.user_id, set()))
+                        for user in sample_users
+                    },
+                    config=report_config,
+                    offline_score_summary=score_summary,
+                    holdout_diagnostic=diagnostic,
+                    holdout_safe_audit=holdout_safe_audit,
+                    artifact_manifest=artifact_manifest,
+                    runtime_steps=probability_runtime.steps if probability_runtime is not None else (),
+                    runtime_exposures=probability_runtime.exposures if probability_runtime is not None else (),
+                    runtime_decisions=probability_runtime.decisions if probability_runtime is not None else (),
+                    runtime_provider_failures=(
+                        probability_runtime.provider_failures if probability_runtime is not None else ()
+                    ),
+                    runtime_summary=probability_runtime.summary if probability_runtime is not None else None,
+                    runtime_enabled=probability_runtime is not None,
+                )
+            ).write(output_path)
         return output_path
+
+    def _run_target_delivery_runtime(
+        self,
+        prepared: _PreparedInputs,
+        platform: PlatformRecommendationModel,
+    ) -> _RankingRuntimeArtifacts:
+        post = PostContent(
+            post_id=prepared.target_video.video_id,
+            text=prepared.target_video.caption,
+            topic_tags=list(prepared.target_video.hashtags),
+        )
+        provider_metadata = _adapter_safe_metadata(self.decision_adapter, self.config.provider)
+        eligible_user_ids = set(prepared.sample_user_ids) - set(prepared.seed_user_ids)
+        candidate_rows: list[dict[str, object]] = []
+        decision_rows: list[dict[str, object]] = []
+        action_rows: list[dict[str, object]] = []
+        provider_failure_rows: list[dict[str, object]] = []
+        outcomes_by_user: dict[str, dict[str, object]] = {}
+        step_rows: list[dict[str, object]] = []
+        decision_adapter_calls = 0
+        schedule_position = 0
+
+        for time_step in range(self.config.horizon):
+            if time_step == 0:
+                ranked_candidates = platform.rank_eligible_users(prepared.seed_user_ids)
+                selected_candidates = ranked_candidates
+            else:
+                ranked_candidates = platform.rank_eligible_users(eligible_user_ids)
+                selected_candidates = ranked_candidates[:TARGET_DELIVERY_CAPACITY]
+            selected_user_ids = {candidate.user_id for candidate in selected_candidates}
+            ranking_positions = {
+                candidate.user_id: ranking_position
+                for ranking_position, candidate in enumerate(ranked_candidates, start=1)
+            }
+            for ranking_position, candidate in enumerate(ranked_candidates, start=1):
+                candidate_rows.append(
+                    {
+                        "time_step": time_step,
+                        "ranking_position": ranking_position,
+                        "user_id": candidate.user_id,
+                        "is_seed": _csv_bool(candidate.user_id in prepared.seed_user_ids),
+                        "selected": _csv_bool(candidate.user_id in selected_user_ids),
+                        "base_network_relevance": round(candidate.base_network_relevance, 12),
+                        "engaged_neighbor_count": candidate.engaged_neighbor_count,
+                        "engaged_neighbor_signal": round(candidate.engaged_neighbor_signal, 12),
+                        "historical_tag_affinity": round(candidate.historical_tag_affinity, 12),
+                        "recommendation_score": round(candidate.recommendation_score, 12),
+                    }
+                )
+
+            pending_target_exposures: list[str] = []
+            pending_engagements: list[tuple[str, str]] = []
+            step_decisions = 0
+            step_engagements = 0
+            step_ignored = 0
+            step_provider_failed = 0
+            for candidate in selected_candidates:
+                user_id = candidate.user_id
+                user = prepared.users_by_id[user_id]
+                decision_adapter_calls += 1
+                pending_target_exposures.append(user_id)
+                outcome_row = {
+                    "user_id": user_id,
+                    "video_id": prepared.target_video.video_id,
+                    "is_seed": _csv_bool(user.is_seed),
+                    "exposure_time_step": time_step,
+                    "ranking_position": ranking_positions[user_id],
+                    "result_status": "",
+                    "provider_status": "",
+                }
+                attempt = _attempt_runtime_decision(
+                    adapter=self.decision_adapter,
+                    post=post,
+                    profile=_runtime_user_profile(user),
+                    peer_context=PeerContext(),
+                    platform_context=PlatformContext(
+                        time_label=f"batch-{time_step}",
+                        hot_topics=list(prepared.target_video.hashtags),
+                        platform_mood="target delivery ranking exposure",
+                    ),
+                    time_step=time_step,
+                    schedule_position=schedule_position,
+                    video_id=prepared.target_video.video_id,
+                    provider_metadata=provider_metadata,
+                )
+                if attempt.provider_failure is not None:
+                    step_provider_failed += 1
+                    outcome_row["result_status"] = "provider_failed"
+                    outcome_row["provider_status"] = "provider_failed"
+                    provider_failure_rows.append(attempt.provider_failure)
+                    outcomes_by_user[user_id] = outcome_row
+                    schedule_position += 1
+                    continue
+
+                decision = attempt.decision
+                assert decision is not None
+                step_decisions += 1
+                if decision.engage:
+                    step_engagements += 1
+                    pending_engagements.append((user_id, decision.action))
+                else:
+                    step_ignored += 1
+                outcome_row["result_status"] = decision.action
+                outcome_row["provider_status"] = "succeeded"
+                outcomes_by_user[user_id] = outcome_row
+                decision_row, action_row = _runtime_decision_rows(
+                    decision,
+                    schedule_position=schedule_position,
+                    user_id=user_id,
+                    video_id=prepared.target_video.video_id,
+                    time_step=time_step,
+                )
+                decision_rows.append(decision_row)
+                action_rows.append(action_row)
+                schedule_position += 1
+
+            eligible_user_ids.difference_update(selected_user_ids)
+            for user_id in pending_target_exposures:
+                platform.record_target_exposure(user_id)
+            for user_id, action in pending_engagements:
+                platform.record_engagement(user_id, action)
+            step_rows.append(
+                {
+                    "time_step": time_step,
+                    "eligible_users": len(ranked_candidates),
+                    "ranked_candidates": len(ranked_candidates),
+                    "selected_users": len(selected_candidates),
+                    "seed_users": len(selected_candidates) if time_step == 0 else 0,
+                    "target_exposures": len(selected_candidates),
+                    "decisions": step_decisions,
+                    "engagements": step_engagements,
+                    "ignored": step_ignored,
+                    "provider_failed": step_provider_failed,
+                    "below_delivery_capacity": len(ranked_candidates) - len(selected_candidates),
+                }
+            )
+
+        for user_id in sorted(eligible_user_ids):
+            user = prepared.users_by_id[user_id]
+            outcomes_by_user[user_id] = {
+                "user_id": user_id,
+                "video_id": prepared.target_video.video_id,
+                "is_seed": _csv_bool(user.is_seed),
+                "exposure_time_step": "",
+                "ranking_position": "",
+                "result_status": "below_delivery_capacity",
+                "provider_status": "not_called",
+            }
+        outcomes = [outcomes_by_user[user_id] for user_id in prepared.sample_user_ids]
+        summary = {
+            "runtime_version": TARGET_DELIVERY_RUNTIME_VERSION,
+            "horizon": self.config.horizon,
+            "schedule_method": TARGET_DELIVERY_SCHEDULE_METHOD,
+            "seed_step": 0,
+            "non_seed_steps": [1, self.config.horizon - 1],
+            "user_opportunity_limit": 1,
+            "delivery_capacity": TARGET_DELIVERY_CAPACITY,
+            "maximum_target_exposures": TARGET_DELIVERY_CAPACITY * self.config.horizon,
+            "ranking_formula": TARGET_DELIVERY_RANKING_FORMULA,
+            "engaged_neighbor_formula": TARGET_DELIVERY_ENGAGED_NEIGHBOR_FORMULA,
+            "same_batch_feedback": False,
+            "decision_adapter_calls": decision_adapter_calls,
+            "provider_metadata": provider_metadata,
+            "counts": {
+                "sample_users": len(prepared.sample_user_ids),
+                "seed_users": len(prepared.seed_user_ids),
+                "target_exposures": decision_adapter_calls,
+                "decisions": len(decision_rows),
+                "engagements": sum(row["action"] != "ignore" for row in action_rows),
+                "ignored": sum(row["action"] == "ignore" for row in action_rows),
+                "provider_failed": len(provider_failure_rows),
+                "below_delivery_capacity": len(eligible_user_ids),
+                "decision_adapter_calls": decision_adapter_calls,
+            },
+        }
+        return _RankingRuntimeArtifacts(
+            steps=step_rows,
+            candidates=candidate_rows,
+            outcomes=outcomes,
+            decisions=decision_rows,
+            actions=action_rows,
+            provider_failures=provider_failure_rows,
+            summary=summary,
+            decision_adapter_calls=decision_adapter_calls,
+        )
 
     def _run_runtime(
         self,
@@ -1036,62 +1411,44 @@ class FinalResearchRunner:
                 _increment_counter(step_row, "target_exposures")
                 pending_target_exposures.append(user_id)
                 decision_adapter_calls += 1
-                try:
-                    decision = self.decision_adapter.decide(
-                        post,
-                        _runtime_user_profile(batch_input.user),
-                        batch_input.peer_context,
-                        PlatformContext(
-                            time_label=f"batch-{time_step}",
-                            hot_topics=list(prepared.target_video.hashtags),
-                            platform_mood="fixed final research batch",
-                        ),
-                        time_step,
-                    )
-                except ProviderDecisionError as exc:
+                attempt = _attempt_runtime_decision(
+                    adapter=self.decision_adapter,
+                    post=post,
+                    profile=_runtime_user_profile(batch_input.user),
+                    peer_context=batch_input.peer_context,
+                    platform_context=PlatformContext(
+                        time_label=f"batch-{time_step}",
+                        hot_topics=list(prepared.target_video.hashtags),
+                        platform_mood="fixed final research batch",
+                    ),
+                    time_step=time_step,
+                    schedule_position=schedule_position,
+                    video_id=prepared.target_video.video_id,
+                    provider_metadata=provider_metadata,
+                )
+                if attempt.provider_failure is not None:
                     _increment_counter(step_row, "provider_failed")
-                    provider_failures.append(
-                        {
-                            "schedule_position": schedule_position,
-                            "user_id": user_id,
-                            "video_id": prepared.target_video.video_id,
-                            "time_step": time_step,
-                            "failure_type": exc.failure_type,
-                            "provider_metadata": _json_cell(provider_metadata),
-                        }
-                    )
+                    provider_failures.append(attempt.provider_failure)
                     schedule_position += 1
                     continue
 
+                decision = attempt.decision
+                assert decision is not None
                 _increment_counter(step_row, "decisions")
                 if decision.engage:
                     _increment_counter(step_row, "engagements")
                     pending_engagements.append((user_id, decision.action))
                 else:
                     _increment_counter(step_row, "ignored")
-                decision_row = {
-                    "schedule_position": schedule_position,
-                    "user_id": user_id,
-                    "video_id": prepared.target_video.video_id,
-                    "time_step": time_step,
-                    "engage": _csv_bool(decision.engage),
-                    "probability": decision.probability,
-                    "reason": decision.reason,
-                    "confidence": decision.confidence,
-                    "action": decision.action,
-                    "decision_source": decision.decision_source,
-                    "provider_metadata": _json_cell(decision.provider_metadata),
-                }
-                decisions.append(decision_row)
-                actions.append(
-                    {
-                        "schedule_position": schedule_position,
-                        "user_id": user_id,
-                        "video_id": prepared.target_video.video_id,
-                        "time_step": time_step,
-                        "action": decision.action,
-                    }
+                decision_row, action_row = _runtime_decision_rows(
+                    decision,
+                    schedule_position=schedule_position,
+                    user_id=user_id,
+                    video_id=prepared.target_video.video_id,
+                    time_step=time_step,
                 )
+                decisions.append(decision_row)
+                actions.append(action_row)
                 schedule_position += 1
 
             for user_id in pending_target_exposures:
@@ -1131,6 +1488,72 @@ class FinalResearchRunner:
             summary=summary,
             decision_adapter_calls=decision_adapter_calls,
         )
+
+
+def _attempt_runtime_decision(
+    *,
+    adapter: LLMDecisionAdapter,
+    post: PostContent,
+    profile: UserProfile,
+    peer_context: PeerContext,
+    platform_context: PlatformContext,
+    time_step: int,
+    schedule_position: int,
+    video_id: str,
+    provider_metadata: Mapping[str, object],
+) -> _RuntimeDecisionAttempt:
+    try:
+        decision = adapter.decide(
+            post,
+            profile,
+            peer_context,
+            platform_context,
+            time_step,
+        )
+    except ProviderDecisionError as exc:
+        return _RuntimeDecisionAttempt(
+            decision=None,
+            provider_failure={
+                "schedule_position": schedule_position,
+                "user_id": profile.user_id,
+                "video_id": video_id,
+                "time_step": time_step,
+                "failure_type": exc.failure_type,
+                "provider_metadata": _json_cell(provider_metadata),
+            },
+        )
+    return _RuntimeDecisionAttempt(decision=decision, provider_failure=None)
+
+
+def _runtime_decision_rows(
+    decision: EngageDecision,
+    *,
+    schedule_position: int,
+    user_id: str,
+    video_id: str,
+    time_step: int,
+) -> tuple[dict[str, object], dict[str, object]]:
+    decision_row = {
+        "schedule_position": schedule_position,
+        "user_id": user_id,
+        "video_id": video_id,
+        "time_step": time_step,
+        "engage": _csv_bool(decision.engage),
+        "probability": decision.probability,
+        "reason": decision.reason,
+        "confidence": decision.confidence,
+        "action": decision.action,
+        "decision_source": decision.decision_source,
+        "provider_metadata": _json_cell(decision.provider_metadata),
+    }
+    action_row = {
+        "schedule_position": schedule_position,
+        "user_id": user_id,
+        "video_id": video_id,
+        "time_step": time_step,
+        "action": decision.action,
+    }
+    return decision_row, action_row
 
 
 def _fixed_batch_assignments(
