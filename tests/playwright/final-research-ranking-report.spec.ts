@@ -16,6 +16,30 @@ type RankingUser = {
   is_network_cohort: boolean;
 };
 
+type RankingCandidate = {
+  ranking_position: number;
+  user_id: string;
+  is_seed: boolean;
+  selected: boolean;
+  base_network_relevance: number;
+  engaged_neighbor_signal: number;
+  historical_tag_affinity: number;
+  recommendation_score: number;
+};
+
+type SensitivityVariant = {
+  variant_id: string;
+  weights: {
+    base_network: number;
+    engaged_neighbor: number;
+    tag_affinity: number;
+  };
+  batches: Array<{
+    overlap_with_main_user_ids: string[];
+    added_vs_main_user_ids: string[];
+  }>;
+};
+
 type RankingPayload = {
   users: RankingUser[];
   target_video: {
@@ -31,8 +55,54 @@ type RankingPayload = {
   field_lineage: Array<{
     field_name: string;
   }>;
+  run: {
+    horizon: number;
+    delivery_capacity: number;
+  };
+  ranking_rounds: Array<{
+    time_step: number;
+    candidates: RankingCandidate[];
+  }>;
+  ranking_diagnostics_summary: {
+    batches_with_top_selection_change: number;
+    main_weights: {
+      base_network: number;
+      engaged_neighbor: number;
+      tag_affinity: number;
+    };
+  };
+  ranking_diagnostics: {
+    weight_sensitivity: {
+      variants: SensitivityVariant[];
+    };
+  };
   downloads: Record<string, string>;
 };
+
+type CandidateWithBatch = RankingCandidate & { time_step: number };
+
+function selectWorkedCandidate(payload: RankingPayload): CandidateWithBatch {
+  const evidence = payload.ranking_rounds.flatMap((round) =>
+    round.candidates.map((candidate) => ({ time_step: round.time_step, ...candidate })),
+  );
+  const candidate = evidence.find(
+    (row) => !row.is_seed && row.selected && row.engaged_neighbor_signal > 0,
+  ) ?? evidence.find((row) => !row.is_seed && row.selected) ?? evidence[0];
+  if (!candidate) throw new Error('ranking report requires at least one persisted candidate');
+  return candidate;
+}
+
+function sensitivityAverages(variant: SensitivityVariant): { overlap: number; changed: number } {
+  const divisor = Math.max(1, variant.batches.length);
+  return {
+    overlap:
+      variant.batches.reduce((total, batch) => total + batch.overlap_with_main_user_ids.length, 0) /
+      divisor,
+    changed:
+      variant.batches.reduce((total, batch) => total + batch.added_vs_main_user_ids.length, 0) /
+      divisor,
+  };
+}
 
 function generateRankingReport(
   testInfo: TestInfo,
@@ -197,31 +267,50 @@ async function assertRankingReport(
   await expect(page.getByTestId('lineage-table').locator('tbody tr')).toHaveCount(payload.field_lineage.length);
 
   const rankingSection = page.getByTestId('ranking-rounds-section');
-  await expect(rankingSection).toContainText('0.50');
-  await expect(rankingSection).toContainText('0.30');
-  await expect(rankingSection).toContainText('0.20');
-  await expect(rankingSection).toContainText('Delivery Capacity 20');
-  await expect(rankingSection).toContainText('历史评论网络相关性 50%');
-  await expect(rankingSection).toContainText('已互动直接邻居信号 30%');
-  await expect(rankingSection).toContainText('目标标签亲和度 20%');
+  const weights = payload.ranking_diagnostics_summary.main_weights;
+  const weightPercent = (value: number): string => `${(value * 100).toFixed(0)}%`;
+  await expect(rankingSection).toContainText(weights.base_network.toFixed(2));
+  await expect(rankingSection).toContainText(weights.engaged_neighbor.toFixed(2));
+  await expect(rankingSection).toContainText(weights.tag_affinity.toFixed(2));
+  await expect(rankingSection).toContainText(`Delivery Capacity ${payload.run.delivery_capacity}`);
+  await expect(rankingSection).toContainText(`历史评论网络相关性 ${weightPercent(weights.base_network)}`);
+  await expect(rankingSection).toContainText(`已互动直接邻居信号 ${weightPercent(weights.engaged_neighbor)}`);
+  await expect(rankingSection).toContainText(`目标标签亲和度 ${weightPercent(weights.tag_affinity)}`);
   await expect(rankingSection).toContainText('0..1');
   await expect(rankingSection).toContainText('三位已互动直接邻居达到封顶');
   await expect(rankingSection).toContainText('只影响后续批次');
-  await expect(rankingSection).toContainText('每批最多投放 20 人');
+  await expect(rankingSection).toContainText(`每批最多投放 ${payload.run.delivery_capacity} 人`);
   await expect(rankingSection).toContainText('不是用户互动概率或 action 配额');
   await expect(rankingSection).toContainText('Batch 0');
-  await expect(rankingSection).toContainText('Batch 1–29');
+  await expect(rankingSection).toContainText(`Batch 1–${payload.run.horizon - 1}`);
   const workedExample = page.getByTestId('ranking-worked-example');
+  const candidate = selectWorkedCandidate(payload);
+  const contributions = [
+    candidate.base_network_relevance * weights.base_network,
+    candidate.engaged_neighbor_signal * weights.engaged_neighbor,
+    candidate.historical_tag_affinity * weights.tag_affinity,
+  ];
+  const calculatedScore = contributions.reduce((total, value) => total + value, 0);
   await expect(workedExample).toContainText('Persisted Candidate Evidence（持久化候选证据）');
   await expect(workedExample).toContainText('base_network_relevance');
   await expect(workedExample).toContainText('engaged_neighbor_signal');
   await expect(workedExample).toContainText('historical_tag_affinity');
   await expect(workedExample).toContainText('recommendation_score');
-  await expect(workedExample).toContainText(/× 50% = \d+\.\d{4}/);
-  await expect(workedExample).toContainText(/× 30% = \d+\.\d{4}/);
-  await expect(workedExample).toContainText(/× 20% = \d+\.\d{4}/);
-  await expect(workedExample).toContainText(/Rank \d+/);
-  await expect(workedExample).toContainText(/已曝光|未曝光/);
+  await expect(workedExample).toContainText(
+    `${candidate.base_network_relevance.toFixed(4)} × ${weightPercent(weights.base_network)} = ${contributions[0].toFixed(4)}`,
+  );
+  await expect(workedExample).toContainText(
+    `${candidate.engaged_neighbor_signal.toFixed(4)} × ${weightPercent(weights.engaged_neighbor)} = ${contributions[1].toFixed(4)}`,
+  );
+  await expect(workedExample).toContainText(
+    `${candidate.historical_tag_affinity.toFixed(4)} × ${weightPercent(weights.tag_affinity)} = ${contributions[2].toFixed(4)}`,
+  );
+  await expect(workedExample).toContainText(
+    `User ${candidate.user_id} · Batch ${candidate.time_step} · Rank ${candidate.ranking_position} · ${candidate.selected ? '已曝光' : '未曝光'}`,
+  );
+  await expect(workedExample).toContainText(
+    `${contributions.map((value) => value.toFixed(4)).join(' + ')} = ${calculatedScore.toFixed(4)} recommendation_score（持久化值 ${candidate.recommendation_score.toFixed(4)}）`,
+  );
   await page.getByTestId('ranking-round-select').selectOption('1');
   await expect(page.getByTestId('round-summary')).toContainText('Eligible');
   await expect(page.getByTestId('round-summary')).toContainText(/Selected\s*20/);
@@ -235,8 +324,10 @@ async function assertRankingReport(
   await expect(networkSection).toContainText('网络项进入公式');
   await expect(networkSection).toContainText('不能单独证明投放结果改变');
   await expect(networkSection).toContainText('Observed Recommendation Signal Effect（推荐信号产生可观测影响）');
-  await expect(networkSection).toContainText(/\d+ \/ 30 个批次/);
-  await expect(networkSection).toContainText('同批 Top20 membership');
+  await expect(networkSection).toContainText(
+    `${payload.ranking_diagnostics_summary.batches_with_top_selection_change} / ${payload.ranking_rounds.length} 个批次`,
+  );
+  await expect(networkSection).toContainText(`同批 Top${payload.run.delivery_capacity} membership`);
   const ablationSection = page.getByTestId('paired-ablation-section');
   await expect(ablationSection).toContainText('shadow diagnostic');
   await expect(ablationSection).toContainText('冻结 persisted candidate evidence（持久化候选证据）');
@@ -249,11 +340,19 @@ async function assertRankingReport(
   await expect(page.getByTestId('ablation-summary')).toContainText('network-removed');
   await expect(page.getByTestId('ablation-rank-deltas')).toContainText(/rank delta/i);
   await expect(page.getByTestId('sensitivity-section').locator('[data-variant-id]')).toHaveCount(3);
-  await expect(page.getByTestId('sensitivity-section')).toContainText('主方案（50/30/20）');
-  await expect(page.getByTestId('sensitivity-section')).toContainText('网络较弱（40/20/40）');
-  await expect(page.getByTestId('sensitivity-section')).toContainText('无网络（0/0/100）');
+  const sensitivitySection = page.getByTestId('sensitivity-section');
+  const ratio = (variant: SensitivityVariant): string =>
+    `${(variant.weights.base_network * 100).toFixed(0)}/${(variant.weights.engaged_neighbor * 100).toFixed(0)}/${(variant.weights.tag_affinity * 100).toFixed(0)}`;
+  const [mainVariant, weakerVariant, noNetworkVariant] = payload.ranking_diagnostics.weight_sensitivity.variants;
+  await expect(sensitivitySection).toContainText(`主方案（${ratio(mainVariant)}）`);
+  await expect(sensitivitySection).toContainText(`网络较弱（${ratio(weakerVariant)}）`);
+  await expect(sensitivitySection).toContainText(`无网络（${ratio(noNetworkVariant)}）`);
   await expect(page.getByTestId('sensitivity-section')).toContainText('平均 changed selections');
-  await expect(page.getByTestId('sensitivity-section')).toContainText('19.7 overlap 约等于 0.3 个不同选择');
+  const weakerAverages = sensitivityAverages(weakerVariant);
+  await expect(sensitivitySection).toContainText(
+    `${weakerAverages.overlap.toFixed(1)} overlap 约等于 ${weakerAverages.changed.toFixed(1)} 个不同选择`,
+  );
+  await expect(sensitivitySection).toContainText('结果解读');
   await expect(page.getByTestId('sensitivity-section')).not.toContainText('parameter optimization');
   await expect(page.getByTestId('sensitivity-section')).not.toContainText('production accuracy');
 
@@ -357,4 +456,68 @@ test('ranking research report exposes complete paired selection identities', asy
   await expect(deltas).toContainText('u60');
   await expect(deltas).toContainText('network-added');
   expect(await deltas.locator('tbody tr').count()).toBeGreaterThan(20);
+});
+
+test('configured formal ranking run preserves exact evidence on desktop and mobile', async ({ page }, testInfo) => {
+  const configuredRunDir = process.env.FINAL_RESEARCH_FORMAL_RUN_DIR;
+  test.skip(!configuredRunDir, 'Set FINAL_RESEARCH_FORMAL_RUN_DIR to validate the local formal run.');
+  if (!configuredRunDir) return;
+
+  const runDir = path.resolve(configuredRunDir);
+  const payloadPath = path.join(runDir, 'final_research_report_payload.json');
+  const reportPath = path.join(runDir, 'report.html');
+  expect(existsSync(payloadPath)).toBeTruthy();
+  const payloadBeforeRebuild = readFileSync(payloadPath);
+  execFileSync(path.resolve('.venv/bin/python'), [
+    '-c',
+    'import sys; from llm_abm_sim.final_research_report import rebuild_final_research_report; rebuild_final_research_report(sys.argv[1])',
+    runDir,
+  ]);
+  expect(readFileSync(payloadPath).equals(payloadBeforeRebuild)).toBeTruthy();
+
+  const payload = JSON.parse(readFileSync(payloadPath, 'utf8')) as RankingPayload;
+  expect(payload.ranking_diagnostics_summary.batches_with_top_selection_change).toBe(8);
+  expect(payload.ranking_rounds).toHaveLength(30);
+  const weakerVariant = payload.ranking_diagnostics.weight_sensitivity.variants.find(
+    (variant) => variant.variant_id === 'weaker_network_40_20_40',
+  );
+  expect(weakerVariant).toBeDefined();
+  if (!weakerVariant) return;
+  const weakerAverages = sensitivityAverages(weakerVariant);
+  expect(weakerAverages.overlap).toBeCloseTo(19.7, 1);
+  expect(weakerAverages.changed).toBeCloseTo(0.3, 1);
+
+  const candidate = selectWorkedCandidate(payload);
+  const weights = payload.ranking_diagnostics_summary.main_weights;
+  const contributions = [
+    candidate.base_network_relevance * weights.base_network,
+    candidate.engaged_neighbor_signal * weights.engaged_neighbor,
+    candidate.historical_tag_affinity * weights.tag_affinity,
+  ];
+  const calculatedScore = contributions.reduce((total, value) => total + value, 0);
+  expect(candidate.recommendation_score).toBeCloseTo(calculatedScore, 10);
+
+  for (const viewport of [
+    { name: 'desktop', width: 1440, height: 1000 },
+    { name: 'mobile', width: 390, height: 844 },
+  ]) {
+    await page.setViewportSize(viewport);
+    await page.goto(pathToFileURL(reportPath).toString());
+    await expect(page.getByTestId('network-effect-section')).toContainText('8 / 30 个批次');
+    await expect(page.getByTestId('sensitivity-section')).toContainText(
+      `${weakerAverages.overlap.toFixed(1)} overlap 约等于 ${weakerAverages.changed.toFixed(1)} 个不同选择`,
+    );
+    const example = page.getByTestId('ranking-worked-example');
+    await expect(example).toContainText(
+      `User ${candidate.user_id} · Batch ${candidate.time_step} · Rank ${candidate.ranking_position} · 已曝光`,
+    );
+    await expect(example).toContainText(
+      `${contributions.map((value) => value.toFixed(4)).join(' + ')} = ${calculatedScore.toFixed(4)} recommendation_score（持久化值 ${candidate.recommendation_score.toFixed(4)}）`,
+    );
+    await expectNoLayoutFailures(page);
+    await page.screenshot({
+      path: testInfo.outputPath(`formal-ranking-report-${viewport.name}.png`),
+      fullPage: true,
+    });
+  }
 });

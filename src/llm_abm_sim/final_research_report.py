@@ -1520,6 +1520,11 @@ def _ranking_field_lineage() -> list[FieldLineageEntry]:
 def _render_ranking_report(payload: FinalResearchRankingReportPayload) -> str:
     target = payload.target_video
     target_url = escape(target.video_url, quote=True)
+    weights = payload.ranking_diagnostics_summary.main_weights
+    base_network_weight = weights["base_network"] * 100
+    engaged_neighbor_weight = weights["engaged_neighbor"] * 100
+    tag_affinity_weight = weights["tag_affinity"] * 100
+    final_reranking_batch = max(1, payload.run.horizon - 1)
     explanation_catalog = ResearchExplanationCatalog.from_lineage(payload.field_lineage)
     downloads = payload.downloads.model_dump(mode="json")
     download_links = "".join(
@@ -1570,16 +1575,16 @@ def _render_ranking_report(payload: FinalResearchRankingReportPayload) -> str:
   </section>
 
   <section id="ranking-rounds" class="content-band" data-testid="ranking-rounds-section">
-    <div class="section-heading"><div><span class="eyebrow">GLOBAL RERANKING</span><h2>逐轮全局 Top{payload.run.delivery_capacity}</h2><p>平台使用 50/30/20 公式排序：历史评论网络相关性 50%、已互动直接邻居信号 30%、目标标签亲和度 20%。</p><p class="formula">{escape(payload.run.ranking_formula)}</p></div><label>Batch<select id="ranking-round-select" data-testid="ranking-round-select"></select></label></div>
+    <div class="section-heading"><div><span class="eyebrow">GLOBAL RERANKING</span><h2>逐轮全局 Top{payload.run.delivery_capacity}</h2><p>平台使用 {base_network_weight:.0f}/{engaged_neighbor_weight:.0f}/{tag_affinity_weight:.0f} 公式排序：历史评论网络相关性 {base_network_weight:.0f}%、已互动直接邻居信号 {engaged_neighbor_weight:.0f}%、目标标签亲和度 {tag_affinity_weight:.0f}%。</p><p class="formula">{escape(payload.run.ranking_formula)}</p></div><label>Batch<select id="ranking-round-select" data-testid="ranking-round-select"></select></label></div>
     <div class="ranking-term-grid" data-testid="ranking-formula-terms">
-      <article><h3><code>base_network_relevance</code>（历史评论网络相关性）</h3><p>0..1；越高表示用户在 Historical Set（历史集合）评论网络中的相关性越强，按 50% 权重进入排序。</p></article>
-      <article><h3><code>engaged_neighbor_signal</code>（已互动直接邻居信号）</h3><p>0..1；<code>min(1, engaged_neighbor_count / 3)</code> 表示三位已互动直接邻居达到封顶。它只影响后续批次，按 30% 权重进入排序。</p></article>
-      <article><h3><code>historical_tag_affinity</code>（历史标签亲和度）</h3><p>0..1；越高表示历史互动标签与目标视频标签越匹配，按 20% 权重进入排序。</p></article>
+      <article><h3><code>base_network_relevance</code>（历史评论网络相关性）</h3><p>0..1；越高表示用户在 Historical Set（历史集合）评论网络中的相关性越强，按 {base_network_weight:.0f}% 权重进入排序。</p></article>
+      <article><h3><code>engaged_neighbor_signal</code>（已互动直接邻居信号）</h3><p>0..1；<code>min(1, engaged_neighbor_count / 3)</code> 表示三位已互动直接邻居达到封顶。它只影响后续批次，按 {engaged_neighbor_weight:.0f}% 权重进入排序。</p></article>
+      <article><h3><code>historical_tag_affinity</code>（历史标签亲和度）</h3><p>0..1；越高表示历史互动标签与目标视频标签越匹配，按 {tag_affinity_weight:.0f}% 权重进入排序。</p></article>
       <article><h3><code>recommendation_score</code>（推荐排序分数）</h3><p>0..1；三项加权贡献之和，越高越靠前，只用于同批候选排序，不是单个用户的曝光或互动概率。</p></article>
     </div>
     <div class="ranking-method-notes">
       <article><h3>Delivery Capacity {payload.run.delivery_capacity}（每批投放容量）</h3><p>Top{payload.run.delivery_capacity} 表示每批最多投放 {payload.run.delivery_capacity} 人，不是用户互动概率或 action 配额；曝光后的 action 由 LLM Decision Adapter 另行决定。</p></article>
-      <article><h3>Batch 0 与 Batch 1–29</h3><p>Batch 0 强制曝光预先选定的 seeds；Batch 1–29 每批对全部尚未处理的 eligible users（合格用户）重新计算分数并全局重排。</p></article>
+      <article><h3>Batch 0 与 Batch 1–{final_reranking_batch}</h3><p>Batch 0 强制曝光预先选定的 seeds；Batch 1–{final_reranking_batch} 每批对全部尚未处理的 eligible users（合格用户）重新计算分数并全局重排。</p></article>
     </div>
     <article id="ranking-worked-example" class="ranking-worked-example" data-testid="ranking-worked-example"></article>
     <div class="section-heading round-heading"><div><h3>逐批候选结果</h3><p class="muted">选择一批查看进入当批 Delivery Capacity（投放容量）的候选。</p></div></div>
@@ -1590,7 +1595,7 @@ def _render_ranking_report(payload: FinalResearchRankingReportPayload) -> str:
     <span class="eyebrow">NETWORK EVIDENCE</span><h2>Recommendation Signal Inclusion（推荐信号已纳入）与 Observed Recommendation Signal Effect（推荐信号产生可观测影响）</h2>
     <div class="network-reading-note"><p><strong>Inclusion（纳入）</strong>只说明网络项进入公式并具有明确权重，不能单独证明投放结果改变。</p><p><strong>Observed Effect（可观测影响）</strong>要求移除网络项后，同批 Top20 membership（成员集合）实际发生变化。</p></div>
     <div id="network-effect-summary" class="effect-grid"></div>
-    <div class="diagnostic-layout"><article id="paired-ablation" class="diagnostic-panel" data-testid="paired-ablation-section"><div class="section-heading"><div><h3>Paired ranking · shadow diagnostic</h3><p class="muted">同批冻结 persisted candidate evidence（持久化候选证据）并运行 shadow no-network（无网络影子排序），零额外 Decision Adapter calls；它不是第二条完整 trajectory（轨迹），也不是因果实验。</p></div><label>Batch<select id="ablation-round-select" data-testid="ablation-round-select"></select></label></div><div id="ablation-summary" class="ablation-summary" data-testid="ablation-summary"></div><div class="table-wrap rank-delta-table"><table data-testid="ablation-rank-deltas"><thead><tr><th>User</th><th>Full rank</th><th>No-network rank</th><th>Rank delta</th><th>Selection effect</th></tr></thead><tbody id="ablation-rank-delta-body"></tbody></table></div></article><article class="diagnostic-panel" data-testid="sensitivity-section"><h3>Ranking Weight Sensitivity（排序权重敏感性）</h3><p class="muted">同时阅读平均 Top20 overlap（重合人数）与平均 changed selections（不同选择数）；例如 19.7 overlap 约等于 0.3 个不同选择。</p><div id="sensitivity-variants" class="sensitivity-variants"></div></article></div>
+    <div class="diagnostic-layout"><article id="paired-ablation" class="diagnostic-panel" data-testid="paired-ablation-section"><div class="section-heading"><div><h3>Paired ranking · shadow diagnostic</h3><p class="muted">同批冻结 persisted candidate evidence（持久化候选证据）并运行 shadow no-network（无网络影子排序），零额外 Decision Adapter calls；它不是第二条完整 trajectory（轨迹），也不是因果实验。</p></div><label>Batch<select id="ablation-round-select" data-testid="ablation-round-select"></select></label></div><div id="ablation-summary" class="ablation-summary" data-testid="ablation-summary"></div><div class="table-wrap rank-delta-table"><table data-testid="ablation-rank-deltas"><thead><tr><th>User</th><th>Full rank</th><th>No-network rank</th><th>Rank delta</th><th>Selection effect</th></tr></thead><tbody id="ablation-rank-delta-body"></tbody></table></div></article><article class="diagnostic-panel" data-testid="sensitivity-section"><h3>Ranking Weight Sensitivity（排序权重敏感性）</h3><p id="sensitivity-reading-note" class="muted"></p><div id="sensitivity-variants" class="sensitivity-variants"></div></article></div>
   </section>
 
   <section class="content-band" data-testid="prompt-contract-section"><span class="eyebrow">LLM PROMPT CONTRACT</span><h2>Prompt Isolation（提示证据隔离）</h2><div class="prompt-reading-note"><p><strong>阶段一：</strong>平台排序决定谁看到视频；<strong>阶段二：</strong>LLM 决定曝光后的 action（动作）。</p><p>使用 neutral PeerContext（中性同伴上下文）是为了防止评论网络 evidence 同时进入 ranking 和 LLM 决策，不是数据丢失。页面只展示 allowlisted evidence（允许证据），raw Prompt 与 provider payload 保持不可见。</p></div><div class="prompt-grid"><article><h3>允许字段（Allowed）</h3><ul id="prompt-allowed"></ul></article><article><h3>空缺 / 中性字段（Neutral）</h3><ul id="prompt-neutral"></ul></article><article><h3>排除字段（Excluded）</h3><ul id="prompt-excluded"></ul></article></div></section>
@@ -1950,8 +1955,8 @@ function summaryItem(label, value) {
 
 function renderRankingWorkedExample() {
   const evidence = payload.ranking_rounds.flatMap((round) => round.candidates.map((candidate) => ({time_step:round.time_step,...candidate})));
-  const candidate = evidence.find((row) => !row.is_seed && row.selected && row.engaged_neighbor_signal > 0)
-    || evidence.find((row) => !row.is_seed && row.selected)
+  const preferredCandidate = evidence.find((row) => !row.is_seed && row.selected && row.engaged_neighbor_signal > 0);
+  const candidate = preferredCandidate || evidence.find((row) => !row.is_seed && row.selected)
     || evidence[0];
   if (!candidate) return;
   const weights = payload.ranking_diagnostics_summary.main_weights;
@@ -1964,6 +1969,7 @@ function renderRankingWorkedExample() {
   root.append(
     element('h3','',`Persisted Candidate Evidence（持久化候选证据）复算示例`),
     element('p','',`User ${candidate.user_id} · Batch ${candidate.time_step} · Rank ${candidate.ranking_position} · ${candidate.selected ? '已曝光' : '未曝光'}`),
+    element('p','',preferredCandidate ? '确定选择规则：按批次与名次顺序，取首位非 seed、已曝光且邻居信号为正的候选。' : '确定选择规则：当前证据无正向邻居信号候选，按批次与名次顺序取首位非 seed 已曝光候选。'),
   );
   const grid = element('div','ranking-worked-example-grid');
   contributions.forEach(([field,value,weight]) => {
@@ -1997,7 +2003,7 @@ function renderRankingRound() {
 function renderNetworkSummary() {
   const summary = payload.ranking_diagnostics_summary;
   const weights = summary.main_weights;
-  const weightLabel = `${weights.base_network * 100}/${weights.engaged_neighbor * 100}/${weights.tag_affinity * 100}`;
+  const weightLabel = `${(weights.base_network * 100).toFixed(0)}/${(weights.engaged_neighbor * 100).toFixed(0)}/${(weights.tag_affinity * 100).toFixed(0)}`;
   const inclusion = metric('Recommendation Signal Inclusion（推荐信号已纳入）',summary.network_signals_in_formula ? '已纳入' : '未纳入',`${weightLabel} 权重 · diagnostic adapter calls ${summary.diagnostic_decision_adapter_calls}`);
   const effect = metric('Observed Recommendation Signal Effect（推荐信号产生可观测影响）',summary.top_selection_changed ? `${topLabel} 已改变` : `${topLabel} 未改变`,`${summary.batches_with_top_selection_change} / ${payload.ranking_rounds.length} 个批次的同批 ${topLabel} membership 发生变化`);
   byId('network-effect-summary').append(inclusion,effect);
@@ -2024,18 +2030,27 @@ function renderAblation() {
 
 function renderSensitivity() {
   const descriptions = {
-    main_50_30_20:['主方案（50/30/20）','预声明研究假设，作为正式排序与比较基准。'],
-    weaker_network_40_20_40:['网络较弱（40/20/40）','降低两项网络权重，检查投放选择对主权重假设的稳健性。'],
-    no_network_0_0_100:['无网络（0/0/100）','移除评论网络贡献，只保留目标标签亲和度作为对照。'],
+    main_50_30_20:['主方案','预声明研究假设，作为正式排序与比较基准。','与自身基准比较，用于确认计算口径。'],
+    weaker_network_40_20_40:['网络较弱','降低两项网络权重，检查投放选择对主权重假设的稳健性。','重合越接近每批投放容量，表示主方案对权重调整越稳健。'],
+    no_network_0_0_100:['无网络','移除评论网络贡献，只保留目标标签亲和度作为对照。','不同选择越多，表示网络项对本次投放集合的影响越明显。'],
   };
+  let readingExample = null;
   payload.ranking_diagnostics.weight_sensitivity.variants.forEach((variant) => {
     const averageOverlap = variant.batches.reduce((total,batch) => total + batch.overlap_with_main_user_ids.length,0) / Math.max(1,variant.batches.length);
     const averageChanged = variant.batches.reduce((total,batch) => total + batch.added_vs_main_user_ids.length,0) / Math.max(1,variant.batches.length);
-    const [name,purpose] = descriptions[variant.variant_id] || [variant.variant_id,'预声明权重对照。'];
+    const ratio = `${(variant.weights.base_network * 100).toFixed(0)}/${(variant.weights.engaged_neighbor * 100).toFixed(0)}/${(variant.weights.tag_affinity * 100).toFixed(0)}`;
+    const [name,purpose,interpretation] = descriptions[variant.variant_id] || [variant.variant_id,'预声明权重对照。','结合重合人数与不同选择数阅读。'];
     const article = element('article'); article.dataset.variantId = variant.variant_id;
-    article.append(element('strong','',name),element('span','',purpose),element('span','',`平均 Top20 overlap ${averageOverlap.toFixed(1)} · 平均 changed selections ${averageChanged.toFixed(1)}`));
+    article.append(element('strong','',`${name}（${ratio}）`),element('span','',purpose),element('span','',`平均 ${topLabel} overlap ${averageOverlap.toFixed(1)} · 平均 changed selections ${averageChanged.toFixed(1)}`),element('span','',`结果解读：${interpretation}`));
     byId('sensitivity-variants').appendChild(article);
+    if (variant.variant_id === 'weaker_network_40_20_40') readingExample = {name,averageOverlap,averageChanged};
   });
+  if (!readingExample) {
+    const fallback = payload.ranking_diagnostics.weight_sensitivity.variants[0];
+    const batches = fallback?.batches || [];
+    readingExample = {name:'所选方案',averageOverlap:batches.reduce((total,batch) => total + batch.overlap_with_main_user_ids.length,0) / Math.max(1,batches.length),averageChanged:batches.reduce((total,batch) => total + batch.added_vs_main_user_ids.length,0) / Math.max(1,batches.length)};
+  }
+  byId('sensitivity-reading-note').textContent = `同时阅读平均 ${topLabel} overlap（重合人数）与平均 changed selections（不同选择数）；本次${readingExample.name}方案的 ${readingExample.averageOverlap.toFixed(1)} overlap 约等于 ${readingExample.averageChanged.toFixed(1)} 个不同选择。`;
 }
 
 function renderBars(id, rows) {
