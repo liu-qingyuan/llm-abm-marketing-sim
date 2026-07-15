@@ -198,6 +198,133 @@ async function expectNoLayoutFailures(page: Page): Promise<void> {
   expect(failures).toEqual({ horizontalOverflow: false, textOverflow: [], overlaps: [] });
 }
 
+async function expectBilingualReaderSurface(page: Page): Promise<void> {
+  const failures = await page.evaluate(() => {
+    const selectors = [
+      '.topbar',
+      '.ranking-hero .eyebrow',
+      '.hero-meta',
+      '.hero-funnel > article > span',
+      '.object-band',
+      '.section-heading',
+      '.section-explanation',
+      '.scope-intro',
+      '.lineage-legends',
+      '.ranking-term-grid',
+      '.ranking-method-notes',
+      '.network-reading-note',
+      '[data-testid="paired-ablation-section"] > .section-heading',
+      '.effect-grid',
+      '.sensitivity-variants',
+      '.prompt-reading-note',
+      '.prompt-grid > article > h3',
+      '.chart-grid h3',
+      '.chart-explanation',
+      '.filters label',
+      'table thead',
+      '.proxy-explanation-guide > p',
+      '.downloads',
+      '.limitations-band',
+    ];
+    const elements = [...new Set(selectors.flatMap((selector) => [...document.querySelectorAll<HTMLElement>(selector)]))];
+    return elements.flatMap((element) => {
+      const copy = element.cloneNode(true) as HTMLElement;
+      copy.querySelectorAll('code, .formula, input, select, option').forEach((child) => child.remove());
+      const text = (copy.textContent ?? '').replace(/\s+/g, ' ').trim();
+      const withoutPairs = text.replace(/[A-Za-z][A-Za-z0-9_./–-]*(?: [A-Za-z0-9_./–-]+)*（[^）]+）/g, '');
+      const unpaired = withoutPairs.match(/[A-Za-z][A-Za-z0-9_./-]*/g) ?? [];
+      return unpaired.length ? [`${element.tagName}.${element.className}: ${unpaired.join(', ')}`] : [];
+    });
+  });
+  expect(failures).toEqual([]);
+}
+
+async function assertReaderComprehensionContract(
+  page: Page,
+  outputDir: string,
+  payload: RankingPayload,
+): Promise<void> {
+  for (const explanationId of [
+    'sample-section-explanation',
+    'lineage-section-explanation',
+    'ranking-section-explanation',
+    'network-section-explanation',
+    'prompt-section-explanation',
+    'aggregate-section-explanation',
+    'users-section-explanation',
+  ]) {
+    const explanation = page.getByTestId(explanationId);
+    for (const label of ['是什么', '为什么需要', '怎么形成或计算', '本次结果怎么看']) {
+      await expect(explanation).toContainText(label);
+    }
+  }
+  await expect(page.getByTestId('sample-section-explanation')).toContainText('Base Sample（基础样本）');
+  await expect(page.getByTestId('sample-section-explanation')).toContainText('Final Sample（最终样本）');
+
+  await expect(page.getByTestId('lineage-table')).toContainText('Meaning（简要含义）');
+  await page.getByTestId('lineage-search').fill('recommendation_score');
+  await expect(page.getByTestId('lineage-table').locator('tbody tr')).not.toHaveCount(0);
+  await page.getByRole('button', { name: /^recommendation_score/ }).click();
+  await expect(page.getByTestId('lineage-detail')).toContainText('recommendation_score（推荐排序分数）');
+  await page.getByTestId('lineage-search').fill('');
+
+  const promptSection = page.getByTestId('prompt-contract-section');
+  await expect(promptSection).toContainText('平台排序决定谁看到视频');
+  await expect(promptSection).toContainText('Target Holdout answers（目标留出答案）');
+
+  for (const chartExplanationId of [
+    'sample-composition-explanation',
+    'batch-delivery-explanation',
+    'action-status-explanation',
+    'provider-failure-explanation',
+    'network-activation-explanation',
+    'ablation-overlap-explanation',
+  ]) {
+    const explanation = page.getByTestId(chartExplanationId);
+    for (const label of ['统计什么', '单位 / 分母', '为什么需要', '本次结果']) {
+      await expect(explanation).toContainText(label);
+    }
+  }
+
+  const users = payload.users;
+  for (const id of ['result-filter', 'role-filter', 'scope-filter', 'seed-filter', 'cohort-filter']) {
+    await page.getByTestId(id).selectOption('');
+  }
+  await expect(page.getByTestId('visible-user-count')).toHaveText(
+    `${users.length.toLocaleString()} / ${users.length.toLocaleString()}`,
+  );
+  for (const [filterId, value, expected] of [
+    ['result-filter', 'below_delivery_capacity', users.filter((user) => user.result_status === 'below_delivery_capacity').length],
+    ['result-filter', 'ignore', users.filter((user) => user.result_status === 'ignore').length],
+    ['role-filter', 'seed', users.filter((user) => user.sample_role === 'seed').length],
+    ['seed-filter', 'true', users.filter((user) => user.is_seed).length],
+    ['cohort-filter', 'true', users.filter((user) => user.is_network_cohort).length],
+  ] as const) {
+    await page.getByTestId(filterId).selectOption(value);
+    await expect(page.getByTestId('user-table').locator('tbody tr')).toHaveCount(expected);
+    await page.getByTestId(filterId).selectOption('');
+  }
+  await page.getByTestId('user-table').locator('tbody tr').first().click();
+  await expect(page.getByTestId('proxy-values')).toContainText('Activity（活跃度代理）');
+  const proxyExplanation = page.getByTestId('proxy-explanation-guide');
+  if (await proxyExplanation.getAttribute('open') !== null) {
+    await proxyExplanation.locator('summary').click();
+  }
+  await expect(proxyExplanation).not.toHaveAttribute('open', '');
+  await proxyExplanation.locator('summary').click();
+  await expect(proxyExplanation).toContainText('不能用于因果或心理推断');
+
+  for (const [label, relativePath] of Object.entries(payload.downloads)) {
+    expect(existsSync(path.join(outputDir, relativePath)), `${label}: ${relativePath}`).toBeTruthy();
+    const link = page.getByTestId(`download-${label.replaceAll('_', '-')}`);
+    await expect(link).toContainText('（');
+    const href = await link.getAttribute('href');
+    expect(fileURLToPath(new URL(href ?? '', page.url()))).toBe(path.join(outputDir, relativePath));
+  }
+  await expectBilingualReaderSurface(page);
+  await expectNoLayoutFailures(page);
+}
+
 async function assertRankingReport(
   page: Page,
   outputDir: string,
@@ -206,20 +333,6 @@ async function assertRankingReport(
 ): Promise<void> {
   await page.goto(pathToFileURL(path.join(outputDir, 'report.html')).toString());
   await expect(page.getByTestId('final-research-ranking-report')).toBeVisible();
-  for (const bilingualLabel of [
-    'Target Delivery Ranking（目标投放排序）',
-    'TARGET VIDEO（目标视频）',
-    'CORE OBJECTS（核心对象）',
-    'GLOBAL RERANKING（全局重排）',
-    'NETWORK EVIDENCE（网络证据）',
-    'LLM PROMPT CONTRACT（大模型提示合同）',
-    'AGGREGATES（聚合图表）',
-    'USER TRACE（用户追踪）',
-    'ARTIFACTS（交付物）',
-    'LIMITATIONS（研究限制）',
-  ]) {
-    await expect(page.getByTestId('final-research-ranking-report')).toContainText(bilingualLabel);
-  }
 
   const hero = page.getByTestId('ranking-hero');
   await expect(hero).toContainText('当高端酒店开始');
@@ -240,22 +353,6 @@ async function assertRankingReport(
   await expect(page.getByTestId('core-objects-section')).toContainText('PlatformRecommendationModel');
   await page.getByRole('link', { name: '逐轮排序' }).click();
   await expect(page).toHaveURL(/#ranking-rounds$/);
-
-  for (const explanationId of [
-    'sample-section-explanation',
-    'lineage-section-explanation',
-    'ranking-section-explanation',
-    'network-section-explanation',
-    'prompt-section-explanation',
-    'aggregate-section-explanation',
-    'users-section-explanation',
-  ]) {
-    const explanation = page.getByTestId(explanationId);
-    await expect(explanation).toContainText('是什么');
-    await expect(explanation).toContainText('为什么需要');
-    await expect(explanation).toContainText('怎么形成或计算');
-    await expect(explanation).toContainText('本次结果怎么看');
-  }
 
   const sampleSection = page.getByTestId('sample-comparison-section');
   await expect(sampleSection).toContainText(`Seed Users（种子用户） ${payload.sample_comparison.seed_count}`);
@@ -286,6 +383,7 @@ async function assertRankingReport(
   await page.getByTestId('lineage-stage-filter').selectOption('');
   await page.getByTestId('lineage-search').fill('合成月收入标签');
   await expect(page.getByTestId('lineage-table').locator('tbody tr')).toHaveCount(1);
+  await expect(page.getByTestId('lineage-table')).toContainText('实验用月收入区间，不是观测收入。');
   await page.getByRole('button', { name: /latent_monthly_income/ }).click();
   const lineageDetail = page.getByTestId('lineage-detail');
   await expect(lineageDetail).toContainText('latent_monthly_income（合成月收入标签）');
@@ -307,7 +405,7 @@ async function assertRankingReport(
   await expect(rankingSection).toContainText(weights.base_network.toFixed(2));
   await expect(rankingSection).toContainText(weights.engaged_neighbor.toFixed(2));
   await expect(rankingSection).toContainText(weights.tag_affinity.toFixed(2));
-  await expect(rankingSection).toContainText(`Delivery Capacity ${payload.run.delivery_capacity}`);
+  await expect(rankingSection).toContainText(`Delivery Capacity（每批投放容量）${payload.run.delivery_capacity}`);
   await expect(rankingSection).toContainText(`历史评论网络相关性 ${weightPercent(weights.base_network)}`);
   await expect(rankingSection).toContainText(`已互动直接邻居信号 ${weightPercent(weights.engaged_neighbor)}`);
   await expect(rankingSection).toContainText(`目标标签亲和度 ${weightPercent(weights.tag_affinity)}`);
@@ -315,7 +413,7 @@ async function assertRankingReport(
   await expect(rankingSection).toContainText('三位已互动直接邻居达到封顶');
   await expect(rankingSection).toContainText('只影响后续批次');
   await expect(rankingSection).toContainText(`每批最多投放 ${payload.run.delivery_capacity} 人`);
-  await expect(rankingSection).toContainText('不是用户互动概率或 action 配额');
+  await expect(rankingSection).toContainText('不是用户互动概率或 action（动作）配额');
   await expect(rankingSection).toContainText('Batch 0');
   await expect(rankingSection).toContainText(`Batch 1–${payload.run.horizon - 1}`);
   const workedExample = page.getByTestId('ranking-worked-example');
@@ -341,10 +439,10 @@ async function assertRankingReport(
     `${candidate.historical_tag_affinity.toFixed(4)} × ${weightPercent(weights.tag_affinity)} = ${contributions[2].toFixed(4)}`,
   );
   await expect(workedExample).toContainText(
-    `User ${candidate.user_id} · Batch ${candidate.time_step} · Rank ${candidate.ranking_position} · ${candidate.selected ? '已曝光' : '未曝光'}`,
+    `User（用户）${candidate.user_id} · Batch（批次）${candidate.time_step} · Rank（名次）${candidate.ranking_position} · ${candidate.selected ? '已曝光' : '未曝光'}`,
   );
   await expect(workedExample).toContainText(
-    `${contributions.map((value) => value.toFixed(4)).join(' + ')} = ${calculatedScore.toFixed(4)} recommendation_score（持久化值 ${candidate.recommendation_score.toFixed(4)}）`,
+    `${contributions.map((value) => value.toFixed(4)).join(' + ')} = ${calculatedScore.toFixed(4)} recommendation_score（推荐排序分数；持久化值 ${candidate.recommendation_score.toFixed(4)}）`,
   );
   await page.getByTestId('ranking-round-select').selectOption('1');
   await expect(page.getByTestId('round-summary')).toContainText('Eligible');
@@ -394,7 +492,7 @@ async function assertRankingReport(
   await expect(page.getByTestId('sensitivity-section')).toContainText('平均 changed selections');
   const weakerAverages = sensitivityAverages(weakerVariant);
   await expect(sensitivitySection).toContainText(
-    `${weakerAverages.overlap.toFixed(1)} overlap 约等于 ${weakerAverages.changed.toFixed(1)} 个不同选择`,
+    `${weakerAverages.overlap.toFixed(1)} overlap（重合人数）约等于 ${weakerAverages.changed.toFixed(1)} 个不同选择`,
   );
   await expect(sensitivitySection).toContainText('结果解读');
   await expect(page.getByTestId('sensitivity-section')).not.toContainText('parameter optimization');
@@ -402,15 +500,15 @@ async function assertRankingReport(
 
   const promptSection = page.getByTestId('prompt-contract-section');
   await expect(promptSection).toContainText('平台排序决定谁看到视频');
-  await expect(promptSection).toContainText('LLM 决定曝光后的 action');
-  await expect(promptSection).toContainText('防止评论网络 evidence 同时进入 ranking 和 LLM 决策');
+  await expect(promptSection).toContainText('LLM（大模型）决定曝光后的 action（动作）');
+  await expect(promptSection).toContainText('防止评论网络 evidence（证据）同时进入 ranking（排序）和 LLM（大模型）决策');
   await expect(promptSection).toContainText('不是数据丢失');
-  await expect(promptSection).toContainText('允许字段（Allowed）');
-  await expect(promptSection).toContainText('空缺 / 中性字段（Neutral）');
-  await expect(promptSection).toContainText('排除字段（Excluded）');
+  await expect(promptSection).toContainText('Allowed（允许字段）');
+  await expect(promptSection).toContainText('Neutral（空缺 / 中性字段）');
+  await expect(promptSection).toContainText('Excluded（排除字段）');
   await expect(promptSection).toContainText('recommendation_score（推荐排序分数）');
   await expect(promptSection).toContainText('Target Holdout answers（目标留出答案）');
-  await expect(promptSection).toContainText('raw Prompt 与 provider payload 保持不可见');
+  await expect(promptSection).toContainText('raw Prompt（原始提示）与 provider payload（服务提供方载荷）保持不可见');
 
   for (const chartId of [
     'sample-composition-chart',
@@ -445,22 +543,8 @@ async function assertRankingReport(
   const positiveSignalActions = payload.users.filter(
     (user) => positiveSelectedUserIds.has(user.user_id) && user.action,
   ).length;
-  const chartNotes = [
-    page.getByTestId('sample-composition-explanation'),
-    page.getByTestId('batch-delivery-explanation'),
-    page.getByTestId('action-status-explanation'),
-    page.getByTestId('provider-failure-explanation'),
-    page.getByTestId('network-activation-explanation'),
-    page.getByTestId('ablation-overlap-explanation'),
-  ];
-  for (const note of chartNotes) {
-    await expect(note).toContainText('统计什么');
-    await expect(note).toContainText('单位 / 分母');
-    await expect(note).toContainText('为什么需要');
-    await expect(note).toContainText('本次结果');
-  }
   await expect(page.getByTestId('sample-composition-explanation')).toContainText(
-    `Final Sample ${payload.sample_comparison.final_sample_count.toLocaleString()} 人`,
+    `Final Sample（最终样本）${payload.sample_comparison.final_sample_count.toLocaleString()} 人`,
   );
   await expect(page.getByTestId('batch-delivery-explanation')).toContainText(`Batch 0`);
   await expect(page.getByTestId('batch-delivery-explanation')).toContainText(
@@ -474,27 +558,27 @@ async function assertRankingReport(
   );
   const actionExplanation = page.getByTestId('action-status-explanation');
   await expect(actionExplanation).toContainText(
-    `${belowCapacityCount.toLocaleString()} 个 below_delivery_capacity 用户从未曝光`,
+    `${belowCapacityCount.toLocaleString()} 个 below_delivery_capacity（未获得投放）用户从未曝光`,
   );
   await expect(actionExplanation).toContainText(
-    `${ignoreCount.toLocaleString()} 个 ignore 用户已曝光但选择不互动`,
+    `${ignoreCount.toLocaleString()} 个 ignore（忽略）用户已曝光但选择不互动`,
   );
-  await expect(actionExplanation).toContainText('like / comment / share');
-  await expect(actionExplanation).toContainText('provider_failed');
+  await expect(actionExplanation).toContainText('like（点赞）/ comment（评论）/ share（分享）');
+  await expect(actionExplanation).toContainText('provider_failed（Provider 失败）');
   const providerExplanation = page.getByTestId('provider-failure-explanation');
   await expect(providerExplanation).toContainText('重试耗尽任务');
   await expect(providerExplanation).toContainText(
     `${providerFailureCount.toLocaleString()} / ${totalExposures.toLocaleString()}`,
   );
-  await expect(providerExplanation).toContainText('不代表 provider 永不失败');
+  await expect(providerExplanation).toContainText('不代表 provider（服务提供方）永不失败');
   const networkExplanation = page.getByTestId('network-activation-explanation');
-  await expect(networkExplanation).toContainText('candidate evidence rows');
-  await expect(networkExplanation).toContainText(`${positiveCandidateRows.toLocaleString()} 条 candidates`);
-  await expect(networkExplanation).toContainText(`${positiveSelectedUsers.toLocaleString()} 位 selected users`);
-  await expect(networkExplanation).toContainText(`${positiveSignalActions.toLocaleString()} 条 actions`);
+  await expect(networkExplanation).toContainText('candidate evidence rows（候选证据行）');
+  await expect(networkExplanation).toContainText(`${positiveCandidateRows.toLocaleString()} 条 candidates（候选）`);
+  await expect(networkExplanation).toContainText(`${positiveSelectedUsers.toLocaleString()} 位 selected users（已选择用户）`);
+  await expect(networkExplanation).toContainText(`${positiveSignalActions.toLocaleString()} 条 actions（动作）`);
   const ablationExplanation = page.getByTestId('ablation-overlap-explanation');
   await expect(ablationExplanation).toContainText(
-    `Top${payload.run.delivery_capacity} overlap=${payload.run.delivery_capacity}`,
+    `Top${payload.run.delivery_capacity} overlap（前列重合人数）=${payload.run.delivery_capacity}`,
   );
   await expect(ablationExplanation).toContainText('选择集合相同');
   await expect(ablationExplanation).toContainText('数值降低');
@@ -538,7 +622,7 @@ async function assertRankingReport(
   await expect(proxyExplanation).toContainText('以 follower evidence（粉丝证据） 为主');
   await expect(proxyExplanation).toContainText('不是平台官方指数');
   await expect(proxyExplanation).toContainText('评论网络中的位置与评论获赞认可');
-  await expect(proxyExplanation).toContainText('local influence 的两个组成部分');
+  await expect(proxyExplanation).toContainText('local influence（局部影响力代理）的两个组成部分');
   await expect(proxyExplanation).toContainText('不是独立心理特征');
   await expect(proxyExplanation).toContainText('不能用于因果或心理推断');
   await expect(proxyValues).toBeVisible();
@@ -548,37 +632,13 @@ async function assertRankingReport(
   await expect(page.getByTestId('user-table').locator('tbody tr').first()).toContainText('below_delivery_capacity');
   await page.getByTestId('user-table').locator('tbody tr').first().click();
   expect(await page.getByTestId('ranking-history-table').locator('tbody tr').count()).toBeGreaterThan(1);
-  await page.getByTestId('result-filter').selectOption('ignore');
-  await expect(page.getByTestId('user-table').locator('tbody tr').first()).toContainText('ignore');
   await page.getByTestId('result-filter').selectOption('');
-  await page.getByTestId('role-filter').selectOption('seed');
-  await expect(page.getByTestId('user-table').locator('tbody tr')).toHaveCount(
-    users.filter((user) => user.sample_role === 'seed').length,
-  );
-  await page.getByTestId('role-filter').selectOption('');
   await page.getByTestId('scope-filter').selectOption(users[0].sample_source_scope);
   await expect(page.getByTestId('user-table').locator('tbody tr')).toHaveCount(
     users.filter((user) => user.sample_source_scope === users[0].sample_source_scope).length,
   );
   await page.getByTestId('scope-filter').selectOption('');
-  await page.getByTestId('seed-filter').selectOption('true');
-  await expect(page.getByTestId('user-table').locator('tbody tr')).toHaveCount(
-    users.filter((user) => user.is_seed).length,
-  );
-  await page.getByTestId('seed-filter').selectOption('');
-  await page.getByTestId('cohort-filter').selectOption('true');
-  await expect(page.getByTestId('user-table').locator('tbody tr')).toHaveCount(
-    users.filter((user) => user.is_network_cohort).length,
-  );
-
-  for (const [label, relativePath] of Object.entries(payload.downloads)) {
-    expect(existsSync(path.join(outputDir, relativePath)), `${label}: ${relativePath}`).toBeTruthy();
-    const link = page.getByTestId(`download-${label.replaceAll('_', '-')}`);
-    await expect(link).toContainText('（');
-    const href = await link.getAttribute('href');
-    expect(fileURLToPath(new URL(href ?? '', page.url()))).toBe(path.join(outputDir, relativePath));
-  }
-  await expectNoLayoutFailures(page);
+  await assertReaderComprehensionContract(page, outputDir, payload);
 }
 
 test('ranking research report is complete and interactive on desktop', async ({ page }, testInfo) => {
@@ -657,95 +717,28 @@ test('configured formal ranking run preserves exact evidence on desktop and mobi
   ]) {
     await page.setViewportSize(viewport);
     await page.goto(pathToFileURL(reportPath).toString());
-    for (const explanationId of [
-      'sample-section-explanation',
-      'lineage-section-explanation',
-      'ranking-section-explanation',
-      'network-section-explanation',
-      'prompt-section-explanation',
-      'aggregate-section-explanation',
-      'users-section-explanation',
-    ]) {
-      const explanation = page.getByTestId(explanationId);
-      await expect(explanation).toContainText('是什么');
-      await expect(explanation).toContainText('本次结果怎么看');
-    }
-    await expect(page.getByTestId('sample-section-explanation')).toContainText('Base Sample（基础样本）');
-    await expect(page.getByTestId('sample-section-explanation')).toContainText('Final Sample（最终样本）');
-    await page.getByTestId('lineage-search').fill('recommendation_score');
-    await expect(page.getByTestId('lineage-table').locator('tbody tr')).not.toHaveCount(0);
-    await page.getByRole('button', { name: /^recommendation_score/ }).click();
-    await expect(page.getByTestId('lineage-detail')).toContainText('recommendation_score（推荐排序分数）');
-    await page.getByTestId('lineage-search').fill('');
+    await assertReaderComprehensionContract(page, runDir, payload);
     await expect(page.getByTestId('network-effect-section')).toContainText('8 / 30 个批次');
     await expect(page.getByTestId('sensitivity-section')).toContainText(
-      `${weakerAverages.overlap.toFixed(1)} overlap 约等于 ${weakerAverages.changed.toFixed(1)} 个不同选择`,
+      `${weakerAverages.overlap.toFixed(1)} overlap（重合人数）约等于 ${weakerAverages.changed.toFixed(1)} 个不同选择`,
     );
     const example = page.getByTestId('ranking-worked-example');
     await expect(example).toContainText(
-      `User ${candidate.user_id} · Batch ${candidate.time_step} · Rank ${candidate.ranking_position} · 已曝光`,
+      `User（用户）${candidate.user_id} · Batch（批次）${candidate.time_step} · Rank（名次）${candidate.ranking_position} · 已曝光`,
     );
     await expect(example).toContainText(
-      `${contributions.map((value) => value.toFixed(4)).join(' + ')} = ${calculatedScore.toFixed(4)} recommendation_score（持久化值 ${candidate.recommendation_score.toFixed(4)}）`,
-    );
-    for (const chartExplanationId of [
-      'sample-composition-explanation',
-      'batch-delivery-explanation',
-      'action-status-explanation',
-      'provider-failure-explanation',
-      'network-activation-explanation',
-      'ablation-overlap-explanation',
-    ]) {
-      await expect(page.getByTestId(chartExplanationId)).toContainText('本次结果');
-    }
-    await expect(page.getByTestId('action-status-explanation')).toContainText(
-      '400 个 below_delivery_capacity 用户从未曝光',
+      `${contributions.map((value) => value.toFixed(4)).join(' + ')} = ${calculatedScore.toFixed(4)} recommendation_score（推荐排序分数；持久化值 ${candidate.recommendation_score.toFixed(4)}）`,
     );
     await expect(page.getByTestId('action-status-explanation')).toContainText(
-      '342 个 ignore 用户已曝光但选择不互动',
+      '400 个 below_delivery_capacity（未获得投放）用户从未曝光',
+    );
+    await expect(page.getByTestId('action-status-explanation')).toContainText(
+      '342 个 ignore（忽略）用户已曝光但选择不互动',
     );
     await expect(page.getByTestId('provider-failure-explanation')).toContainText('0 / 600 个任务重试耗尽');
-    await expect(page.getByTestId('network-activation-explanation')).toContainText('30 条 candidates');
-    await expect(page.getByTestId('network-activation-explanation')).toContainText('23 位 selected users');
-    await expect(page.getByTestId('network-activation-explanation')).toContainText('23 条 actions');
-    await expect(page.getByTestId('prompt-contract-section')).toContainText('平台排序决定谁看到视频');
-    await expect(page.getByTestId('prompt-contract-section')).toContainText('Target Holdout answers（目标留出答案）');
-    const users = payload.users;
-    await expect(page.getByTestId('visible-user-count')).toHaveText('1,000 / 1,000');
-    await page.getByTestId('result-filter').selectOption('below_delivery_capacity');
-    await expect(page.getByTestId('user-table').locator('tbody tr')).toHaveCount(
-      users.filter((user) => user.result_status === 'below_delivery_capacity').length,
-    );
-    await page.getByTestId('result-filter').selectOption('ignore');
-    await expect(page.getByTestId('user-table').locator('tbody tr')).toHaveCount(
-      users.filter((user) => user.result_status === 'ignore').length,
-    );
-    await page.getByTestId('result-filter').selectOption('');
-    await page.getByTestId('role-filter').selectOption('seed');
-    await expect(page.getByTestId('user-table').locator('tbody tr')).toHaveCount(
-      users.filter((user) => user.sample_role === 'seed').length,
-    );
-    await page.getByTestId('role-filter').selectOption('');
-    await page.getByTestId('seed-filter').selectOption('true');
-    await expect(page.getByTestId('user-table').locator('tbody tr')).toHaveCount(
-      users.filter((user) => user.is_seed).length,
-    );
-    await page.getByTestId('seed-filter').selectOption('');
-    await page.getByTestId('cohort-filter').selectOption('true');
-    await expect(page.getByTestId('user-table').locator('tbody tr')).toHaveCount(
-      users.filter((user) => user.is_network_cohort).length,
-    );
-    await page.getByTestId('cohort-filter').selectOption('');
-    await expect(page.getByTestId('proxy-values')).toContainText('Activity（活跃度代理）');
-    const proxyExplanation = page.getByTestId('proxy-explanation-guide');
-    await proxyExplanation.locator('summary').click();
-    await expect(proxyExplanation).toContainText('不能用于因果或心理推断');
-    for (const [label, relativePath] of Object.entries(payload.downloads)) {
-      expect(existsSync(path.join(runDir, relativePath)), `${label}: ${relativePath}`).toBeTruthy();
-      const href = await page.getByTestId(`download-${label.replaceAll('_', '-')}`).getAttribute('href');
-      expect(fileURLToPath(new URL(href ?? '', page.url()))).toBe(path.join(runDir, relativePath));
-    }
-    await expectNoLayoutFailures(page);
+    await expect(page.getByTestId('network-activation-explanation')).toContainText('30 条 candidates（候选）');
+    await expect(page.getByTestId('network-activation-explanation')).toContainText('23 位 selected users（已选择用户）');
+    await expect(page.getByTestId('network-activation-explanation')).toContainText('23 条 actions（动作）');
     await page.screenshot({
       path: testInfo.outputPath(`formal-ranking-report-${viewport.name}.png`),
       fullPage: true,
