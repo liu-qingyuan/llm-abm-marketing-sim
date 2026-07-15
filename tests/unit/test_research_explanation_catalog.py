@@ -1,7 +1,7 @@
 import pytest
 
 from llm_abm_sim.final_research_report import _ranking_field_lineage
-from llm_abm_sim.research_explanations import ResearchExplanationCatalog
+from llm_abm_sim.research_explanations import ResearchExplanationCatalog, _pair_domain_tokens
 
 
 def test_research_explanation_catalog_covers_every_lineage_field() -> None:
@@ -46,6 +46,18 @@ def test_research_explanation_catalog_pairs_required_english_tokens_with_chinese
     assert "source scope（来源分组）" in base_sample.meaning
     assert "network sample audit（网络样本审计）" in base_sample.source
     assert "Final Sample（最终样本）" in catalog["sample_comparison.final_sample_count"].meaning
+
+    for explanation in catalog.values():
+        for value in (
+            explanation.meaning,
+            explanation.source,
+            explanation.calculation,
+            explanation.value_range,
+            explanation.usage,
+            explanation.interpretation,
+            explanation.limitation,
+        ):
+            assert _pair_domain_tokens(value) == value, explanation.field_name
 
 
 @pytest.mark.parametrize("corruption", ["missing", "duplicate", "unknown"])

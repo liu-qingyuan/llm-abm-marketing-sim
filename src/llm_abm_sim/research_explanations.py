@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import asdict, dataclass
 from typing import Protocol
@@ -819,6 +820,132 @@ _FIELD_SPECS: dict[str, _ExplanationSpec] = {
     **_prefixed("ranking_diagnostics", _DIAGNOSTIC_SPECS),
 }
 
+_DOMAIN_TOKEN_LABELS = {
+    "Recommendation Signal Inclusion": "推荐信号已纳入",
+    "Observed Recommendation Signal Effect": "推荐信号产生可观测影响",
+    "Target Delivery Ranking": "目标投放排序",
+    "Recommendation Opportunity": "推荐机会",
+    "Delivery Capacity": "投放容量",
+    "Platform Recommendation Score": "平台推荐分数",
+    "Historical Set": "历史集合",
+    "Target Video": "目标视频",
+    "Base Sample": "基础样本",
+    "Final Sample": "最终样本",
+    "Seed Users": "种子用户",
+    "Network Cohort": "网络传播识别组",
+    "Ordinary Users": "普通用户",
+    "Research User": "研究用户",
+    "Decision Adapter": "决策适配器",
+    "network augmentation": "网络补样",
+    "network sample audit": "网络样本审计",
+    "ranking runtime candidate evidence": "排序仿真候选证据",
+    "ranking runtime candidates": "排序仿真候选记录",
+    "ranking runtime outcomes": "排序仿真结果",
+    "ranking runtime summary": "排序仿真摘要",
+    "ranking runtime state": "排序仿真状态",
+    "ranking runtime step": "排序仿真批次",
+    "runtime provider failure allowlist": "仿真运行模型提供方失败允许列表",
+    "runtime provider failures": "仿真运行模型提供方失败记录",
+    "runtime provider task": "仿真运行模型提供方任务",
+    "runtime decisions": "仿真运行决策记录",
+    "runtime actions": "仿真运行动作记录",
+    "source scope": "来源分组",
+    "seed union": "种子并集",
+    "eligible users": "有资格用户",
+    "selected users": "入选用户",
+    "candidate evidence": "候选证据",
+    "ranking evidence": "排序证据",
+    "follower evidence": "粉丝证据",
+    "no-network": "无网络",
+    "Holdout-safe": "留出集安全",
+    "Top K": "前 K 名",
+    "Top20": "前 20 名",
+    "Batch": "批次",
+    "processed": "处理后",
+    "runtime": "仿真运行",
+    "profile": "画像",
+    "reference": "参照值",
+    "ranking": "排序",
+    "candidate": "候选用户",
+    "candidates": "候选用户",
+    "eligible": "有资格",
+    "selected": "入选",
+    "provider": "模型提供方",
+    "Provider": "模型提供方",
+    "decision": "决策",
+    "action": "动作",
+    "Prompt": "提示",
+    "raw": "原始",
+    "artifact": "产物",
+    "writer": "写入器",
+    "scope": "来源分组",
+    "seed": "种子",
+    "seeds": "种子用户",
+    "cohort": "识别组",
+    "evidence": "证据",
+    "rank": "名次",
+    "trajectory": "轨迹",
+    "shadow": "影子对照",
+    "full": "完整方案",
+    "follower": "粉丝",
+    "following": "关注",
+    "video": "视频",
+    "comment": "评论",
+    "reply": "回复",
+    "influence": "影响力",
+    "recognition": "认可",
+    "latent attributes": "合成属性",
+    "latent attribute generator": "合成属性生成器",
+    "latent attribute specification": "合成属性规格",
+    "caption": "文案",
+    "hashtags": "标签",
+    "URL": "链接",
+    "Payload": "载荷",
+    "JSON": "数据文件",
+    "CSV": "表格文件",
+    "Manifest": "产物清单",
+    "horizon": "批次范围",
+    "capacity": "容量",
+    "true": "真",
+    "false": "假",
+    "like": "点赞",
+    "share": "分享",
+    "ignore": "忽略",
+    "provider_failed": "模型提供方失败",
+    "below_delivery_capacity": "低于投放容量",
+    "ranking_runtime_candidates.csv": "排序仿真候选证据文件",
+    "ranking_runtime_steps.csv": "排序仿真批次文件",
+    "ranking_diagnostics_summary.json": "排序诊断摘要文件",
+    "ranking_diagnostics.json": "排序诊断文件",
+    "videos.csv": "视频表格文件",
+    "report.html": "报告页面文件",
+    "FinalResearchReportWriter": "最终研究报告写入器",
+}
+
+for _field_name, _specification in _FIELD_SPECS.items():
+    _DOMAIN_TOKEN_LABELS.setdefault(_field_name.rsplit(".", 1)[-1], _specification.chinese_name)
+
+
+def _pair_domain_tokens(value: str) -> str:
+    protected: list[str] = []
+
+    def protect(text: str) -> str:
+        protected.append(text)
+        return f"\0{len(protected) - 1}\0"
+
+    paired = re.sub(
+        r"[A-Za-z][A-Za-z0-9_./-]*(?: [A-Za-z0-9_./-]+)*（[^）]+）",
+        lambda match: protect(match.group(0)),
+        value,
+    )
+    for token, chinese_name in sorted(_DOMAIN_TOKEN_LABELS.items(), key=lambda item: len(item[0]), reverse=True):
+        pattern = rf"(?<![A-Za-z0-9_]){re.escape(token)}(?![A-Za-z0-9_]|（)"
+        if re.search(pattern, paired):
+            paired = re.sub(pattern, protect(f"{token}（{chinese_name}）"), paired)
+    for index, text in enumerate(protected):
+        paired = paired.replace(f"\0{index}\0", text)
+    return paired
+
 
 class ResearchExplanationCatalog(Mapping[str, FieldExplanation]):
     def __init__(self, explanations: Mapping[str, FieldExplanation]) -> None:
@@ -846,13 +973,13 @@ class ResearchExplanationCatalog(Mapping[str, FieldExplanation]):
             explanations[entry.field_name] = FieldExplanation(
                 field_name=entry.field_name,
                 chinese_name=spec.chinese_name,
-                meaning=spec.meaning,
-                source=f"{provenance_label}：{provenance_definition}{spec.source}",
-                calculation=spec.calculation,
-                value_range=spec.value_range,
-                usage=usage,
-                interpretation=spec.interpretation,
-                limitation=spec.limitation,
+                meaning=_pair_domain_tokens(spec.meaning),
+                source=_pair_domain_tokens(f"{provenance_label}：{provenance_definition}{spec.source}"),
+                calculation=_pair_domain_tokens(spec.calculation),
+                value_range=_pair_domain_tokens(spec.value_range),
+                usage=_pair_domain_tokens(usage),
+                interpretation=_pair_domain_tokens(spec.interpretation),
+                limitation=_pair_domain_tokens(spec.limitation),
             )
         return cls(explanations)
 
