@@ -50,6 +50,170 @@ class FieldExplanation:
     limitation: str
 
 
+@dataclass(frozen=True)
+class _ConceptExplanationTemplate:
+    what: str
+    why: str
+    formation: str
+    result: str
+
+
+@dataclass(frozen=True)
+class _ChartExplanationTemplate:
+    measurement: str
+    denominator: str
+    purpose: str
+    result: str
+
+
+_CONCEPT_EXPLANATIONS = {
+    "sample": _ConceptExplanationTemplate(
+        what=(
+            "Base Sample（基础样本）是 network augmentation（网络补样）前按 source scope（来源分组）形成的初始 "
+            "{base_sample_count} 人样本；Final Sample（最终样本）是真正进入正式 runtime（仿真运行）的 "
+            "{final_sample_count} 人样本。"
+        ),
+        why="保留来源分层口径，同时补入与固定种子用户相连的传播识别对象，让评论网络可以进入后续排序。",
+        formation=(
+            "先固定 Seed Users（种子用户），再识别它们在 Historical Set（历史集合）评论网络中的直接邻居；"
+            "Network Cohort（网络传播识别组）由真实 processed user（处理后用户）组成，不是合成用户或代表性随机样本。"
+        ),
+        result=(
+            "本次加入 {network_cohort_added_count} 位 Network Cohort（网络传播识别组）时等量替换普通用户 "
+            "{replacement_count} 位；固定种子用户不被替换，因此最终样本总量不变，仍为 {final_sample_count} 人。"
+        ),
+    ),
+    "lineage": _ConceptExplanationTemplate(
+        what="Field Dictionary（字段词典）逐项解释页面展示字段的中文名、来源、形成方式、范围、用途和限制。",
+        why="让读者能够从页面术语追溯到持久化证据，并区分直接观测、历史证据、代理指标、合成标签与运行结果。",
+        formation="报告用完整 Field Lineage（字段血缘）构建解释目录；字段缺失、重复或目录不完整会使报告重建失败。",
+        result="本次目录覆盖全部 {field_count} 个字段，可搜索、按使用阶段筛选并选择字段查看详情。",
+    ),
+    "ranking": _ConceptExplanationTemplate(
+        what="平台在每个批次对合格用户重算推荐分数，并按全局 {top_label} 选择实际曝光对象。",
+        why="把平台决定谁看到视频的排序过程，与曝光后 LLM（大模型）决定是否互动的 action（动作）过程明确分开。",
+        formation=(
+            "Batch 0（第 0 批）固定曝光种子用户；后续批次按 {base_network_weight}% 历史网络相关性、"
+            "{engaged_neighbor_weight}% 已互动邻居信号和 {tag_affinity_weight}% 标签亲和度全局重排。"
+        ),
+        result=(
+            "本次共有 {horizon} 个批次，每批 Delivery Capacity（投放容量）最多 {delivery_capacity} 人，"
+            "合计曝光 {total_exposures} 人次。"
+        ),
+    ),
+    "network": _ConceptExplanationTemplate(
+        what="网络证据同时区分推荐信号是否进入公式，以及移除网络项后同批投放成员是否实际变化。",
+        why="避免把公式包含网络变量误读成网络已经改变投放，也避免把影子排序误读成第二条仿真轨迹或因果实验。",
+        formation=(
+            "对每批冻结的持久化候选证据运行 full ranking（完整排序）与 no-network shadow ranking（无网络影子排序），"
+            "不增加 Adapter（决策适配器）调用。"
+        ),
+        result="本次 {changed_batches} / {batch_count} 个批次的 {top_label} 成员发生变化。",
+    ),
+    "prompt": _ConceptExplanationTemplate(
+        what="Prompt Isolation（提示证据隔离）记录曝光后 LLM（大模型）action（动作）决策允许、中性化和排除的字段。",
+        why="防止评论网络证据同时进入平台排序与 LLM（大模型）决策，造成同一 evidence（证据）被重复计算。",
+        formation="平台先完成投放排序；仅对已曝光用户构建受控 Prompt（提示），并把 PeerContext（同伴上下文）保持中性。",
+        result=(
+            "本次 ranking（排序）、network（网络）与 Target Holdout（目标留出）证据均不进入 Prompt（提示），"
+            "raw payload（原始载荷）保持不可见。"
+        ),
+    ),
+    "aggregate": _ConceptExplanationTemplate(
+        what="六张同源图表汇总样本构成、逐批投放、最终状态、Provider（服务提供方）失败、动态网络激活与消融重合。",
+        why="让读者比较总体模式，同时保留统计对象、单位、分母和本次结果，避免把柱高误读成概率或因果效果。",
+        formation=(
+            "所有图表只从同一持久化 report payload（报告载荷）聚合，不读取新数据，也不重新运行 Provider（服务提供方）。"
+        ),
+        result="本次图表共同解释 {final_sample_count} 位用户、{total_exposures} 次曝光与 {provider_decisions} 次决策。",
+    ),
+    "users": _ConceptExplanationTemplate(
+        what=(
+            "用户追踪把聚合结果下钻到每位研究用户的画像、代理指标、排序历史、曝光、"
+            "Provider（服务提供方）与最终 action（动作）。"
+        ),
+        why="让研究读者能从总体计数回查单个用户证据，并区分未曝光、曝光后忽略、互动和 Provider（服务提供方）失败。",
+        formation="页面从同一用户导出与逐批候选证据连接详情；搜索和筛选只改变显示，不修改持久化数据。",
+        result="本次可搜索和筛选全部 {user_count} 位用户，并查看每人的完整 ranking history（排序历史）。",
+    ),
+}
+
+
+_CHART_EXPLANATIONS = {
+    "sample-composition-explanation": _ChartExplanationTemplate(
+        measurement=(
+            "Final Sample（最终样本）中 Seed Users（种子用户）、Network Cohort（网络传播识别组）与 "
+            "Ordinary Users（普通用户）的角色构成。"
+        ),
+        denominator="单位为用户；分母是 Final Sample（最终样本）{final_sample_count} 人。",
+        purpose="确认网络补样保留种子、加入传播识别对象，并以普通用户保持样本总量不变。",
+        result=(
+            "Seed Users（种子用户）{seed_count} 人，Network Cohort（网络传播识别组）{network_cohort_count} 人，"
+            "Ordinary Users（普通用户）{ordinary_count} 人。"
+        ),
+    ),
+    "batch-delivery-explanation": _ChartExplanationTemplate(
+        measurement="每个 Batch（批次）实际产生的 Target Video（目标视频）exposure（曝光）数。",
+        denominator=(
+            "单位为 exposure（曝光）人次；每位用户最多一次，Batch 0（第 0 批）是 seeds（种子用户），"
+            "Batch 1–{final_batch}（第 1–{final_batch} 批）每批最多 {top_label}。"
+        ),
+        purpose="把固定 Delivery Capacity（投放容量）与实际逐批投放分开，避免把柱高误读成互动率。",
+        result="{batch_count} 个批次合计 {total_exposures} 次 exposure（曝光）。",
+    ),
+    "action-status-explanation": _ChartExplanationTemplate(
+        measurement=(
+            "全部研究用户的唯一最终状态：below_delivery_capacity（未获得投放）、ignore（忽略）、"
+            "like（点赞）/ comment（评论）/ share（分享）或 provider_failed（Provider 失败）。"
+        ),
+        denominator="单位为用户；分母是 Final Sample（最终样本）{user_count} 人。",
+        purpose=(
+            "below_delivery_capacity（未获得投放）表示未曝光，ignore（忽略）表示已曝光后不互动；"
+            "互动 action（动作）与 provider（服务提供方）失败也不能混为一类。"
+        ),
+        result=(
+            "{below_capacity} 个 below_delivery_capacity（未获得投放）用户从未曝光；"
+            "{ignored} 个 ignore（忽略）用户已曝光但选择不互动；{engaged} 个用户选择 "
+            "like（点赞）/ comment（评论）/ share（分享）；{provider_failures} 个 provider_failed（Provider 失败）。"
+        ),
+    ),
+    "provider-failure-explanation": _ChartExplanationTemplate(
+        measurement="每批调用在初始尝试和允许重试后仍未得到有效 Decision（决策）的重试耗尽任务。",
+        denominator=(
+            "单位为任务；分母是 {total_exposures} 个实际 exposure（曝光）对应的 provider（服务提供方）决策机会。"
+        ),
+        purpose="失败任务没有有效 action（动作），必须与成功返回 ignore（忽略）或互动动作的任务分开。",
+        result=(
+            "{provider_failures} / {total_exposures} 个任务重试耗尽；本次为 0 时也不代表 "
+            "provider（服务提供方）永不失败。"
+        ),
+    ),
+    "network-activation-explanation": _ChartExplanationTemplate(
+        measurement=(
+            "每批 engaged_neighbor_signal（已互动邻居信号）> 0 的 candidate evidence rows（正向邻居信号候选证据行）。"
+        ),
+        denominator=(
+            "单位为候选证据行；分母是全部逐批 {candidate_rows} 条 candidate evidence rows（候选证据行），"
+            "不是 selected users（已选择用户）或 actions（动作）。"
+        ),
+        purpose="证明动态网络项在候选排序证据中实际激活，同时避免把候选信号误读成已投放或已互动。",
+        result=(
+            "{positive_candidate_rows} 条 candidates（候选）具有正向信号，其中 {positive_selected_users} 位 "
+            "selected users（已选择用户）获得曝光并产生 {positive_signal_actions} 条 actions（动作）。"
+        ),
+    ),
+    "ablation-overlap-explanation": _ChartExplanationTemplate(
+        measurement="每批 full ranking（完整排序）与 no-network shadow ranking（无网络影子排序）的 {top_label} 共同入选人数。",
+        denominator="单位为用户；分母是每批 {top_label} 投放集合。",
+        purpose="在同批冻结候选证据上观察移除网络项是否改变投放成员。",
+        result=(
+            "Top{delivery_capacity} overlap（前列重合人数）={delivery_capacity} 表示两组选择集合相同；"
+            "数值降低表示更多用户被网络项改变。本次 {changed_batches} / {batch_count} 个批次发生变化。"
+        ),
+    ),
+}
+
+
 _PROVENANCE = {
     "Direct Observed Profile Field": (
         "Direct Observed Profile Field（直接观测画像字段）",
@@ -963,7 +1127,7 @@ def _pair_domain_tokens(value: str) -> str:
         return f"\0{len(protected) - 1}\0"
 
     paired = re.sub(
-        r"[A-Za-z][A-Za-z0-9_./-]*(?: [A-Za-z0-9_./-]+)*（[^）]+）",
+        r"[A-Za-z][A-Za-z0-9_./–-]*(?: [A-Za-z0-9_./–-]+)*（[^）]+）",
         lambda match: protect(match.group(0)),
         value,
     )
@@ -1024,9 +1188,26 @@ class ResearchExplanationCatalog(Mapping[str, FieldExplanation]):
     def as_records(self) -> list[dict[str, str]]:
         return [asdict(explanation) for explanation in self._explanations.values()]
 
-    def as_document(self) -> dict[str, object]:
+    @staticmethod
+    def _serialize_templates(
+        templates: Mapping[str, _ConceptExplanationTemplate | _ChartExplanationTemplate],
+        context: Mapping[str, object] | None,
+    ) -> dict[str, dict[str, str]]:
+        serialized: dict[str, dict[str, str]] = {}
+        for key, template in templates.items():
+            values = asdict(template)
+            serialized[key] = (
+                {name: _pair_domain_tokens(value.format_map(context)) for name, value in values.items()}
+                if context is not None
+                else values
+            )
+        return serialized
+
+    def as_document(self, context: Mapping[str, object] | None = None) -> dict[str, object]:
         return {
             "entries": self.as_records(),
+            "concept_explanations": self._serialize_templates(_CONCEPT_EXPLANATIONS, context),
+            "chart_explanations": self._serialize_templates(_CHART_EXPLANATIONS, context),
             "provenance_categories": [
                 {"key": key, "label": label, "definition": definition}
                 for key, (label, definition) in _PROVENANCE.items()

@@ -40,6 +40,35 @@ def test_research_explanation_catalog_describes_structured_field_shapes() -> Non
     assert catalog["ranking_rounds.selected_user_ids"].interpretation.startswith("不适用")
 
 
+def test_research_explanation_catalog_owns_concept_and_chart_templates() -> None:
+    document = ResearchExplanationCatalog.from_lineage(_ranking_field_lineage()).as_document()
+
+    assert set(document["concept_explanations"]) == {
+        "sample",
+        "lineage",
+        "ranking",
+        "network",
+        "prompt",
+        "aggregate",
+        "users",
+    }
+    assert set(document["chart_explanations"]) == {
+        "sample-composition-explanation",
+        "batch-delivery-explanation",
+        "action-status-explanation",
+        "provider-failure-explanation",
+        "network-activation-explanation",
+        "ablation-overlap-explanation",
+    }
+    assert set(next(iter(document["concept_explanations"].values()))) == {"what", "why", "formation", "result"}
+    assert set(next(iter(document["chart_explanations"].values()))) == {
+        "measurement",
+        "denominator",
+        "purpose",
+        "result",
+    }
+
+
 def test_research_explanation_catalog_pairs_required_english_tokens_with_chinese() -> None:
     catalog = ResearchExplanationCatalog.from_lineage(_ranking_field_lineage())
 

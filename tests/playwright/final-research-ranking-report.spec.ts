@@ -212,16 +212,27 @@ async function expectBilingualReaderSurface(page: Page): Promise<void> {
       '.lineage-legends',
       '.ranking-term-grid',
       '.ranking-method-notes',
+      '.ranking-worked-example h3',
+      '.ranking-worked-example-grid strong',
       '.network-reading-note',
       '[data-testid="paired-ablation-section"] > .section-heading',
+      '.ablation-summary span',
+      '.effect-label',
       '.effect-grid',
       '.sensitivity-variants',
       '.prompt-reading-note',
       '.prompt-grid > article > h3',
       '.chart-grid h3',
       '.chart-explanation',
+      '.bar-row > span',
       '.filters label',
+      'select option',
       'table thead',
+      '.status',
+      '.provider-status',
+      '.trace-groups h3',
+      '.trace-groups dt',
+      '.ranking-history h3',
       '.proxy-explanation-guide > p',
       '.downloads',
       '.limitations-band',
@@ -590,6 +601,9 @@ async function assertRankingReport(
   await expect(page.getByTestId('user-table')).toContainText(tagUser.user_id);
   await page.getByTestId('user-search').fill('controlled ignore');
   await expect(page.getByTestId('user-table').locator('tbody tr').first()).toContainText('controlled ignore');
+  await expect(page.getByTestId('user-table')).toContainText('remaining_users（其余用户）');
+  await page.getByTestId('user-table').locator('tbody tr').first().click();
+  await expect(page.getByTestId('user-detail')).toContainText('mocked_provider（决策来源）');
   await page.getByTestId('user-search').fill('');
 
   const failedUser = users.find((user) => user.result_status === 'provider_failed');
@@ -598,6 +612,7 @@ async function assertRankingReport(
   await expect(page.getByTestId('user-table').locator('tbody tr')).toHaveCount(1);
   await page.getByTestId('user-table').locator('tbody tr').click();
   await expect(page.getByTestId('user-detail')).toContainText(failedUser?.user_id ?? '');
+  await expect(page.getByTestId('user-detail')).toContainText('（Provider 失败类型）');
   for (const group of ['直接观测', '历史行为', '派生代理', '合成标签', '样本与 ranking', '曝光与 provider', '最终 action']) {
     await expect(page.getByTestId('user-detail')).toContainText(group);
   }
