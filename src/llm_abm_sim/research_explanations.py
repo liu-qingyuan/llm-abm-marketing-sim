@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import asdict, dataclass
-from typing import Literal, Protocol
+from typing import Literal, Protocol, TypedDict
 
 FieldProvenance = Literal[
     "Direct Observed Profile Field",
@@ -64,6 +64,66 @@ class _ChartExplanationTemplate:
     denominator: str
     purpose: str
     result: str
+
+
+@dataclass(frozen=True)
+class ExplanationContext:
+    base_sample_count: str
+    final_sample_count: str
+    network_cohort_added_count: str
+    replacement_count: str
+    field_count: str
+    top_label: str
+    base_network_weight: str
+    engaged_neighbor_weight: str
+    tag_affinity_weight: str
+    horizon: str
+    delivery_capacity: str
+    total_exposures: str
+    changed_batches: str
+    batch_count: str
+    provider_decisions: str
+    user_count: str
+    seed_count: str
+    network_cohort_count: str
+    ordinary_count: str
+    final_batch: str
+    below_capacity: str
+    ignored: str
+    engaged: str
+    provider_failures: str
+    candidate_rows: str
+    positive_candidate_rows: str
+    positive_selected_users: str
+    positive_signal_actions: str
+
+
+class RenderedConceptExplanation(TypedDict):
+    what: str
+    why: str
+    formation: str
+    result: str
+
+
+class RenderedChartExplanation(TypedDict):
+    measurement: str
+    denominator: str
+    purpose: str
+    result: str
+
+
+class ExplanationCategoryRecord(TypedDict):
+    key: str
+    label: str
+    definition: str
+
+
+class ResearchExplanationDocument(TypedDict):
+    entries: list[dict[str, str]]
+    concept_explanations: dict[str, RenderedConceptExplanation]
+    chart_explanations: dict[str, RenderedChartExplanation]
+    provenance_categories: list[ExplanationCategoryRecord]
+    usage_stages: list[ExplanationCategoryRecord]
 
 
 _CONCEPT_EXPLANATIONS = {
@@ -1189,31 +1249,50 @@ class ResearchExplanationCatalog(Mapping[str, FieldExplanation]):
         return [asdict(explanation) for explanation in self._explanations.values()]
 
     @staticmethod
-    def _serialize_templates(
-        templates: Mapping[str, _ConceptExplanationTemplate | _ChartExplanationTemplate],
-        context: Mapping[str, object] | None,
-    ) -> dict[str, dict[str, str]]:
-        serialized: dict[str, dict[str, str]] = {}
-        for key, template in templates.items():
-            values = asdict(template)
-            serialized[key] = (
-                {name: _pair_domain_tokens(value.format_map(context)) for name, value in values.items()}
-                if context is not None
-                else values
-            )
-        return serialized
+    def _format_template(value: str, context: Mapping[str, object] | None) -> str:
+        return _pair_domain_tokens(value.format_map(context)) if context is not None else value
 
-    def as_document(self, context: Mapping[str, object] | None = None) -> dict[str, object]:
+    @classmethod
+    def _render_concept_explanations(
+        cls, context: Mapping[str, object] | None
+    ) -> dict[str, RenderedConceptExplanation]:
+        return {
+            key: RenderedConceptExplanation(
+                what=cls._format_template(template.what, context),
+                why=cls._format_template(template.why, context),
+                formation=cls._format_template(template.formation, context),
+                result=cls._format_template(template.result, context),
+            )
+            for key, template in _CONCEPT_EXPLANATIONS.items()
+        }
+
+    @classmethod
+    def _render_chart_explanations(
+        cls, context: Mapping[str, object] | None
+    ) -> dict[str, RenderedChartExplanation]:
+        return {
+            key: RenderedChartExplanation(
+                measurement=cls._format_template(template.measurement, context),
+                denominator=cls._format_template(template.denominator, context),
+                purpose=cls._format_template(template.purpose, context),
+                result=cls._format_template(template.result, context),
+            )
+            for key, template in _CHART_EXPLANATIONS.items()
+        }
+
+    @staticmethod
+    def _category_records(categories: Mapping[str, tuple[str, str]]) -> list[ExplanationCategoryRecord]:
+        return [
+            ExplanationCategoryRecord(key=key, label=label, definition=definition)
+            for key, (label, definition) in categories.items()
+        ]
+
+    def as_document(self, context: ExplanationContext | None = None) -> ResearchExplanationDocument:
+        context_values = asdict(context) if context is not None else None
         return {
             "entries": self.as_records(),
-            "concept_explanations": self._serialize_templates(_CONCEPT_EXPLANATIONS, context),
-            "chart_explanations": self._serialize_templates(_CHART_EXPLANATIONS, context),
-            "provenance_categories": [
-                {"key": key, "label": label, "definition": definition}
-                for key, (label, definition) in _PROVENANCE.items()
-            ],
-            "usage_stages": [
-                {"key": key, "label": label, "definition": definition}
-                for key, (label, definition) in _USAGE_STAGE.items()
-            ],
+            "concept_explanations": self._render_concept_explanations(context_values),
+            "chart_explanations": self._render_chart_explanations(context_values),
+            "provenance_categories": self._category_records(_PROVENANCE),
+            "usage_stages": self._category_records(_USAGE_STAGE),
         }

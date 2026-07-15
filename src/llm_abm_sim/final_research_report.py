@@ -9,12 +9,18 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from html import escape
 from pathlib import Path
-from typing import Literal, cast
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from .prompt_field_summary import JINJIANG_PROMPT_V2_PROFILE_FIELDS
-from .research_explanations import FieldProvenance, FieldUsageStage, ResearchExplanationCatalog
+from .research_explanations import (
+    ExplanationContext,
+    FieldProvenance,
+    FieldUsageStage,
+    RenderedConceptExplanation,
+    ResearchExplanationCatalog,
+)
 from .safe_serialization import safe_json, safe_user_data, safe_user_json
 
 FINAL_RESEARCH_REPORT_ARTIFACTS = {
@@ -52,7 +58,7 @@ RankingResultStatus = Literal[
     "provider_failed",
     "below_delivery_capacity",
 ]
-def _render_section_explanation(explanation: Mapping[str, str], test_id: str) -> str:
+def _render_section_explanation(explanation: RenderedConceptExplanation, test_id: str) -> str:
     entries = (
         ("是什么", explanation["what"]),
         ("为什么需要", explanation["why"]),
@@ -1540,38 +1546,38 @@ def _render_ranking_report(payload: FinalResearchRankingReportPayload) -> str:
         for candidate in round_evidence.candidates
         if candidate.selected and candidate.engaged_neighbor_signal > 0
     }
-    explanation_context = {
-        "base_sample_count": f"{sample.base_sample_count:,}",
-        "final_sample_count": f"{sample.final_sample_count:,}",
-        "network_cohort_added_count": f"{sample.network_cohort_added_count:,}",
-        "replacement_count": f"{sample.replacement_count:,}",
-        "field_count": f"{len(payload.field_lineage):,}",
-        "top_label": f"Top{payload.run.delivery_capacity}（前 {payload.run.delivery_capacity} 名）",
-        "base_network_weight": f"{base_network_weight:.0f}",
-        "engaged_neighbor_weight": f"{engaged_neighbor_weight:.0f}",
-        "tag_affinity_weight": f"{tag_affinity_weight:.0f}",
-        "horizon": f"{payload.run.horizon:,}",
-        "delivery_capacity": f"{payload.run.delivery_capacity:,}",
-        "total_exposures": f"{total_exposures:,}",
-        "changed_batches": f"{payload.ranking_diagnostics_summary.batches_with_top_selection_change:,}",
-        "batch_count": f"{len(payload.ranking_rounds):,}",
-        "provider_decisions": f"{provider_decisions:,}",
-        "user_count": f"{len(payload.users):,}",
-        "seed_count": f"{sample_role_counts['seed']:,}",
-        "network_cohort_count": f"{sample_role_counts['network_cohort']:,}",
-        "ordinary_count": f"{sample_role_counts['ordinary']:,}",
-        "final_batch": max(1, payload.run.horizon - 1),
-        "below_capacity": f"{result_status_counts['below_delivery_capacity']:,}",
-        "ignored": f"{result_status_counts['ignore']:,}",
-        "engaged": f"{sum(result_status_counts[action] for action in ('like', 'comment', 'share')):,}",
-        "provider_failures": f"{result_status_counts['provider_failed']:,}",
-        "candidate_rows": f"{sum(len(round_evidence.candidates) for round_evidence in payload.ranking_rounds):,}",
-        "positive_candidate_rows": f"{sum(round_evidence.candidates_with_positive_engaged_neighbor_signal for round_evidence in payload.ranking_rounds):,}",
-        "positive_selected_users": f"{sum(round_evidence.selected_with_positive_engaged_neighbor_signal for round_evidence in payload.ranking_rounds):,}",
-        "positive_signal_actions": f"{sum(user.user_id in positive_selected_user_ids and bool(user.action) for user in payload.users):,}",
-    }
+    explanation_context = ExplanationContext(
+        base_sample_count=f"{sample.base_sample_count:,}",
+        final_sample_count=f"{sample.final_sample_count:,}",
+        network_cohort_added_count=f"{sample.network_cohort_added_count:,}",
+        replacement_count=f"{sample.replacement_count:,}",
+        field_count=f"{len(payload.field_lineage):,}",
+        top_label=f"Top{payload.run.delivery_capacity}（前 {payload.run.delivery_capacity} 名）",
+        base_network_weight=f"{base_network_weight:.0f}",
+        engaged_neighbor_weight=f"{engaged_neighbor_weight:.0f}",
+        tag_affinity_weight=f"{tag_affinity_weight:.0f}",
+        horizon=f"{payload.run.horizon:,}",
+        delivery_capacity=f"{payload.run.delivery_capacity:,}",
+        total_exposures=f"{total_exposures:,}",
+        changed_batches=f"{payload.ranking_diagnostics_summary.batches_with_top_selection_change:,}",
+        batch_count=f"{len(payload.ranking_rounds):,}",
+        provider_decisions=f"{provider_decisions:,}",
+        user_count=f"{len(payload.users):,}",
+        seed_count=f"{sample_role_counts['seed']:,}",
+        network_cohort_count=f"{sample_role_counts['network_cohort']:,}",
+        ordinary_count=f"{sample_role_counts['ordinary']:,}",
+        final_batch=f"{max(1, payload.run.horizon - 1):,}",
+        below_capacity=f"{result_status_counts['below_delivery_capacity']:,}",
+        ignored=f"{result_status_counts['ignore']:,}",
+        engaged=f"{sum(result_status_counts[action] for action in ('like', 'comment', 'share')):,}",
+        provider_failures=f"{result_status_counts['provider_failed']:,}",
+        candidate_rows=f"{sum(len(round_evidence.candidates) for round_evidence in payload.ranking_rounds):,}",
+        positive_candidate_rows=f"{sum(round_evidence.candidates_with_positive_engaged_neighbor_signal for round_evidence in payload.ranking_rounds):,}",
+        positive_selected_users=f"{sum(round_evidence.selected_with_positive_engaged_neighbor_signal for round_evidence in payload.ranking_rounds):,}",
+        positive_signal_actions=f"{sum(user.user_id in positive_selected_user_ids and bool(user.action) for user in payload.users):,}",
+    )
     explanation_document = explanation_catalog.as_document(explanation_context)
-    section_explanations = cast(dict[str, dict[str, str]], explanation_document["concept_explanations"])
+    section_explanations = explanation_document["concept_explanations"]
     downloads = payload.downloads.model_dump(mode="json")
     download_links = "".join(
         f'<a data-testid="download-{escape(key.replace("_", "-"), quote=True)}" '
