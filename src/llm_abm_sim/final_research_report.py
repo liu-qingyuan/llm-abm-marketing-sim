@@ -1801,6 +1801,15 @@ const explanationDocument = JSON.parse(document.getElementById('research-explana
 const explanationCatalog = new Map(explanationDocument.entries.map((entry) => [entry.field_name,entry]));
 const users = payload.users;
 const topLabel = `Top${payload.run.delivery_capacity}`;
+const sampleRoleCounts = new Map(); users.forEach((row) => sampleRoleCounts.set(row.sample_role,(sampleRoleCounts.get(row.sample_role) || 0) + 1));
+const resultStatusCounts = new Map(); users.forEach((row) => resultStatusCounts.set(row.result_status,(resultStatusCounts.get(row.result_status) || 0) + 1));
+const proxyFields = [
+  ['activity_score','Activity（活跃度代理）'],
+  ['global_influence_score','Global influence（全局影响力代理）'],
+  ['local_influence_score','Local influence（局部影响力代理）'],
+  ['local_network_score','Local network（局部网络分量）'],
+  ['local_recognition_score','Local recognition（局部认可分量）'],
+];
 const rankingHistoryByUser = new Map();
 payload.ranking_rounds.forEach((round) => round.candidates.forEach((candidate) => {
   if (!rankingHistoryByUser.has(candidate.user_id)) rankingHistoryByUser.set(candidate.user_id,[]);
@@ -1869,7 +1878,6 @@ function metric(label, value, note) {
 
 function renderSample() {
   const sample = payload.sample_comparison;
-  const sampleRoleCounts = new Map(); users.forEach((row) => sampleRoleCounts.set(row.sample_role,(sampleRoleCounts.get(row.sample_role) || 0) + 1));
   const ordinaryCount = sampleRoleCounts.get('ordinary') || 0;
   byId('sample-summary').textContent = `Seed Users（种子用户） ${sample.seed_count} · Network Cohort（网络传播识别组） ${sample.network_cohort_count} · 普通用户替换 ${sample.replacement_count}`;
   const explanations = [
@@ -2090,25 +2098,23 @@ function renderChartExplanation(id, entries) {
 
 function renderChartExplanations() {
   const sample = payload.sample_comparison;
-  const roleCounts = new Map(); users.forEach((row) => roleCounts.set(row.sample_role,(roleCounts.get(row.sample_role) || 0) + 1));
-  const actionCounts = new Map(); users.forEach((row) => actionCounts.set(row.result_status,(actionCounts.get(row.result_status) || 0) + 1));
   const totalExposures = payload.ranking_rounds.reduce((total,row) => total + row.target_exposures,0);
   const positiveCandidateRows = payload.ranking_rounds.reduce((total,row) => total + row.candidates_with_positive_engaged_neighbor_signal,0);
   const positiveSelectedUsers = payload.ranking_rounds.reduce((total,row) => total + row.selected_with_positive_engaged_neighbor_signal,0);
   const positiveSelectedUserIds = new Set(payload.ranking_rounds.flatMap((round) => round.candidates.filter((candidate) => candidate.selected && candidate.engaged_neighbor_signal > 0).map((candidate) => candidate.user_id)));
   const positiveSignalActions = users.filter((row) => positiveSelectedUserIds.has(row.user_id) && row.action).length;
   const candidateRows = payload.ranking_rounds.reduce((total,row) => total + row.candidates.length,0);
-  const providerFailures = actionCounts.get('provider_failed') || 0;
-  const belowCapacity = actionCounts.get('below_delivery_capacity') || 0;
-  const ignored = actionCounts.get('ignore') || 0;
-  const engaged = ['like','comment','share'].reduce((total,status) => total + (actionCounts.get(status) || 0),0);
+  const providerFailures = resultStatusCounts.get('provider_failed') || 0;
+  const belowCapacity = resultStatusCounts.get('below_delivery_capacity') || 0;
+  const ignored = resultStatusCounts.get('ignore') || 0;
+  const engaged = ['like','comment','share'].reduce((total,status) => total + (resultStatusCounts.get(status) || 0),0);
   const finalBatch = Math.max(1,payload.run.horizon - 1);
 
   renderChartExplanation('sample-composition-explanation',[
     ['统计什么','Final Sample 中 Seed Users、Network Cohort 与 Ordinary Users 的角色构成。'],
     ['单位 / 分母',`单位为用户；分母是 Final Sample ${count(sample.final_sample_count)} 人。`],
     ['为什么需要','确认网络补样保留种子、加入传播识别对象，并以普通用户保持样本总量不变。'],
-    ['本次结果',`Seed ${count(roleCounts.get('seed') || 0)} 人，Network Cohort ${count(roleCounts.get('network_cohort') || 0)} 人，Ordinary ${count(roleCounts.get('ordinary') || 0)} 人。`],
+    ['本次结果',`Seed ${count(sampleRoleCounts.get('seed') || 0)} 人，Network Cohort ${count(sampleRoleCounts.get('network_cohort') || 0)} 人，Ordinary ${count(sampleRoleCounts.get('ordinary') || 0)} 人。`],
   ]);
   renderChartExplanation('batch-delivery-explanation',[
     ['统计什么','每个 Batch 实际产生的 Target Video exposure 数。'],
@@ -2144,8 +2150,7 @@ function renderChartExplanations() {
 
 function renderCharts() {
   renderBatchChart('batch-delivery-chart',payload.ranking_rounds,'target_exposures');
-  const actionCounts = new Map(); users.forEach((row) => actionCounts.set(row.result_status,(actionCounts.get(row.result_status) || 0) + 1));
-  renderBars('action-chart',[...actionCounts.entries()].sort().map(([label,value]) => ({label,value})));
+  renderBars('action-chart',[...resultStatusCounts.entries()].sort().map(([label,value]) => ({label,value})));
   renderBars('provider-failure-chart',payload.ranking_rounds.map((row) => ({label:`Batch ${row.time_step}`,value:row.provider_failed})).filter((row) => row.value > 0).concat(payload.ranking_rounds.every((row) => row.provider_failed === 0) ? [{label:'No failures',value:0}] : []));
   renderBars('network-activation-chart',payload.ranking_rounds.map((row) => ({label:`Batch ${row.time_step}`,value:row.candidates_with_positive_engaged_neighbor_signal})).filter((row) => row.value > 0).slice(0,12).concat(payload.ranking_rounds.every((row) => row.candidates_with_positive_engaged_neighbor_signal === 0) ? [{label:'No activation',value:0}] : []));
   renderBatchChart('ablation-overlap-chart',payload.ranking_diagnostics.paired_ablation.batches,'top_overlap_count');
@@ -2187,13 +2192,6 @@ function renderProxyExplanationGuide() {
   details.appendChild(element('summary','','查看派生代理计算说明'));
   details.appendChild(element('p','', '五项均为 0..1 的归一化数值；越高只表示对应可观测证据在本项目口径下越强。Local network 与 Local recognition 是 local influence 的两个组成部分，不是独立心理特征。'));
   const list = element('div','proxy-explanation-list');
-  const proxyFields = [
-    ['activity_score','Activity（活跃度代理）'],
-    ['global_influence_score','Global influence（全局影响力代理）'],
-    ['local_influence_score','Local influence（局部影响力代理）'],
-    ['local_network_score','Local network（局部网络分量）'],
-    ['local_recognition_score','Local recognition（局部认可分量）'],
-  ];
   proxyFields.forEach(([fieldName,label]) => {
     const explanation = explanationCatalog.get(fieldName);
     if (!explanation) return;
@@ -2215,13 +2213,7 @@ function renderProxyExplanationGuide() {
 function renderUserDetail(row) {
   const root = byId('user-detail'); root.replaceChildren(); root.appendChild(element('h3','',`${row.nickname || row.user_id} · ${row.user_id}`));
   const groups = element('div','trace-groups');
-  const proxyValues = traceGroup('派生代理',[
-    ['Activity（活跃度代理）',fixed(row.activity_score)],
-    ['Global influence（全局影响力代理）',fixed(row.global_influence_score)],
-    ['Local influence（局部影响力代理）',fixed(row.local_influence_score)],
-    ['Local network（局部网络分量）',fixed(row.local_network_score)],
-    ['Local recognition（局部认可分量）',fixed(row.local_recognition_score)],
-  ]);
+  const proxyValues = traceGroup('派生代理',proxyFields.map(([fieldName,label]) => [label,fixed(row[fieldName])]));
   proxyValues.dataset.testid = 'proxy-values';
   groups.append(
     traceGroup('直接观测',[['nickname',row.nickname],['bio',row.bio],['signature',row.signature],['interest_tags',row.interest_tags.join(', ')]]),
