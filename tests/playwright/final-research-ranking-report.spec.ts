@@ -10,6 +10,7 @@ type RankingUser = {
   interest_tags: string[];
   reason: string;
   result_status: string;
+  action: string;
   sample_source_scope: string;
   sample_role: string;
   is_seed: boolean;
@@ -61,6 +62,10 @@ type RankingPayload = {
   };
   ranking_rounds: Array<{
     time_step: number;
+    target_exposures: number;
+    provider_failed: number;
+    candidates_with_positive_engaged_neighbor_signal: number;
+    selected_with_positive_engaged_neighbor_signal: number;
     candidates: RankingCandidate[];
   }>;
   ranking_diagnostics_summary: {
@@ -381,6 +386,82 @@ async function assertRankingReport(
     await expectChart(page.getByTestId(chartId));
   }
 
+  const totalExposures = payload.ranking_rounds.reduce((total, round) => total + round.target_exposures, 0);
+  const belowCapacityCount = payload.users.filter((user) => user.result_status === 'below_delivery_capacity').length;
+  const ignoreCount = payload.users.filter((user) => user.result_status === 'ignore').length;
+  const providerFailureCount = payload.users.filter((user) => user.result_status === 'provider_failed').length;
+  const positiveCandidateRows = payload.ranking_rounds.reduce(
+    (total, round) => total + round.candidates_with_positive_engaged_neighbor_signal,
+    0,
+  );
+  const positiveSelectedUsers = payload.ranking_rounds.reduce(
+    (total, round) => total + round.selected_with_positive_engaged_neighbor_signal,
+    0,
+  );
+  const positiveSelectedUserIds = new Set(
+    payload.ranking_rounds.flatMap((round) =>
+      round.candidates
+        .filter((candidate) => candidate.selected && candidate.engaged_neighbor_signal > 0)
+        .map((candidate) => candidate.user_id),
+    ),
+  );
+  const positiveSignalActions = payload.users.filter(
+    (user) => positiveSelectedUserIds.has(user.user_id) && user.action,
+  ).length;
+  const chartNotes = [
+    page.getByTestId('sample-composition-explanation'),
+    page.getByTestId('batch-delivery-explanation'),
+    page.getByTestId('action-status-explanation'),
+    page.getByTestId('provider-failure-explanation'),
+    page.getByTestId('network-activation-explanation'),
+    page.getByTestId('ablation-overlap-explanation'),
+  ];
+  for (const note of chartNotes) {
+    await expect(note).toContainText('统计什么');
+    await expect(note).toContainText('单位 / 分母');
+    await expect(note).toContainText('为什么需要');
+    await expect(note).toContainText('本次结果');
+  }
+  await expect(page.getByTestId('sample-composition-explanation')).toContainText(
+    `Final Sample ${payload.sample_comparison.final_sample_count.toLocaleString()} 人`,
+  );
+  await expect(page.getByTestId('batch-delivery-explanation')).toContainText(`Batch 0`);
+  await expect(page.getByTestId('batch-delivery-explanation')).toContainText(
+    `Batch 1–${payload.run.horizon - 1}`,
+  );
+  await expect(page.getByTestId('batch-delivery-explanation')).toContainText(
+    `Top${payload.run.delivery_capacity}`,
+  );
+  await expect(page.getByTestId('batch-delivery-explanation')).toContainText(
+    `合计 ${totalExposures.toLocaleString()} 次 exposure`,
+  );
+  const actionExplanation = page.getByTestId('action-status-explanation');
+  await expect(actionExplanation).toContainText(
+    `${belowCapacityCount.toLocaleString()} 个 below_delivery_capacity 用户从未曝光`,
+  );
+  await expect(actionExplanation).toContainText(
+    `${ignoreCount.toLocaleString()} 个 ignore 用户已曝光但选择不互动`,
+  );
+  await expect(actionExplanation).toContainText('like / comment / share');
+  await expect(actionExplanation).toContainText('provider_failed');
+  const providerExplanation = page.getByTestId('provider-failure-explanation');
+  await expect(providerExplanation).toContainText('重试耗尽任务');
+  await expect(providerExplanation).toContainText(
+    `${providerFailureCount.toLocaleString()} / ${totalExposures.toLocaleString()}`,
+  );
+  await expect(providerExplanation).toContainText('不代表 provider 永不失败');
+  const networkExplanation = page.getByTestId('network-activation-explanation');
+  await expect(networkExplanation).toContainText('candidate evidence rows');
+  await expect(networkExplanation).toContainText(`${positiveCandidateRows.toLocaleString()} 条 candidates`);
+  await expect(networkExplanation).toContainText(`${positiveSelectedUsers.toLocaleString()} 位 selected users`);
+  await expect(networkExplanation).toContainText(`${positiveSignalActions.toLocaleString()} 条 actions`);
+  const ablationExplanation = page.getByTestId('ablation-overlap-explanation');
+  await expect(ablationExplanation).toContainText(
+    `Top${payload.run.delivery_capacity} overlap=${payload.run.delivery_capacity}`,
+  );
+  await expect(ablationExplanation).toContainText('选择集合相同');
+  await expect(ablationExplanation).toContainText('数值降低');
+
   const users = payload.users;
   await expect(page.getByTestId('visible-user-count')).toHaveText('1,000 / 1,000');
   const tagUser = users.find((user) => user.interest_tags.length > 1) ?? users[0];
@@ -399,6 +480,31 @@ async function assertRankingReport(
   for (const group of ['直接观测', '历史行为', '派生代理', '合成标签', '样本与 ranking', '曝光与 provider', '最终 action']) {
     await expect(page.getByTestId('user-detail')).toContainText(group);
   }
+  const proxyValues = page.getByTestId('proxy-values');
+  await expect(proxyValues).toBeVisible();
+  for (const label of [
+    'Activity（活跃度代理）',
+    'Global influence（全局影响力代理）',
+    'Local influence（局部影响力代理）',
+    'Local network（局部网络分量）',
+    'Local recognition（局部认可分量）',
+  ]) {
+    await expect(proxyValues).toContainText(label);
+  }
+  const proxyExplanation = page.getByTestId('proxy-explanation-guide');
+  await expect(proxyExplanation).toBeVisible();
+  await expect(proxyExplanation).not.toHaveAttribute('open', '');
+  await proxyExplanation.locator('summary').click();
+  await expect(proxyExplanation).toHaveAttribute('open', '');
+  await expect(proxyExplanation).toContainText('0..1 的归一化数值');
+  await expect(proxyExplanation).toContainText('历史视频、评论和回复活跃度');
+  await expect(proxyExplanation).toContainText('以 follower evidence（粉丝证据） 为主');
+  await expect(proxyExplanation).toContainText('不是平台官方指数');
+  await expect(proxyExplanation).toContainText('评论网络中的位置与评论获赞认可');
+  await expect(proxyExplanation).toContainText('local influence 的两个组成部分');
+  await expect(proxyExplanation).toContainText('不是独立心理特征');
+  await expect(proxyExplanation).toContainText('不能用于因果或心理推断');
+  await expect(proxyValues).toBeVisible();
   await expect(page.getByTestId('user-detail')).toContainText('provider_failed');
 
   await page.getByTestId('result-filter').selectOption('below_delivery_capacity');
@@ -516,6 +622,30 @@ test('configured formal ranking run preserves exact evidence on desktop and mobi
     await expect(example).toContainText(
       `${contributions.map((value) => value.toFixed(4)).join(' + ')} = ${calculatedScore.toFixed(4)} recommendation_score（持久化值 ${candidate.recommendation_score.toFixed(4)}）`,
     );
+    for (const chartExplanationId of [
+      'sample-composition-explanation',
+      'batch-delivery-explanation',
+      'action-status-explanation',
+      'provider-failure-explanation',
+      'network-activation-explanation',
+      'ablation-overlap-explanation',
+    ]) {
+      await expect(page.getByTestId(chartExplanationId)).toContainText('本次结果');
+    }
+    await expect(page.getByTestId('action-status-explanation')).toContainText(
+      '400 个 below_delivery_capacity 用户从未曝光',
+    );
+    await expect(page.getByTestId('action-status-explanation')).toContainText(
+      '342 个 ignore 用户已曝光但选择不互动',
+    );
+    await expect(page.getByTestId('provider-failure-explanation')).toContainText('0 / 600 个任务重试耗尽');
+    await expect(page.getByTestId('network-activation-explanation')).toContainText('30 条 candidates');
+    await expect(page.getByTestId('network-activation-explanation')).toContainText('23 位 selected users');
+    await expect(page.getByTestId('network-activation-explanation')).toContainText('23 条 actions');
+    await expect(page.getByTestId('proxy-values')).toContainText('Activity（活跃度代理）');
+    const proxyExplanation = page.getByTestId('proxy-explanation-guide');
+    await proxyExplanation.locator('summary').click();
+    await expect(proxyExplanation).toContainText('不能用于因果或心理推断');
     await expectNoLayoutFailures(page);
     await page.screenshot({
       path: testInfo.outputPath(`formal-ranking-report-${viewport.name}.png`),

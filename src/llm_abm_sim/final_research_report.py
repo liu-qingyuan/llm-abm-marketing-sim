@@ -1562,7 +1562,7 @@ def _render_ranking_report(payload: FinalResearchRankingReportPayload) -> str:
     <div id="sample-metrics" class="sample-metrics"></div>
     <div class="table-wrap sample-role-table"><table data-testid="sample-role-table"><thead><tr><th>角色</th><th>人数</th><th>怎么形成</th><th>研究角色</th><th>是否进入最终样本</th></tr></thead><tbody id="sample-role-table-body"></tbody></table></div>
     <div class="scope-intro"><h3>Video Source Scope（视频来源分组）</h3><p>这里表示采集来源分组，不是视频语义类别。下表用本次实际前后差值说明网络补样如何改变构成。</p></div>
-    <div class="split-grid"><div class="table-wrap"><table data-testid="sample-scope-table"><thead><tr><th>Source Scope（来源分组）</th><th>Base Sample（基础样本）</th><th>Final Sample（最终样本）</th><th>变化</th></tr></thead><tbody id="scope-table-body"></tbody></table></div><article class="chart-panel"><h3>最终样本角色构成</h3><div id="sample-composition-chart" class="bar-chart" data-testid="sample-composition-chart"></div></article></div>
+    <div class="split-grid"><div class="table-wrap"><table data-testid="sample-scope-table"><thead><tr><th>Source Scope（来源分组）</th><th>Base Sample（基础样本）</th><th>Final Sample（最终样本）</th><th>变化</th></tr></thead><tbody id="scope-table-body"></tbody></table></div><article class="chart-panel"><h3>最终样本角色构成</h3><div id="sample-composition-explanation" class="chart-explanation" data-testid="sample-composition-explanation"></div><div id="sample-composition-chart" class="bar-chart" data-testid="sample-composition-chart"></div></article></div>
   </section>
 
   <section id="lineage" class="content-band" data-testid="field-lineage-section">
@@ -1600,7 +1600,7 @@ def _render_ranking_report(payload: FinalResearchRankingReportPayload) -> str:
 
   <section class="content-band" data-testid="prompt-contract-section"><span class="eyebrow">LLM PROMPT CONTRACT</span><h2>Prompt Isolation（提示证据隔离）</h2><div class="prompt-reading-note"><p><strong>阶段一：</strong>平台排序决定谁看到视频；<strong>阶段二：</strong>LLM 决定曝光后的 action（动作）。</p><p>使用 neutral PeerContext（中性同伴上下文）是为了防止评论网络 evidence 同时进入 ranking 和 LLM 决策，不是数据丢失。页面只展示 allowlisted evidence（允许证据），raw Prompt 与 provider payload 保持不可见。</p></div><div class="prompt-grid"><article><h3>允许字段（Allowed）</h3><ul id="prompt-allowed"></ul></article><article><h3>空缺 / 中性字段（Neutral）</h3><ul id="prompt-neutral"></ul></article><article><h3>排除字段（Excluded）</h3><ul id="prompt-excluded"></ul></article></div></section>
 
-  <section class="content-band"><span class="eyebrow">AGGREGATES</span><h2>同源聚合图表</h2><div class="chart-grid"><article><h3>逐批投放</h3><div id="batch-delivery-chart" class="batch-chart" data-testid="batch-delivery-chart"></div></article><article><h3>Action 与容量状态</h3><div id="action-chart" class="bar-chart" data-testid="action-chart"></div></article><article><h3>Provider failure</h3><div id="provider-failure-chart" class="bar-chart" data-testid="provider-failure-chart"></div></article><article><h3>动态网络激活</h3><div id="network-activation-chart" class="bar-chart" data-testid="network-activation-chart"></div></article><article class="wide"><h3>Ablation Top{payload.run.delivery_capacity} overlap</h3><div id="ablation-overlap-chart" class="batch-chart" data-testid="ablation-overlap-chart"></div></article></div></section>
+  <section class="content-band" data-testid="aggregate-charts-section"><span class="eyebrow">AGGREGATES</span><h2>同源聚合图表</h2><div class="chart-grid"><article><h3>逐批投放</h3><div id="batch-delivery-explanation" class="chart-explanation" data-testid="batch-delivery-explanation"></div><div id="batch-delivery-chart" class="batch-chart" data-testid="batch-delivery-chart"></div></article><article><h3>Action 与容量状态</h3><div id="action-status-explanation" class="chart-explanation" data-testid="action-status-explanation"></div><div id="action-chart" class="bar-chart" data-testid="action-chart"></div></article><article><h3>Provider failure</h3><div id="provider-failure-explanation" class="chart-explanation" data-testid="provider-failure-explanation"></div><div id="provider-failure-chart" class="bar-chart" data-testid="provider-failure-chart"></div></article><article><h3>动态网络激活</h3><div id="network-activation-explanation" class="chart-explanation" data-testid="network-activation-explanation"></div><div id="network-activation-chart" class="bar-chart" data-testid="network-activation-chart"></div></article><article class="wide"><h3>Ablation Top{payload.run.delivery_capacity} overlap</h3><div id="ablation-overlap-explanation" class="chart-explanation" data-testid="ablation-overlap-explanation"></div><div id="ablation-overlap-chart" class="batch-chart" data-testid="ablation-overlap-chart"></div></article></div></section>
 
   <section id="users" class="users-band" data-testid="ranking-users-section"><div class="section-heading"><div><span class="eyebrow">USER TRACE</span><h2>完整 {payload.run.sample_size:,} 用户追踪</h2></div><strong id="visible-user-count" data-testid="visible-user-count"></strong></div><div class="filters"><label>搜索<input id="user-search" data-testid="user-search" type="search"></label><label>Sample role<select id="role-filter" data-testid="role-filter"><option value="">全部</option><option value="seed">seed</option><option value="network_cohort">network_cohort</option><option value="ordinary">ordinary</option></select></label><label>Result<select id="result-filter" data-testid="result-filter"><option value="">全部</option></select></label><label>Scope<select id="scope-filter" data-testid="scope-filter"><option value="">全部</option></select></label><label>Seed<select id="seed-filter" data-testid="seed-filter"><option value="">全部</option><option value="true">是</option><option value="false">否</option></select></label><label>Network Cohort<select id="cohort-filter" data-testid="cohort-filter"><option value="">全部</option><option value="true">是</option><option value="false">否</option></select></label></div><div class="table-wrap users-table"><table data-testid="user-table"><thead><tr><th>User</th><th>Role / scope</th><th>Batch / rank</th><th>Score</th><th>Result</th><th>Reason</th></tr></thead><tbody id="user-table-body"></tbody></table></div><div id="user-detail" class="user-detail" data-testid="user-detail"></div></section>
 
@@ -1750,6 +1750,9 @@ code { color:var(--blue); }
 .prompt-grid li { margin:4px 0; overflow-wrap:anywhere; font-size:.78rem; }
 .chart-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px; }
 .chart-grid .wide { grid-column:1 / -1; }
+.chart-explanation { display:grid; gap:5px; margin-bottom:12px; padding:10px 0 10px 12px; border-left:3px solid var(--gold); }
+.chart-explanation p { margin:0; color:var(--muted); font-size:.76rem; overflow-wrap:anywhere; }
+.chart-explanation strong { color:var(--ink); }
 .batch-chart { min-height:150px; display:flex; align-items:end; gap:4px; padding-top:16px; overflow:hidden; }
 .batch-column { flex:1; min-width:4px; display:grid; align-items:end; height:125px; }
 .batch-column i { display:block; min-height:2px; background:var(--green); }
@@ -1773,6 +1776,14 @@ code { color:var(--blue); }
 .trace-groups div { display:grid; grid-template-columns:minmax(88px,.8fr) minmax(0,1.2fr); gap:7px; padding:3px 0; }
 .trace-groups dt { color:var(--muted); font-size:.7rem; }
 .trace-groups dd { margin:0; overflow-wrap:anywhere; font-size:.75rem; font-weight:700; }
+.proxy-explanation-guide { margin-top:12px; padding:12px 0; border-block:1px solid #d9d1f1; }
+.proxy-explanation-guide summary { color:var(--violet); font-weight:800; cursor:pointer; }
+.proxy-explanation-guide > p { margin:10px 0 0; color:var(--muted); font-size:.78rem; }
+.proxy-explanation-list { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:0 18px; margin-top:10px; }
+.proxy-explanation-list article { min-width:0; padding:10px 0; border-top:1px solid var(--line); }
+.proxy-explanation-list h4 { margin:0 0 5px; font-size:.82rem; overflow-wrap:anywhere; }
+.proxy-explanation-list p { margin:3px 0 0; color:var(--muted); font-size:.74rem; overflow-wrap:anywhere; }
+.proxy-explanation-list strong { color:var(--ink); }
 .ranking-history { margin-top:12px; }
 .ranking-history .table-wrap { max-height:300px; background:#fff; }
 .downloads { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:8px; }
@@ -1780,7 +1791,7 @@ code { color:var(--blue); }
 .limitations-band { display:grid; grid-template-columns:180px 1fr; background:#fff8ec; }
 .limitations-band li { margin:5px 0; }
 @media (max-width:1000px) { .hero-funnel { grid-template-columns:repeat(3,minmax(0,1fr)); }.sample-metrics,.effect-grid { grid-template-columns:repeat(2,minmax(0,1fr)); }.lineage-layout,.diagnostic-layout { grid-template-columns:1fr; }.lineage-detail { min-height:0; }.filters { grid-template-columns:repeat(3,minmax(0,1fr)); }.trace-groups { grid-template-columns:repeat(2,minmax(0,1fr)); } }
-@media (max-width:700px) { main { border:0; }.topbar { position:static; align-items:flex-start; flex-direction:column; }.workflow-nav { gap:7px 14px; }.workflow-nav a { font-size:.74rem; }.ranking-hero { min-height:610px; padding-top:24px; }.ranking-hero h1 { font-size:2.35rem; }.hero-copy { display:block; }.hero-meta { display:flex; flex-wrap:wrap; margin-top:12px; border:0; }.hero-meta span { padding:5px 9px; border:1px solid #cbd7d0; }.hero-funnel { grid-template-columns:repeat(2,minmax(0,1fr)); margin-top:16px; }.hero-funnel article { min-height:74px; padding:9px; }.hero-funnel article:nth-child(n+6),.hero-funnel p { display:none; }.hero-funnel strong { font-size:1.25rem; }.object-flow { grid-template-columns:1fr; }.object-flow i { transform:rotate(90deg); justify-self:center; }.section-heading { align-items:flex-start; flex-direction:column; }.sample-explanation,.sample-metrics,.effect-grid,.split-grid,.scope-intro,.lineage-legends,.prompt-grid,.chart-grid,.filters,.trace-groups,.ranking-term-grid,.ranking-method-notes,.ranking-worked-example-grid,.network-reading-note,.prompt-reading-note { grid-template-columns:1fr; }.sample-explanation article:nth-child(odd) { padding-right:0; border-right:0; }.sample-explanation article + article { border-top:1px solid var(--line); }.ranking-term-grid article:nth-child(odd),.ranking-term-grid article:nth-child(even) { padding:12px 0; border-right:0; }.ranking-term-grid article + article { border-top:1px solid var(--line); }.lineage-legends section + section { padding-left:0; border-top:1px solid var(--line); border-left:0; }.round-summary,.ablation-summary { grid-template-columns:repeat(2,minmax(0,1fr)); }.chart-grid .wide { grid-column:auto; }.compact-filters { grid-template-columns:1fr; }.downloads { grid-template-columns:repeat(2,minmax(0,1fr)); }.limitations-band { grid-template-columns:1fr; }.users-table { max-height:540px; } }
+@media (max-width:700px) { main { border:0; }.topbar { position:static; align-items:flex-start; flex-direction:column; }.workflow-nav { gap:7px 14px; }.workflow-nav a { font-size:.74rem; }.ranking-hero { min-height:610px; padding-top:24px; }.ranking-hero h1 { font-size:2.35rem; }.hero-copy { display:block; }.hero-meta { display:flex; flex-wrap:wrap; margin-top:12px; border:0; }.hero-meta span { padding:5px 9px; border:1px solid #cbd7d0; }.hero-funnel { grid-template-columns:repeat(2,minmax(0,1fr)); margin-top:16px; }.hero-funnel article { min-height:74px; padding:9px; }.hero-funnel article:nth-child(n+6),.hero-funnel p { display:none; }.hero-funnel strong { font-size:1.25rem; }.object-flow { grid-template-columns:1fr; }.object-flow i { transform:rotate(90deg); justify-self:center; }.section-heading { align-items:flex-start; flex-direction:column; }.sample-explanation,.sample-metrics,.effect-grid,.split-grid,.scope-intro,.lineage-legends,.prompt-grid,.chart-grid,.filters,.trace-groups,.ranking-term-grid,.ranking-method-notes,.ranking-worked-example-grid,.network-reading-note,.prompt-reading-note,.proxy-explanation-list { grid-template-columns:1fr; }.sample-explanation article:nth-child(odd) { padding-right:0; border-right:0; }.sample-explanation article + article { border-top:1px solid var(--line); }.ranking-term-grid article:nth-child(odd),.ranking-term-grid article:nth-child(even) { padding:12px 0; border-right:0; }.ranking-term-grid article + article { border-top:1px solid var(--line); }.lineage-legends section + section { padding-left:0; border-top:1px solid var(--line); border-left:0; }.round-summary,.ablation-summary { grid-template-columns:repeat(2,minmax(0,1fr)); }.chart-grid .wide { grid-column:auto; }.compact-filters { grid-template-columns:1fr; }.downloads { grid-template-columns:repeat(2,minmax(0,1fr)); }.limitations-band { grid-template-columns:1fr; }.users-table { max-height:540px; } }
 """
 
 
@@ -2068,6 +2079,69 @@ function renderBatchChart(id, rows, valueKey) {
   rows.forEach((row) => { const column = element('div','batch-column'); column.title = `Batch ${row.time_step}: ${row[valueKey]}`; const bar = element('i'); bar.style.height = `${Math.max(2,(Number(row[valueKey] || 0) / maximum) * 115)}px`; column.appendChild(bar); root.appendChild(column); });
 }
 
+function renderChartExplanation(id, entries) {
+  const root = byId(id);
+  entries.forEach(([label,value]) => {
+    const line = element('p');
+    line.append(element('strong','',`${label}：`),document.createTextNode(value));
+    root.appendChild(line);
+  });
+}
+
+function renderChartExplanations() {
+  const sample = payload.sample_comparison;
+  const roleCounts = new Map(); users.forEach((row) => roleCounts.set(row.sample_role,(roleCounts.get(row.sample_role) || 0) + 1));
+  const actionCounts = new Map(); users.forEach((row) => actionCounts.set(row.result_status,(actionCounts.get(row.result_status) || 0) + 1));
+  const totalExposures = payload.ranking_rounds.reduce((total,row) => total + row.target_exposures,0);
+  const positiveCandidateRows = payload.ranking_rounds.reduce((total,row) => total + row.candidates_with_positive_engaged_neighbor_signal,0);
+  const positiveSelectedUsers = payload.ranking_rounds.reduce((total,row) => total + row.selected_with_positive_engaged_neighbor_signal,0);
+  const positiveSelectedUserIds = new Set(payload.ranking_rounds.flatMap((round) => round.candidates.filter((candidate) => candidate.selected && candidate.engaged_neighbor_signal > 0).map((candidate) => candidate.user_id)));
+  const positiveSignalActions = users.filter((row) => positiveSelectedUserIds.has(row.user_id) && row.action).length;
+  const candidateRows = payload.ranking_rounds.reduce((total,row) => total + row.candidates.length,0);
+  const providerFailures = actionCounts.get('provider_failed') || 0;
+  const belowCapacity = actionCounts.get('below_delivery_capacity') || 0;
+  const ignored = actionCounts.get('ignore') || 0;
+  const engaged = ['like','comment','share'].reduce((total,status) => total + (actionCounts.get(status) || 0),0);
+  const finalBatch = Math.max(1,payload.run.horizon - 1);
+
+  renderChartExplanation('sample-composition-explanation',[
+    ['统计什么','Final Sample 中 Seed Users、Network Cohort 与 Ordinary Users 的角色构成。'],
+    ['单位 / 分母',`单位为用户；分母是 Final Sample ${count(sample.final_sample_count)} 人。`],
+    ['为什么需要','确认网络补样保留种子、加入传播识别对象，并以普通用户保持样本总量不变。'],
+    ['本次结果',`Seed ${count(roleCounts.get('seed') || 0)} 人，Network Cohort ${count(roleCounts.get('network_cohort') || 0)} 人，Ordinary ${count(roleCounts.get('ordinary') || 0)} 人。`],
+  ]);
+  renderChartExplanation('batch-delivery-explanation',[
+    ['统计什么','每个 Batch 实际产生的 Target Video exposure 数。'],
+    ['单位 / 分母',`单位为 exposure 人次；每位用户最多一次，Batch 0 是 seeds，Batch 1–${finalBatch} 每批最多 Top${payload.run.delivery_capacity}。`],
+    ['为什么需要','把固定 Delivery Capacity 与实际逐批投放分开，避免把柱高误读成互动率。'],
+    ['本次结果',`${count(payload.ranking_rounds.length)} 个批次合计 ${count(totalExposures)} 次 exposure。`],
+  ]);
+  renderChartExplanation('action-status-explanation',[
+    ['统计什么','全部研究用户的唯一最终状态：below_delivery_capacity、ignore、like / comment / share 或 provider_failed。'],
+    ['单位 / 分母',`单位为用户；分母是 Final Sample ${count(users.length)} 人。`],
+    ['为什么需要','below_delivery_capacity 表示未曝光，ignore 表示已曝光后不互动；互动 action 与 provider 失败也不能混为一类。'],
+    ['本次结果',`${count(belowCapacity)} 个 below_delivery_capacity 用户从未曝光；${count(ignored)} 个 ignore 用户已曝光但选择不互动；${count(engaged)} 个用户选择 like / comment / share；${count(providerFailures)} 个 provider_failed。`],
+  ]);
+  renderChartExplanation('provider-failure-explanation',[
+    ['统计什么','每批调用在初始尝试和允许重试后仍未得到有效 Decision 的重试耗尽任务。'],
+    ['单位 / 分母',`单位为任务；分母是 ${count(totalExposures)} 个实际 exposure 对应的 provider 决策机会。`],
+    ['为什么需要','失败任务没有有效 action，必须与成功返回 ignore 或互动动作的任务分开。'],
+    ['本次结果',`${count(providerFailures)} / ${count(totalExposures)} 个任务重试耗尽；本次为 0 时也不代表 provider 永不失败。`],
+  ]);
+  renderChartExplanation('network-activation-explanation',[
+    ['统计什么','每批 engaged_neighbor_signal > 0 的 candidate evidence rows（正向邻居信号候选证据行）。'],
+    ['单位 / 分母',`单位为候选证据行；分母是全部逐批 ${count(candidateRows)} 条 candidate evidence rows，不是 selected users 或 actions。`],
+    ['为什么需要','证明动态网络项在候选排序证据中实际激活，同时避免把候选信号误读成已投放或已互动。'],
+    ['本次结果',`${count(positiveCandidateRows)} 条 candidates 具有正向信号，其中 ${count(positiveSelectedUsers)} 位 selected users 获得曝光并产生 ${count(positiveSignalActions)} 条 actions。`],
+  ]);
+  renderChartExplanation('ablation-overlap-explanation',[
+    ['统计什么',`每批 full ranking 与 no-network shadow ranking 的 Top${payload.run.delivery_capacity} 共同入选人数。`],
+    ['单位 / 分母',`单位为用户；分母是每批 Top${payload.run.delivery_capacity} 投放集合。`],
+    ['为什么需要','在同批冻结候选证据上观察移除网络项是否改变投放成员。'],
+    ['本次结果',`Top${payload.run.delivery_capacity} overlap=${payload.run.delivery_capacity} 表示两组选择集合相同；数值降低表示更多用户被网络项改变。本次 ${count(payload.ranking_diagnostics_summary.batches_with_top_selection_change)} / ${count(payload.ranking_rounds.length)} 个批次发生变化。`],
+  ]);
+}
+
 function renderCharts() {
   renderBatchChart('batch-delivery-chart',payload.ranking_rounds,'target_exposures');
   const actionCounts = new Map(); users.forEach((row) => actionCounts.set(row.result_status,(actionCounts.get(row.result_status) || 0) + 1));
@@ -2108,13 +2182,51 @@ function traceGroup(title, fields) {
   fields.forEach(([label,value]) => { const line = element('div'); line.append(element('dt','',label),element('dd','',display(value))); list.appendChild(line); }); article.appendChild(list); return article;
 }
 
+function renderProxyExplanationGuide() {
+  const details = element('details','proxy-explanation-guide'); details.dataset.testid = 'proxy-explanation-guide';
+  details.appendChild(element('summary','','查看派生代理计算说明'));
+  details.appendChild(element('p','', '五项均为 0..1 的归一化数值；越高只表示对应可观测证据在本项目口径下越强。Local network 与 Local recognition 是 local influence 的两个组成部分，不是独立心理特征。'));
+  const list = element('div','proxy-explanation-list');
+  const proxyFields = [
+    ['activity_score','Activity（活跃度代理）'],
+    ['global_influence_score','Global influence（全局影响力代理）'],
+    ['local_influence_score','Local influence（局部影响力代理）'],
+    ['local_network_score','Local network（局部网络分量）'],
+    ['local_recognition_score','Local recognition（局部认可分量）'],
+  ];
+  proxyFields.forEach(([fieldName,label]) => {
+    const explanation = explanationCatalog.get(fieldName);
+    if (!explanation) return;
+    const article = element('article'); article.appendChild(element('h4','',label));
+    [
+      ['含义',explanation.meaning],
+      ['计算',explanation.calculation],
+      ['范围与高低值',`${explanation.value_range} ${explanation.interpretation}`],
+      ['限制',explanation.limitation],
+    ].forEach(([term,value]) => {
+      const line = element('p'); line.append(element('strong','',`${term}：`),document.createTextNode(value)); article.appendChild(line);
+    });
+    list.appendChild(article);
+  });
+  details.appendChild(list);
+  return details;
+}
+
 function renderUserDetail(row) {
   const root = byId('user-detail'); root.replaceChildren(); root.appendChild(element('h3','',`${row.nickname || row.user_id} · ${row.user_id}`));
   const groups = element('div','trace-groups');
+  const proxyValues = traceGroup('派生代理',[
+    ['Activity（活跃度代理）',fixed(row.activity_score)],
+    ['Global influence（全局影响力代理）',fixed(row.global_influence_score)],
+    ['Local influence（局部影响力代理）',fixed(row.local_influence_score)],
+    ['Local network（局部网络分量）',fixed(row.local_network_score)],
+    ['Local recognition（局部认可分量）',fixed(row.local_recognition_score)],
+  ]);
+  proxyValues.dataset.testid = 'proxy-values';
   groups.append(
     traceGroup('直接观测',[['nickname',row.nickname],['bio',row.bio],['signature',row.signature],['interest_tags',row.interest_tags.join(', ')]]),
     traceGroup('历史行为',[['historical_tags',row.historical_tags.join(', ')],['followers',row.follower_count],['following',row.following_count],['video_count',row.video_count],['weighted_degree',row.historical_comment_network_weighted_degree]]),
-    traceGroup('派生代理',[['activity',fixed(row.activity_score)],['global influence',fixed(row.global_influence_score)],['local influence',fixed(row.local_influence_score)],['local network',fixed(row.local_network_score)],['local recognition',fixed(row.local_recognition_score)]]),
+    proxyValues,
     traceGroup('合成标签',[['class',row.latent_class],['hotel class',row.latent_hotel_class],['travel purpose',row.latent_travel_purpose],['age',row.latent_age],['income',row.latent_monthly_income]]),
     traceGroup('样本与 ranking',[['role',row.sample_role],['scope',row.sample_source_scope],['seed',row.is_seed],['network cohort',row.is_network_cohort],['batch / rank',`${row.latest_ranking_time_step} / ${row.latest_ranking_position}`],['score',fixed(row.recommendation_score)]]),
     traceGroup('曝光与 provider',[['selected',row.selected_for_exposure],['exposure batch',row.exposure_time_step],['provider',row.provider_status],['failure type',row.provider_failure_type]]),
@@ -2126,7 +2238,7 @@ function renderUserDetail(row) {
   const body = element('tbody'); (rankingHistoryByUser.get(row.user_id) || []).forEach((evidence) => {
     const line = element('tr'); [evidence.time_step,evidence.ranking_position,evidence.selected,fixed(evidence.base_network_relevance),`${evidence.engaged_neighbor_count} / ${fixed(evidence.engaged_neighbor_signal)}`,fixed(evidence.historical_tag_affinity),fixed(evidence.recommendation_score)].forEach((value) => line.appendChild(element('td','',display(value)))); body.appendChild(line);
   });
-  historyTable.append(head,body); historyWrap.appendChild(historyTable); historyPanel.appendChild(historyWrap); root.append(groups,historyPanel);
+  historyTable.append(head,body); historyWrap.appendChild(historyTable); historyPanel.appendChild(historyWrap); root.append(groups,renderProxyExplanationGuide(),historyPanel);
 }
 
 renderHero(); renderSample(); renderLineageMetadata(); renderLineage(); renderRankingWorkedExample();
@@ -2134,7 +2246,7 @@ populateRoundSelect('ranking-round-select',payload.ranking_rounds); renderRankin
 const ablationBatches = payload.ranking_diagnostics.paired_ablation.batches; populateRoundSelect('ablation-round-select',ablationBatches); renderAblation();
 renderNetworkSummary(); renderSensitivity();
 fillList('prompt-allowed',payload.prompt_contract.allowed_profile_fields.map(promptFieldLabel)); fillList('prompt-neutral',payload.prompt_contract.neutralized_fields.map(promptFieldLabel)); fillList('prompt-excluded',payload.prompt_contract.excluded_fields.map(promptFieldLabel)); fillList('limitations-list',payload.limitations);
-renderCharts(); populateUserFilters(); renderUsers(); if (users.length) renderUserDetail(users[0]);
+renderChartExplanations(); renderCharts(); populateUserFilters(); renderUsers(); if (users.length) renderUserDetail(users[0]);
 byId('lineage-search').addEventListener('input',renderLineage); byId('lineage-stage-filter').addEventListener('input',renderLineage);
 byId('ranking-round-select').addEventListener('input',renderRankingRound); byId('ablation-round-select').addEventListener('input',renderAblation);
 ['user-search','role-filter','result-filter','scope-filter','seed-filter','cohort-filter'].forEach((id) => byId(id).addEventListener('input',renderUsers));
