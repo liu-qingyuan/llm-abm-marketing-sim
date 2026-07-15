@@ -64,11 +64,11 @@ _PROVENANCE = {
 }
 
 _USAGE_STAGE = {
-    "Sampling": "Sampling（抽样）：形成 Base Sample（基础样本）或 Final Sample（最终样本）",
-    "Seed Selection": "Seed Selection（种子选择）：识别首批固定投放用户",
-    "Ranking": "Ranking（排序）：形成逐轮候选证据、名次或投放结果",
-    "LLM Prompt": "LLM Prompt（大模型提示）：作为曝光后 action 决策输入",
-    "Report Only": "Report Only（仅报告）：只用于审计、解释或下载",
+    "Sampling": ("Sampling（抽样）", "形成 Base Sample（基础样本）或 Final Sample（最终样本）。"),
+    "Seed Selection": ("Seed Selection（种子选择）", "识别首批固定投放用户。"),
+    "Ranking": ("Ranking（排序）", "形成逐轮候选证据、名次或投放结果。"),
+    "LLM Prompt": ("LLM Prompt（大模型提示）", "作为曝光后 action（动作）决策输入。"),
+    "Report Only": ("Report Only（仅报告）", "只用于审计、解释或下载。"),
 }
 
 
@@ -168,6 +168,30 @@ def _path(chinese_name: str, meaning: str, source: str) -> _ExplanationSpec:
         "run 目录内的相对路径。",
         "不适用：路径没有高低方向。",
         "路径只定位允许公开的 processed/runtime artifact，不代表 artifact 内容本身。",
+    )
+
+
+def _mapping(chinese_name: str, meaning: str, source: str) -> _ExplanationSpec:
+    return _ExplanationSpec(
+        chinese_name,
+        meaning,
+        source,
+        "按 sample_source_scope（样本来源分组）聚合唯一用户数。",
+        "来源分组名称到非负人数的映射。",
+        "不适用：映射本身没有统一高低；应比较各来源分组人数及前后差值。",
+        "分组与人数受本次采集覆盖和抽样口径限制，不代表平台总体构成。",
+    )
+
+
+def _identifier_list(chinese_name: str, meaning: str, source: str) -> _ExplanationSpec:
+    return _ExplanationSpec(
+        chinese_name,
+        meaning,
+        source,
+        "按 ranking_position（排序名次）保留 selected=true 的 user_id（用户标识）。",
+        "0 个或多个 user_id（用户标识）组成的列表。",
+        "不适用：列表本身没有高低；人数由列表长度表达，顺序由本批排序决定。",
+        "列表表示仿真投放身份，不是现实平台曝光日志。",
     )
 
 
@@ -618,17 +642,15 @@ _SAMPLE_SPECS = {
         calculation="与新增 cohort 等量替换，以保持 Final Sample 总量不变。",
         limitation="替换是研究设计，不表示被替换用户质量更低。",
     ),
-    "base_source_scope_counts": _count(
+    "base_source_scope_counts": _mapping(
         "基础样本来源构成",
         "Base Sample 按 Video Source Scope 分组的人数。",
         "network sample audit。",
-        calculation="按 sample_source_scope 分组统计 Base Sample。",
     ),
-    "final_source_scope_counts": _count(
+    "final_source_scope_counts": _mapping(
         "最终样本来源构成",
         "Final Sample 按 Video Source Scope 分组的人数。",
         "network sample audit。",
-        calculation="按 sample_source_scope 分组统计 Final Sample。",
     ),
 }
 
@@ -659,11 +681,10 @@ _ROUND_SPECS = {
         "ranking runtime step。",
         calculation="统计 candidate selected=true。",
     ),
-    "selected_user_ids": _text(
+    "selected_user_ids": _identifier_list(
         "本批选择用户",
         "本批获得 Target Video 曝光的稳定 user_id 列表。",
         "ranking runtime candidates。",
-        limitation="列表表示仿真投放，不是现实平台曝光日志。",
     ),
     "target_exposures": _count(
         "本批目标曝光数",
@@ -821,7 +842,7 @@ class ResearchExplanationCatalog(Mapping[str, FieldExplanation]):
         for entry in lineage:
             spec = _FIELD_SPECS[entry.field_name]
             provenance_label, provenance_definition = _PROVENANCE[entry.provenance]
-            usage = "；".join(_USAGE_STAGE[stage] for stage in entry.usage_stages)
+            usage = "；".join(f"{_USAGE_STAGE[stage][0]}：{_USAGE_STAGE[stage][1]}" for stage in entry.usage_stages)
             explanations[entry.field_name] = FieldExplanation(
                 field_name=entry.field_name,
                 chinese_name=spec.chinese_name,
@@ -846,3 +867,16 @@ class ResearchExplanationCatalog(Mapping[str, FieldExplanation]):
 
     def as_records(self) -> list[dict[str, str]]:
         return [asdict(explanation) for explanation in self._explanations.values()]
+
+    def as_document(self) -> dict[str, object]:
+        return {
+            "entries": self.as_records(),
+            "provenance_categories": [
+                {"key": key, "label": label, "definition": definition}
+                for key, (label, definition) in _PROVENANCE.items()
+            ],
+            "usage_stages": [
+                {"key": key, "label": label, "definition": definition}
+                for key, (label, definition) in _USAGE_STAGE.items()
+            ],
+        }

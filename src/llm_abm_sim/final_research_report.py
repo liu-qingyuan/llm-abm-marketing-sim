@@ -1528,7 +1528,7 @@ def _render_ranking_report(payload: FinalResearchRankingReportPayload) -> str:
         for key, relative_path in downloads.items()
     )
     payload_json = safe_user_json(payload, indent=None).replace("</", "<\\/")
-    explanation_json = safe_user_json(explanation_catalog.as_records(), indent=None).replace("</", "<\\/")
+    explanation_json = safe_user_json(explanation_catalog.as_document(), indent=None).replace("</", "<\\/")
     return f"""<!doctype html>
 <html lang="zh-CN">
 <head>
@@ -1556,15 +1556,15 @@ def _render_ranking_report(payload: FinalResearchRankingReportPayload) -> str:
     <div id="sample-explanation" class="sample-explanation"></div>
     <div id="sample-metrics" class="sample-metrics"></div>
     <div class="table-wrap sample-role-table"><table data-testid="sample-role-table"><thead><tr><th>角色</th><th>人数</th><th>怎么形成</th><th>研究角色</th><th>是否进入最终样本</th></tr></thead><tbody id="sample-role-table-body"></tbody></table></div>
-    <div class="scope-intro"><h3>Video Source Scope（视频来源分组）</h3><p>这里的 scope 是采集来源分组，不是视频语义类别。下表用本次实际前后差值说明 network augmentation 如何改变构成。</p></div>
+    <div class="scope-intro"><h3>Video Source Scope（视频来源分组）</h3><p>这里表示采集来源分组，不是视频语义类别。下表用本次实际前后差值说明网络补样如何改变构成。</p></div>
     <div class="split-grid"><div class="table-wrap"><table data-testid="sample-scope-table"><thead><tr><th>Source Scope（来源分组）</th><th>Base Sample（基础样本）</th><th>Final Sample（最终样本）</th><th>变化</th></tr></thead><tbody id="scope-table-body"></tbody></table></div><article class="chart-panel"><h3>最终样本角色构成</h3><div id="sample-composition-chart" class="bar-chart" data-testid="sample-composition-chart"></div></article></div>
   </section>
 
   <section id="lineage" class="content-band" data-testid="field-lineage-section">
-    <div class="section-heading"><div><span class="eyebrow">FIELD LINEAGE（字段血缘）</span><h2>Field Dictionary（字段词典）</h2><p class="muted">默认表格用于快速扫描；选择字段后查看含义、形成方式、范围、用途和研究限制。</p></div><div class="compact-filters"><label>字段搜索<input id="lineage-search" data-testid="lineage-search" type="search"></label><label>用途<select id="lineage-stage-filter" data-testid="lineage-stage-filter"><option value="">全部</option><option value="Sampling">Sampling（抽样）</option><option value="Seed Selection">Seed Selection（种子选择）</option><option value="Ranking">Ranking（排序）</option><option value="LLM Prompt">LLM Prompt（大模型提示）</option><option value="Report Only">Report Only（仅报告）</option></select></label></div></div>
+    <div class="section-heading"><div><span class="eyebrow">FIELD LINEAGE（字段血缘）</span><h2>Field Dictionary（字段词典）</h2><p class="muted">默认表格用于快速扫描；选择字段后查看含义、形成方式、范围、用途和研究限制。</p></div><div class="compact-filters"><label>字段搜索<input id="lineage-search" data-testid="lineage-search" type="search"></label><label>用途<select id="lineage-stage-filter" data-testid="lineage-stage-filter"><option value="">全部</option></select></label></div></div>
     <div class="lineage-legends">
-      <section><h3>Field Provenance（字段来源）</h3><dl><div><dt>Direct Observed Profile Field（直接观测画像字段）</dt><dd>processed 数据中可直接观察或定位的记录。</dd></div><div><dt>Historical Behavioral Evidence（历史行为证据）</dt><dd>Historical Set（历史集合）的评论、回复、视频或来源记录。</dd></div><div><dt>Derived Proxy Metric（派生代理指标）</dt><dd>由可观测字段复算，不是平台官方指标。</dd></div><div><dt>Synthetic Experiment Label（合成实验标签）</dt><dd>由固定规格与随机种子生成，只用于仿真实验。</dd></div><div><dt>Runtime Simulation Result（仿真运行结果）</dt><dd>由本次 runtime 或报告构建过程记录。</dd></div></dl></section>
-      <section><h3>Field Usage Stage（字段使用阶段）</h3><dl><div><dt>Sampling（抽样）</dt><dd>形成基础样本或最终样本。</dd></div><div><dt>Seed Selection（种子选择）</dt><dd>识别首批固定投放用户。</dd></div><div><dt>Ranking（排序）</dt><dd>形成候选证据、名次或投放结果。</dd></div><div><dt>LLM Prompt（大模型提示）</dt><dd>作为曝光后 action 决策输入。</dd></div><div><dt>Report Only（仅报告）</dt><dd>只用于审计、解释或下载。</dd></div></dl></section>
+      <section><h3>Field Provenance（字段来源）</h3><dl id="lineage-provenance-legend"></dl></section>
+      <section><h3>Field Usage Stage（字段使用阶段）</h3><dl id="lineage-usage-legend"></dl></section>
     </div>
     <div class="lineage-layout"><div class="table-wrap lineage-table"><table data-testid="lineage-table"><thead><tr><th>Field（字段）</th><th>中文名</th><th>Field Provenance（字段来源）</th><th>Field Usage Stage（字段使用阶段）</th></tr></thead><tbody id="lineage-table-body"></tbody></table></div><aside id="lineage-detail" class="lineage-detail" data-testid="lineage-detail" aria-live="polite"></aside></div>
   </section>
@@ -1744,7 +1744,8 @@ code { color:var(--blue); }
 
 _RANKING_REPORT_JS = r"""
 const payload = JSON.parse(document.getElementById('final-research-ranking-payload').textContent);
-const explanationCatalog = new Map(JSON.parse(document.getElementById('research-explanation-catalog').textContent).map((entry) => [entry.field_name,entry]));
+const explanationDocument = JSON.parse(document.getElementById('research-explanation-catalog').textContent);
+const explanationCatalog = new Map(explanationDocument.entries.map((entry) => [entry.field_name,entry]));
 const users = payload.users;
 const topLabel = `Top${payload.run.delivery_capacity}`;
 const rankingHistoryByUser = new Map();
@@ -1755,20 +1756,8 @@ payload.ranking_rounds.forEach((round) => round.candidates.forEach((candidate) =
 const byId = (id) => document.getElementById(id);
 const display = (value) => value === null || value === undefined || value === '' ? '—' : String(value);
 const fixed = (value) => value === null || value === undefined ? '—' : Number(value).toFixed(4);
-const provenanceLabels = {
-  'Direct Observed Profile Field':'Direct Observed Profile Field（直接观测画像字段）',
-  'Historical Behavioral Evidence':'Historical Behavioral Evidence（历史行为证据）',
-  'Derived Proxy Metric':'Derived Proxy Metric（派生代理指标）',
-  'Synthetic Experiment Label':'Synthetic Experiment Label（合成实验标签）',
-  'Runtime Simulation Result':'Runtime Simulation Result（仿真运行结果）',
-};
-const usageLabels = {
-  'Sampling':'Sampling（抽样）',
-  'Seed Selection':'Seed Selection（种子选择）',
-  'Ranking':'Ranking（排序）',
-  'LLM Prompt':'LLM Prompt（大模型提示）',
-  'Report Only':'Report Only（仅报告）',
-};
+const provenanceLabels = Object.fromEntries(explanationDocument.provenance_categories.map((category) => [category.key,category.label]));
+const usageLabels = Object.fromEntries(explanationDocument.usage_stages.map((stage) => [stage.key,stage.label]));
 let selectedLineageField = payload.field_lineage[0]?.field_name || '';
 const count = (value) => {
   const numeric = Number(value);
@@ -1815,23 +1804,23 @@ function renderSample() {
   const ordinaryCount = sampleRoleCounts.get('ordinary') || 0;
   byId('sample-summary').textContent = `Seed Users（种子用户） ${sample.seed_count} · Network Cohort（网络传播识别组） ${sample.network_cohort_count} · 普通用户替换 ${sample.replacement_count}`;
   const explanations = [
-    ['是什么',`Base Sample（基础样本）是 network augmentation 前按 source scope 形成的初始 ${count(sample.base_sample_count)} 人样本；Final Sample（最终样本）是真正进入正式 runtime 的 ${count(sample.final_sample_count)} 人样本。`],
-    ['为什么需要',`Base Sample 保留来源分层口径；Final Sample 补入与固定种子用户相连的传播识别对象，让评论网络能够在后续 ranking 中实际产生可观察信号。`],
-    ['怎么形成',`先固定 Seed Users（种子用户），再识别它们在 Historical Set（历史集合）评论网络中的直接邻居。Network Cohort（网络传播识别组）由真实 processed 用户组成，不是合成用户或代表性随机样本。`],
+    ['是什么',`Base Sample（基础样本）是 network augmentation（网络补样）前按 source scope（来源分组）形成的初始 ${count(sample.base_sample_count)} 人样本；Final Sample（最终样本）是真正进入正式 runtime（仿真运行）的 ${count(sample.final_sample_count)} 人样本。`],
+    ['为什么需要',`Base Sample（基础样本）保留来源分层口径；Final Sample（最终样本）补入与固定种子用户相连的传播识别对象，让评论网络能够在后续 ranking（排序）中实际产生可观察信号。`],
+    ['怎么形成',`先固定 Seed Users（种子用户），再识别它们在 Historical Set（历史集合）评论网络中的直接邻居。Network Cohort（网络传播识别组）由真实 processed user（处理后用户）组成，不是合成用户或代表性随机样本。`],
     ['本次结果怎么看',`新增 ${count(sample.network_cohort_added_count)} 位网络用户时等量替换普通用户 ${count(sample.replacement_count)} 位；固定种子用户不被替换，因此最终样本总量不变，仍为 ${count(sample.final_sample_count)} 人。`],
   ];
   explanations.forEach(([title,copy]) => { const article = element('article'); article.append(element('h3','',title),element('p','',copy)); byId('sample-explanation').appendChild(article); });
   const metrics = [
-    ['Base Sample（基础样本）',sample.base_sample_count,'network augmentation 前'],
-    ['Final Sample（最终样本）',sample.final_sample_count,'正式 runtime 样本'],
+    ['Base Sample（基础样本）',sample.base_sample_count,'network augmentation（网络补样）前'],
+    ['Final Sample（最终样本）',sample.final_sample_count,'正式 runtime（仿真运行）样本'],
     ['Network Cohort（网络传播识别组）',sample.network_cohort_count,`${sample.network_cohort_added_count} 位新增网络用户`],
     ['普通用户替换',sample.replacement_count,'保持最终样本总量不变'],
   ];
   metrics.forEach(([label,value,note]) => byId('sample-metrics').appendChild(metric(label,value,note)));
   const roles = [
-    ['Seed Users（种子用户）',sampleRoleCounts.get('seed') || 0,'从 Base Sample 按预声明 seed union 固定','Batch 0 固定曝光；后续互动可激活邻居信号','是'],
-    ['Network Cohort（网络传播识别组）',sampleRoleCounts.get('network_cohort') || 0,'seeds 在 Historical Set 评论网络中的直接邻居','传播识别 cohort；参与后续全局 ranking','是'],
-    ['Ordinary Users（普通用户）',ordinaryCount,'Final Sample 中非 seed、非 network cohort 用户','保持来源样本与对照覆盖；参与后续全局 ranking','是'],
+    ['Seed Users（种子用户）',sampleRoleCounts.get('seed') || 0,'从 Base Sample（基础样本）按预声明 seed union（种子并集）固定','Batch 0（第 0 批）固定曝光；后续互动可激活邻居信号','是'],
+    ['Network Cohort（网络传播识别组）',sampleRoleCounts.get('network_cohort') || 0,'Seed Users（种子用户）在 Historical Set（历史集合）评论网络中的直接邻居','传播识别组；参与后续全局 ranking（排序）','是'],
+    ['Ordinary Users（普通用户）',ordinaryCount,'Final Sample（最终样本）中非种子、非网络传播识别组用户','保持来源样本与对照覆盖；参与后续全局 ranking（排序）','是'],
   ];
   roles.forEach((values) => { const row = element('tr'); values.forEach((value) => row.appendChild(element('td','',display(value)))); byId('sample-role-table-body').appendChild(row); });
   const scopes = [...new Set([...Object.keys(sample.base_source_scope_counts),...Object.keys(sample.final_source_scope_counts)])].sort();
@@ -1868,6 +1857,15 @@ function renderLineageDetail(fieldName) {
     ['限制',explanation.limitation],
   ].forEach(([label,value]) => { const line = element('div'); line.append(element('dt','',label),element('dd','',value)); list.appendChild(line); });
   root.appendChild(list);
+}
+
+function renderLineageMetadata() {
+  const fillDefinitions = (id, categories) => categories.forEach((category) => {
+    const line = element('div'); line.append(element('dt','',category.label),element('dd','',category.definition)); byId(id).appendChild(line);
+  });
+  fillDefinitions('lineage-provenance-legend',explanationDocument.provenance_categories);
+  fillDefinitions('lineage-usage-legend',explanationDocument.usage_stages);
+  explanationDocument.usage_stages.forEach((stage) => { const option = element('option','',stage.label); option.value = stage.key; byId('lineage-stage-filter').appendChild(option); });
 }
 
 function renderLineage() {
@@ -2027,7 +2025,7 @@ function renderUserDetail(row) {
   historyTable.append(head,body); historyWrap.appendChild(historyTable); historyPanel.appendChild(historyWrap); root.append(groups,historyPanel);
 }
 
-renderHero(); renderSample(); renderLineage();
+renderHero(); renderSample(); renderLineageMetadata(); renderLineage();
 populateRoundSelect('ranking-round-select',payload.ranking_rounds); renderRankingRound();
 const ablationBatches = payload.ranking_diagnostics.paired_ablation.batches; populateRoundSelect('ablation-round-select',ablationBatches); renderAblation();
 renderNetworkSummary(); renderSensitivity();

@@ -156,10 +156,10 @@ async function assertRankingReport(
   await expect(sampleSection).toContainText(`Seed Users（种子用户） ${payload.sample_comparison.seed_count}`);
   await expect(sampleSection).toContainText(`Network Cohort（网络传播识别组） ${payload.sample_comparison.network_cohort_count}`);
   await expect(sampleSection).toContainText(`普通用户替换 ${payload.sample_comparison.replacement_count}`);
-  await expect(sampleSection).toContainText(`Base Sample（基础样本）是 network augmentation 前按 source scope 形成的初始 ${payload.sample_comparison.base_sample_count.toLocaleString()} 人样本`);
-  await expect(sampleSection).toContainText(`Final Sample（最终样本）是真正进入正式 runtime 的 ${payload.sample_comparison.final_sample_count.toLocaleString()} 人样本`);
+  await expect(sampleSection).toContainText(`Base Sample（基础样本）是 network augmentation（网络补样）前按 source scope（来源分组）形成的初始 ${payload.sample_comparison.base_sample_count.toLocaleString()} 人样本`);
+  await expect(sampleSection).toContainText(`Final Sample（最终样本）是真正进入正式 runtime（仿真运行）的 ${payload.sample_comparison.final_sample_count.toLocaleString()} 人样本`);
   await expect(sampleSection).toContainText('Historical Set（历史集合）评论网络中的直接邻居');
-  await expect(sampleSection).toContainText('真实 processed 用户');
+  await expect(sampleSection).toContainText('真实 processed user（处理后用户）');
   await expect(sampleSection).toContainText('不是合成用户或代表性随机样本');
   await expect(sampleSection).toContainText('固定种子用户');
   await expect(sampleSection).toContainText('等量替换普通用户');
