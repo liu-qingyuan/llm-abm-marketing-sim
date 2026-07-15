@@ -22,10 +22,15 @@ type RankingPayload = {
     video_url: string;
   };
   sample_comparison: {
+    base_sample_count: number;
+    final_sample_count: number;
     seed_count: number;
     network_cohort_count: number;
     replacement_count: number;
   };
+  field_lineage: Array<{
+    field_name: string;
+  }>;
   downloads: Record<string, string>;
 };
 
@@ -148,16 +153,48 @@ async function assertRankingReport(
   await expect(page).toHaveURL(/#ranking-rounds$/);
 
   const sampleSection = page.getByTestId('sample-comparison-section');
-  await expect(sampleSection).toContainText(`Seeds ${payload.sample_comparison.seed_count}`);
-  await expect(sampleSection).toContainText(`Network Cohort ${payload.sample_comparison.network_cohort_count}`);
+  await expect(sampleSection).toContainText(`Seed Users（种子用户） ${payload.sample_comparison.seed_count}`);
+  await expect(sampleSection).toContainText(`Network Cohort（网络传播识别组） ${payload.sample_comparison.network_cohort_count}`);
   await expect(sampleSection).toContainText(`普通用户替换 ${payload.sample_comparison.replacement_count}`);
-  await expect(sampleSection).toContainText('Base Sample');
-  await expect(sampleSection).toContainText('Network-Augmented Research Sample');
+  await expect(sampleSection).toContainText(`Base Sample（基础样本）是 network augmentation 前按 source scope 形成的初始 ${payload.sample_comparison.base_sample_count.toLocaleString()} 人样本`);
+  await expect(sampleSection).toContainText(`Final Sample（最终样本）是真正进入正式 runtime 的 ${payload.sample_comparison.final_sample_count.toLocaleString()} 人样本`);
+  await expect(sampleSection).toContainText('Historical Set（历史集合）评论网络中的直接邻居');
+  await expect(sampleSection).toContainText('真实 processed 用户');
+  await expect(sampleSection).toContainText('不是合成用户或代表性随机样本');
+  await expect(sampleSection).toContainText('固定种子用户');
+  await expect(sampleSection).toContainText('等量替换普通用户');
+  await expect(sampleSection).toContainText('最终样本总量不变');
+  await expect(sampleSection).toContainText('采集来源分组，不是视频语义类别');
+  await expect(page.getByTestId('sample-role-table').locator('tbody tr')).toHaveCount(3);
+  await expect(page.getByTestId('sample-role-table')).toContainText('是否进入最终样本');
+  await expect(page.getByTestId('sample-scope-table')).toContainText('变化');
 
-  await expect(page.getByTestId('field-lineage-section')).toContainText('Field Lineage Matrix');
+  const lineageSection = page.getByTestId('field-lineage-section');
+  await expect(lineageSection).toContainText('Field Dictionary（字段词典）');
+  await expect(lineageSection).toContainText('Direct Observed Profile Field（直接观测画像字段）');
+  await expect(lineageSection).toContainText('Runtime Simulation Result（仿真运行结果）');
+  await expect(lineageSection).toContainText('Sampling（抽样）');
+  await expect(lineageSection).toContainText('Report Only（仅报告）');
   await page.getByTestId('lineage-stage-filter').selectOption('LLM Prompt');
   await expect(page.getByTestId('lineage-table').locator('tbody tr')).not.toHaveCount(0);
-  await expect(page.getByTestId('lineage-table')).toContainText('LLM Prompt');
+  await expect(page.getByTestId('lineage-table')).toContainText('LLM Prompt（大模型提示）');
+  await page.getByTestId('lineage-stage-filter').selectOption('');
+  await page.getByTestId('lineage-search').fill('合成月收入标签');
+  await expect(page.getByTestId('lineage-table').locator('tbody tr')).toHaveCount(1);
+  await page.getByRole('button', { name: /latent_monthly_income/ }).click();
+  const lineageDetail = page.getByTestId('lineage-detail');
+  await expect(lineageDetail).toContainText('latent_monthly_income（合成月收入标签）');
+  for (const label of ['含义', '来源', '计算 / 形成方式', '范围', '用途', '高低值解读', '限制']) {
+    await expect(lineageDetail).toContainText(label);
+  }
+  await page.getByTestId('lineage-search').fill('推荐排序分数');
+  const recommendationField = page.getByRole('button', { name: /^recommendation_score/ });
+  await recommendationField.focus();
+  await recommendationField.press('Enter');
+  await expect(lineageDetail).toContainText('recommendation_score（推荐排序分数）');
+  await expect(lineageDetail).toContainText('不是曝光概率、互动概率或真实平台参数');
+  await page.getByTestId('lineage-search').fill('');
+  await expect(page.getByTestId('lineage-table').locator('tbody tr')).toHaveCount(payload.field_lineage.length);
 
   const rankingSection = page.getByTestId('ranking-rounds-section');
   await expect(rankingSection).toContainText('0.50');

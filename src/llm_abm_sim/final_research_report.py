@@ -14,6 +14,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from .prompt_field_summary import JINJIANG_PROMPT_V2_PROFILE_FIELDS
+from .research_explanations import ResearchExplanationCatalog
 from .safe_serialization import safe_json, safe_user_data, safe_user_json
 
 FINAL_RESEARCH_REPORT_ARTIFACTS = {
@@ -1519,6 +1520,7 @@ def _ranking_field_lineage() -> list[FieldLineageEntry]:
 def _render_ranking_report(payload: FinalResearchRankingReportPayload) -> str:
     target = payload.target_video
     target_url = escape(target.video_url, quote=True)
+    explanation_catalog = ResearchExplanationCatalog.from_lineage(payload.field_lineage)
     downloads = payload.downloads.model_dump(mode="json")
     download_links = "".join(
         f'<a data-testid="download-{escape(key.replace("_", "-"), quote=True)}" '
@@ -1526,6 +1528,7 @@ def _render_ranking_report(payload: FinalResearchRankingReportPayload) -> str:
         for key, relative_path in downloads.items()
     )
     payload_json = safe_user_json(payload, indent=None).replace("</", "<\\/")
+    explanation_json = safe_user_json(explanation_catalog.as_records(), indent=None).replace("</", "<\\/")
     return f"""<!doctype html>
 <html lang="zh-CN">
 <head>
@@ -1548,9 +1551,23 @@ def _render_ranking_report(payload: FinalResearchRankingReportPayload) -> str:
 
   <section class="object-band" data-testid="core-objects-section"><span class="eyebrow">CORE OBJECTS</span><div class="object-flow"><article><strong>TargetVideo</strong><span>唯一目标内容</span></article><i aria-hidden="true">→</i><article><strong>PlatformRecommendationModel</strong><span>逐批全局重排</span></article><i aria-hidden="true">→</i><article><strong>ResearchUser</strong><span>曝光后结构化决策</span></article></div></section>
 
-  <section id="sample" class="content-band" data-testid="sample-comparison-section"><div class="section-heading"><div><span class="eyebrow">SAMPLE</span><h2>Base Sample 与 Network-Augmented Research Sample</h2></div><p id="sample-summary"></p></div><div id="sample-metrics" class="sample-metrics"></div><div class="split-grid"><div class="table-wrap"><table><thead><tr><th>Source scope</th><th>Base Sample</th><th>Final Sample</th></tr></thead><tbody id="scope-table-body"></tbody></table></div><article class="chart-panel"><h3>样本构成</h3><div id="sample-composition-chart" class="bar-chart" data-testid="sample-composition-chart"></div></article></div></section>
+  <section id="sample" class="content-band" data-testid="sample-comparison-section">
+    <div class="section-heading"><div><span class="eyebrow">SAMPLE（样本）</span><h2>Base Sample（基础样本）与 Final Sample（最终样本）</h2></div><p id="sample-summary"></p></div>
+    <div id="sample-explanation" class="sample-explanation"></div>
+    <div id="sample-metrics" class="sample-metrics"></div>
+    <div class="table-wrap sample-role-table"><table data-testid="sample-role-table"><thead><tr><th>角色</th><th>人数</th><th>怎么形成</th><th>研究角色</th><th>是否进入最终样本</th></tr></thead><tbody id="sample-role-table-body"></tbody></table></div>
+    <div class="scope-intro"><h3>Video Source Scope（视频来源分组）</h3><p>这里的 scope 是采集来源分组，不是视频语义类别。下表用本次实际前后差值说明 network augmentation 如何改变构成。</p></div>
+    <div class="split-grid"><div class="table-wrap"><table data-testid="sample-scope-table"><thead><tr><th>Source Scope（来源分组）</th><th>Base Sample（基础样本）</th><th>Final Sample（最终样本）</th><th>变化</th></tr></thead><tbody id="scope-table-body"></tbody></table></div><article class="chart-panel"><h3>最终样本角色构成</h3><div id="sample-composition-chart" class="bar-chart" data-testid="sample-composition-chart"></div></article></div>
+  </section>
 
-  <section id="lineage" class="content-band" data-testid="field-lineage-section"><div class="section-heading"><div><span class="eyebrow">PROVENANCE</span><h2>Field Lineage Matrix</h2></div><div class="compact-filters"><label>字段搜索<input id="lineage-search" data-testid="lineage-search" type="search"></label><label>用途<select id="lineage-stage-filter" data-testid="lineage-stage-filter"><option value="">全部</option><option>Sampling</option><option>Seed Selection</option><option>Ranking</option><option>LLM Prompt</option><option>Report Only</option></select></label></div></div><div class="table-wrap lineage-table"><table data-testid="lineage-table"><thead><tr><th>Field</th><th>Field Provenance</th><th>Field Usage Stage</th></tr></thead><tbody id="lineage-table-body"></tbody></table></div></section>
+  <section id="lineage" class="content-band" data-testid="field-lineage-section">
+    <div class="section-heading"><div><span class="eyebrow">FIELD LINEAGE（字段血缘）</span><h2>Field Dictionary（字段词典）</h2><p class="muted">默认表格用于快速扫描；选择字段后查看含义、形成方式、范围、用途和研究限制。</p></div><div class="compact-filters"><label>字段搜索<input id="lineage-search" data-testid="lineage-search" type="search"></label><label>用途<select id="lineage-stage-filter" data-testid="lineage-stage-filter"><option value="">全部</option><option value="Sampling">Sampling（抽样）</option><option value="Seed Selection">Seed Selection（种子选择）</option><option value="Ranking">Ranking（排序）</option><option value="LLM Prompt">LLM Prompt（大模型提示）</option><option value="Report Only">Report Only（仅报告）</option></select></label></div></div>
+    <div class="lineage-legends">
+      <section><h3>Field Provenance（字段来源）</h3><dl><div><dt>Direct Observed Profile Field（直接观测画像字段）</dt><dd>processed 数据中可直接观察或定位的记录。</dd></div><div><dt>Historical Behavioral Evidence（历史行为证据）</dt><dd>Historical Set（历史集合）的评论、回复、视频或来源记录。</dd></div><div><dt>Derived Proxy Metric（派生代理指标）</dt><dd>由可观测字段复算，不是平台官方指标。</dd></div><div><dt>Synthetic Experiment Label（合成实验标签）</dt><dd>由固定规格与随机种子生成，只用于仿真实验。</dd></div><div><dt>Runtime Simulation Result（仿真运行结果）</dt><dd>由本次 runtime 或报告构建过程记录。</dd></div></dl></section>
+      <section><h3>Field Usage Stage（字段使用阶段）</h3><dl><div><dt>Sampling（抽样）</dt><dd>形成基础样本或最终样本。</dd></div><div><dt>Seed Selection（种子选择）</dt><dd>识别首批固定投放用户。</dd></div><div><dt>Ranking（排序）</dt><dd>形成候选证据、名次或投放结果。</dd></div><div><dt>LLM Prompt（大模型提示）</dt><dd>作为曝光后 action 决策输入。</dd></div><div><dt>Report Only（仅报告）</dt><dd>只用于审计、解释或下载。</dd></div></dl></section>
+    </div>
+    <div class="lineage-layout"><div class="table-wrap lineage-table"><table data-testid="lineage-table"><thead><tr><th>Field（字段）</th><th>中文名</th><th>Field Provenance（字段来源）</th><th>Field Usage Stage（字段使用阶段）</th></tr></thead><tbody id="lineage-table-body"></tbody></table></div><aside id="lineage-detail" class="lineage-detail" data-testid="lineage-detail" aria-live="polite"></aside></div>
+  </section>
 
   <section id="ranking-rounds" class="content-band" data-testid="ranking-rounds-section"><div class="section-heading"><div><span class="eyebrow">GLOBAL RERANKING</span><h2>逐轮全局 Top{payload.run.delivery_capacity}</h2><p class="formula">{escape(payload.run.ranking_formula)}</p><p class="muted">{escape(payload.run.engaged_neighbor_formula)} · Delivery Capacity {payload.run.delivery_capacity}</p></div><label>Batch<select id="ranking-round-select" data-testid="ranking-round-select"></select></label></div><div id="round-summary" class="round-summary" data-testid="round-summary"></div><div class="table-wrap"><table data-testid="ranking-candidate-table"><thead><tr><th>Rank</th><th>User</th><th>Base network</th><th>Engaged neighbor</th><th>Tag affinity</th><th>Score</th></tr></thead><tbody id="ranking-candidate-body"></tbody></table></div></section>
 
@@ -1566,6 +1583,7 @@ def _render_ranking_report(payload: FinalResearchRankingReportPayload) -> str:
   <section class="limitations-band"><span class="eyebrow">LIMITATIONS</span><ul id="limitations-list"></ul></section>
 </main>
 <script id="final-research-ranking-payload" type="application/json">{payload_json}</script>
+<script id="research-explanation-catalog" type="application/json">{explanation_json}</script>
 <script>{_RANKING_REPORT_JS}</script>
 </body>
 </html>
@@ -1630,6 +1648,15 @@ label { display:grid; gap:5px; color:var(--muted); font-size:.76rem; font-weight
 .sample-metrics article,.effect-grid article { min-height:92px; padding:13px; border-left:4px solid var(--blue); background:var(--paper); }
 .sample-metrics strong,.effect-grid strong { display:block; font-size:1.55rem; }
 .sample-metrics span,.effect-grid span { color:var(--muted); font-size:.78rem; }
+.sample-explanation { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:0 22px; margin:0 0 18px; border-block:1px solid var(--line); }
+.sample-explanation article { padding:14px 0; }
+.sample-explanation article:nth-child(odd) { padding-right:22px; border-right:1px solid var(--line); }
+.sample-explanation article:nth-child(n+3) { border-top:1px solid var(--line); }
+.sample-explanation h3 { color:var(--green); }
+.sample-explanation p { margin-bottom:0; color:var(--muted); }
+.sample-role-table { margin-bottom:18px; }
+.scope-intro { display:grid; grid-template-columns:minmax(220px,.6fr) minmax(0,1.4fr); gap:18px; align-items:start; margin:22px 0 10px; }
+.scope-intro p { margin-bottom:0; color:var(--muted); }
 .split-grid { display:grid; grid-template-columns:minmax(0,1.4fr) minmax(280px,.8fr); gap:18px; }
 .table-wrap { width:100%; overflow:auto; border:1px solid var(--line); }
 table { width:100%; min-width:780px; border-collapse:collapse; }
@@ -1645,7 +1672,22 @@ code { color:var(--blue); }
 .bar-track { height:9px; background:#e5ebe7; }
 .bar-fill { height:100%; background:var(--blue); }
 .compact-filters { display:grid; grid-template-columns:minmax(170px,1fr) minmax(150px,.8fr); gap:10px; width:min(480px,100%); }
-.lineage-table { max-height:520px; }
+.lineage-legends { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:22px; margin-bottom:18px; border-block:1px solid var(--line); }
+.lineage-legends section { padding:14px 0; }
+.lineage-legends section + section { padding-left:22px; border-left:1px solid var(--line); }
+.lineage-legends dl,.lineage-detail dl { margin:0; }
+.lineage-legends dl > div { margin-bottom:8px; }
+.lineage-legends dt { font-size:.76rem; font-weight:800; }
+.lineage-legends dd { margin:2px 0 0; color:var(--muted); font-size:.74rem; }
+.lineage-layout { display:grid; grid-template-columns:minmax(0,1.45fr) minmax(290px,.55fr); gap:16px; align-items:start; }
+.lineage-table { max-height:620px; }
+.lineage-field { min-height:0; padding:0; border:0; background:transparent; color:var(--blue); font:inherit; font-weight:750; text-align:left; overflow-wrap:anywhere; cursor:pointer; }
+.lineage-field:hover,.lineage-field:focus-visible,.lineage-field[aria-pressed="true"] { color:var(--green); text-decoration:underline; outline-offset:3px; }
+.lineage-detail { min-height:360px; padding:16px; border:1px solid var(--line); border-top:4px solid var(--green); background:var(--paper); }
+.lineage-detail h3 { overflow-wrap:anywhere; }
+.lineage-detail dl > div { padding:8px 0; border-top:1px solid var(--line); }
+.lineage-detail dt { color:var(--muted); font-size:.72rem; font-weight:800; }
+.lineage-detail dd { margin:2px 0 0; overflow-wrap:anywhere; font-size:.8rem; }
 .formula { margin:0 0 4px; color:var(--blue); font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:.82rem; overflow-wrap:anywhere; }
 .round-summary,.ablation-summary { display:grid; grid-template-columns:repeat(6,minmax(0,1fr)); gap:8px; margin-bottom:12px; }
 .round-summary article,.ablation-summary article { padding:10px; border-top:3px solid var(--gold); background:var(--paper); }
@@ -1695,13 +1737,14 @@ code { color:var(--blue); }
 .downloads a { min-height:42px; display:flex; align-items:center; padding:8px 10px; border:1px solid var(--line); border-radius:4px; text-decoration:none; font-weight:750; }
 .limitations-band { display:grid; grid-template-columns:180px 1fr; background:#fff8ec; }
 .limitations-band li { margin:5px 0; }
-@media (max-width:1000px) { .hero-funnel { grid-template-columns:repeat(3,minmax(0,1fr)); }.sample-metrics,.effect-grid { grid-template-columns:repeat(2,minmax(0,1fr)); }.diagnostic-layout { grid-template-columns:1fr; }.filters { grid-template-columns:repeat(3,minmax(0,1fr)); }.trace-groups { grid-template-columns:repeat(2,minmax(0,1fr)); } }
-@media (max-width:700px) { main { border:0; }.topbar { position:static; align-items:flex-start; flex-direction:column; }.workflow-nav { gap:7px 14px; }.workflow-nav a { font-size:.74rem; }.ranking-hero { min-height:610px; padding-top:24px; }.ranking-hero h1 { font-size:2.35rem; }.hero-copy { display:block; }.hero-meta { display:flex; flex-wrap:wrap; margin-top:12px; border:0; }.hero-meta span { padding:5px 9px; border:1px solid #cbd7d0; }.hero-funnel { grid-template-columns:repeat(2,minmax(0,1fr)); margin-top:16px; }.hero-funnel article { min-height:74px; padding:9px; }.hero-funnel article:nth-child(n+6),.hero-funnel p { display:none; }.hero-funnel strong { font-size:1.25rem; }.object-flow { grid-template-columns:1fr; }.object-flow i { transform:rotate(90deg); justify-self:center; }.section-heading { align-items:flex-start; flex-direction:column; }.sample-metrics,.effect-grid,.split-grid,.prompt-grid,.chart-grid,.filters,.trace-groups { grid-template-columns:1fr; }.round-summary,.ablation-summary { grid-template-columns:repeat(2,minmax(0,1fr)); }.chart-grid .wide { grid-column:auto; }.compact-filters { grid-template-columns:1fr; }.downloads { grid-template-columns:repeat(2,minmax(0,1fr)); }.limitations-band { grid-template-columns:1fr; }.users-table { max-height:540px; } }
+@media (max-width:1000px) { .hero-funnel { grid-template-columns:repeat(3,minmax(0,1fr)); }.sample-metrics,.effect-grid { grid-template-columns:repeat(2,minmax(0,1fr)); }.lineage-layout,.diagnostic-layout { grid-template-columns:1fr; }.lineage-detail { min-height:0; }.filters { grid-template-columns:repeat(3,minmax(0,1fr)); }.trace-groups { grid-template-columns:repeat(2,minmax(0,1fr)); } }
+@media (max-width:700px) { main { border:0; }.topbar { position:static; align-items:flex-start; flex-direction:column; }.workflow-nav { gap:7px 14px; }.workflow-nav a { font-size:.74rem; }.ranking-hero { min-height:610px; padding-top:24px; }.ranking-hero h1 { font-size:2.35rem; }.hero-copy { display:block; }.hero-meta { display:flex; flex-wrap:wrap; margin-top:12px; border:0; }.hero-meta span { padding:5px 9px; border:1px solid #cbd7d0; }.hero-funnel { grid-template-columns:repeat(2,minmax(0,1fr)); margin-top:16px; }.hero-funnel article { min-height:74px; padding:9px; }.hero-funnel article:nth-child(n+6),.hero-funnel p { display:none; }.hero-funnel strong { font-size:1.25rem; }.object-flow { grid-template-columns:1fr; }.object-flow i { transform:rotate(90deg); justify-self:center; }.section-heading { align-items:flex-start; flex-direction:column; }.sample-explanation,.sample-metrics,.effect-grid,.split-grid,.scope-intro,.lineage-legends,.prompt-grid,.chart-grid,.filters,.trace-groups { grid-template-columns:1fr; }.sample-explanation article:nth-child(odd) { padding-right:0; border-right:0; }.sample-explanation article + article { border-top:1px solid var(--line); }.lineage-legends section + section { padding-left:0; border-top:1px solid var(--line); border-left:0; }.round-summary,.ablation-summary { grid-template-columns:repeat(2,minmax(0,1fr)); }.chart-grid .wide { grid-column:auto; }.compact-filters { grid-template-columns:1fr; }.downloads { grid-template-columns:repeat(2,minmax(0,1fr)); }.limitations-band { grid-template-columns:1fr; }.users-table { max-height:540px; } }
 """
 
 
 _RANKING_REPORT_JS = r"""
 const payload = JSON.parse(document.getElementById('final-research-ranking-payload').textContent);
+const explanationCatalog = new Map(JSON.parse(document.getElementById('research-explanation-catalog').textContent).map((entry) => [entry.field_name,entry]));
 const users = payload.users;
 const topLabel = `Top${payload.run.delivery_capacity}`;
 const rankingHistoryByUser = new Map();
@@ -1712,6 +1755,21 @@ payload.ranking_rounds.forEach((round) => round.candidates.forEach((candidate) =
 const byId = (id) => document.getElementById(id);
 const display = (value) => value === null || value === undefined || value === '' ? '—' : String(value);
 const fixed = (value) => value === null || value === undefined ? '—' : Number(value).toFixed(4);
+const provenanceLabels = {
+  'Direct Observed Profile Field':'Direct Observed Profile Field（直接观测画像字段）',
+  'Historical Behavioral Evidence':'Historical Behavioral Evidence（历史行为证据）',
+  'Derived Proxy Metric':'Derived Proxy Metric（派生代理指标）',
+  'Synthetic Experiment Label':'Synthetic Experiment Label（合成实验标签）',
+  'Runtime Simulation Result':'Runtime Simulation Result（仿真运行结果）',
+};
+const usageLabels = {
+  'Sampling':'Sampling（抽样）',
+  'Seed Selection':'Seed Selection（种子选择）',
+  'Ranking':'Ranking（排序）',
+  'LLM Prompt':'LLM Prompt（大模型提示）',
+  'Report Only':'Report Only（仅报告）',
+};
+let selectedLineageField = payload.field_lineage[0]?.field_name || '';
 const count = (value) => {
   const numeric = Number(value);
   return Number.isFinite(numeric) ? numeric.toLocaleString() : display(value);
@@ -1753,36 +1811,82 @@ function metric(label, value, note) {
 
 function renderSample() {
   const sample = payload.sample_comparison;
-  byId('sample-summary').textContent = `Seeds ${sample.seed_count} · Network Cohort ${sample.network_cohort_count} · 普通用户替换 ${sample.replacement_count}`;
+  const sampleRoleCounts = new Map(); users.forEach((row) => sampleRoleCounts.set(row.sample_role,(sampleRoleCounts.get(row.sample_role) || 0) + 1));
+  const ordinaryCount = sampleRoleCounts.get('ordinary') || 0;
+  byId('sample-summary').textContent = `Seed Users（种子用户） ${sample.seed_count} · Network Cohort（网络传播识别组） ${sample.network_cohort_count} · 普通用户替换 ${sample.replacement_count}`;
+  const explanations = [
+    ['是什么',`Base Sample（基础样本）是 network augmentation 前按 source scope 形成的初始 ${count(sample.base_sample_count)} 人样本；Final Sample（最终样本）是真正进入正式 runtime 的 ${count(sample.final_sample_count)} 人样本。`],
+    ['为什么需要',`Base Sample 保留来源分层口径；Final Sample 补入与固定种子用户相连的传播识别对象，让评论网络能够在后续 ranking 中实际产生可观察信号。`],
+    ['怎么形成',`先固定 Seed Users（种子用户），再识别它们在 Historical Set（历史集合）评论网络中的直接邻居。Network Cohort（网络传播识别组）由真实 processed 用户组成，不是合成用户或代表性随机样本。`],
+    ['本次结果怎么看',`新增 ${count(sample.network_cohort_added_count)} 位网络用户时等量替换普通用户 ${count(sample.replacement_count)} 位；固定种子用户不被替换，因此最终样本总量不变，仍为 ${count(sample.final_sample_count)} 人。`],
+  ];
+  explanations.forEach(([title,copy]) => { const article = element('article'); article.append(element('h3','',title),element('p','',copy)); byId('sample-explanation').appendChild(article); });
   const metrics = [
-    ['Base Sample',sample.base_sample_count,'初始分层样本'],
-    ['Final Sample',sample.final_sample_count,'Network-Augmented Research Sample'],
-    ['Network Cohort',sample.network_cohort_count,`${sample.network_cohort_added_count} 位新增网络用户`],
+    ['Base Sample（基础样本）',sample.base_sample_count,'network augmentation 前'],
+    ['Final Sample（最终样本）',sample.final_sample_count,'正式 runtime 样本'],
+    ['Network Cohort（网络传播识别组）',sample.network_cohort_count,`${sample.network_cohort_added_count} 位新增网络用户`],
     ['普通用户替换',sample.replacement_count,'保持最终样本总量不变'],
   ];
   metrics.forEach(([label,value,note]) => byId('sample-metrics').appendChild(metric(label,value,note)));
+  const roles = [
+    ['Seed Users（种子用户）',sampleRoleCounts.get('seed') || 0,'从 Base Sample 按预声明 seed union 固定','Batch 0 固定曝光；后续互动可激活邻居信号','是'],
+    ['Network Cohort（网络传播识别组）',sampleRoleCounts.get('network_cohort') || 0,'seeds 在 Historical Set 评论网络中的直接邻居','传播识别 cohort；参与后续全局 ranking','是'],
+    ['Ordinary Users（普通用户）',ordinaryCount,'Final Sample 中非 seed、非 network cohort 用户','保持来源样本与对照覆盖；参与后续全局 ranking','是'],
+  ];
+  roles.forEach((values) => { const row = element('tr'); values.forEach((value) => row.appendChild(element('td','',display(value)))); byId('sample-role-table-body').appendChild(row); });
   const scopes = [...new Set([...Object.keys(sample.base_source_scope_counts),...Object.keys(sample.final_source_scope_counts)])].sort();
   scopes.forEach((scope) => {
     const row = element('tr');
-    [scope,sample.base_source_scope_counts[scope] || 0,sample.final_source_scope_counts[scope] || 0].forEach((value) => row.appendChild(element('td','',display(value))));
+    const baseCount = sample.base_source_scope_counts[scope] || 0;
+    const finalCount = sample.final_source_scope_counts[scope] || 0;
+    const delta = finalCount - baseCount;
+    [scope,baseCount,finalCount,`${delta > 0 ? '+' : ''}${delta}`].forEach((value) => row.appendChild(element('td','',display(value))));
     byId('scope-table-body').appendChild(row);
   });
   renderBars('sample-composition-chart', [
-    {label:'Seeds',value:sample.seed_count},
-    {label:'Network Cohort',value:sample.network_cohort_count},
-    {label:'Ordinary',value:sample.final_sample_count - sample.seed_count - sample.network_cohort_count},
+    {label:'Seed Users（种子用户）',value:sample.seed_count},
+    {label:'Network Cohort（网络传播识别组）',value:sample.network_cohort_count},
+    {label:'Ordinary Users（普通用户）',value:ordinaryCount},
   ]);
+}
+
+function renderLineageDetail(fieldName) {
+  const explanation = explanationCatalog.get(fieldName);
+  if (!explanation) return;
+  selectedLineageField = fieldName;
+  document.querySelectorAll('.lineage-field').forEach((button) => button.setAttribute('aria-pressed',String(button.dataset.fieldName === fieldName)));
+  const root = byId('lineage-detail'); root.replaceChildren();
+  root.appendChild(element('h3','',`${explanation.field_name}（${explanation.chinese_name}）`));
+  const list = element('dl');
+  [
+    ['含义',explanation.meaning],
+    ['来源',explanation.source],
+    ['计算 / 形成方式',explanation.calculation],
+    ['范围',explanation.value_range],
+    ['用途',explanation.usage],
+    ['高低值解读',explanation.interpretation],
+    ['限制',explanation.limitation],
+  ].forEach(([label,value]) => { const line = element('div'); line.append(element('dt','',label),element('dd','',value)); list.appendChild(line); });
+  root.appendChild(list);
 }
 
 function renderLineage() {
   const query = byId('lineage-search').value.trim().toLowerCase();
   const stage = byId('lineage-stage-filter').value;
   const body = byId('lineage-table-body'); body.replaceChildren();
-  payload.field_lineage.filter((entry) => (!query || `${entry.field_name} ${entry.provenance}`.toLowerCase().includes(query)) && (!stage || entry.usage_stages.includes(stage))).forEach((entry) => {
-    const row = element('tr');
-    const field = element('td'); field.appendChild(element('code','',entry.field_name));
-    row.append(field,element('td','',entry.provenance),element('td','',entry.usage_stages.join(' · '))); body.appendChild(row);
+  const filtered = payload.field_lineage.filter((entry) => {
+    const explanation = explanationCatalog.get(entry.field_name);
+    const searchText = `${entry.field_name} ${entry.provenance} ${entry.usage_stages.join(' ')} ${Object.values(explanation || {}).join(' ')}`.toLowerCase();
+    return (!query || searchText.includes(query)) && (!stage || entry.usage_stages.includes(stage));
   });
+  filtered.forEach((entry) => {
+    const explanation = explanationCatalog.get(entry.field_name);
+    const row = element('tr');
+    const field = element('td'); const button = element('button','lineage-field',entry.field_name); button.type = 'button'; button.dataset.fieldName = entry.field_name; button.setAttribute('aria-controls','lineage-detail'); button.addEventListener('click',() => renderLineageDetail(entry.field_name)); field.appendChild(button);
+    row.append(field,element('td','',explanation.chinese_name),element('td','',provenanceLabels[entry.provenance]),element('td','',entry.usage_stages.map((value) => usageLabels[value]).join(' · '))); body.appendChild(row);
+  });
+  if (filtered.length) renderLineageDetail(filtered.some((entry) => entry.field_name === selectedLineageField) ? selectedLineageField : filtered[0].field_name);
+  else { selectedLineageField = ''; byId('lineage-detail').replaceChildren(element('p','muted','没有符合当前条件的字段。')); }
 }
 
 function populateRoundSelect(id, rows) {
