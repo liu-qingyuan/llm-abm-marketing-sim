@@ -14,7 +14,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from .prompt_field_summary import JINJIANG_PROMPT_V2_PROFILE_FIELDS
-from .research_explanations import ResearchExplanationCatalog
+from .research_explanations import FieldProvenance, FieldUsageStage, ResearchExplanationCatalog
 from .safe_serialization import safe_json, safe_user_data, safe_user_json
 
 FINAL_RESEARCH_REPORT_ARTIFACTS = {
@@ -52,14 +52,24 @@ RankingResultStatus = Literal[
     "provider_failed",
     "below_delivery_capacity",
 ]
-FieldProvenance = Literal[
-    "Direct Observed Profile Field",
-    "Historical Behavioral Evidence",
-    "Derived Proxy Metric",
-    "Synthetic Experiment Label",
-    "Runtime Simulation Result",
-]
-FieldUsageStage = Literal["Sampling", "Seed Selection", "Ranking", "LLM Prompt", "Report Only"]
+@dataclass(frozen=True)
+class _SectionExplanation:
+    what: str
+    why: str
+    formation: str
+    result: str
+
+    def render(self, test_id: str) -> str:
+        entries = (
+            ("是什么", self.what),
+            ("为什么需要", self.why),
+            ("怎么形成或计算", self.formation),
+            ("本次结果怎么看", self.result),
+        )
+        articles = "".join(
+            f"<article><h3>{escape(title)}</h3><p>{escape(copy)}</p></article>" for title, copy in entries
+        )
+        return f'<div class="section-explanation" data-testid="{escape(test_id, quote=True)}">{articles}</div>'
 
 
 class FinalResearchTargetVideo(BaseModel):
@@ -1526,6 +1536,74 @@ def _render_ranking_report(payload: FinalResearchRankingReportPayload) -> str:
     tag_affinity_weight = weights["tag_affinity"] * 100
     final_reranking_batch = max(1, payload.run.horizon - 1)
     explanation_catalog = ResearchExplanationCatalog.from_lineage(payload.field_lineage)
+    sample = payload.sample_comparison
+    total_exposures = sum(round_evidence.target_exposures for round_evidence in payload.ranking_rounds)
+    provider_decisions = next(stage.count for stage in payload.run_funnel if stage.key == "provider_decisions")
+    section_explanations = {
+        "sample": _SectionExplanation(
+            what=(
+                "Base Sample（基础样本）是 network augmentation（网络补样）前按 source scope（来源分组）"
+                f"形成的初始 {sample.base_sample_count:,} 人样本；Final Sample（最终样本）是真正进入正式 "
+                f"runtime（仿真运行）的 {sample.final_sample_count:,} 人样本。"
+            ),
+            why="保留来源分层口径，同时补入与固定种子用户相连的传播识别对象，让评论网络可以进入后续排序。",
+            formation=(
+                "先固定 Seed Users（种子用户），再识别它们在 Historical Set（历史集合）评论网络中的直接邻居；"
+                "Network Cohort（网络传播识别组）由真实 processed user（处理后用户）组成，不是合成用户或"
+                "代表性随机样本。"
+            ),
+            result=(
+                f"本次加入 {sample.network_cohort_added_count:,} 位 Network Cohort（网络传播识别组）时等量替换普通用户 "
+                f"{sample.replacement_count:,} 位；固定种子用户不被替换，因此最终样本总量不变，仍为 "
+                f"{sample.final_sample_count:,} 人。"
+            ),
+        ),
+        "lineage": _SectionExplanation(
+            what="Field Dictionary（字段词典）逐项解释页面展示字段的中文名、来源、形成方式、范围、用途和限制。",
+            why="让读者能够从页面术语追溯到持久化证据，并区分直接观测、历史证据、代理指标、合成标签与运行结果。",
+            formation="报告用完整 Field Lineage（字段血缘）构建解释目录；字段缺失、重复或目录不完整会使报告重建失败。",
+            result=f"本次目录覆盖全部 {len(payload.field_lineage):,} 个字段，可搜索、按使用阶段筛选并选择字段查看详情。",
+        ),
+        "ranking": _SectionExplanation(
+            what=f"平台在每个批次对合格用户重算推荐分数，并按全局 Top{payload.run.delivery_capacity} 选择实际曝光对象。",
+            why="把平台决定谁看到视频的排序过程，与曝光后 LLM 决定是否互动的 action（动作）过程明确分开。",
+            formation=(
+                f"Batch 0（第 0 批）固定曝光种子用户；后续批次按 {base_network_weight:.0f}% 历史网络相关性、"
+                f"{engaged_neighbor_weight:.0f}% 已互动邻居信号和 {tag_affinity_weight:.0f}% 标签亲和度全局重排。"
+            ),
+            result=(
+                f"本次共有 {payload.run.horizon:,} 个批次，每批 Delivery Capacity（投放容量）最多 "
+                f"{payload.run.delivery_capacity:,} 人，合计曝光 {total_exposures:,} 人次。"
+            ),
+        ),
+        "network": _SectionExplanation(
+            what="网络证据同时区分推荐信号是否进入公式，以及移除网络项后同批投放成员是否实际变化。",
+            why="避免把公式包含网络变量误读成网络已经改变投放，也避免把影子排序误读成第二条仿真轨迹或因果实验。",
+            formation="对每批冻结的持久化候选证据运行 full ranking（完整排序）与 no-network shadow ranking（无网络影子排序），不增加 Adapter 调用。",
+            result=(
+                f"本次 {payload.ranking_diagnostics_summary.batches_with_top_selection_change:,} / "
+                f"{len(payload.ranking_rounds):,} 个批次的 Top{payload.run.delivery_capacity} 成员发生变化。"
+            ),
+        ),
+        "prompt": _SectionExplanation(
+            what="Prompt Isolation（提示证据隔离）记录曝光后 LLM action 决策允许、中性化和排除的字段。",
+            why="防止评论网络证据同时进入平台排序与 LLM 决策，造成同一 evidence（证据）被重复计算。",
+            formation="平台先完成投放排序；仅对已曝光用户构建受控 Prompt（提示），并把 PeerContext（同伴上下文）保持中性。",
+            result="本次 ranking（排序）、network（网络）与 Target Holdout（目标留出）证据均不进入 Prompt，raw payload（原始载荷）保持不可见。",
+        ),
+        "aggregate": _SectionExplanation(
+            what="六张同源图表汇总样本构成、逐批投放、最终状态、Provider 失败、动态网络激活与消融重合。",
+            why="让读者比较总体模式，同时保留统计对象、单位、分母和本次结果，避免把柱高误读成概率或因果效果。",
+            formation="所有图表只从同一持久化 report payload（报告载荷）聚合，不读取新数据，也不重新运行 Provider。",
+            result=f"本次图表共同解释 {sample.final_sample_count:,} 位用户、{total_exposures:,} 次曝光与 {provider_decisions:,} 次决策。",
+        ),
+        "users": _SectionExplanation(
+            what="用户追踪把聚合结果下钻到每位研究用户的画像、代理指标、排序历史、曝光、Provider 与最终 action。",
+            why="让研究读者能从总体计数回查单个用户证据，并区分未曝光、曝光后忽略、互动和 Provider 失败。",
+            formation="页面从同一用户导出与逐批候选证据连接详情；搜索和筛选只改变显示，不修改持久化数据。",
+            result=f"本次可搜索和筛选全部 {len(payload.users):,} 位用户，并查看每人的完整 ranking history（排序历史）。",
+        ),
+    }
     downloads = payload.downloads.model_dump(mode="json")
     download_links = "".join(
         f'<a data-testid="download-{escape(key.replace("_", "-"), quote=True)}" '
@@ -1545,20 +1623,20 @@ def _render_ranking_report(payload: FinalResearchRankingReportPayload) -> str:
 <body>
 <main data-testid="final-research-ranking-report">
   <nav class="topbar" aria-label="研究报告导航">
-    <a class="brand" href="#top">Target Delivery Ranking</a>
+    <a class="brand" href="#top">Target Delivery Ranking（目标投放排序）</a>
     <div class="workflow-nav"><a href="#sample">样本</a><a href="#lineage">字段血缘</a><a href="#ranking-rounds">逐轮排序</a><a href="#network-effect">网络影响</a><a href="#users">用户追踪</a></div>
   </nav>
 
   <header id="top" class="ranking-hero" data-testid="ranking-hero">
-    <div class="hero-copy"><span class="eyebrow">TARGETVIDEO · {escape(target.video_id)}</span><h1>{escape(target.caption)}</h1><p>{escape(" ".join("#" + tag.lstrip("#") for tag in target.hashtags))}</p><a class="target-link" data-testid="target-video-link" href="{target_url}">查看真实 TargetVideo</a><div class="hero-meta"><span>{payload.run.sample_size:,} ResearchUsers</span><span>{payload.run.horizon} batches</span><span>Top{payload.run.delivery_capacity}</span></div></div>
+    <div class="hero-copy"><span class="eyebrow">TARGET VIDEO（目标视频） · {escape(target.video_id)}</span><h1>{escape(target.caption)}</h1><p>{escape(" ".join("#" + tag.lstrip("#") for tag in target.hashtags))}</p><a class="target-link" data-testid="target-video-link" href="{target_url}">查看真实 Target Video（目标视频）</a><div class="hero-meta"><span>{payload.run.sample_size:,} Users（用户）</span><span>{payload.run.horizon} Batches（批次）</span><span>Top{payload.run.delivery_capacity}（容量）</span></div></div>
     <div id="hero-funnel" class="hero-funnel" data-testid="ranking-funnel-section"></div>
   </header>
 
-  <section class="object-band" data-testid="core-objects-section"><span class="eyebrow">CORE OBJECTS</span><div class="object-flow"><article><strong>TargetVideo</strong><span>唯一目标内容</span></article><i aria-hidden="true">→</i><article><strong>PlatformRecommendationModel</strong><span>逐批全局重排</span></article><i aria-hidden="true">→</i><article><strong>ResearchUser</strong><span>曝光后结构化决策</span></article></div></section>
+  <section class="object-band" data-testid="core-objects-section"><span class="eyebrow">CORE OBJECTS（核心对象）</span><div class="object-flow"><article><strong>TargetVideo（目标视频）</strong><span>唯一目标内容</span></article><i aria-hidden="true">→</i><article><strong>PlatformRecommendationModel（平台推荐模型）</strong><span>逐批全局重排</span></article><i aria-hidden="true">→</i><article><strong>ResearchUser（研究用户）</strong><span>曝光后结构化决策</span></article></div></section>
 
   <section id="sample" class="content-band" data-testid="sample-comparison-section">
     <div class="section-heading"><div><span class="eyebrow">SAMPLE（样本）</span><h2>Base Sample（基础样本）与 Final Sample（最终样本）</h2></div><p id="sample-summary"></p></div>
-    <div id="sample-explanation" class="sample-explanation"></div>
+    {section_explanations["sample"].render("sample-section-explanation")}
     <div id="sample-metrics" class="sample-metrics"></div>
     <div class="table-wrap sample-role-table"><table data-testid="sample-role-table"><thead><tr><th>角色</th><th>人数</th><th>怎么形成</th><th>研究角色</th><th>是否进入最终样本</th></tr></thead><tbody id="sample-role-table-body"></tbody></table></div>
     <div class="scope-intro"><h3>Video Source Scope（视频来源分组）</h3><p>这里表示采集来源分组，不是视频语义类别。下表用本次实际前后差值说明网络补样如何改变构成。</p></div>
@@ -1567,6 +1645,7 @@ def _render_ranking_report(payload: FinalResearchRankingReportPayload) -> str:
 
   <section id="lineage" class="content-band" data-testid="field-lineage-section">
     <div class="section-heading"><div><span class="eyebrow">FIELD LINEAGE（字段血缘）</span><h2>Field Dictionary（字段词典）</h2><p class="muted">默认表格用于快速扫描；选择字段后查看含义、形成方式、范围、用途和研究限制。</p></div><div class="compact-filters"><label>字段搜索<input id="lineage-search" data-testid="lineage-search" type="search"></label><label>用途<select id="lineage-stage-filter" data-testid="lineage-stage-filter"><option value="">全部</option></select></label></div></div>
+    {section_explanations["lineage"].render("lineage-section-explanation")}
     <div class="lineage-legends">
       <section><h3>Field Provenance（字段来源）</h3><dl id="lineage-provenance-legend"></dl></section>
       <section><h3>Field Usage Stage（字段使用阶段）</h3><dl id="lineage-usage-legend"></dl></section>
@@ -1575,7 +1654,8 @@ def _render_ranking_report(payload: FinalResearchRankingReportPayload) -> str:
   </section>
 
   <section id="ranking-rounds" class="content-band" data-testid="ranking-rounds-section">
-    <div class="section-heading"><div><span class="eyebrow">GLOBAL RERANKING</span><h2>逐轮全局 Top{payload.run.delivery_capacity}</h2><p>平台使用 {base_network_weight:.0f}/{engaged_neighbor_weight:.0f}/{tag_affinity_weight:.0f} 公式排序：历史评论网络相关性 {base_network_weight:.0f}%、已互动直接邻居信号 {engaged_neighbor_weight:.0f}%、目标标签亲和度 {tag_affinity_weight:.0f}%。</p><p class="formula">{escape(payload.run.ranking_formula)}</p></div><label>Batch<select id="ranking-round-select" data-testid="ranking-round-select"></select></label></div>
+    <div class="section-heading"><div><span class="eyebrow">GLOBAL RERANKING（全局重排）</span><h2>逐轮全局 Top{payload.run.delivery_capacity}</h2><p>平台使用 {base_network_weight:.0f}/{engaged_neighbor_weight:.0f}/{tag_affinity_weight:.0f} 公式排序：历史评论网络相关性 {base_network_weight:.0f}%、已互动直接邻居信号 {engaged_neighbor_weight:.0f}%、目标标签亲和度 {tag_affinity_weight:.0f}%。</p><p class="formula">{escape(payload.run.ranking_formula)}</p></div><label>Batch（批次）<select id="ranking-round-select" data-testid="ranking-round-select"></select></label></div>
+    {section_explanations["ranking"].render("ranking-section-explanation")}
     <div class="ranking-term-grid" data-testid="ranking-formula-terms">
       <article><h3><code>base_network_relevance</code>（历史评论网络相关性）</h3><p>0..1；越高表示用户在 Historical Set（历史集合）评论网络中的相关性越强，按 {base_network_weight:.0f}% 权重进入排序。</p></article>
       <article><h3><code>engaged_neighbor_signal</code>（已互动直接邻居信号）</h3><p>0..1；<code>min(1, engaged_neighbor_count / 3)</code> 表示三位已互动直接邻居达到封顶。它只影响后续批次，按 {engaged_neighbor_weight:.0f}% 权重进入排序。</p></article>
@@ -1588,24 +1668,25 @@ def _render_ranking_report(payload: FinalResearchRankingReportPayload) -> str:
     </div>
     <article id="ranking-worked-example" class="ranking-worked-example" data-testid="ranking-worked-example"></article>
     <div class="section-heading round-heading"><div><h3>逐批候选结果</h3><p class="muted">选择一批查看进入当批 Delivery Capacity（投放容量）的候选。</p></div></div>
-    <div id="round-summary" class="round-summary" data-testid="round-summary"></div><div class="table-wrap"><table data-testid="ranking-candidate-table"><thead><tr><th>Rank</th><th>User</th><th>Base network</th><th>Engaged neighbor</th><th>Tag affinity</th><th>Score</th></tr></thead><tbody id="ranking-candidate-body"></tbody></table></div>
+    <div id="round-summary" class="round-summary" data-testid="round-summary"></div><div class="table-wrap"><table data-testid="ranking-candidate-table"><thead><tr><th>Rank（名次）</th><th>User（用户）</th><th>Base network（历史网络）</th><th>Engaged neighbor（已互动邻居）</th><th>Tag affinity（标签亲和度）</th><th>Score（分数）</th></tr></thead><tbody id="ranking-candidate-body"></tbody></table></div>
   </section>
 
   <section id="network-effect" class="content-band" data-testid="network-effect-section">
-    <span class="eyebrow">NETWORK EVIDENCE</span><h2>Recommendation Signal Inclusion（推荐信号已纳入）与 Observed Recommendation Signal Effect（推荐信号产生可观测影响）</h2>
+    <span class="eyebrow">NETWORK EVIDENCE（网络证据）</span><h2>Recommendation Signal Inclusion（推荐信号已纳入）与 Observed Recommendation Signal Effect（推荐信号产生可观测影响）</h2>
+    {section_explanations["network"].render("network-section-explanation")}
     <div class="network-reading-note"><p><strong>Inclusion（纳入）</strong>只说明网络项进入公式并具有明确权重，不能单独证明投放结果改变。</p><p><strong>Observed Effect（可观测影响）</strong>要求移除网络项后，同批 Top{payload.run.delivery_capacity} membership（成员集合）实际发生变化。</p></div>
     <div id="network-effect-summary" class="effect-grid"></div>
     <div class="diagnostic-layout"><article id="paired-ablation" class="diagnostic-panel" data-testid="paired-ablation-section"><div class="section-heading"><div><h3>Paired ranking · shadow diagnostic</h3><p class="muted">同批冻结 persisted candidate evidence（持久化候选证据）并运行 shadow no-network（无网络影子排序），零额外 Decision Adapter calls；它不是第二条完整 trajectory（轨迹），也不是因果实验。</p></div><label>Batch<select id="ablation-round-select" data-testid="ablation-round-select"></select></label></div><div id="ablation-summary" class="ablation-summary" data-testid="ablation-summary"></div><div class="table-wrap rank-delta-table"><table data-testid="ablation-rank-deltas"><thead><tr><th>User</th><th>Full rank</th><th>No-network rank</th><th>Rank delta</th><th>Selection effect</th></tr></thead><tbody id="ablation-rank-delta-body"></tbody></table></div></article><article class="diagnostic-panel" data-testid="sensitivity-section"><h3>Ranking Weight Sensitivity（排序权重敏感性）</h3><p id="sensitivity-reading-note" class="muted"></p><div id="sensitivity-variants" class="sensitivity-variants"></div></article></div>
   </section>
 
-  <section class="content-band" data-testid="prompt-contract-section"><span class="eyebrow">LLM PROMPT CONTRACT</span><h2>Prompt Isolation（提示证据隔离）</h2><div class="prompt-reading-note"><p><strong>阶段一：</strong>平台排序决定谁看到视频；<strong>阶段二：</strong>LLM 决定曝光后的 action（动作）。</p><p>使用 neutral PeerContext（中性同伴上下文）是为了防止评论网络 evidence 同时进入 ranking 和 LLM 决策，不是数据丢失。页面只展示 allowlisted evidence（允许证据），raw Prompt 与 provider payload 保持不可见。</p></div><div class="prompt-grid"><article><h3>允许字段（Allowed）</h3><ul id="prompt-allowed"></ul></article><article><h3>空缺 / 中性字段（Neutral）</h3><ul id="prompt-neutral"></ul></article><article><h3>排除字段（Excluded）</h3><ul id="prompt-excluded"></ul></article></div></section>
+  <section class="content-band" data-testid="prompt-contract-section"><span class="eyebrow">LLM PROMPT CONTRACT（大模型提示合同）</span><h2>Prompt Isolation（提示证据隔离）</h2>{section_explanations["prompt"].render("prompt-section-explanation")}<div class="prompt-reading-note"><p><strong>阶段一：</strong>平台排序决定谁看到视频；<strong>阶段二：</strong>LLM 决定曝光后的 action（动作）。</p><p>使用 neutral PeerContext（中性同伴上下文）是为了防止评论网络 evidence 同时进入 ranking 和 LLM 决策，不是数据丢失。页面只展示 allowlisted evidence（允许证据），raw Prompt 与 provider payload 保持不可见。</p></div><div class="prompt-grid"><article><h3>允许字段（Allowed）</h3><ul id="prompt-allowed"></ul></article><article><h3>空缺 / 中性字段（Neutral）</h3><ul id="prompt-neutral"></ul></article><article><h3>排除字段（Excluded）</h3><ul id="prompt-excluded"></ul></article></div></section>
 
-  <section class="content-band" data-testid="aggregate-charts-section"><span class="eyebrow">AGGREGATES</span><h2>同源聚合图表</h2><div class="chart-grid"><article><h3>逐批投放</h3><div id="batch-delivery-explanation" class="chart-explanation" data-testid="batch-delivery-explanation"></div><div id="batch-delivery-chart" class="batch-chart" data-testid="batch-delivery-chart"></div></article><article><h3>Action 与容量状态</h3><div id="action-status-explanation" class="chart-explanation" data-testid="action-status-explanation"></div><div id="action-chart" class="bar-chart" data-testid="action-chart"></div></article><article><h3>Provider failure</h3><div id="provider-failure-explanation" class="chart-explanation" data-testid="provider-failure-explanation"></div><div id="provider-failure-chart" class="bar-chart" data-testid="provider-failure-chart"></div></article><article><h3>动态网络激活</h3><div id="network-activation-explanation" class="chart-explanation" data-testid="network-activation-explanation"></div><div id="network-activation-chart" class="bar-chart" data-testid="network-activation-chart"></div></article><article class="wide"><h3>Ablation Top{payload.run.delivery_capacity} overlap</h3><div id="ablation-overlap-explanation" class="chart-explanation" data-testid="ablation-overlap-explanation"></div><div id="ablation-overlap-chart" class="batch-chart" data-testid="ablation-overlap-chart"></div></article></div></section>
+  <section class="content-band" data-testid="aggregate-charts-section"><span class="eyebrow">AGGREGATES（聚合图表）</span><h2>同源聚合图表</h2>{section_explanations["aggregate"].render("aggregate-section-explanation")}<div class="chart-grid"><article><h3>逐批投放</h3><div id="batch-delivery-explanation" class="chart-explanation" data-testid="batch-delivery-explanation"></div><div id="batch-delivery-chart" class="batch-chart" data-testid="batch-delivery-chart"></div></article><article><h3>Action（动作）与容量状态</h3><div id="action-status-explanation" class="chart-explanation" data-testid="action-status-explanation"></div><div id="action-chart" class="bar-chart" data-testid="action-chart"></div></article><article><h3>Provider failure（Provider 失败）</h3><div id="provider-failure-explanation" class="chart-explanation" data-testid="provider-failure-explanation"></div><div id="provider-failure-chart" class="bar-chart" data-testid="provider-failure-chart"></div></article><article><h3>动态网络激活</h3><div id="network-activation-explanation" class="chart-explanation" data-testid="network-activation-explanation"></div><div id="network-activation-chart" class="bar-chart" data-testid="network-activation-chart"></div></article><article class="wide"><h3>Ablation（消融）Top{payload.run.delivery_capacity} overlap（重合人数）</h3><div id="ablation-overlap-explanation" class="chart-explanation" data-testid="ablation-overlap-explanation"></div><div id="ablation-overlap-chart" class="batch-chart" data-testid="ablation-overlap-chart"></div></article></div></section>
 
-  <section id="users" class="users-band" data-testid="ranking-users-section"><div class="section-heading"><div><span class="eyebrow">USER TRACE</span><h2>完整 {payload.run.sample_size:,} 用户追踪</h2></div><strong id="visible-user-count" data-testid="visible-user-count"></strong></div><div class="filters"><label>搜索<input id="user-search" data-testid="user-search" type="search"></label><label>Sample role<select id="role-filter" data-testid="role-filter"><option value="">全部</option><option value="seed">seed</option><option value="network_cohort">network_cohort</option><option value="ordinary">ordinary</option></select></label><label>Result<select id="result-filter" data-testid="result-filter"><option value="">全部</option></select></label><label>Scope<select id="scope-filter" data-testid="scope-filter"><option value="">全部</option></select></label><label>Seed<select id="seed-filter" data-testid="seed-filter"><option value="">全部</option><option value="true">是</option><option value="false">否</option></select></label><label>Network Cohort<select id="cohort-filter" data-testid="cohort-filter"><option value="">全部</option><option value="true">是</option><option value="false">否</option></select></label></div><div class="table-wrap users-table"><table data-testid="user-table"><thead><tr><th>User</th><th>Role / scope</th><th>Batch / rank</th><th>Score</th><th>Result</th><th>Reason</th></tr></thead><tbody id="user-table-body"></tbody></table></div><div id="user-detail" class="user-detail" data-testid="user-detail"></div></section>
+  <section id="users" class="users-band" data-testid="ranking-users-section"><div class="section-heading"><div><span class="eyebrow">USER TRACE（用户追踪）</span><h2>完整 {payload.run.sample_size:,} 用户追踪</h2></div><strong id="visible-user-count" data-testid="visible-user-count"></strong></div>{section_explanations["users"].render("users-section-explanation")}<div class="filters"><label>搜索<input id="user-search" data-testid="user-search" type="search"></label><label>Sample role（样本角色）<select id="role-filter" data-testid="role-filter"><option value="">全部</option><option value="seed">seed（种子用户）</option><option value="network_cohort">network_cohort（网络传播识别组）</option><option value="ordinary">ordinary（普通用户）</option></select></label><label>Result（结果）<select id="result-filter" data-testid="result-filter"><option value="">全部</option></select></label><label>Source Scope（来源分组）<select id="scope-filter" data-testid="scope-filter"><option value="">全部</option></select></label><label>Seed User（种子用户）<select id="seed-filter" data-testid="seed-filter"><option value="">全部</option><option value="true">是</option><option value="false">否</option></select></label><label>Network Cohort（网络传播识别组）<select id="cohort-filter" data-testid="cohort-filter"><option value="">全部</option><option value="true">是</option><option value="false">否</option></select></label></div><div class="table-wrap users-table"><table data-testid="user-table"><thead><tr><th>User（用户）</th><th>Role / scope（角色 / 来源）</th><th>Batch / rank（批次 / 名次）</th><th>Score（分数）</th><th>Result（结果）</th><th>Reason（理由）</th></tr></thead><tbody id="user-table-body"></tbody></table></div><div id="user-detail" class="user-detail" data-testid="user-detail"></div></section>
 
-  <section class="downloads-band"><span class="eyebrow">ARTIFACTS</span><h2>同源下载</h2><div class="downloads">{download_links}</div></section>
-  <section class="limitations-band"><span class="eyebrow">LIMITATIONS</span><ul id="limitations-list"></ul></section>
+  <section class="downloads-band"><span class="eyebrow">ARTIFACTS（交付物）</span><h2>同源下载</h2><div class="downloads">{download_links}</div></section>
+  <section class="limitations-band"><span class="eyebrow">LIMITATIONS（研究限制）</span><ul id="limitations-list"></ul></section>
 </main>
 <script id="final-research-ranking-payload" type="application/json">{payload_json}</script>
 <script id="research-explanation-catalog" type="application/json">{explanation_json}</script>
@@ -1617,14 +1698,14 @@ def _render_ranking_report(payload: FinalResearchRankingReportPayload) -> str:
 
 def _ranking_download_label(key: str) -> str:
     labels = {
-        "report": "Report HTML",
-        "payload": "Payload JSON",
-        "csv": "User CSV",
-        "users_json": "User JSON",
-        "manifest": "Manifest",
-        "ranking_diagnostics": "Ranking diagnostics",
-        "ranking_ablation_csv": "Ablation CSV",
-        "ranking_sensitivity_csv": "Sensitivity CSV",
+        "report": "Report HTML（网页报告）",
+        "payload": "Payload JSON（报告载荷）",
+        "csv": "User CSV（用户表格）",
+        "users_json": "User JSON（用户数据）",
+        "manifest": "Manifest（交付物清单）",
+        "ranking_diagnostics": "Ranking diagnostics（排序诊断）",
+        "ranking_ablation_csv": "Ablation CSV（消融表格）",
+        "ranking_sensitivity_csv": "Sensitivity CSV（敏感性表格）",
     }
     return labels[key]
 
@@ -1673,12 +1754,12 @@ label { display:grid; gap:5px; color:var(--muted); font-size:.76rem; font-weight
 .sample-metrics article,.effect-grid article { min-height:92px; padding:13px; border-left:4px solid var(--blue); background:var(--paper); }
 .sample-metrics strong,.effect-grid strong { display:block; font-size:1.55rem; }
 .sample-metrics span,.effect-grid span { color:var(--muted); font-size:.78rem; }
-.sample-explanation { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:0 22px; margin:0 0 18px; border-block:1px solid var(--line); }
-.sample-explanation article { padding:14px 0; }
-.sample-explanation article:nth-child(odd) { padding-right:22px; border-right:1px solid var(--line); }
-.sample-explanation article:nth-child(n+3) { border-top:1px solid var(--line); }
-.sample-explanation h3 { color:var(--green); }
-.sample-explanation p { margin-bottom:0; color:var(--muted); }
+.section-explanation { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:0 22px; margin:0 0 18px; border-block:1px solid var(--line); }
+.section-explanation article { padding:14px 0; }
+.section-explanation article:nth-child(odd) { padding-right:22px; border-right:1px solid var(--line); }
+.section-explanation article:nth-child(n+3) { border-top:1px solid var(--line); }
+.section-explanation h3 { color:var(--green); }
+.section-explanation p { margin-bottom:0; color:var(--muted); }
 .sample-role-table { margin-bottom:18px; }
 .scope-intro { display:grid; grid-template-columns:minmax(220px,.6fr) minmax(0,1.4fr); gap:18px; align-items:start; margin:22px 0 10px; }
 .scope-intro p { margin-bottom:0; color:var(--muted); }
@@ -1791,7 +1872,7 @@ code { color:var(--blue); }
 .limitations-band { display:grid; grid-template-columns:180px 1fr; background:#fff8ec; }
 .limitations-band li { margin:5px 0; }
 @media (max-width:1000px) { .hero-funnel { grid-template-columns:repeat(3,minmax(0,1fr)); }.sample-metrics,.effect-grid { grid-template-columns:repeat(2,minmax(0,1fr)); }.lineage-layout,.diagnostic-layout { grid-template-columns:1fr; }.lineage-detail { min-height:0; }.filters { grid-template-columns:repeat(3,minmax(0,1fr)); }.trace-groups { grid-template-columns:repeat(2,minmax(0,1fr)); } }
-@media (max-width:700px) { main { border:0; }.topbar { position:static; align-items:flex-start; flex-direction:column; }.workflow-nav { gap:7px 14px; }.workflow-nav a { font-size:.74rem; }.ranking-hero { min-height:610px; padding-top:24px; }.ranking-hero h1 { font-size:2.35rem; }.hero-copy { display:block; }.hero-meta { display:flex; flex-wrap:wrap; margin-top:12px; border:0; }.hero-meta span { padding:5px 9px; border:1px solid #cbd7d0; }.hero-funnel { grid-template-columns:repeat(2,minmax(0,1fr)); margin-top:16px; }.hero-funnel article { min-height:74px; padding:9px; }.hero-funnel article:nth-child(n+6),.hero-funnel p { display:none; }.hero-funnel strong { font-size:1.25rem; }.object-flow { grid-template-columns:1fr; }.object-flow i { transform:rotate(90deg); justify-self:center; }.section-heading { align-items:flex-start; flex-direction:column; }.sample-explanation,.sample-metrics,.effect-grid,.split-grid,.scope-intro,.lineage-legends,.prompt-grid,.chart-grid,.filters,.trace-groups,.ranking-term-grid,.ranking-method-notes,.ranking-worked-example-grid,.network-reading-note,.prompt-reading-note,.proxy-explanation-list { grid-template-columns:1fr; }.sample-explanation article:nth-child(odd) { padding-right:0; border-right:0; }.sample-explanation article + article { border-top:1px solid var(--line); }.ranking-term-grid article:nth-child(odd),.ranking-term-grid article:nth-child(even) { padding:12px 0; border-right:0; }.ranking-term-grid article + article { border-top:1px solid var(--line); }.lineage-legends section + section { padding-left:0; border-top:1px solid var(--line); border-left:0; }.round-summary,.ablation-summary { grid-template-columns:repeat(2,minmax(0,1fr)); }.chart-grid .wide { grid-column:auto; }.compact-filters { grid-template-columns:1fr; }.downloads { grid-template-columns:repeat(2,minmax(0,1fr)); }.limitations-band { grid-template-columns:1fr; }.users-table { max-height:540px; } }
+@media (max-width:700px) { main { border:0; }.topbar { position:static; align-items:flex-start; flex-direction:column; }.workflow-nav { gap:7px 14px; }.workflow-nav a { font-size:.74rem; }.ranking-hero { min-height:610px; padding:16px 18px; }.ranking-hero h1 { font-size:2.35rem; }.hero-copy { display:block; }.hero-meta { display:flex; flex-wrap:wrap; margin-top:12px; border:0; }.hero-meta span { padding:5px 9px; border:1px solid #cbd7d0; }.hero-funnel { grid-template-columns:repeat(2,minmax(0,1fr)); margin-top:16px; }.hero-funnel article { min-height:74px; padding:9px; }.hero-funnel article:nth-child(n+6),.hero-funnel p { display:none; }.hero-funnel strong { font-size:1.25rem; }.object-flow { grid-template-columns:1fr; }.object-flow i { transform:rotate(90deg); justify-self:center; }.section-heading { align-items:flex-start; flex-direction:column; }.section-explanation,.sample-metrics,.effect-grid,.split-grid,.scope-intro,.lineage-legends,.prompt-grid,.chart-grid,.filters,.trace-groups,.ranking-term-grid,.ranking-method-notes,.ranking-worked-example-grid,.network-reading-note,.prompt-reading-note,.proxy-explanation-list { grid-template-columns:1fr; }.section-explanation article:nth-child(odd) { padding-right:0; border-right:0; }.section-explanation article + article { border-top:1px solid var(--line); }.ranking-term-grid article:nth-child(odd),.ranking-term-grid article:nth-child(even) { padding:12px 0; border-right:0; }.ranking-term-grid article + article { border-top:1px solid var(--line); }.lineage-legends section + section { padding-left:0; border-top:1px solid var(--line); border-left:0; }.round-summary,.ablation-summary { grid-template-columns:repeat(2,minmax(0,1fr)); }.chart-grid .wide { grid-column:auto; }.compact-filters { grid-template-columns:1fr; }.downloads { grid-template-columns:repeat(2,minmax(0,1fr)); }.limitations-band { grid-template-columns:1fr; }.users-table { max-height:540px; } }
 """
 
 
@@ -1820,6 +1901,16 @@ const display = (value) => value === null || value === undefined || value === ''
 const fixed = (value) => value === null || value === undefined ? '—' : Number(value).toFixed(4);
 const provenanceLabels = Object.fromEntries(explanationDocument.provenance_categories.map((category) => [category.key,category.label]));
 const usageLabels = Object.fromEntries(explanationDocument.usage_stages.map((stage) => [stage.key,stage.label]));
+const actionLabels = {like:'like（点赞）',comment:'comment（评论）',share:'share（分享）',ignore:'ignore（忽略）'};
+const resultStatusLabels = {...actionLabels,provider_failed:'provider_failed（Provider 失败）',below_delivery_capacity:'below_delivery_capacity（未获得投放）'};
+const providerStatusLabels = {not_called:'not_called（未调用）',succeeded:'succeeded（成功）',provider_failed:'provider_failed（Provider 失败）'};
+const sampleRoleLabels = {seed:'seed（种子用户）',network_cohort:'network_cohort（网络传播识别组）',ordinary:'ordinary（普通用户）'};
+const limitationTranslations = {
+  'Network Cohort supports propagation identification and is not a representative random sample.':'Network Cohort（网络传播识别组）用于传播识别，不是代表性随机样本。',
+  'Ranking weights are predeclared research assumptions, not learned Douyin platform parameters.':'Ranking weights（排序权重）是预声明研究假设，不是从抖音平台学习得到的参数。',
+  'Paired ablation is a frozen-evidence shadow ranking, not a second user-state trajectory.':'Paired ablation（配对消融）是冻结证据上的影子排序，不是第二条用户状态轨迹。',
+  'No real exposure denominator is available; below delivery capacity is not a user ignore decision.':'没有真实曝光分母；below_delivery_capacity（未获得投放）不是用户的 ignore（忽略）决策。',
+};
 let selectedLineageField = payload.field_lineage[0]?.field_name || '';
 const count = (value) => {
   const numeric = Number(value);
@@ -1859,13 +1950,21 @@ function renderHero() {
   const actionCounts = new Map();
   users.filter((row) => row.action).forEach((row) => actionCounts.set(row.action,(actionCounts.get(row.action) || 0) + 1));
   const actionStage = {
-    label:'Actions',
+    key:'actions',
+    label:'Actions（动作）',
     count:[...actionCounts.values()].reduce((total,value) => total + value,0),
-    description:[...actionCounts.entries()].sort().map(([action,value]) => `${action} ${value}`).join(' · '),
+    description:[...actionCounts.entries()].sort().map(([action,value]) => `${actionLabels[action] || action} ${value}`).join(' · '),
+  };
+  const stageLabels = {
+    target_exposures:'Exposures（曝光）',
+    provider_decisions:'Decisions（决策）',
+    actions:'Actions（动作）',
+    provider_failed:'Failures（失败）',
+    below_delivery_capacity:'Below capacity（未投放）',
   };
   [stages.get('target_exposures'),stages.get('provider_decisions'),actionStage,stages.get('provider_failed'),stages.get('below_delivery_capacity')].filter(Boolean).forEach((stage) => {
     const article = element('article');
-    article.append(element('span', '', stage.label), element('strong', '', count(stage.count)), element('p', '', stage.description));
+    article.append(element('span', '', stageLabels[stage.key] || stage.label), element('strong', '', count(stage.count)), element('p', '', stage.description));
     byId('hero-funnel').appendChild(article);
   });
 }
@@ -1880,13 +1979,6 @@ function renderSample() {
   const sample = payload.sample_comparison;
   const ordinaryCount = sampleRoleCounts.get('ordinary') || 0;
   byId('sample-summary').textContent = `Seed Users（种子用户） ${sample.seed_count} · Network Cohort（网络传播识别组） ${sample.network_cohort_count} · 普通用户替换 ${sample.replacement_count}`;
-  const explanations = [
-    ['是什么',`Base Sample（基础样本）是 network augmentation（网络补样）前按 source scope（来源分组）形成的初始 ${count(sample.base_sample_count)} 人样本；Final Sample（最终样本）是真正进入正式 runtime（仿真运行）的 ${count(sample.final_sample_count)} 人样本。`],
-    ['为什么需要',`Base Sample（基础样本）保留来源分层口径；Final Sample（最终样本）补入与固定种子用户相连的传播识别对象，让评论网络能够在后续 ranking（排序）中实际产生可观察信号。`],
-    ['怎么形成',`先固定 Seed Users（种子用户），再识别它们在 Historical Set（历史集合）评论网络中的直接邻居。Network Cohort（网络传播识别组）由真实 processed user（处理后用户）组成，不是合成用户或代表性随机样本。`],
-    ['本次结果怎么看',`新增 ${count(sample.network_cohort_added_count)} 位网络用户时等量替换普通用户 ${count(sample.replacement_count)} 位；固定种子用户不被替换，因此最终样本总量不变，仍为 ${count(sample.final_sample_count)} 人。`],
-  ];
-  explanations.forEach(([title,copy]) => { const article = element('article'); article.append(element('h3','',title),element('p','',copy)); byId('sample-explanation').appendChild(article); });
   const metrics = [
     ['Base Sample（基础样本）',sample.base_sample_count,'network augmentation（网络补样）前'],
     ['Final Sample（最终样本）',sample.final_sample_count,'正式 runtime（仿真运行）样本'],
@@ -1965,7 +2057,7 @@ function renderLineage() {
 }
 
 function populateRoundSelect(id, rows) {
-  rows.forEach((row) => { const option = element('option','',`Batch ${row.time_step}`); option.value = String(row.time_step); byId(id).appendChild(option); });
+  rows.forEach((row) => { const option = element('option','',`Batch ${row.time_step}（第 ${row.time_step} 批）`); option.value = String(row.time_step); byId(id).appendChild(option); });
 }
 
 function summaryItem(label, value) {
@@ -2007,8 +2099,8 @@ function renderRankingRound() {
   const round = payload.ranking_rounds.find((row) => row.time_step === timeStep);
   if (!round) return;
   const values = [
-    ['Eligible',count(round.eligible_count)],['Delivery Capacity',round.delivery_capacity],['Selected',round.selected_count],
-    ['Target exposures',round.target_exposures],['Provider failed',round.provider_failed],['Network-active selected',round.selected_with_positive_engaged_neighbor_signal],
+    ['Eligible（合格候选）',count(round.eligible_count)],['Delivery Capacity（投放容量）',round.delivery_capacity],['Selected（已选择）',round.selected_count],
+    ['Target exposures（目标视频曝光）',round.target_exposures],['Provider failed（Provider 失败）',round.provider_failed],['Network-active selected（网络信号入选）',round.selected_with_positive_engaged_neighbor_signal],
   ];
   const summary = byId('round-summary'); summary.replaceChildren(); values.forEach(([label,value]) => summary.appendChild(summaryItem(label,value)));
   const body = byId('ranking-candidate-body'); body.replaceChildren();
@@ -2035,8 +2127,8 @@ function renderAblation() {
   if (!batch) return;
   const summary = byId('ablation-summary'); summary.replaceChildren();
   [
-    ['Eligible',batch.eligible_count],[`${topLabel} overlap`,batch.top_overlap_count],['network-added',batch.network_added_user_ids.length],
-    ['network-removed',batch.network_removed_user_ids.length],[`Full ${topLabel}`,batch.full_top_user_ids.length],[`No-network ${topLabel}`,batch.no_network_top_user_ids.length],
+    ['Eligible（合格候选）',batch.eligible_count],[`${topLabel} overlap（重合人数）`,batch.top_overlap_count],['network-added（网络新增）',batch.network_added_user_ids.length],
+    ['network-removed（网络移除）',batch.network_removed_user_ids.length],[`Full ${topLabel}（完整排序）`,batch.full_top_user_ids.length],[`No-network ${topLabel}（无网络排序）`,batch.no_network_top_user_ids.length],
   ].forEach(([label,value]) => summary.appendChild(summaryItem(label,value)));
   const deltas = byId('ablation-rank-delta-body'); deltas.replaceChildren();
   batch.rank_deltas.forEach((row) => {
@@ -2087,9 +2179,14 @@ function renderBatchChart(id, rows, valueKey) {
   rows.forEach((row) => { const column = element('div','batch-column'); column.title = `Batch ${row.time_step}: ${row[valueKey]}`; const bar = element('i'); bar.style.height = `${Math.max(2,(Number(row[valueKey] || 0) / maximum) * 115)}px`; column.appendChild(bar); root.appendChild(column); });
 }
 
-function renderChartExplanation(id, entries) {
+function renderChartExplanation(id, explanation) {
   const root = byId(id);
-  entries.forEach(([label,value]) => {
+  [
+    ['统计什么',explanation.measurement],
+    ['单位 / 分母',explanation.denominator],
+    ['为什么需要',explanation.purpose],
+    ['本次结果',explanation.result],
+  ].forEach(([label,value]) => {
     const line = element('p');
     line.append(element('strong','',`${label}：`),document.createTextNode(value));
     root.appendChild(line);
@@ -2110,56 +2207,56 @@ function renderChartExplanations() {
   const engaged = ['like','comment','share'].reduce((total,status) => total + (resultStatusCounts.get(status) || 0),0);
   const finalBatch = Math.max(1,payload.run.horizon - 1);
 
-  renderChartExplanation('sample-composition-explanation',[
-    ['统计什么','Final Sample 中 Seed Users、Network Cohort 与 Ordinary Users 的角色构成。'],
-    ['单位 / 分母',`单位为用户；分母是 Final Sample ${count(sample.final_sample_count)} 人。`],
-    ['为什么需要','确认网络补样保留种子、加入传播识别对象，并以普通用户保持样本总量不变。'],
-    ['本次结果',`Seed ${count(sampleRoleCounts.get('seed') || 0)} 人，Network Cohort ${count(sampleRoleCounts.get('network_cohort') || 0)} 人，Ordinary ${count(sampleRoleCounts.get('ordinary') || 0)} 人。`],
-  ]);
-  renderChartExplanation('batch-delivery-explanation',[
-    ['统计什么','每个 Batch 实际产生的 Target Video exposure 数。'],
-    ['单位 / 分母',`单位为 exposure 人次；每位用户最多一次，Batch 0 是 seeds，Batch 1–${finalBatch} 每批最多 Top${payload.run.delivery_capacity}。`],
-    ['为什么需要','把固定 Delivery Capacity 与实际逐批投放分开，避免把柱高误读成互动率。'],
-    ['本次结果',`${count(payload.ranking_rounds.length)} 个批次合计 ${count(totalExposures)} 次 exposure。`],
-  ]);
-  renderChartExplanation('action-status-explanation',[
-    ['统计什么','全部研究用户的唯一最终状态：below_delivery_capacity、ignore、like / comment / share 或 provider_failed。'],
-    ['单位 / 分母',`单位为用户；分母是 Final Sample ${count(users.length)} 人。`],
-    ['为什么需要','below_delivery_capacity 表示未曝光，ignore 表示已曝光后不互动；互动 action 与 provider 失败也不能混为一类。'],
-    ['本次结果',`${count(belowCapacity)} 个 below_delivery_capacity 用户从未曝光；${count(ignored)} 个 ignore 用户已曝光但选择不互动；${count(engaged)} 个用户选择 like / comment / share；${count(providerFailures)} 个 provider_failed。`],
-  ]);
-  renderChartExplanation('provider-failure-explanation',[
-    ['统计什么','每批调用在初始尝试和允许重试后仍未得到有效 Decision 的重试耗尽任务。'],
-    ['单位 / 分母',`单位为任务；分母是 ${count(totalExposures)} 个实际 exposure 对应的 provider 决策机会。`],
-    ['为什么需要','失败任务没有有效 action，必须与成功返回 ignore 或互动动作的任务分开。'],
-    ['本次结果',`${count(providerFailures)} / ${count(totalExposures)} 个任务重试耗尽；本次为 0 时也不代表 provider 永不失败。`],
-  ]);
-  renderChartExplanation('network-activation-explanation',[
-    ['统计什么','每批 engaged_neighbor_signal > 0 的 candidate evidence rows（正向邻居信号候选证据行）。'],
-    ['单位 / 分母',`单位为候选证据行；分母是全部逐批 ${count(candidateRows)} 条 candidate evidence rows，不是 selected users 或 actions。`],
-    ['为什么需要','证明动态网络项在候选排序证据中实际激活，同时避免把候选信号误读成已投放或已互动。'],
-    ['本次结果',`${count(positiveCandidateRows)} 条 candidates 具有正向信号，其中 ${count(positiveSelectedUsers)} 位 selected users 获得曝光并产生 ${count(positiveSignalActions)} 条 actions。`],
-  ]);
-  renderChartExplanation('ablation-overlap-explanation',[
-    ['统计什么',`每批 full ranking 与 no-network shadow ranking 的 Top${payload.run.delivery_capacity} 共同入选人数。`],
-    ['单位 / 分母',`单位为用户；分母是每批 Top${payload.run.delivery_capacity} 投放集合。`],
-    ['为什么需要','在同批冻结候选证据上观察移除网络项是否改变投放成员。'],
-    ['本次结果',`Top${payload.run.delivery_capacity} overlap=${payload.run.delivery_capacity} 表示两组选择集合相同；数值降低表示更多用户被网络项改变。本次 ${count(payload.ranking_diagnostics_summary.batches_with_top_selection_change)} / ${count(payload.ranking_rounds.length)} 个批次发生变化。`],
-  ]);
+  renderChartExplanation('sample-composition-explanation',{
+    measurement:'Final Sample 中 Seed Users、Network Cohort 与 Ordinary Users 的角色构成。',
+    denominator:`单位为用户；分母是 Final Sample ${count(sample.final_sample_count)} 人。`,
+    purpose:'确认网络补样保留种子、加入传播识别对象，并以普通用户保持样本总量不变。',
+    result:`Seed ${count(sampleRoleCounts.get('seed') || 0)} 人，Network Cohort ${count(sampleRoleCounts.get('network_cohort') || 0)} 人，Ordinary ${count(sampleRoleCounts.get('ordinary') || 0)} 人。`,
+  });
+  renderChartExplanation('batch-delivery-explanation',{
+    measurement:'每个 Batch 实际产生的 Target Video exposure 数。',
+    denominator:`单位为 exposure 人次；每位用户最多一次，Batch 0 是 seeds，Batch 1–${finalBatch} 每批最多 Top${payload.run.delivery_capacity}。`,
+    purpose:'把固定 Delivery Capacity 与实际逐批投放分开，避免把柱高误读成互动率。',
+    result:`${count(payload.ranking_rounds.length)} 个批次合计 ${count(totalExposures)} 次 exposure。`,
+  });
+  renderChartExplanation('action-status-explanation',{
+    measurement:'全部研究用户的唯一最终状态：below_delivery_capacity、ignore、like / comment / share 或 provider_failed。',
+    denominator:`单位为用户；分母是 Final Sample ${count(users.length)} 人。`,
+    purpose:'below_delivery_capacity 表示未曝光，ignore 表示已曝光后不互动；互动 action 与 provider 失败也不能混为一类。',
+    result:`${count(belowCapacity)} 个 below_delivery_capacity 用户从未曝光；${count(ignored)} 个 ignore 用户已曝光但选择不互动；${count(engaged)} 个用户选择 like / comment / share；${count(providerFailures)} 个 provider_failed。`,
+  });
+  renderChartExplanation('provider-failure-explanation',{
+    measurement:'每批调用在初始尝试和允许重试后仍未得到有效 Decision 的重试耗尽任务。',
+    denominator:`单位为任务；分母是 ${count(totalExposures)} 个实际 exposure 对应的 provider 决策机会。`,
+    purpose:'失败任务没有有效 action，必须与成功返回 ignore 或互动动作的任务分开。',
+    result:`${count(providerFailures)} / ${count(totalExposures)} 个任务重试耗尽；本次为 0 时也不代表 provider 永不失败。`,
+  });
+  renderChartExplanation('network-activation-explanation',{
+    measurement:'每批 engaged_neighbor_signal > 0 的 candidate evidence rows（正向邻居信号候选证据行）。',
+    denominator:`单位为候选证据行；分母是全部逐批 ${count(candidateRows)} 条 candidate evidence rows，不是 selected users 或 actions。`,
+    purpose:'证明动态网络项在候选排序证据中实际激活，同时避免把候选信号误读成已投放或已互动。',
+    result:`${count(positiveCandidateRows)} 条 candidates 具有正向信号，其中 ${count(positiveSelectedUsers)} 位 selected users 获得曝光并产生 ${count(positiveSignalActions)} 条 actions。`,
+  });
+  renderChartExplanation('ablation-overlap-explanation',{
+    measurement:`每批 full ranking 与 no-network shadow ranking 的 Top${payload.run.delivery_capacity} 共同入选人数。`,
+    denominator:`单位为用户；分母是每批 Top${payload.run.delivery_capacity} 投放集合。`,
+    purpose:'在同批冻结候选证据上观察移除网络项是否改变投放成员。',
+    result:`Top${payload.run.delivery_capacity} overlap=${payload.run.delivery_capacity} 表示两组选择集合相同；数值降低表示更多用户被网络项改变。本次 ${count(payload.ranking_diagnostics_summary.batches_with_top_selection_change)} / ${count(payload.ranking_rounds.length)} 个批次发生变化。`,
+  });
 }
 
 function renderCharts() {
   renderBatchChart('batch-delivery-chart',payload.ranking_rounds,'target_exposures');
-  renderBars('action-chart',[...resultStatusCounts.entries()].sort().map(([label,value]) => ({label,value})));
-  renderBars('provider-failure-chart',payload.ranking_rounds.map((row) => ({label:`Batch ${row.time_step}`,value:row.provider_failed})).filter((row) => row.value > 0).concat(payload.ranking_rounds.every((row) => row.provider_failed === 0) ? [{label:'No failures',value:0}] : []));
-  renderBars('network-activation-chart',payload.ranking_rounds.map((row) => ({label:`Batch ${row.time_step}`,value:row.candidates_with_positive_engaged_neighbor_signal})).filter((row) => row.value > 0).slice(0,12).concat(payload.ranking_rounds.every((row) => row.candidates_with_positive_engaged_neighbor_signal === 0) ? [{label:'No activation',value:0}] : []));
+  renderBars('action-chart',[...resultStatusCounts.entries()].sort().map(([label,value]) => ({label:resultStatusLabels[label] || label,value})));
+  renderBars('provider-failure-chart',payload.ranking_rounds.map((row) => ({label:`Batch ${row.time_step}（第 ${row.time_step} 批）`,value:row.provider_failed})).filter((row) => row.value > 0).concat(payload.ranking_rounds.every((row) => row.provider_failed === 0) ? [{label:'No failures（无失败）',value:0}] : []));
+  renderBars('network-activation-chart',payload.ranking_rounds.map((row) => ({label:`Batch ${row.time_step}（第 ${row.time_step} 批）`,value:row.candidates_with_positive_engaged_neighbor_signal})).filter((row) => row.value > 0).slice(0,12).concat(payload.ranking_rounds.every((row) => row.candidates_with_positive_engaged_neighbor_signal === 0) ? [{label:'No activation（未激活）',value:0}] : []));
   renderBatchChart('ablation-overlap-chart',payload.ranking_diagnostics.paired_ablation.batches,'top_overlap_count');
 }
 
 function populateUserFilters() {
-  const addOptions = (id, values) => values.forEach((value) => { const option = element('option','',value); option.value = value; byId(id).appendChild(option); });
-  addOptions('result-filter',[...new Set(users.map((row) => row.result_status))].sort());
-  addOptions('scope-filter',[...new Set(users.map((row) => row.sample_source_scope))].sort());
+  const addOptions = (id, values, labels = {}) => values.forEach((value) => { const option = element('option','',labels[value] || value); option.value = value; byId(id).appendChild(option); });
+  addOptions('result-filter',[...new Set(users.map((row) => row.result_status))].sort(),resultStatusLabels);
+  addOptions('scope-filter',[...new Set(users.map((row) => row.sample_source_scope))].sort(),{remaining_users:'remaining_users（其余用户）'});
 }
 
 function userSearchText(row) {
@@ -2176,8 +2273,8 @@ function renderUsers() {
   filtered.forEach((row) => {
     const tr = element('tr'); tr.tabIndex = 0;
     const profile = element('td'); profile.append(element('span','profile-name',row.nickname || row.user_id),element('span','profile-id',row.user_id));
-    const status = element('span',`status ${row.result_status}`,row.result_status); const resultCell = element('td'); resultCell.append(status,element('small','',row.provider_status));
-    [profile,element('td','',`${row.sample_role} · ${row.sample_source_scope}`),element('td','',`${row.latest_ranking_time_step} / ${row.latest_ranking_position}`),element('td','',fixed(row.recommendation_score)),resultCell,element('td','',row.reason || '—')].forEach((cell) => tr.appendChild(cell));
+    const status = element('span',`status ${row.result_status}`,resultStatusLabels[row.result_status] || row.result_status); const resultCell = element('td'); resultCell.append(status,element('small','',providerStatusLabels[row.provider_status] || row.provider_status));
+    [profile,element('td','',`${sampleRoleLabels[row.sample_role] || row.sample_role} · ${row.sample_source_scope}`),element('td','',`${row.latest_ranking_time_step} / ${row.latest_ranking_position}`),element('td','',fixed(row.recommendation_score)),resultCell,element('td','',row.reason || '—')].forEach((cell) => tr.appendChild(cell));
     tr.addEventListener('click',() => renderUserDetail(row)); tr.addEventListener('keydown',(event) => { if (event.key === 'Enter') renderUserDetail(row); }); body.appendChild(tr);
   });
 }
@@ -2226,7 +2323,7 @@ function renderUserDetail(row) {
   );
   const historyPanel = element('section','ranking-history'); historyPanel.appendChild(element('h3','','逐轮 ranking evidence'));
   const historyWrap = element('div','table-wrap'); const historyTable = element('table'); historyTable.dataset.testid = 'ranking-history-table';
-  const head = element('thead'); const headRow = element('tr'); ['Batch','Rank','Selected','Base network','Engaged neighbor','Tag affinity','Score'].forEach((label) => headRow.appendChild(element('th','',label))); head.appendChild(headRow);
+  const head = element('thead'); const headRow = element('tr'); ['Batch（批次）','Rank（名次）','Selected（已选择）','Base network（历史网络）','Engaged neighbor（已互动邻居）','Tag affinity（标签亲和度）','Score（分数）'].forEach((label) => headRow.appendChild(element('th','',label))); head.appendChild(headRow);
   const body = element('tbody'); (rankingHistoryByUser.get(row.user_id) || []).forEach((evidence) => {
     const line = element('tr'); [evidence.time_step,evidence.ranking_position,evidence.selected,fixed(evidence.base_network_relevance),`${evidence.engaged_neighbor_count} / ${fixed(evidence.engaged_neighbor_signal)}`,fixed(evidence.historical_tag_affinity),fixed(evidence.recommendation_score)].forEach((value) => line.appendChild(element('td','',display(value)))); body.appendChild(line);
   });
@@ -2237,7 +2334,7 @@ renderHero(); renderSample(); renderLineageMetadata(); renderLineage(); renderRa
 populateRoundSelect('ranking-round-select',payload.ranking_rounds); renderRankingRound();
 const ablationBatches = payload.ranking_diagnostics.paired_ablation.batches; populateRoundSelect('ablation-round-select',ablationBatches); renderAblation();
 renderNetworkSummary(); renderSensitivity();
-fillList('prompt-allowed',payload.prompt_contract.allowed_profile_fields.map(promptFieldLabel)); fillList('prompt-neutral',payload.prompt_contract.neutralized_fields.map(promptFieldLabel)); fillList('prompt-excluded',payload.prompt_contract.excluded_fields.map(promptFieldLabel)); fillList('limitations-list',payload.limitations);
+fillList('prompt-allowed',payload.prompt_contract.allowed_profile_fields.map(promptFieldLabel)); fillList('prompt-neutral',payload.prompt_contract.neutralized_fields.map(promptFieldLabel)); fillList('prompt-excluded',payload.prompt_contract.excluded_fields.map(promptFieldLabel)); fillList('limitations-list',payload.limitations.map((value) => limitationTranslations[value] || value));
 renderChartExplanations(); renderCharts(); populateUserFilters(); renderUsers(); if (users.length) renderUserDetail(users[0]);
 byId('lineage-search').addEventListener('input',renderLineage); byId('lineage-stage-filter').addEventListener('input',renderLineage);
 byId('ranking-round-select').addEventListener('input',renderRankingRound); byId('ablation-round-select').addEventListener('input',renderAblation);

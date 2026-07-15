@@ -3,7 +3,16 @@ from __future__ import annotations
 import re
 from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import asdict, dataclass
-from typing import Protocol
+from typing import Literal, Protocol
+
+FieldProvenance = Literal[
+    "Direct Observed Profile Field",
+    "Historical Behavioral Evidence",
+    "Derived Proxy Metric",
+    "Synthetic Experiment Label",
+    "Runtime Simulation Result",
+]
+FieldUsageStage = Literal["Sampling", "Seed Selection", "Ranking", "LLM Prompt", "Report Only"]
 
 
 class LineageEntry(Protocol):
@@ -11,10 +20,10 @@ class LineageEntry(Protocol):
     def field_name(self) -> str: ...
 
     @property
-    def provenance(self) -> str: ...
+    def provenance(self) -> FieldProvenance: ...
 
     @property
-    def usage_stages(self) -> Sequence[str]: ...
+    def usage_stages(self) -> Sequence[FieldUsageStage]: ...
 
 
 @dataclass(frozen=True)

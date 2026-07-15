@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { expect, test, type Locator, type Page, type TestInfo } from '@playwright/test';
@@ -206,15 +206,29 @@ async function assertRankingReport(
 ): Promise<void> {
   await page.goto(pathToFileURL(path.join(outputDir, 'report.html')).toString());
   await expect(page.getByTestId('final-research-ranking-report')).toBeVisible();
+  for (const bilingualLabel of [
+    'Target Delivery Ranking（目标投放排序）',
+    'TARGET VIDEO（目标视频）',
+    'CORE OBJECTS（核心对象）',
+    'GLOBAL RERANKING（全局重排）',
+    'NETWORK EVIDENCE（网络证据）',
+    'LLM PROMPT CONTRACT（大模型提示合同）',
+    'AGGREGATES（聚合图表）',
+    'USER TRACE（用户追踪）',
+    'ARTIFACTS（交付物）',
+    'LIMITATIONS（研究限制）',
+  ]) {
+    await expect(page.getByTestId('final-research-ranking-report')).toContainText(bilingualLabel);
+  }
 
   const hero = page.getByTestId('ranking-hero');
   await expect(hero).toContainText('当高端酒店开始');
   await expect(hero).toContainText('1,000');
-  await expect(hero).toContainText('Target exposures');
-  await expect(hero).toContainText('Provider decisions');
+  await expect(hero).toContainText('Exposures（曝光）');
+  await expect(hero).toContainText('Decisions（决策）');
   await expect(hero).toContainText('Actions');
   await expect(hero).toContainText('ignore');
-  await expect(hero).toContainText('Below delivery capacity');
+  await expect(hero).toContainText('Below capacity（未投放）');
   await expect(page.getByTestId('target-video-link')).toHaveAttribute('href', payload.target_video.video_url);
   const nextSectionTop = await page.getByTestId('core-objects-section').evaluate(
     (element) => element.getBoundingClientRect().top,
@@ -226,6 +240,22 @@ async function assertRankingReport(
   await expect(page.getByTestId('core-objects-section')).toContainText('PlatformRecommendationModel');
   await page.getByRole('link', { name: '逐轮排序' }).click();
   await expect(page).toHaveURL(/#ranking-rounds$/);
+
+  for (const explanationId of [
+    'sample-section-explanation',
+    'lineage-section-explanation',
+    'ranking-section-explanation',
+    'network-section-explanation',
+    'prompt-section-explanation',
+    'aggregate-section-explanation',
+    'users-section-explanation',
+  ]) {
+    const explanation = page.getByTestId(explanationId);
+    await expect(explanation).toContainText('是什么');
+    await expect(explanation).toContainText('为什么需要');
+    await expect(explanation).toContainText('怎么形成或计算');
+    await expect(explanation).toContainText('本次结果怎么看');
+  }
 
   const sampleSection = page.getByTestId('sample-comparison-section');
   await expect(sampleSection).toContainText(`Seed Users（种子用户） ${payload.sample_comparison.seed_count}`);
@@ -318,11 +348,18 @@ async function assertRankingReport(
   );
   await page.getByTestId('ranking-round-select').selectOption('1');
   await expect(page.getByTestId('round-summary')).toContainText('Eligible');
-  await expect(page.getByTestId('round-summary')).toContainText(/Selected\s*20/);
+  await expect(page.getByTestId('round-summary')).toContainText('Selected（已选择）20');
   await expect(page.getByTestId('ranking-candidate-table').locator('tbody tr')).toHaveCount(20);
-  await expect(page.getByTestId('ranking-candidate-table')).toContainText('Base network');
-  await expect(page.getByTestId('ranking-candidate-table')).toContainText('Engaged neighbor');
-  await expect(page.getByTestId('ranking-candidate-table')).toContainText('Tag affinity');
+  for (const heading of [
+    'Rank（名次）',
+    'User（用户）',
+    'Base network（历史网络）',
+    'Engaged neighbor（已互动邻居）',
+    'Tag affinity（标签亲和度）',
+    'Score（分数）',
+  ]) {
+    await expect(page.getByTestId('ranking-candidate-table')).toContainText(heading);
+  }
 
   const networkSection = page.getByTestId('network-effect-section');
   await expect(networkSection).toContainText('Recommendation Signal Inclusion（推荐信号已纳入）');
@@ -536,7 +573,9 @@ async function assertRankingReport(
 
   for (const [label, relativePath] of Object.entries(payload.downloads)) {
     expect(existsSync(path.join(outputDir, relativePath)), `${label}: ${relativePath}`).toBeTruthy();
-    const href = await page.getByTestId(`download-${label.replaceAll('_', '-')}`).getAttribute('href');
+    const link = page.getByTestId(`download-${label.replaceAll('_', '-')}`);
+    await expect(link).toContainText('（');
+    const href = await link.getAttribute('href');
     expect(fileURLToPath(new URL(href ?? '', page.url()))).toBe(path.join(outputDir, relativePath));
   }
   await expectNoLayoutFailures(page);
@@ -575,13 +614,20 @@ test('configured formal ranking run preserves exact evidence on desktop and mobi
   const payloadPath = path.join(runDir, 'final_research_report_payload.json');
   const reportPath = path.join(runDir, 'report.html');
   expect(existsSync(payloadPath)).toBeTruthy();
-  const payloadBeforeRebuild = readFileSync(payloadPath);
+  const preservedArtifactNames = readdirSync(runDir).filter((name) => name !== 'report.html').sort();
+  const artifactsBeforeRebuild = new Map(
+    preservedArtifactNames.map((name) => [name, readFileSync(path.join(runDir, name))]),
+  );
   execFileSync(path.resolve('.venv/bin/python'), [
     '-c',
     'import sys; from llm_abm_sim.final_research_report import rebuild_final_research_report; rebuild_final_research_report(sys.argv[1])',
     runDir,
   ]);
-  expect(readFileSync(payloadPath).equals(payloadBeforeRebuild)).toBeTruthy();
+  expect(preservedArtifactNames).toHaveLength(24);
+  expect(readdirSync(runDir).filter((name) => name !== 'report.html').sort()).toEqual(preservedArtifactNames);
+  for (const [name, before] of artifactsBeforeRebuild) {
+    expect(readFileSync(path.join(runDir, name)).equals(before), name).toBeTruthy();
+  }
 
   const payload = JSON.parse(readFileSync(payloadPath, 'utf8')) as RankingPayload;
   expect(payload.ranking_diagnostics_summary.batches_with_top_selection_change).toBe(8);
@@ -611,6 +657,26 @@ test('configured formal ranking run preserves exact evidence on desktop and mobi
   ]) {
     await page.setViewportSize(viewport);
     await page.goto(pathToFileURL(reportPath).toString());
+    for (const explanationId of [
+      'sample-section-explanation',
+      'lineage-section-explanation',
+      'ranking-section-explanation',
+      'network-section-explanation',
+      'prompt-section-explanation',
+      'aggregate-section-explanation',
+      'users-section-explanation',
+    ]) {
+      const explanation = page.getByTestId(explanationId);
+      await expect(explanation).toContainText('是什么');
+      await expect(explanation).toContainText('本次结果怎么看');
+    }
+    await expect(page.getByTestId('sample-section-explanation')).toContainText('Base Sample（基础样本）');
+    await expect(page.getByTestId('sample-section-explanation')).toContainText('Final Sample（最终样本）');
+    await page.getByTestId('lineage-search').fill('recommendation_score');
+    await expect(page.getByTestId('lineage-table').locator('tbody tr')).not.toHaveCount(0);
+    await page.getByRole('button', { name: /^recommendation_score/ }).click();
+    await expect(page.getByTestId('lineage-detail')).toContainText('recommendation_score（推荐排序分数）');
+    await page.getByTestId('lineage-search').fill('');
     await expect(page.getByTestId('network-effect-section')).toContainText('8 / 30 个批次');
     await expect(page.getByTestId('sensitivity-section')).toContainText(
       `${weakerAverages.overlap.toFixed(1)} overlap 约等于 ${weakerAverages.changed.toFixed(1)} 个不同选择`,
@@ -642,10 +708,43 @@ test('configured formal ranking run preserves exact evidence on desktop and mobi
     await expect(page.getByTestId('network-activation-explanation')).toContainText('30 条 candidates');
     await expect(page.getByTestId('network-activation-explanation')).toContainText('23 位 selected users');
     await expect(page.getByTestId('network-activation-explanation')).toContainText('23 条 actions');
+    await expect(page.getByTestId('prompt-contract-section')).toContainText('平台排序决定谁看到视频');
+    await expect(page.getByTestId('prompt-contract-section')).toContainText('Target Holdout answers（目标留出答案）');
+    const users = payload.users;
+    await expect(page.getByTestId('visible-user-count')).toHaveText('1,000 / 1,000');
+    await page.getByTestId('result-filter').selectOption('below_delivery_capacity');
+    await expect(page.getByTestId('user-table').locator('tbody tr')).toHaveCount(
+      users.filter((user) => user.result_status === 'below_delivery_capacity').length,
+    );
+    await page.getByTestId('result-filter').selectOption('ignore');
+    await expect(page.getByTestId('user-table').locator('tbody tr')).toHaveCount(
+      users.filter((user) => user.result_status === 'ignore').length,
+    );
+    await page.getByTestId('result-filter').selectOption('');
+    await page.getByTestId('role-filter').selectOption('seed');
+    await expect(page.getByTestId('user-table').locator('tbody tr')).toHaveCount(
+      users.filter((user) => user.sample_role === 'seed').length,
+    );
+    await page.getByTestId('role-filter').selectOption('');
+    await page.getByTestId('seed-filter').selectOption('true');
+    await expect(page.getByTestId('user-table').locator('tbody tr')).toHaveCount(
+      users.filter((user) => user.is_seed).length,
+    );
+    await page.getByTestId('seed-filter').selectOption('');
+    await page.getByTestId('cohort-filter').selectOption('true');
+    await expect(page.getByTestId('user-table').locator('tbody tr')).toHaveCount(
+      users.filter((user) => user.is_network_cohort).length,
+    );
+    await page.getByTestId('cohort-filter').selectOption('');
     await expect(page.getByTestId('proxy-values')).toContainText('Activity（活跃度代理）');
     const proxyExplanation = page.getByTestId('proxy-explanation-guide');
     await proxyExplanation.locator('summary').click();
     await expect(proxyExplanation).toContainText('不能用于因果或心理推断');
+    for (const [label, relativePath] of Object.entries(payload.downloads)) {
+      expect(existsSync(path.join(runDir, relativePath)), `${label}: ${relativePath}`).toBeTruthy();
+      const href = await page.getByTestId(`download-${label.replaceAll('_', '-')}`).getAttribute('href');
+      expect(fileURLToPath(new URL(href ?? '', page.url()))).toBe(path.join(runDir, relativePath));
+    }
     await expectNoLayoutFailures(page);
     await page.screenshot({
       path: testInfo.outputPath(`formal-ranking-report-${viewport.name}.png`),
