@@ -38,6 +38,16 @@ def test_research_explanation_catalog_describes_structured_field_shapes() -> Non
     assert catalog["ranking_rounds.selected_user_ids"].interpretation.startswith("不适用")
 
 
+def test_research_explanation_catalog_pairs_required_english_tokens_with_chinese() -> None:
+    catalog = ResearchExplanationCatalog.from_lineage(_ranking_field_lineage())
+
+    base_sample = catalog["sample_comparison.base_sample_count"]
+    assert "network augmentation（网络补样）" in base_sample.meaning
+    assert "source scope（来源分组）" in base_sample.meaning
+    assert "network sample audit（网络样本审计）" in base_sample.source
+    assert "Final Sample（最终样本）" in catalog["sample_comparison.final_sample_count"].meaning
+
+
 @pytest.mark.parametrize("corruption", ["missing", "duplicate", "unknown"])
 def test_research_explanation_catalog_rejects_lineage_contract_errors(corruption: str) -> None:
     lineage = _ranking_field_lineage()

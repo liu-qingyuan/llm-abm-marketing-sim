@@ -43,7 +43,7 @@ class FieldExplanation:
 _PROVENANCE = {
     "Direct Observed Profile Field": (
         "Direct Observed Profile Field（直接观测画像字段）",
-        "来自 processed 数据中可直接观察或定位的记录。",
+        "来自 processed data（处理后数据）中可直接观察或定位的记录。",
     ),
     "Historical Behavioral Evidence": (
         "Historical Behavioral Evidence（历史行为证据）",
@@ -59,7 +59,7 @@ _PROVENANCE = {
     ),
     "Runtime Simulation Result": (
         "Runtime Simulation Result（仿真运行结果）",
-        "由本次 Target Delivery Ranking runtime 或报告构建过程记录。",
+        "由本次 Target Delivery Ranking（目标投放排序）仿真运行或报告构建过程记录。",
     ),
 }
 
@@ -164,10 +164,10 @@ def _path(chinese_name: str, meaning: str, source: str) -> _ExplanationSpec:
         chinese_name,
         meaning,
         source,
-        "不适用：由 writer 使用固定 artifact 名称写入。",
-        "run 目录内的相对路径。",
+        "不适用：由 writer（写入器）使用固定 artifact（产物）名称写入。",
+        "run directory（运行目录）内的相对路径。",
         "不适用：路径没有高低方向。",
-        "路径只定位允许公开的 processed/runtime artifact，不代表 artifact 内容本身。",
+        "路径只定位允许公开的 processed/runtime artifact（处理后数据/仿真运行产物），不代表产物内容本身。",
     )
 
 
@@ -368,27 +368,27 @@ _USER_FIELD_SPECS = {
     ),
     "in_base_sample": _boolean(
         "是否属于基础样本",
-        "用户是否在 network augmentation 前的初始 Base Sample（基础样本）中。",
-        "network sample audit。",
-        limitation="false 可能表示用户通过网络补入 Final Sample，不代表质量更低。",
+        "用户是否在 network augmentation（网络补样）前的初始 Base Sample（基础样本）中。",
+        "network sample audit（网络样本审计）。",
+        limitation="false 可能表示用户通过网络补入 Final Sample（最终样本），不代表质量更低。",
     ),
     "is_seed": _boolean(
         "是否为种子用户",
-        "用户是否属于 Batch 0 固定曝光的 Seed Users（种子用户）。",
-        "Base Sample 的 seed union 选择结果。",
-        limitation="seed 是研究调度角色，不代表真实平台关键意见领袖。",
+        "用户是否属于 Batch 0（第 0 批）固定曝光的 Seed Users（种子用户）。",
+        "Base Sample（基础样本）的 seed union（种子并集）选择结果。",
+        limitation="seed（种子）是研究调度角色，不代表真实平台关键意见领袖。",
     ),
     "is_network_cohort": _boolean(
         "是否为网络传播识别组",
-        "用户是否为 seeds 在 Historical Set 评论网络中的直接邻居。",
-        "Historical Set 评论派生网络与 sample audit。",
-        limitation="该 cohort 是真实 processed 用户的传播识别组，不是好友关系、合成用户或代表性随机样本。",
+        "用户是否为 Seed Users（种子用户）在 Historical Set（历史集合）评论网络中的直接邻居。",
+        "Historical Set（历史集合）评论派生网络与 sample audit（样本审计）。",
+        limitation="该 cohort（识别组）由真实 processed users（处理后用户）组成，不是好友关系、合成用户或代表性随机样本。",
     ),
     "sample_role": _category(
         "样本角色",
-        "用户在 Final Sample 中的 seed、network_cohort 或 ordinary 角色。",
-        "network sample audit。",
-        values="seed / network_cohort / ordinary。",
+        "用户在 Final Sample（最终样本）中的 seed（种子）、network_cohort（网络传播识别组）或 ordinary（普通）角色。",
+        "network sample audit（网络样本审计）。",
+        values="seed（种子）/ network_cohort（网络传播识别组）/ ordinary（普通）。",
         limitation="角色用于研究抽样与比较，不代表用户的固定社会身份。",
     ),
     "historical_comment_network_weighted_degree": _count(
@@ -607,50 +607,50 @@ _RUN_SPECS = {
 _SAMPLE_SPECS = {
     "base_sample_count": _count(
         "基础样本量",
-        "network augmentation 前按 source scope 形成的初始样本人数。",
-        "network sample audit。",
-        calculation="统计 Base Sample 唯一 user_id。",
+        "network augmentation（网络补样）前按 source scope（来源分组）形成的初始样本人数。",
+        "network sample audit（网络样本审计）。",
+        calculation="统计 Base Sample（基础样本）的唯一 user_id（用户标识）。",
     ),
     "final_sample_count": _count(
         "最终样本量",
-        "真正进入正式 runtime 的最终样本人数。",
-        "network sample audit。",
-        calculation="统计 Final Sample 唯一 user_id。",
+        "真正进入正式 runtime（仿真运行）的 Final Sample（最终样本）人数。",
+        "network sample audit（网络样本审计）。",
+        calculation="统计 Final Sample（最终样本）的唯一 user_id（用户标识）。",
     ),
     "seed_count": _count(
         "种子用户数",
-        "Batch 0 固定曝光的 Seed Users 数量。",
-        "network sample audit。",
-        calculation="统计 Final Sample 中 is_seed=true 的用户。",
+        "Batch 0（第 0 批）固定曝光的 Seed Users（种子用户）数量。",
+        "network sample audit（网络样本审计）。",
+        calculation="统计 Final Sample（最终样本）中 is_seed（是否为种子用户）=true 的用户。",
     ),
     "network_cohort_count": _count(
         "网络传播识别组人数",
-        "Final Sample 中 Historical Set 直接网络邻居的总人数。",
-        "network sample audit。",
-        calculation="统计 is_network_cohort=true 的用户。",
+        "Final Sample（最终样本）中 Historical Set（历史集合）直接网络邻居的总人数。",
+        "network sample audit（网络样本审计）。",
+        calculation="统计 is_network_cohort（是否属于网络传播识别组）=true 的用户。",
     ),
     "network_cohort_added_count": _count(
         "新增网络传播识别组人数",
-        "不在 Base Sample、通过 network augmentation 补入的 Network Cohort 人数。",
-        "network sample audit。",
-        calculation="统计 is_network_cohort=true 且 in_base_sample=false 的用户。",
+        "不在 Base Sample（基础样本）、通过 network augmentation（网络补样）加入的 Network Cohort（网络传播识别组）人数。",
+        "network sample audit（网络样本审计）。",
+        calculation="统计 is_network_cohort（是否属于网络传播识别组）=true 且 in_base_sample（是否属于基础样本）=false 的用户。",
     ),
     "replacement_count": _count(
         "普通用户替换数",
-        "为补入网络用户而从 Base Sample 等量移出的 Ordinary Users 数量。",
-        "network sample audit。",
-        calculation="与新增 cohort 等量替换，以保持 Final Sample 总量不变。",
+        "为补入网络用户而从 Base Sample（基础样本）等量移出的 Ordinary Users（普通用户）数量。",
+        "network sample audit（网络样本审计）。",
+        calculation="与新增 Network Cohort（网络传播识别组）等量替换，以保持 Final Sample（最终样本）总量不变。",
         limitation="替换是研究设计，不表示被替换用户质量更低。",
     ),
     "base_source_scope_counts": _mapping(
         "基础样本来源构成",
-        "Base Sample 按 Video Source Scope 分组的人数。",
-        "network sample audit。",
+        "Base Sample（基础样本）按 Video Source Scope（视频来源分组）统计的人数。",
+        "network sample audit（网络样本审计）。",
     ),
     "final_source_scope_counts": _mapping(
         "最终样本来源构成",
-        "Final Sample 按 Video Source Scope 分组的人数。",
-        "network sample audit。",
+        "Final Sample（最终样本）按 Video Source Scope（视频来源分组）统计的人数。",
+        "network sample audit（网络样本审计）。",
     ),
 }
 
