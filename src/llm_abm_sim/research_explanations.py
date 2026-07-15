@@ -494,7 +494,7 @@ _USER_FIELD_SPECS = {
         "按数据集 reference 对历史回复数归一化。",
     ),
     "global_influence_score": _score(
-        "全局影响力代理",
+        "全平台影响力代理",
         "以 follower evidence 为主的全平台影响力代理。",
         "processed profile 与派生 reference。",
         "按项目 influence 方法归一化 follower 等可观测证据。",

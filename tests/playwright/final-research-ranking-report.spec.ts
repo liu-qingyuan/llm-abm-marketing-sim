@@ -620,7 +620,7 @@ async function assertRankingReport(
   await expect(proxyValues).toBeVisible();
   for (const label of [
     'Activity（活跃度代理）',
-    'Global influence（全局影响力代理）',
+    'Global influence（全平台影响力代理）',
     'Local influence（局部影响力代理）',
     'Local network（局部网络分量）',
     'Local recognition（局部认可分量）',

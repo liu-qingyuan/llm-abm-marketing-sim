@@ -1860,7 +1860,7 @@ const sampleRoleCounts = new Map(); users.forEach((row) => sampleRoleCounts.set(
 const resultStatusCounts = new Map(); users.forEach((row) => resultStatusCounts.set(row.result_status,(resultStatusCounts.get(row.result_status) || 0) + 1));
 const proxyFields = [
   ['activity_score','Activity（活跃度代理）'],
-  ['global_influence_score','Global influence（全局影响力代理）'],
+  ['global_influence_score','Global influence（全平台影响力代理）'],
   ['local_influence_score','Local influence（局部影响力代理）'],
   ['local_network_score','Local network（局部网络分量）'],
   ['local_recognition_score','Local recognition（局部认可分量）'],
