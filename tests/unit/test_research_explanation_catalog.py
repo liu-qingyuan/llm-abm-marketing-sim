@@ -1,3 +1,5 @@
+import re
+
 import pytest
 
 from llm_abm_sim.final_research_report import _ranking_field_lineage
@@ -58,6 +60,15 @@ def test_research_explanation_catalog_pairs_required_english_tokens_with_chinese
             explanation.limitation,
         ):
             assert _pair_domain_tokens(value) == value, explanation.field_name
+            without_paired_tokens = re.sub(
+                r"[A-Za-z][A-Za-z0-9_./-]*(?: [A-Za-z0-9_./-]+)*（[^）]+）",
+                "",
+                value,
+            )
+            assert not re.search(r"[A-Za-z][A-Za-z0-9_./-]*", without_paired_tokens), (
+                explanation.field_name,
+                without_paired_tokens,
+            )
 
 
 @pytest.mark.parametrize("corruption", ["missing", "duplicate", "unknown"])
