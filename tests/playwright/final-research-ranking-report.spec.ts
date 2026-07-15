@@ -335,7 +335,9 @@ async function assertRankingReport(
   await expect(ablationSection).toContainText('不是第二条完整 trajectory（轨迹）');
   await expect(ablationSection).toContainText('不是因果实验');
   await page.getByTestId('ablation-round-select').selectOption('1');
-  await expect(page.getByTestId('ablation-summary')).toContainText('Top20 overlap');
+  await expect(page.getByTestId('ablation-summary')).toContainText(
+    `Top${payload.run.delivery_capacity} overlap`,
+  );
   await expect(page.getByTestId('ablation-summary')).toContainText('network-added');
   await expect(page.getByTestId('ablation-summary')).toContainText('network-removed');
   await expect(page.getByTestId('ablation-rank-deltas')).toContainText(/rank delta/i);
