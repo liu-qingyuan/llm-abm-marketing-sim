@@ -1569,11 +1569,31 @@ def _render_ranking_report(payload: FinalResearchRankingReportPayload) -> str:
     <div class="lineage-layout"><div class="table-wrap lineage-table"><table data-testid="lineage-table"><thead><tr><th>Field（字段）</th><th>中文名</th><th>Field Provenance（字段来源）</th><th>Field Usage Stage（字段使用阶段）</th></tr></thead><tbody id="lineage-table-body"></tbody></table></div><aside id="lineage-detail" class="lineage-detail" data-testid="lineage-detail" aria-live="polite"></aside></div>
   </section>
 
-  <section id="ranking-rounds" class="content-band" data-testid="ranking-rounds-section"><div class="section-heading"><div><span class="eyebrow">GLOBAL RERANKING</span><h2>逐轮全局 Top{payload.run.delivery_capacity}</h2><p class="formula">{escape(payload.run.ranking_formula)}</p><p class="muted">{escape(payload.run.engaged_neighbor_formula)} · Delivery Capacity {payload.run.delivery_capacity}</p></div><label>Batch<select id="ranking-round-select" data-testid="ranking-round-select"></select></label></div><div id="round-summary" class="round-summary" data-testid="round-summary"></div><div class="table-wrap"><table data-testid="ranking-candidate-table"><thead><tr><th>Rank</th><th>User</th><th>Base network</th><th>Engaged neighbor</th><th>Tag affinity</th><th>Score</th></tr></thead><tbody id="ranking-candidate-body"></tbody></table></div></section>
+  <section id="ranking-rounds" class="content-band" data-testid="ranking-rounds-section">
+    <div class="section-heading"><div><span class="eyebrow">GLOBAL RERANKING</span><h2>逐轮全局 Top{payload.run.delivery_capacity}</h2><p>平台使用 50/30/20 公式排序：历史评论网络相关性 50%、已互动直接邻居信号 30%、目标标签亲和度 20%。</p><p class="formula">{escape(payload.run.ranking_formula)}</p></div><label>Batch<select id="ranking-round-select" data-testid="ranking-round-select"></select></label></div>
+    <div class="ranking-term-grid" data-testid="ranking-formula-terms">
+      <article><h3><code>base_network_relevance</code>（历史评论网络相关性）</h3><p>0..1；越高表示用户在 Historical Set（历史集合）评论网络中的相关性越强，按 50% 权重进入排序。</p></article>
+      <article><h3><code>engaged_neighbor_signal</code>（已互动直接邻居信号）</h3><p>0..1；<code>min(1, engaged_neighbor_count / 3)</code> 表示三位已互动直接邻居达到封顶。它只影响后续批次，按 30% 权重进入排序。</p></article>
+      <article><h3><code>historical_tag_affinity</code>（历史标签亲和度）</h3><p>0..1；越高表示历史互动标签与目标视频标签越匹配，按 20% 权重进入排序。</p></article>
+      <article><h3><code>recommendation_score</code>（推荐排序分数）</h3><p>0..1；三项加权贡献之和，越高越靠前，只用于同批候选排序，不是单个用户的曝光或互动概率。</p></article>
+    </div>
+    <div class="ranking-method-notes">
+      <article><h3>Delivery Capacity {payload.run.delivery_capacity}（每批投放容量）</h3><p>Top{payload.run.delivery_capacity} 表示每批最多投放 {payload.run.delivery_capacity} 人，不是用户互动概率或 action 配额；曝光后的 action 由 LLM Decision Adapter 另行决定。</p></article>
+      <article><h3>Batch 0 与 Batch 1–29</h3><p>Batch 0 强制曝光预先选定的 seeds；Batch 1–29 每批对全部尚未处理的 eligible users（合格用户）重新计算分数并全局重排。</p></article>
+    </div>
+    <article id="ranking-worked-example" class="ranking-worked-example" data-testid="ranking-worked-example"></article>
+    <div class="section-heading round-heading"><div><h3>逐批候选结果</h3><p class="muted">选择一批查看进入当批 Delivery Capacity（投放容量）的候选。</p></div></div>
+    <div id="round-summary" class="round-summary" data-testid="round-summary"></div><div class="table-wrap"><table data-testid="ranking-candidate-table"><thead><tr><th>Rank</th><th>User</th><th>Base network</th><th>Engaged neighbor</th><th>Tag affinity</th><th>Score</th></tr></thead><tbody id="ranking-candidate-body"></tbody></table></div>
+  </section>
 
-  <section id="network-effect" class="content-band" data-testid="network-effect-section"><span class="eyebrow">NETWORK EVIDENCE</span><h2>Recommendation Signal Inclusion 与 Observed Recommendation Signal Effect</h2><div id="network-effect-summary" class="effect-grid"></div><div class="diagnostic-layout"><article id="paired-ablation" class="diagnostic-panel" data-testid="paired-ablation-section"><div class="section-heading"><div><h3>Paired ranking · shadow diagnostic</h3><p class="muted">同批冻结证据，不推进第二套用户状态。</p></div><label>Batch<select id="ablation-round-select" data-testid="ablation-round-select"></select></label></div><div id="ablation-summary" class="ablation-summary" data-testid="ablation-summary"></div><div class="table-wrap rank-delta-table"><table data-testid="ablation-rank-deltas"><thead><tr><th>User</th><th>Full rank</th><th>No-network rank</th><th>Rank delta</th><th>Selection effect</th></tr></thead><tbody id="ablation-rank-delta-body"></tbody></table></div></article><article class="diagnostic-panel" data-testid="sensitivity-section"><h3>最小权重敏感性</h3><div id="sensitivity-variants" class="sensitivity-variants"></div></article></div></section>
+  <section id="network-effect" class="content-band" data-testid="network-effect-section">
+    <span class="eyebrow">NETWORK EVIDENCE</span><h2>Recommendation Signal Inclusion（推荐信号已纳入）与 Observed Recommendation Signal Effect（推荐信号产生可观测影响）</h2>
+    <div class="network-reading-note"><p><strong>Inclusion（纳入）</strong>只说明网络项进入公式并具有明确权重，不能单独证明投放结果改变。</p><p><strong>Observed Effect（可观测影响）</strong>要求移除网络项后，同批 Top20 membership（成员集合）实际发生变化。</p></div>
+    <div id="network-effect-summary" class="effect-grid"></div>
+    <div class="diagnostic-layout"><article id="paired-ablation" class="diagnostic-panel" data-testid="paired-ablation-section"><div class="section-heading"><div><h3>Paired ranking · shadow diagnostic</h3><p class="muted">同批冻结 persisted candidate evidence（持久化候选证据）并运行 shadow no-network（无网络影子排序），零额外 Decision Adapter calls；它不是第二条完整 trajectory（轨迹），也不是因果实验。</p></div><label>Batch<select id="ablation-round-select" data-testid="ablation-round-select"></select></label></div><div id="ablation-summary" class="ablation-summary" data-testid="ablation-summary"></div><div class="table-wrap rank-delta-table"><table data-testid="ablation-rank-deltas"><thead><tr><th>User</th><th>Full rank</th><th>No-network rank</th><th>Rank delta</th><th>Selection effect</th></tr></thead><tbody id="ablation-rank-delta-body"></tbody></table></div></article><article class="diagnostic-panel" data-testid="sensitivity-section"><h3>Ranking Weight Sensitivity（排序权重敏感性）</h3><p class="muted">同时阅读平均 Top20 overlap（重合人数）与平均 changed selections（不同选择数）；例如 19.7 overlap 约等于 0.3 个不同选择。</p><div id="sensitivity-variants" class="sensitivity-variants"></div></article></div>
+  </section>
 
-  <section class="content-band" data-testid="prompt-contract-section"><span class="eyebrow">LLM PROMPT CONTRACT</span><h2>决策证据隔离</h2><p>{escape(payload.prompt_contract.statement)}</p><div class="prompt-grid"><article><h3>允许字段</h3><ul id="prompt-allowed"></ul></article><article><h3>空缺 / 中性字段</h3><ul id="prompt-neutral"></ul></article><article><h3>排除字段</h3><ul id="prompt-excluded"></ul></article></div></section>
+  <section class="content-band" data-testid="prompt-contract-section"><span class="eyebrow">LLM PROMPT CONTRACT</span><h2>Prompt Isolation（提示证据隔离）</h2><div class="prompt-reading-note"><p><strong>阶段一：</strong>平台排序决定谁看到视频；<strong>阶段二：</strong>LLM 决定曝光后的 action（动作）。</p><p>使用 neutral PeerContext（中性同伴上下文）是为了防止评论网络 evidence 同时进入 ranking 和 LLM 决策，不是数据丢失。页面只展示 allowlisted evidence（允许证据），raw Prompt 与 provider payload 保持不可见。</p></div><div class="prompt-grid"><article><h3>允许字段（Allowed）</h3><ul id="prompt-allowed"></ul></article><article><h3>空缺 / 中性字段（Neutral）</h3><ul id="prompt-neutral"></ul></article><article><h3>排除字段（Excluded）</h3><ul id="prompt-excluded"></ul></article></div></section>
 
   <section class="content-band"><span class="eyebrow">AGGREGATES</span><h2>同源聚合图表</h2><div class="chart-grid"><article><h3>逐批投放</h3><div id="batch-delivery-chart" class="batch-chart" data-testid="batch-delivery-chart"></div></article><article><h3>Action 与容量状态</h3><div id="action-chart" class="bar-chart" data-testid="action-chart"></div></article><article><h3>Provider failure</h3><div id="provider-failure-chart" class="bar-chart" data-testid="provider-failure-chart"></div></article><article><h3>动态网络激活</h3><div id="network-activation-chart" class="bar-chart" data-testid="network-activation-chart"></div></article><article class="wide"><h3>Ablation Top{payload.run.delivery_capacity} overlap</h3><div id="ablation-overlap-chart" class="batch-chart" data-testid="ablation-overlap-chart"></div></article></div></section>
 
@@ -1689,11 +1709,28 @@ code { color:var(--blue); }
 .lineage-detail dt { color:var(--muted); font-size:.72rem; font-weight:800; }
 .lineage-detail dd { margin:2px 0 0; overflow-wrap:anywhere; font-size:.8rem; }
 .formula { margin:0 0 4px; color:var(--blue); font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:.82rem; overflow-wrap:anywhere; }
+.ranking-term-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); border-block:1px solid var(--line); }
+.ranking-term-grid article { min-width:0; padding:14px 0; }
+.ranking-term-grid article:nth-child(odd) { padding-right:20px; border-right:1px solid var(--line); }
+.ranking-term-grid article:nth-child(even) { padding-left:20px; }
+.ranking-term-grid article:nth-child(n+3) { border-top:1px solid var(--line); }
+.ranking-term-grid p,.ranking-method-notes p,.ranking-worked-example p { margin-bottom:0; color:var(--muted); }
+.ranking-method-notes { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:20px; margin:18px 0; }
+.ranking-method-notes article { padding-left:13px; border-left:4px solid var(--gold); }
+.ranking-worked-example { margin:18px 0 24px; padding:16px; border:1px solid var(--line); border-top:4px solid var(--blue); border-radius:6px; background:var(--paper); }
+.ranking-worked-example-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:9px; margin:12px 0; }
+.ranking-worked-example-grid div { min-width:0; padding:10px; background:#fff; }
+.ranking-worked-example-grid strong,.ranking-worked-example-grid span { display:block; overflow-wrap:anywhere; }
+.ranking-worked-example-grid span { color:var(--muted); font-size:.75rem; }
+.worked-total { padding-top:10px; border-top:1px solid var(--line); color:var(--ink) !important; font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-weight:750; overflow-wrap:anywhere; }
+.round-heading { margin-top:4px; }
 .round-summary,.ablation-summary { display:grid; grid-template-columns:repeat(6,minmax(0,1fr)); gap:8px; margin-bottom:12px; }
 .round-summary article,.ablation-summary article { padding:10px; border-top:3px solid var(--gold); background:var(--paper); }
 .round-summary strong,.round-summary span,.ablation-summary strong,.ablation-summary span { display:block; }
 .round-summary span,.ablation-summary span { color:var(--muted); font-size:.7rem; }
 .effect-grid article:nth-child(2) { border-left-color:var(--gold); }
+.network-reading-note,.prompt-reading-note { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:20px; margin:0 0 18px; padding-block:12px; border-block:1px solid var(--line); }
+.network-reading-note p,.prompt-reading-note p { margin:0; color:var(--muted); }
 .diagnostic-layout { display:grid; grid-template-columns:minmax(0,1.4fr) minmax(300px,.6fr); gap:16px; }
 .rank-delta-table { max-height:310px; }
 .sensitivity-variants { display:grid; gap:9px; }
@@ -1738,7 +1775,7 @@ code { color:var(--blue); }
 .limitations-band { display:grid; grid-template-columns:180px 1fr; background:#fff8ec; }
 .limitations-band li { margin:5px 0; }
 @media (max-width:1000px) { .hero-funnel { grid-template-columns:repeat(3,minmax(0,1fr)); }.sample-metrics,.effect-grid { grid-template-columns:repeat(2,minmax(0,1fr)); }.lineage-layout,.diagnostic-layout { grid-template-columns:1fr; }.lineage-detail { min-height:0; }.filters { grid-template-columns:repeat(3,minmax(0,1fr)); }.trace-groups { grid-template-columns:repeat(2,minmax(0,1fr)); } }
-@media (max-width:700px) { main { border:0; }.topbar { position:static; align-items:flex-start; flex-direction:column; }.workflow-nav { gap:7px 14px; }.workflow-nav a { font-size:.74rem; }.ranking-hero { min-height:610px; padding-top:24px; }.ranking-hero h1 { font-size:2.35rem; }.hero-copy { display:block; }.hero-meta { display:flex; flex-wrap:wrap; margin-top:12px; border:0; }.hero-meta span { padding:5px 9px; border:1px solid #cbd7d0; }.hero-funnel { grid-template-columns:repeat(2,minmax(0,1fr)); margin-top:16px; }.hero-funnel article { min-height:74px; padding:9px; }.hero-funnel article:nth-child(n+6),.hero-funnel p { display:none; }.hero-funnel strong { font-size:1.25rem; }.object-flow { grid-template-columns:1fr; }.object-flow i { transform:rotate(90deg); justify-self:center; }.section-heading { align-items:flex-start; flex-direction:column; }.sample-explanation,.sample-metrics,.effect-grid,.split-grid,.scope-intro,.lineage-legends,.prompt-grid,.chart-grid,.filters,.trace-groups { grid-template-columns:1fr; }.sample-explanation article:nth-child(odd) { padding-right:0; border-right:0; }.sample-explanation article + article { border-top:1px solid var(--line); }.lineage-legends section + section { padding-left:0; border-top:1px solid var(--line); border-left:0; }.round-summary,.ablation-summary { grid-template-columns:repeat(2,minmax(0,1fr)); }.chart-grid .wide { grid-column:auto; }.compact-filters { grid-template-columns:1fr; }.downloads { grid-template-columns:repeat(2,minmax(0,1fr)); }.limitations-band { grid-template-columns:1fr; }.users-table { max-height:540px; } }
+@media (max-width:700px) { main { border:0; }.topbar { position:static; align-items:flex-start; flex-direction:column; }.workflow-nav { gap:7px 14px; }.workflow-nav a { font-size:.74rem; }.ranking-hero { min-height:610px; padding-top:24px; }.ranking-hero h1 { font-size:2.35rem; }.hero-copy { display:block; }.hero-meta { display:flex; flex-wrap:wrap; margin-top:12px; border:0; }.hero-meta span { padding:5px 9px; border:1px solid #cbd7d0; }.hero-funnel { grid-template-columns:repeat(2,minmax(0,1fr)); margin-top:16px; }.hero-funnel article { min-height:74px; padding:9px; }.hero-funnel article:nth-child(n+6),.hero-funnel p { display:none; }.hero-funnel strong { font-size:1.25rem; }.object-flow { grid-template-columns:1fr; }.object-flow i { transform:rotate(90deg); justify-self:center; }.section-heading { align-items:flex-start; flex-direction:column; }.sample-explanation,.sample-metrics,.effect-grid,.split-grid,.scope-intro,.lineage-legends,.prompt-grid,.chart-grid,.filters,.trace-groups,.ranking-term-grid,.ranking-method-notes,.ranking-worked-example-grid,.network-reading-note,.prompt-reading-note { grid-template-columns:1fr; }.sample-explanation article:nth-child(odd) { padding-right:0; border-right:0; }.sample-explanation article + article { border-top:1px solid var(--line); }.ranking-term-grid article:nth-child(odd),.ranking-term-grid article:nth-child(even) { padding:12px 0; border-right:0; }.ranking-term-grid article + article { border-top:1px solid var(--line); }.lineage-legends section + section { padding-left:0; border-top:1px solid var(--line); border-left:0; }.round-summary,.ablation-summary { grid-template-columns:repeat(2,minmax(0,1fr)); }.chart-grid .wide { grid-column:auto; }.compact-filters { grid-template-columns:1fr; }.downloads { grid-template-columns:repeat(2,minmax(0,1fr)); }.limitations-band { grid-template-columns:1fr; }.users-table { max-height:540px; } }
 """
 
 
@@ -1774,6 +1811,22 @@ function element(tag, className, textValue) {
 function fillList(id, values) {
   const root = byId(id);
   values.forEach((value) => root.appendChild(element('li', '', value)));
+}
+
+function promptFieldLabel(fieldName) {
+  const explanation = explanationCatalog.get(fieldName);
+  if (explanation) return `${fieldName}（${explanation.chinese_name}）`;
+  const labels = {
+    'peer_context.exposed_neighbors':'已曝光邻居数',
+    'peer_context.engaged_neighbors':'已互动邻居数',
+    'peer_context.engagement_ratio':'邻居互动比例',
+    'peer_context.influential_engaged_neighbors':'高影响已互动邻居数',
+    'peer_context.visible_likes':'可见点赞数',
+    'peer_context.visible_comments':'可见评论数',
+    'peer_context.visible_shares':'可见分享数',
+    'Target Holdout answers':'目标留出答案',
+  };
+  return `${fieldName}（${labels[fieldName] || '报告字段'}）`;
 }
 
 function renderHero() {
@@ -1895,6 +1948,35 @@ function summaryItem(label, value) {
   const article = element('article'); article.append(element('span','',label),element('strong','',display(value))); return article;
 }
 
+function renderRankingWorkedExample() {
+  const evidence = payload.ranking_rounds.flatMap((round) => round.candidates.map((candidate) => ({time_step:round.time_step,...candidate})));
+  const candidate = evidence.find((row) => !row.is_seed && row.selected && row.engaged_neighbor_signal > 0)
+    || evidence.find((row) => !row.is_seed && row.selected)
+    || evidence[0];
+  if (!candidate) return;
+  const weights = payload.ranking_diagnostics_summary.main_weights;
+  const contributions = [
+    ['base_network_relevance',candidate.base_network_relevance,weights.base_network],
+    ['engaged_neighbor_signal',candidate.engaged_neighbor_signal,weights.engaged_neighbor],
+    ['historical_tag_affinity',candidate.historical_tag_affinity,weights.tag_affinity],
+  ];
+  const root = byId('ranking-worked-example');
+  root.append(
+    element('h3','',`Persisted Candidate Evidence（持久化候选证据）复算示例`),
+    element('p','',`User ${candidate.user_id} · Batch ${candidate.time_step} · Rank ${candidate.ranking_position} · ${candidate.selected ? '已曝光' : '未曝光'}`),
+  );
+  const grid = element('div','ranking-worked-example-grid');
+  contributions.forEach(([field,value,weight]) => {
+    const contribution = Number(value) * Number(weight);
+    const item = element('div');
+    item.append(element('strong','',String(field)),element('span','',`${fixed(value)} × ${(Number(weight) * 100).toFixed(0)}% = ${fixed(contribution)}`));
+    grid.appendChild(item);
+  });
+  root.appendChild(grid);
+  const total = contributions.reduce((sum,[,value,weight]) => sum + Number(value) * Number(weight),0);
+  root.appendChild(element('p','worked-total',`${contributions.map(([,value,weight]) => fixed(Number(value) * Number(weight))).join(' + ')} = ${fixed(total)} recommendation_score（持久化值 ${fixed(candidate.recommendation_score)}）`));
+}
+
 function renderRankingRound() {
   const timeStep = Number(byId('ranking-round-select').value);
   const round = payload.ranking_rounds.find((row) => row.time_step === timeStep);
@@ -1916,8 +1998,8 @@ function renderNetworkSummary() {
   const summary = payload.ranking_diagnostics_summary;
   const weights = summary.main_weights;
   const weightLabel = `${weights.base_network * 100}/${weights.engaged_neighbor * 100}/${weights.tag_affinity * 100}`;
-  const inclusion = metric('Recommendation Signal Inclusion',summary.network_signals_in_formula ? 'Included' : 'Not included',`${weightLabel} weights · diagnostic adapter calls ${summary.diagnostic_decision_adapter_calls}`);
-  const effect = metric('Observed Recommendation Signal Effect',summary.top_selection_changed ? `${topLabel} changed` : `No ${topLabel} change`,`${summary.batches_with_top_selection_change} batches changed`);
+  const inclusion = metric('Recommendation Signal Inclusion（推荐信号已纳入）',summary.network_signals_in_formula ? '已纳入' : '未纳入',`${weightLabel} 权重 · diagnostic adapter calls ${summary.diagnostic_decision_adapter_calls}`);
+  const effect = metric('Observed Recommendation Signal Effect（推荐信号产生可观测影响）',summary.top_selection_changed ? `${topLabel} 已改变` : `${topLabel} 未改变`,`${summary.batches_with_top_selection_change} / ${payload.ranking_rounds.length} 个批次的同批 ${topLabel} membership 发生变化`);
   byId('network-effect-summary').append(inclusion,effect);
 }
 
@@ -1941,10 +2023,17 @@ function renderAblation() {
 }
 
 function renderSensitivity() {
+  const descriptions = {
+    main_50_30_20:['主方案（50/30/20）','预声明研究假设，作为正式排序与比较基准。'],
+    weaker_network_40_20_40:['网络较弱（40/20/40）','降低两项网络权重，检查投放选择对主权重假设的稳健性。'],
+    no_network_0_0_100:['无网络（0/0/100）','移除评论网络贡献，只保留目标标签亲和度作为对照。'],
+  };
   payload.ranking_diagnostics.weight_sensitivity.variants.forEach((variant) => {
     const averageOverlap = variant.batches.reduce((total,batch) => total + batch.overlap_with_main_user_ids.length,0) / Math.max(1,variant.batches.length);
+    const averageChanged = variant.batches.reduce((total,batch) => total + batch.added_vs_main_user_ids.length,0) / Math.max(1,variant.batches.length);
+    const [name,purpose] = descriptions[variant.variant_id] || [variant.variant_id,'预声明权重对照。'];
     const article = element('article'); article.dataset.variantId = variant.variant_id;
-    article.append(element('strong','',variant.variant_id),element('span','',`${variant.weights.base_network * 100}/${variant.weights.engaged_neighbor * 100}/${variant.weights.tag_affinity * 100}`),element('span','',`平均 Top20 overlap ${averageOverlap.toFixed(1)}`));
+    article.append(element('strong','',name),element('span','',purpose),element('span','',`平均 Top20 overlap ${averageOverlap.toFixed(1)} · 平均 changed selections ${averageChanged.toFixed(1)}`));
     byId('sensitivity-variants').appendChild(article);
   });
 }
@@ -2025,11 +2114,11 @@ function renderUserDetail(row) {
   historyTable.append(head,body); historyWrap.appendChild(historyTable); historyPanel.appendChild(historyWrap); root.append(groups,historyPanel);
 }
 
-renderHero(); renderSample(); renderLineageMetadata(); renderLineage();
+renderHero(); renderSample(); renderLineageMetadata(); renderLineage(); renderRankingWorkedExample();
 populateRoundSelect('ranking-round-select',payload.ranking_rounds); renderRankingRound();
 const ablationBatches = payload.ranking_diagnostics.paired_ablation.batches; populateRoundSelect('ablation-round-select',ablationBatches); renderAblation();
 renderNetworkSummary(); renderSensitivity();
-fillList('prompt-allowed',payload.prompt_contract.allowed_profile_fields); fillList('prompt-neutral',payload.prompt_contract.neutralized_fields); fillList('prompt-excluded',payload.prompt_contract.excluded_fields); fillList('limitations-list',payload.limitations);
+fillList('prompt-allowed',payload.prompt_contract.allowed_profile_fields.map(promptFieldLabel)); fillList('prompt-neutral',payload.prompt_contract.neutralized_fields.map(promptFieldLabel)); fillList('prompt-excluded',payload.prompt_contract.excluded_fields.map(promptFieldLabel)); fillList('limitations-list',payload.limitations);
 renderCharts(); populateUserFilters(); renderUsers(); if (users.length) renderUserDetail(users[0]);
 byId('lineage-search').addEventListener('input',renderLineage); byId('lineage-stage-filter').addEventListener('input',renderLineage);
 byId('ranking-round-select').addEventListener('input',renderRankingRound); byId('ablation-round-select').addEventListener('input',renderAblation);

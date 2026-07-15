@@ -201,6 +201,27 @@ async function assertRankingReport(
   await expect(rankingSection).toContainText('0.30');
   await expect(rankingSection).toContainText('0.20');
   await expect(rankingSection).toContainText('Delivery Capacity 20');
+  await expect(rankingSection).toContainText('历史评论网络相关性 50%');
+  await expect(rankingSection).toContainText('已互动直接邻居信号 30%');
+  await expect(rankingSection).toContainText('目标标签亲和度 20%');
+  await expect(rankingSection).toContainText('0..1');
+  await expect(rankingSection).toContainText('三位已互动直接邻居达到封顶');
+  await expect(rankingSection).toContainText('只影响后续批次');
+  await expect(rankingSection).toContainText('每批最多投放 20 人');
+  await expect(rankingSection).toContainText('不是用户互动概率或 action 配额');
+  await expect(rankingSection).toContainText('Batch 0');
+  await expect(rankingSection).toContainText('Batch 1–29');
+  const workedExample = page.getByTestId('ranking-worked-example');
+  await expect(workedExample).toContainText('Persisted Candidate Evidence（持久化候选证据）');
+  await expect(workedExample).toContainText('base_network_relevance');
+  await expect(workedExample).toContainText('engaged_neighbor_signal');
+  await expect(workedExample).toContainText('historical_tag_affinity');
+  await expect(workedExample).toContainText('recommendation_score');
+  await expect(workedExample).toContainText(/× 50% = \d+\.\d{4}/);
+  await expect(workedExample).toContainText(/× 30% = \d+\.\d{4}/);
+  await expect(workedExample).toContainText(/× 20% = \d+\.\d{4}/);
+  await expect(workedExample).toContainText(/Rank \d+/);
+  await expect(workedExample).toContainText(/已曝光|未曝光/);
   await page.getByTestId('ranking-round-select').selectOption('1');
   await expect(page.getByTestId('round-summary')).toContainText('Eligible');
   await expect(page.getByTestId('round-summary')).toContainText(/Selected\s*20/);
@@ -210,25 +231,43 @@ async function assertRankingReport(
   await expect(page.getByTestId('ranking-candidate-table')).toContainText('Tag affinity');
 
   const networkSection = page.getByTestId('network-effect-section');
-  await expect(networkSection).toContainText('Recommendation Signal Inclusion');
-  await expect(networkSection).toContainText('Observed Recommendation Signal Effect');
+  await expect(networkSection).toContainText('Recommendation Signal Inclusion（推荐信号已纳入）');
+  await expect(networkSection).toContainText('网络项进入公式');
+  await expect(networkSection).toContainText('不能单独证明投放结果改变');
+  await expect(networkSection).toContainText('Observed Recommendation Signal Effect（推荐信号产生可观测影响）');
+  await expect(networkSection).toContainText(/\d+ \/ 30 个批次/);
+  await expect(networkSection).toContainText('同批 Top20 membership');
   const ablationSection = page.getByTestId('paired-ablation-section');
   await expect(ablationSection).toContainText('shadow diagnostic');
+  await expect(ablationSection).toContainText('冻结 persisted candidate evidence（持久化候选证据）');
+  await expect(ablationSection).toContainText('零额外 Decision Adapter calls');
+  await expect(ablationSection).toContainText('不是第二条完整 trajectory（轨迹）');
+  await expect(ablationSection).toContainText('不是因果实验');
   await page.getByTestId('ablation-round-select').selectOption('1');
   await expect(page.getByTestId('ablation-summary')).toContainText('Top20 overlap');
   await expect(page.getByTestId('ablation-summary')).toContainText('network-added');
   await expect(page.getByTestId('ablation-summary')).toContainText('network-removed');
   await expect(page.getByTestId('ablation-rank-deltas')).toContainText(/rank delta/i);
   await expect(page.getByTestId('sensitivity-section').locator('[data-variant-id]')).toHaveCount(3);
+  await expect(page.getByTestId('sensitivity-section')).toContainText('主方案（50/30/20）');
+  await expect(page.getByTestId('sensitivity-section')).toContainText('网络较弱（40/20/40）');
+  await expect(page.getByTestId('sensitivity-section')).toContainText('无网络（0/0/100）');
+  await expect(page.getByTestId('sensitivity-section')).toContainText('平均 changed selections');
+  await expect(page.getByTestId('sensitivity-section')).toContainText('19.7 overlap 约等于 0.3 个不同选择');
   await expect(page.getByTestId('sensitivity-section')).not.toContainText('parameter optimization');
   await expect(page.getByTestId('sensitivity-section')).not.toContainText('production accuracy');
 
   const promptSection = page.getByTestId('prompt-contract-section');
-  await expect(promptSection).toContainText('允许字段');
-  await expect(promptSection).toContainText('空缺 / 中性字段');
-  await expect(promptSection).toContainText('排除字段');
-  await expect(promptSection).toContainText('recommendation_score');
-  await expect(promptSection).toContainText('Target Holdout answers');
+  await expect(promptSection).toContainText('平台排序决定谁看到视频');
+  await expect(promptSection).toContainText('LLM 决定曝光后的 action');
+  await expect(promptSection).toContainText('防止评论网络 evidence 同时进入 ranking 和 LLM 决策');
+  await expect(promptSection).toContainText('不是数据丢失');
+  await expect(promptSection).toContainText('允许字段（Allowed）');
+  await expect(promptSection).toContainText('空缺 / 中性字段（Neutral）');
+  await expect(promptSection).toContainText('排除字段（Excluded）');
+  await expect(promptSection).toContainText('recommendation_score（推荐排序分数）');
+  await expect(promptSection).toContainText('Target Holdout answers（目标留出答案）');
+  await expect(promptSection).toContainText('raw Prompt 与 provider payload 保持不可见');
 
   for (const chartId of [
     'sample-composition-chart',
