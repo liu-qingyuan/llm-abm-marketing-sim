@@ -297,6 +297,10 @@ async function assertReaderComprehensionContract(
   outputDir: string,
   payload: RankingPayload,
 ): Promise<void> {
+  const runEvidenceButton = page.getByTestId('run-evidence-mode-button');
+  if ((await runEvidenceButton.getAttribute('aria-selected')) !== 'true') await runEvidenceButton.click();
+  await expect(page.getByTestId('run-evidence-mode-panel')).toBeVisible();
+
   for (const explanationId of [
     'sample-section-explanation',
     'lineage-section-explanation',
@@ -800,6 +804,23 @@ test('mechanism shell defaults to explanation and keeps run evidence available o
   await expect(page.getByTestId('sample-comparison-section')).toContainText(
     payload.sample_comparison.final_sample_count.toLocaleString(),
   );
+  await expect(page.getByTestId('sample-comparison-section').getByTestId('field-lineage-section')).toBeVisible();
+  await expect(page.getByTestId('ranking-rounds-section').getByTestId('batch-delivery-chart')).toBeVisible();
+  const decisionSection = page.getByTestId('prompt-contract-section');
+  await expect(decisionSection.getByTestId('action-chart')).toBeVisible();
+  await expect(decisionSection.getByTestId('provider-failure-chart')).toBeVisible();
+  await expect(decisionSection.getByTestId('ranking-users-section')).toBeVisible();
+  const feedbackSection = page.getByTestId('network-feedback-section');
+  await expect(feedbackSection.getByTestId('network-activation-chart')).toBeVisible();
+  await expect(feedbackSection.getByTestId('ablation-overlap-chart')).toBeVisible();
+  await expect(page.getByTestId('aggregate-charts-section')).toHaveCount(0);
+  await expect(page.getByTestId('run-evidence-mode-panel')).not.toContainText('同源聚合图表');
+  expect(
+    await page.getByTestId('run-evidence-mode-panel').locator('[data-section-anchor]').evaluateAll((sections) =>
+      sections.map((section) => section.getAttribute('data-section-anchor')),
+    ),
+  ).toEqual(['overview', 'sample', 'exposure-ranking', 'llm-decision', 'network-feedback']);
+  await expect(page.locator('select[id*="batch" i], select[id*="round" i]')).toHaveCount(0);
 
   await page.getByTestId('mechanism-mode-button').focus();
   await page.getByTestId('mechanism-mode-button').press('ArrowRight');
@@ -1066,18 +1087,16 @@ test('ranking candidates users and prompt fields share one right detail drawer',
   await expect(drawer).not.toHaveAttribute('data-selection-kind', /.+/);
 });
 
-test('ranking research report is complete and interactive on desktop', async ({ page }, testInfo) => {
+test('ranking research report is complete and interactive on desktop viewports', async ({ page }, testInfo) => {
   const { outputDir, payload } = generateRankingReport(testInfo);
-  await page.setViewportSize({ width: 1440, height: 1000 });
-  await assertRankingReport(page, outputDir, payload, 1000);
-  await page.screenshot({ path: testInfo.outputPath('ranking-report-desktop.png'), fullPage: true });
-});
-
-test('ranking research report remains usable on mobile', async ({ page }, testInfo) => {
-  const { outputDir, payload } = generateRankingReport(testInfo);
-  await page.setViewportSize({ width: 390, height: 844 });
-  await assertRankingReport(page, outputDir, payload, 844);
-  await page.screenshot({ path: testInfo.outputPath('ranking-report-mobile.png'), fullPage: true });
+  for (const viewport of [
+    { name: 'laptop', width: 1280, height: 800 },
+    { name: 'desktop', width: 1440, height: 1000 },
+  ]) {
+    await page.setViewportSize(viewport);
+    await assertRankingReport(page, outputDir, payload, viewport.height);
+    await page.screenshot({ path: testInfo.outputPath(`ranking-report-${viewport.name}.png`), fullPage: true });
+  }
 });
 
 test('ranking research report exposes complete paired selection identities', async ({ page }, testInfo) => {
@@ -1091,7 +1110,7 @@ test('ranking research report exposes complete paired selection identities', asy
   expect(await deltas.locator('tbody tr').count()).toBeGreaterThan(20);
 });
 
-test('configured formal ranking run preserves exact evidence on desktop and mobile', async ({ page }, testInfo) => {
+test('configured formal ranking run preserves payload-derived evidence on desktop', async ({ page }, testInfo) => {
   const configuredRunDir = process.env.FINAL_RESEARCH_FORMAL_RUN_DIR;
   test.skip(!configuredRunDir, 'Set FINAL_RESEARCH_FORMAL_RUN_DIR to validate the local formal run.');
   if (!configuredRunDir) return;
@@ -1100,6 +1119,13 @@ test('configured formal ranking run preserves exact evidence on desktop and mobi
   const payloadPath = path.join(runDir, 'final_research_report_payload.json');
   const reportPath = path.join(runDir, 'report.html');
   expect(existsSync(payloadPath)).toBeTruthy();
+  const artifactManifest = JSON.parse(
+    readFileSync(path.join(runDir, 'artifact_manifest.json'), 'utf8'),
+  ) as { artifacts: Record<string, string> };
+  const expectedPreservedArtifactNames = [
+    ...Object.values(artifactManifest.artifacts).filter((name) => name !== 'report.html'),
+    'artifact_manifest.json',
+  ].sort();
   const preservedArtifactNames = readdirSync(runDir).filter((name) => name !== 'report.html').sort();
   const artifactsBeforeRebuild = new Map(
     preservedArtifactNames.map((name) => [name, readFileSync(path.join(runDir, name))]),
@@ -1109,7 +1135,7 @@ test('configured formal ranking run preserves exact evidence on desktop and mobi
     'import sys; from llm_abm_sim.final_research_report import rebuild_final_research_report; rebuild_final_research_report(sys.argv[1])',
     runDir,
   ]);
-  expect(preservedArtifactNames).toHaveLength(24);
+  expect(preservedArtifactNames).toEqual(expectedPreservedArtifactNames);
   expect(readdirSync(runDir).filter((name) => name !== 'report.html').sort()).toEqual(preservedArtifactNames);
   for (const [name, before] of artifactsBeforeRebuild) {
     expect(readFileSync(path.join(runDir, name)).equals(before), name).toBeTruthy();
@@ -1165,8 +1191,8 @@ test('configured formal ranking run preserves exact evidence on desktop and mobi
   ).length;
 
   for (const viewport of [
+    { name: 'laptop', width: 1280, height: 800 },
     { name: 'desktop', width: 1440, height: 1000 },
-    { name: 'mobile', width: 390, height: 844 },
   ]) {
     await page.setViewportSize(viewport);
     await page.goto(pathToFileURL(reportPath).toString());

@@ -1046,8 +1046,9 @@ def test_target_delivery_ranking_report_rebuild_is_deterministic(tmp_path: Path)
     report_path = run_dir / "report.html"
     payload_path = run_dir / "final_research_report_payload.json"
     preserved_artifacts = {
-        name: (run_dir / name).read_bytes()
-        for name in ("final_research_users.csv", "final_research_users.json", "artifact_manifest.json")
+        path.name: path.read_bytes()
+        for path in run_dir.iterdir()
+        if path.is_file() and path != report_path
     }
 
     assert rebuild_final_research_report(run_dir) == report_path
@@ -1059,8 +1060,9 @@ def test_target_delivery_ranking_report_rebuild_is_deterministic(tmp_path: Path)
     assert payload_path.read_bytes() == first_payload
     assert report_path.read_bytes() == first_report
     assert {
-        name: (run_dir / name).read_bytes()
-        for name in ("final_research_users.csv", "final_research_users.json", "artifact_manifest.json")
+        path.name: path.read_bytes()
+        for path in run_dir.iterdir()
+        if path.is_file() and path != report_path
     } == preserved_artifacts
 
 

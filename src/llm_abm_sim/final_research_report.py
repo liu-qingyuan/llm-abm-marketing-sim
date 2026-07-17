@@ -1738,9 +1738,8 @@ def _render_ranking_report(payload: FinalResearchRankingReportPayload) -> str:
     <div class="table-wrap sample-role-table"><table data-testid="sample-role-table"><thead><tr><th>角色</th><th>人数</th><th>怎么形成</th><th>研究角色</th><th>是否进入最终样本</th></tr></thead><tbody id="sample-role-table-body"></tbody></table></div>
     <div class="scope-intro"><h3>Video Source Scope（视频来源分组）</h3><p>这里表示采集来源分组，不是视频语义类别。下表用本次实际前后差值说明网络补样如何改变构成。</p></div>
     <div class="split-grid"><div class="table-wrap"><table data-testid="sample-scope-table"><thead><tr><th>Source Scope（来源分组）</th><th>Base Sample（基础样本）</th><th>Final Sample（最终样本）</th><th>变化</th></tr></thead><tbody id="scope-table-body"></tbody></table></div><article class="chart-panel"><h3>最终样本角色构成</h3><div id="sample-composition-explanation" class="chart-explanation" data-testid="sample-composition-explanation"></div><div id="sample-composition-chart" class="bar-chart" data-testid="sample-composition-chart"></div></article></div>
-  </section>
 
-  <section id="lineage" class="content-band" data-testid="field-lineage-section">
+  <div id="lineage" class="evidence-subsection" data-testid="field-lineage-section">
     <div class="section-heading"><div><span class="eyebrow">FIELD LINEAGE（字段血缘）</span><h2>Field Dictionary（字段词典）</h2><p class="muted">默认表格用于快速扫描；选择字段后查看含义、形成方式、范围、用途和研究限制。</p></div><div class="compact-filters"><label>字段搜索<input id="lineage-search" data-testid="lineage-search" type="search"></label><label>用途<select id="lineage-stage-filter" data-testid="lineage-stage-filter"><option value="">全部</option></select></label></div></div>
     {_render_section_explanation(section_explanations["lineage"], "lineage-section-explanation")}
     <div class="lineage-legends">
@@ -1748,6 +1747,7 @@ def _render_ranking_report(payload: FinalResearchRankingReportPayload) -> str:
       <section><h3>Field Usage Stage（字段使用阶段）</h3><dl id="lineage-usage-legend"></dl></section>
     </div>
     <div class="table-wrap lineage-table"><table data-testid="lineage-table"><thead><tr><th>Field（字段）</th><th>中文名</th><th>Meaning（简要含义）</th><th>Field Provenance（字段来源）</th><th>Field Usage Stage（字段使用阶段）</th></tr></thead><tbody id="lineage-table-body"></tbody></table></div>
+  </div>
   </section>
 
   <section id="ranking-rounds" class="content-band" data-testid="ranking-rounds-section" data-section-anchor="exposure-ranking">
@@ -1768,6 +1768,19 @@ def _render_ranking_report(payload: FinalResearchRankingReportPayload) -> str:
     </div>
     <div class="section-heading round-heading"><div><h3 id="ranking-candidate-title"></h3><p id="ranking-candidate-description" class="muted"></p></div></div>
     <div id="round-summary" class="round-summary" data-testid="round-summary"></div><div class="table-wrap"><table data-testid="ranking-candidate-table"><thead><tr id="ranking-candidate-head-row"></tr></thead><tbody id="ranking-candidate-body"></tbody></table></div>
+    <div class="evidence-subsection">
+      {_render_section_explanation(section_explanations["aggregate"], "aggregate-section-explanation")}
+      <div class="chart-grid distributed-chart-grid"><article class="wide"><h3>逐批投放</h3><div id="batch-delivery-explanation" class="chart-explanation" data-testid="batch-delivery-explanation"></div><div id="batch-delivery-chart" class="batch-chart" data-testid="batch-delivery-chart"></div></article></div>
+    </div>
+  </section>
+
+  <section class="content-band" data-testid="prompt-contract-section" data-section-anchor="llm-decision">
+    <span class="eyebrow">LLM PROMPT CONTRACT（大模型提示合同）</span><h2>Prompt Isolation（提示证据隔离）</h2>{_render_section_explanation(section_explanations["prompt"], "prompt-section-explanation")}<div class="prompt-reading-note"><p><strong>阶段一：</strong>平台排序决定谁看到视频；<strong>阶段二：</strong>LLM（大模型）决定曝光后的 action（动作）。</p><p>使用 neutral PeerContext（中性同伴上下文）是为了防止评论网络 evidence（证据）同时进入 ranking（排序）和 LLM（大模型）决策，不是数据丢失。页面只展示 allowlisted evidence（允许证据），raw Prompt（原始提示）与 provider payload（服务提供方载荷）保持不可见。</p></div><div id="batch-decision-evidence" class="batch-decision-evidence" data-testid="batch-decision-evidence"></div><div class="prompt-grid"><article><h3>Allowed（允许字段）</h3><ul id="prompt-allowed"></ul></article><article><h3>Neutral（空缺 / 中性字段）</h3><ul id="prompt-neutral"></ul></article><article><h3>Excluded（排除字段）</h3><ul id="prompt-excluded"></ul></article></div>
+    <div class="chart-grid distributed-chart-grid evidence-subsection">
+      <article><h3>Action（动作）与容量状态</h3><div id="action-status-explanation" class="chart-explanation" data-testid="action-status-explanation"></div><div id="action-chart" class="bar-chart" data-testid="action-chart"></div></article>
+      <article><h3>Provider failure（Provider 失败）</h3><div id="provider-failure-explanation" class="chart-explanation" data-testid="provider-failure-explanation"></div><div id="provider-failure-chart" class="bar-chart" data-testid="provider-failure-chart"></div></article>
+    </div>
+    <div id="users" class="evidence-subsection" data-testid="ranking-users-section"><div class="section-heading"><div><span class="eyebrow">USER TRACE（用户追踪）</span><h2>完整 {payload.run.sample_size:,} 用户追踪</h2></div><strong id="visible-user-count" data-testid="visible-user-count"></strong></div>{_render_section_explanation(section_explanations["users"], "users-section-explanation")}<div class="filters"><label>搜索<input id="user-search" data-testid="user-search" type="search"></label><label>Sample role（样本角色）<select id="role-filter" data-testid="role-filter"><option value="">全部</option><option value="seed">seed（种子用户）</option><option value="network_cohort">network_cohort（网络传播识别组）</option><option value="ordinary">ordinary（普通用户）</option></select></label><label>Result（结果）<select id="result-filter" data-testid="result-filter"><option value="">全部</option></select></label><label>Source Scope（来源分组）<select id="scope-filter" data-testid="scope-filter"><option value="">全部</option></select></label><label>Seed User（种子用户）<select id="seed-filter" data-testid="seed-filter"><option value="">全部</option><option value="true">是</option><option value="false">否</option></select></label><label>Network Cohort（网络传播识别组）<select id="cohort-filter" data-testid="cohort-filter"><option value="">全部</option><option value="true">是</option><option value="false">否</option></select></label></div><div class="table-wrap users-table"><table data-testid="user-table"><thead><tr><th>User（用户）</th><th>Role / scope（角色 / 来源）</th><th>Batch / rank（批次 / 名次）</th><th>Score（分数）</th><th>Result（结果）</th><th>Reason（理由）</th></tr></thead><tbody id="user-table-body"></tbody></table></div></div>
   </section>
 
   <section id="run-network-feedback" class="content-band" data-testid="network-feedback-section" data-section-anchor="network-feedback">
@@ -1789,13 +1802,11 @@ def _render_ranking_report(payload: FinalResearchRankingReportPayload) -> str:
     <div class="diagnostic-layout"><article id="paired-ablation" class="diagnostic-panel" data-testid="paired-ablation-section"><div class="section-heading"><div><h3>Paired ranking（配对排序） · shadow diagnostic（影子诊断）</h3><p class="muted">同批冻结 persisted candidate evidence（持久化候选证据）并运行 shadow no-network（无网络影子排序），零额外 Decision Adapter calls（决策适配器调用）；它不是第二条完整 trajectory（轨迹），也不是因果实验。</p></div></div><div id="ablation-summary" class="ablation-summary" data-testid="ablation-summary"></div><div class="table-wrap rank-delta-table"><table data-testid="ablation-rank-deltas"><thead><tr><th>User（用户）</th><th>Full rank（完整排序名次）</th><th>No-network rank（无网络排序名次）</th><th>Rank delta（名次变化）</th><th>Selection effect（入选影响）</th></tr></thead><tbody id="ablation-rank-delta-body"></tbody></table></div></article><article class="diagnostic-panel" data-testid="sensitivity-section"><h3>Ranking Weight Sensitivity（排序权重敏感性）</h3><p id="sensitivity-reading-note" class="muted"></p><div id="sensitivity-variants" class="sensitivity-variants"></div></article></div>
       </div>
     </details>
+    <div class="chart-grid distributed-chart-grid evidence-subsection">
+      <article><h3>动态网络激活</h3><div id="network-activation-explanation" class="chart-explanation" data-testid="network-activation-explanation"></div><div id="network-activation-chart" class="bar-chart" data-testid="network-activation-chart"></div></article>
+      <article><h3>Ablation（消融）Top{payload.run.delivery_capacity} overlap（重合人数）</h3><div id="ablation-overlap-explanation" class="chart-explanation" data-testid="ablation-overlap-explanation"></div><div id="ablation-overlap-chart" class="batch-chart" data-testid="ablation-overlap-chart"></div></article>
+    </div>
   </section>
-
-  <section class="content-band" data-testid="prompt-contract-section" data-section-anchor="llm-decision"><span class="eyebrow">LLM PROMPT CONTRACT（大模型提示合同）</span><h2>Prompt Isolation（提示证据隔离）</h2>{_render_section_explanation(section_explanations["prompt"], "prompt-section-explanation")}<div class="prompt-reading-note"><p><strong>阶段一：</strong>平台排序决定谁看到视频；<strong>阶段二：</strong>LLM（大模型）决定曝光后的 action（动作）。</p><p>使用 neutral PeerContext（中性同伴上下文）是为了防止评论网络 evidence（证据）同时进入 ranking（排序）和 LLM（大模型）决策，不是数据丢失。页面只展示 allowlisted evidence（允许证据），raw Prompt（原始提示）与 provider payload（服务提供方载荷）保持不可见。</p></div><div id="batch-decision-evidence" class="batch-decision-evidence" data-testid="batch-decision-evidence"></div><div class="prompt-grid"><article><h3>Allowed（允许字段）</h3><ul id="prompt-allowed"></ul></article><article><h3>Neutral（空缺 / 中性字段）</h3><ul id="prompt-neutral"></ul></article><article><h3>Excluded（排除字段）</h3><ul id="prompt-excluded"></ul></article></div></section>
-
-  <section class="content-band" data-testid="aggregate-charts-section"><span class="eyebrow">AGGREGATES（聚合图表）</span><h2>同源聚合图表</h2>{_render_section_explanation(section_explanations["aggregate"], "aggregate-section-explanation")}<div class="chart-grid"><article><h3>逐批投放</h3><div id="batch-delivery-explanation" class="chart-explanation" data-testid="batch-delivery-explanation"></div><div id="batch-delivery-chart" class="batch-chart" data-testid="batch-delivery-chart"></div></article><article><h3>Action（动作）与容量状态</h3><div id="action-status-explanation" class="chart-explanation" data-testid="action-status-explanation"></div><div id="action-chart" class="bar-chart" data-testid="action-chart"></div></article><article><h3>Provider failure（Provider 失败）</h3><div id="provider-failure-explanation" class="chart-explanation" data-testid="provider-failure-explanation"></div><div id="provider-failure-chart" class="bar-chart" data-testid="provider-failure-chart"></div></article><article><h3>动态网络激活</h3><div id="network-activation-explanation" class="chart-explanation" data-testid="network-activation-explanation"></div><div id="network-activation-chart" class="bar-chart" data-testid="network-activation-chart"></div></article><article class="wide"><h3>Ablation（消融）Top{payload.run.delivery_capacity} overlap（重合人数）</h3><div id="ablation-overlap-explanation" class="chart-explanation" data-testid="ablation-overlap-explanation"></div><div id="ablation-overlap-chart" class="batch-chart" data-testid="ablation-overlap-chart"></div></article></div></section>
-
-  <section id="users" class="users-band" data-testid="ranking-users-section"><div class="section-heading"><div><span class="eyebrow">USER TRACE（用户追踪）</span><h2>完整 {payload.run.sample_size:,} 用户追踪</h2></div><strong id="visible-user-count" data-testid="visible-user-count"></strong></div>{_render_section_explanation(section_explanations["users"], "users-section-explanation")}<div class="filters"><label>搜索<input id="user-search" data-testid="user-search" type="search"></label><label>Sample role（样本角色）<select id="role-filter" data-testid="role-filter"><option value="">全部</option><option value="seed">seed（种子用户）</option><option value="network_cohort">network_cohort（网络传播识别组）</option><option value="ordinary">ordinary（普通用户）</option></select></label><label>Result（结果）<select id="result-filter" data-testid="result-filter"><option value="">全部</option></select></label><label>Source Scope（来源分组）<select id="scope-filter" data-testid="scope-filter"><option value="">全部</option></select></label><label>Seed User（种子用户）<select id="seed-filter" data-testid="seed-filter"><option value="">全部</option><option value="true">是</option><option value="false">否</option></select></label><label>Network Cohort（网络传播识别组）<select id="cohort-filter" data-testid="cohort-filter"><option value="">全部</option><option value="true">是</option><option value="false">否</option></select></label></div><div class="table-wrap users-table"><table data-testid="user-table"><thead><tr><th>User（用户）</th><th>Role / scope（角色 / 来源）</th><th>Batch / rank（批次 / 名次）</th><th>Score（分数）</th><th>Result（结果）</th><th>Reason（理由）</th></tr></thead><tbody id="user-table-body"></tbody></table></div></section>
 
   <section class="downloads-band"><span class="eyebrow">ARTIFACTS（交付物）</span><h2>同源下载</h2><div class="downloads">{download_links}</div></section>
   <section class="limitations-band"><span class="eyebrow">LIMITATIONS（研究限制）</span><ul id="limitations-list"></ul></section>
@@ -1908,6 +1919,7 @@ label { display:grid; gap:5px; color:var(--muted); font-size:.76rem; font-weight
 .batch-timeline button:hover,.batch-timeline button:focus-visible { border-color:var(--green); color:var(--green); outline:none; }
 .batch-timeline button[aria-current="step"] { border-color:var(--ink); background:var(--ink); color:#fff; }
 .object-band,.content-band,.users-band,.downloads-band,.limitations-band { padding:30px clamp(18px,4vw,54px); border-bottom:1px solid var(--line); }
+.evidence-subsection { margin-top:30px; padding-top:24px; border-top:1px solid var(--line); }
 .object-band { background:#fff; }
 .object-flow { display:grid; grid-template-columns:1fr auto 1.25fr auto 1fr; gap:15px; align-items:center; }
 .object-flow article { min-height:88px; padding:14px; border-top:3px solid var(--green); background:var(--paper); }
@@ -2015,6 +2027,7 @@ code { color:var(--blue); }
 .prompt-field-button:hover,.prompt-field-button:focus-visible { color:var(--green); text-decoration:underline; outline-offset:3px; }
 .chart-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px; }
 .chart-grid .wide { grid-column:1 / -1; }
+.distributed-chart-grid { margin-top:18px; }
 .chart-explanation { display:grid; gap:5px; margin-bottom:12px; padding:10px 0 10px 12px; border-left:3px solid var(--gold); }
 .chart-explanation p { margin:0; color:var(--muted); font-size:.76rem; overflow-wrap:anywhere; }
 .chart-explanation strong { color:var(--ink); }
@@ -2073,7 +2086,6 @@ code { color:var(--blue); }
 .limitations-band { display:grid; grid-template-columns:180px 1fr; background:#fff8ec; }
 .limitations-band li { margin:5px 0; }
 @media (max-width:1000px) { .hero-funnel { grid-template-columns:repeat(3,minmax(0,1fr)); }.sample-metrics,.effect-grid { grid-template-columns:repeat(2,minmax(0,1fr)); }.diagnostic-layout { grid-template-columns:1fr; }.lineage-detail { min-height:0; }.filters { grid-template-columns:repeat(3,minmax(0,1fr)); }.trace-groups { grid-template-columns:repeat(2,minmax(0,1fr)); }.drawer-detail .trace-groups { grid-template-columns:1fr; } }
-@media (max-width:700px) { main { border:0; }.topbar { position:static; display:flex; width:100%; align-items:stretch; flex-direction:column; gap:8px; }.brand,.workflow-nav { width:100%; overflow:visible; }.workflow-nav { justify-content:flex-start; flex-wrap:wrap; gap:7px 14px; }.workflow-nav a { font-size:.74rem; }.mode-switch { align-self:flex-start; }.ranking-hero { min-height:500px; padding:12px 18px; }.ranking-hero h1 { font-size:2.1rem; }.hero-copy { display:block; }.hero-meta { display:flex; flex-wrap:wrap; margin-top:12px; border:0; }.hero-meta span { padding:5px 9px; border:1px solid #cbd7d0; }.hero-funnel { grid-template-columns:repeat(3,minmax(0,1fr)); margin-top:16px; }.hero-funnel article { min-height:74px; padding:9px; }.hero-funnel article:nth-child(n+6),.hero-funnel p { display:none; }.hero-funnel strong { font-size:1.25rem; }.batch-control { top:0; grid-template-columns:140px minmax(0,1fr); gap:10px; padding-block:6px; }.object-flow { grid-template-columns:1fr; }.object-flow i { transform:rotate(90deg); justify-self:center; }.section-heading { align-items:flex-start; flex-direction:column; }.section-explanation,.sample-metrics,.effect-grid,.split-grid,.scope-intro,.lineage-legends,.prompt-grid,.chart-grid,.filters,.trace-groups,.ranking-term-grid,.ranking-method-notes,.ranking-worked-example-grid,.network-reading-note,.prompt-reading-note,.proxy-explanation-list,.capacity-layout,.mechanism-impact-grid { grid-template-columns:1fr; }.section-explanation article:nth-child(odd) { padding-right:0; border-right:0; }.section-explanation article + article { border-top:1px solid var(--line); }.ranking-term-grid article:nth-child(odd),.ranking-term-grid article:nth-child(even) { padding:12px 0; border-right:0; }.ranking-term-grid article + article { border-top:1px solid var(--line); }.lineage-legends section + section { padding-left:0; border-top:1px solid var(--line); border-left:0; }.round-summary,.ablation-summary { grid-template-columns:repeat(2,minmax(0,1fr)); }.chart-grid .wide { grid-column:auto; }.compact-filters { grid-template-columns:1fr; }.downloads { grid-template-columns:repeat(2,minmax(0,1fr)); }.limitations-band { grid-template-columns:1fr; }.users-table { max-height:540px; } }
 """
 
 
@@ -2397,7 +2409,7 @@ function selectBatch(timeStep) {
     ? 'Seed direct exposure（种子直接曝光）'
     : 'Global Reranking（全局重排）';
   const isSeedBatch = timeStep === 0;
-  byId('ranking-batch-eyebrow').textContent = isSeedBatch ? 'BATCH 0 · SEED DIRECT EXPOSURE' : 'GLOBAL RERANKING（全局重排）';
+  byId('ranking-batch-eyebrow').textContent = isSeedBatch ? 'BATCH 0（第 0 批） · SEED DIRECT EXPOSURE（种子直接曝光）' : 'GLOBAL RERANKING（全局重排）';
   byId('ranking-batch-title').textContent = isSeedBatch
     ? 'Seed direct exposure（种子直接曝光）'
     : `Batch ${timeStep} Global Reranking（全局重排）`;
@@ -2464,7 +2476,7 @@ function renderRankingRound() {
   const summary = byId('round-summary'); summary.replaceChildren(); values.forEach(([label,value]) => summary.appendChild(summaryItem(label,value)));
   byId('ranking-candidate-title').textContent = isSeedBatch ? 'Batch 0 seed direct exposures（种子直接曝光）' : '逐批候选结果';
   byId('ranking-candidate-description').textContent = isSeedBatch
-    ? '顺序仅用于追踪预声明 seeds，不表示 Global Reranking 名次。'
+    ? '顺序仅用于追踪预声明 seeds（种子用户），不表示 Global Reranking（全局重排）名次。'
     : '当前表格展示进入当批 Delivery Capacity（投放容量）的候选。';
   const headers = isSeedBatch
     ? ['Seed order（种子顺序）','User（用户）']
