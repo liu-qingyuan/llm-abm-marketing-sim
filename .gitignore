@@ -25,6 +25,7 @@ runs/
 test-results/
 playwright-report/
 blob-report/
+.playwright-cli/
 node_modules/
 npm-debug.log*
 *.egg-info/
