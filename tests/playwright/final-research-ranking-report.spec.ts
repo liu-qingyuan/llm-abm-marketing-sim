@@ -58,6 +58,8 @@ type RankingPayload = {
   };
   field_lineage: Array<{
     field_name: string;
+    provenance: string;
+    usage_stages: string[];
   }>;
   run: {
     horizon: number;
@@ -431,6 +433,7 @@ async function assertRankingReport(
   await page.getByTestId('lineage-search').fill('');
   await expect(page.getByTestId('lineage-table').locator('tbody tr')).toHaveCount(payload.field_lineage.length);
 
+  await page.getByTestId('shared-batch-timeline').getByRole('button', { name: 'Batch 1', exact: true }).click();
   const rankingSection = page.getByTestId('ranking-rounds-section');
   const weights = payload.ranking_diagnostics_summary.main_weights;
   const weightPercent = (value: number): string => `${(value * 100).toFixed(0)}%`;
@@ -480,7 +483,6 @@ async function assertRankingReport(
   if (await evidenceDrawer.isVisible()) {
     await evidenceDrawer.getByRole('button', { name: '关闭详情' }).click();
   }
-  await page.getByTestId('shared-batch-timeline').getByRole('button', { name: 'Batch 1', exact: true }).click();
   await expect(page.getByTestId('round-summary')).toContainText('Eligible');
   await expect(page.getByTestId('round-summary')).toContainText('Selected（已选择）20');
   await expect(page.getByTestId('ranking-candidate-table').locator('tbody tr')).toHaveCount(20);
@@ -774,6 +776,12 @@ test('one persisted Batch selection updates ranking and LLM evidence together', 
   await expect(timeline.getByRole('button')).toHaveCount(payload.run.horizon);
   await expect(timeline.getByRole('button', { name: 'Batch 0', exact: true })).toHaveAttribute('aria-current', 'step');
   await expect(page.getByTestId('batch-mechanism-label')).toContainText('Seed direct exposure');
+  await expect(page.getByTestId('ranking-batch-title')).toContainText('Seed direct exposure');
+  await expect(page.getByTestId('reranking-evidence-contract')).toBeHidden();
+  await expect(page.getByTestId('ranking-candidate-table').getByRole('columnheader')).toHaveText([
+    'Seed order（种子顺序）',
+    'User（用户）',
+  ]);
 
   const selectedBatch = payload.ranking_rounds.find((round) => round.time_step === 1);
   expect(selectedBatch).toBeDefined();
@@ -786,13 +794,11 @@ test('one persisted Batch selection updates ranking and LLM evidence together', 
   await expect(page.getByTestId('final-research-ranking-report')).toHaveAttribute('data-current-batch', '1');
   await expect(timeline.getByRole('button', { name: 'Batch 1', exact: true })).toHaveAttribute('aria-current', 'step');
   await expect(page.getByTestId('batch-mechanism-label')).toContainText('Global Reranking');
+  await expect(page.getByTestId('ranking-batch-title')).toContainText('Global Reranking');
+  await expect(page.getByTestId('reranking-evidence-contract')).toBeVisible();
   await expect(page.getByTestId('ranking-candidate-table')).toContainText(selectedCandidate?.user_id ?? '');
   await expect(page.getByTestId('batch-decision-evidence')).toContainText(exposedUser?.user_id ?? '');
   await expect(page.getByTestId('batch-decision-evidence')).toContainText(exposedUser?.provider_status ?? '');
-  await expect(page.getByTestId('ranking-round-select')).toHaveValue('1');
-  await expect(page.getByTestId('ablation-round-select')).toHaveValue('1');
-  await expect(page.getByTestId('ranking-round-select')).toBeHidden();
-  await expect(page.getByTestId('ablation-round-select')).toBeHidden();
 });
 
 test('ranking candidates users and prompt fields share one right detail drawer', async ({ page }, testInfo) => {
@@ -808,13 +814,33 @@ test('ranking candidates users and prompt fields share one right detail drawer',
     .find((round) => round.time_step === 1)
     ?.candidates.find((row) => row.selected);
   expect(candidate).toBeDefined();
+  const candidateUser = payload.users.find((row) => row.user_id === candidate?.user_id);
+  expect(candidateUser).toBeDefined();
   await page.getByTestId('ranking-candidate-table').locator('tbody tr').first().click();
   await expect(drawer).toBeVisible();
   await expect(drawer).toHaveAttribute('data-selection-kind', 'candidate');
   await expect(drawer).toContainText(candidate?.user_id ?? '');
+  await expect(drawer).toContainText(candidateUser?.nickname ?? '');
+  await expect(drawer).toContainText(candidateUser?.sample_role ?? '');
   await expect(drawer).toContainText('Batch（批次）1');
+  await expect(drawer).toContainText(`ranking position（排序名次）${candidate?.ranking_position ?? ''}`);
+  await expect(drawer).toContainText(candidateUser?.action ?? '');
+  await expect(drawer).toContainText(candidateUser?.confidence?.toFixed(4) ?? '');
+  await expect(drawer).toContainText(candidateUser?.reason ?? '');
   await expect(drawer).toContainText('Score contribution（分数贡献）');
+  for (const value of [
+    candidate?.base_network_relevance,
+    candidate?.engaged_neighbor_signal,
+    candidate?.historical_tag_affinity,
+  ]) {
+    await expect(drawer).toContainText(value?.toFixed(4) ?? '');
+  }
   await page.screenshot({ path: testInfo.outputPath('ranking-candidate-drawer-desktop.png') });
+
+  await page.getByTestId('shared-batch-timeline').getByRole('button', { name: 'Batch 2', exact: true }).click();
+  await expect(drawer).toBeHidden();
+  await expect(drawer).not.toHaveAttribute('data-selection-kind', /.+/);
+  await page.getByTestId('shared-batch-timeline').getByRole('button', { name: 'Batch 1', exact: true }).click();
 
   const user = payload.users.find((row) => row.exposure_time_step === 1);
   expect(user).toBeDefined();
@@ -824,6 +850,11 @@ test('ranking candidates users and prompt fields share one right detail drawer',
   }).click();
   await expect(drawer).toHaveAttribute('data-selection-kind', 'user');
   await expect(drawer).toContainText(user?.user_id ?? '');
+  await expect(drawer).toContainText(user?.nickname ?? '');
+  await expect(drawer).toContainText(user?.sample_role ?? '');
+  await expect(drawer).toContainText(user?.action ?? '');
+  await expect(drawer).toContainText(user?.confidence?.toFixed(4) ?? '');
+  await expect(drawer).toContainText(user?.reason ?? '');
   await expect(drawer).toContainText('Field Provenance（字段来源）');
   await expect(drawer).toContainText('Field Usage Stage（字段使用阶段）');
 
@@ -832,11 +863,16 @@ test('ranking candidates users and prompt fields share one right detail drawer',
   await promptField.click();
   await expect(drawer).toHaveAttribute('data-selection-kind', 'field');
   await expect(drawer).toContainText(promptFieldName);
+  const promptFieldLineage = payload.field_lineage.find((entry) => entry.field_name === promptFieldName);
+  expect(promptFieldLineage).toBeDefined();
+  await expect(drawer).toContainText(promptFieldLineage?.provenance ?? '');
+  for (const stage of promptFieldLineage?.usage_stages ?? []) await expect(drawer).toContainText(stage);
   await expect(drawer).toContainText('Field Provenance（字段来源）');
   await expect(drawer).toContainText('Field Usage Stage（字段使用阶段）');
 
-  await drawer.getByRole('button', { name: '关闭详情' }).click();
+  await page.getByTestId('mechanism-mode-button').click();
   await expect(drawer).toBeHidden();
+  await expect(drawer).not.toHaveAttribute('data-selection-kind', /.+/);
 });
 
 test('ranking research report is complete and interactive on desktop', async ({ page }, testInfo) => {

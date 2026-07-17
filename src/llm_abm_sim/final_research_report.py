@@ -1728,7 +1728,8 @@ def _render_ranking_report(payload: FinalResearchRankingReportPayload) -> str:
   </section>
 
   <section id="ranking-rounds" class="content-band" data-testid="ranking-rounds-section" data-section-anchor="exposure-ranking">
-    <div class="section-heading"><div><span class="eyebrow">GLOBAL RERANKING（全局重排）</span><h2>逐轮全局 Top{payload.run.delivery_capacity}（前 {payload.run.delivery_capacity} 名）</h2><p>平台使用 {base_network_weight:.0f}/{engaged_neighbor_weight:.0f}/{tag_affinity_weight:.0f} 公式排序：历史评论网络相关性 {base_network_weight:.0f}%、已互动直接邻居信号 {engaged_neighbor_weight:.0f}%、目标标签亲和度 {tag_affinity_weight:.0f}%。</p><p class="formula">{escape(payload.run.ranking_formula)}</p></div><select id="ranking-round-select" data-testid="ranking-round-select" aria-hidden="true" tabindex="-1" hidden></select></div>
+    <div class="section-heading"><div><span id="ranking-batch-eyebrow" class="eyebrow"></span><h2 id="ranking-batch-title" data-testid="ranking-batch-title"></h2><p id="ranking-batch-description"></p><p id="ranking-batch-formula" class="formula">{escape(payload.run.ranking_formula)}</p></div></div>
+    <div id="reranking-evidence-contract" data-testid="reranking-evidence-contract">
     {_render_section_explanation(section_explanations["ranking"], "ranking-section-explanation")}
     <div class="ranking-term-grid" data-testid="ranking-formula-terms">
       <article><h3><code>base_network_relevance</code>（历史评论网络相关性）</h3><p>0..1；越高表示用户在 Historical Set（历史集合）评论网络中的相关性越强，按 {base_network_weight:.0f}% 权重进入排序。</p></article>
@@ -1741,8 +1742,9 @@ def _render_ranking_report(payload: FinalResearchRankingReportPayload) -> str:
       <article><h3>Batch 0（第 0 批）与 Batch 1–{final_reranking_batch}（第 1–{final_reranking_batch} 批）</h3><p>Batch 0（第 0 批）强制曝光预先选定的 seeds（种子用户）；Batch 1–{final_reranking_batch}（第 1–{final_reranking_batch} 批）每批对全部尚未处理的 eligible users（合格用户）重新计算分数并全局重排。</p></article>
     </div>
     <article id="ranking-worked-example" class="ranking-worked-example" data-testid="ranking-worked-example"></article>
-    <div class="section-heading round-heading"><div><h3>逐批候选结果</h3><p class="muted">选择一批查看进入当批 Delivery Capacity（投放容量）的候选。</p></div></div>
-    <div id="round-summary" class="round-summary" data-testid="round-summary"></div><div class="table-wrap"><table data-testid="ranking-candidate-table"><thead><tr><th>Rank（名次）</th><th>User（用户）</th><th>Base network（历史网络）</th><th>Engaged neighbor（已互动邻居）</th><th>Tag affinity（标签亲和度）</th><th>Score（分数）</th></tr></thead><tbody id="ranking-candidate-body"></tbody></table></div>
+    </div>
+    <div class="section-heading round-heading"><div><h3 id="ranking-candidate-title"></h3><p id="ranking-candidate-description" class="muted"></p></div></div>
+    <div id="round-summary" class="round-summary" data-testid="round-summary"></div><div class="table-wrap"><table data-testid="ranking-candidate-table"><thead><tr id="ranking-candidate-head-row"></tr></thead><tbody id="ranking-candidate-body"></tbody></table></div>
   </section>
 
   <section id="network-effect" class="content-band" data-testid="network-effect-section" data-section-anchor="network-feedback">
@@ -1750,7 +1752,7 @@ def _render_ranking_report(payload: FinalResearchRankingReportPayload) -> str:
     {_render_section_explanation(section_explanations["network"], "network-section-explanation")}
     <div class="network-reading-note"><p><strong>Inclusion（纳入）</strong>只说明网络项进入公式并具有明确权重，不能单独证明投放结果改变。</p><p><strong>Observed Effect（可观测影响）</strong>要求移除网络项后，同批 Top{payload.run.delivery_capacity} membership（前 {payload.run.delivery_capacity} 名成员集合）实际发生变化。</p></div>
     <div id="network-effect-summary" class="effect-grid"></div>
-    <div class="diagnostic-layout"><article id="paired-ablation" class="diagnostic-panel" data-testid="paired-ablation-section"><div class="section-heading"><div><h3>Paired ranking（配对排序） · shadow diagnostic（影子诊断）</h3><p class="muted">同批冻结 persisted candidate evidence（持久化候选证据）并运行 shadow no-network（无网络影子排序），零额外 Decision Adapter calls（决策适配器调用）；它不是第二条完整 trajectory（轨迹），也不是因果实验。</p></div><select id="ablation-round-select" data-testid="ablation-round-select" aria-hidden="true" tabindex="-1" hidden></select></div><div id="ablation-summary" class="ablation-summary" data-testid="ablation-summary"></div><div class="table-wrap rank-delta-table"><table data-testid="ablation-rank-deltas"><thead><tr><th>User（用户）</th><th>Full rank（完整排序名次）</th><th>No-network rank（无网络排序名次）</th><th>Rank delta（名次变化）</th><th>Selection effect（入选影响）</th></tr></thead><tbody id="ablation-rank-delta-body"></tbody></table></div></article><article class="diagnostic-panel" data-testid="sensitivity-section"><h3>Ranking Weight Sensitivity（排序权重敏感性）</h3><p id="sensitivity-reading-note" class="muted"></p><div id="sensitivity-variants" class="sensitivity-variants"></div></article></div>
+    <div class="diagnostic-layout"><article id="paired-ablation" class="diagnostic-panel" data-testid="paired-ablation-section"><div class="section-heading"><div><h3>Paired ranking（配对排序） · shadow diagnostic（影子诊断）</h3><p class="muted">同批冻结 persisted candidate evidence（持久化候选证据）并运行 shadow no-network（无网络影子排序），零额外 Decision Adapter calls（决策适配器调用）；它不是第二条完整 trajectory（轨迹），也不是因果实验。</p></div></div><div id="ablation-summary" class="ablation-summary" data-testid="ablation-summary"></div><div class="table-wrap rank-delta-table"><table data-testid="ablation-rank-deltas"><thead><tr><th>User（用户）</th><th>Full rank（完整排序名次）</th><th>No-network rank（无网络排序名次）</th><th>Rank delta（名次变化）</th><th>Selection effect（入选影响）</th></tr></thead><tbody id="ablation-rank-delta-body"></tbody></table></div></article><article class="diagnostic-panel" data-testid="sensitivity-section"><h3>Ranking Weight Sensitivity（排序权重敏感性）</h3><p id="sensitivity-reading-note" class="muted"></p><div id="sensitivity-variants" class="sensitivity-variants"></div></article></div>
   </section>
 
   <section class="content-band" data-testid="prompt-contract-section" data-section-anchor="llm-decision"><span class="eyebrow">LLM PROMPT CONTRACT（大模型提示合同）</span><h2>Prompt Isolation（提示证据隔离）</h2>{_render_section_explanation(section_explanations["prompt"], "prompt-section-explanation")}<div class="prompt-reading-note"><p><strong>阶段一：</strong>平台排序决定谁看到视频；<strong>阶段二：</strong>LLM（大模型）决定曝光后的 action（动作）。</p><p>使用 neutral PeerContext（中性同伴上下文）是为了防止评论网络 evidence（证据）同时进入 ranking（排序）和 LLM（大模型）决策，不是数据丢失。页面只展示 allowlisted evidence（允许证据），raw Prompt（原始提示）与 provider payload（服务提供方载荷）保持不可见。</p></div><div id="batch-decision-evidence" class="batch-decision-evidence" data-testid="batch-decision-evidence"></div><div class="prompt-grid"><article><h3>Allowed（允许字段）</h3><ul id="prompt-allowed"></ul></article><article><h3>Neutral（空缺 / 中性字段）</h3><ul id="prompt-neutral"></ul></article><article><h3>Excluded（排除字段）</h3><ul id="prompt-excluded"></ul></article></div></section>
@@ -2096,6 +2098,7 @@ function appendBreakableFieldLabel(node, label) {
 }
 
 function setReportMode(mode) {
+  if (interactionState.mode !== mode) closeDrawer();
   interactionState.mode = mode;
   reportRoot.dataset.reportMode = mode;
   modePanels.forEach((panel) => { panel.hidden = panel.dataset.reportModePanel !== mode; });
@@ -2115,7 +2118,9 @@ function openDrawer(kind, selection) {
 }
 
 function closeDrawer() {
+  interactionState.selection = null;
   interactionState.drawerOpen = false;
+  evidenceDrawer.removeAttribute('data-selection-kind');
   evidenceDrawer.hidden = true;
 }
 
@@ -2313,10 +2318,6 @@ function renderLineage() {
   else { selectedLineageField = ''; byId('lineage-detail').replaceChildren(element('p','muted','没有符合当前条件的字段。')); }
 }
 
-function populateRoundSelect(id, rows) {
-  rows.forEach((row) => { const option = element('option','',`Batch ${row.time_step}（第 ${row.time_step} 批）`); option.value = String(row.time_step); byId(id).appendChild(option); });
-}
-
 function renderBatchTimeline() {
   const root = byId('shared-batch-timeline');
   Array.from({length:payload.run.horizon},(_,timeStep) => timeStep).forEach((timeStep) => {
@@ -2332,6 +2333,7 @@ function renderBatchTimeline() {
 function selectBatch(timeStep) {
   const round = payload.ranking_rounds.find((row) => row.time_step === timeStep);
   if (!round) return;
+  if (interactionState.batch !== timeStep) closeDrawer();
   interactionState.batch = timeStep;
   reportRoot.dataset.currentBatch = String(timeStep);
   document.querySelectorAll('[data-batch]').forEach((button) => {
@@ -2341,10 +2343,17 @@ function selectBatch(timeStep) {
   byId('batch-mechanism-label').textContent = timeStep === 0
     ? 'Seed direct exposure（种子直接曝光）'
     : 'Global Reranking（全局重排）';
-  for (const id of ['ranking-round-select','ablation-round-select']) {
-    const select = byId(id);
-    if ([...select.options].some((option) => Number(option.value) === timeStep)) select.value = String(timeStep);
-  }
+  const isSeedBatch = timeStep === 0;
+  byId('ranking-batch-eyebrow').textContent = isSeedBatch ? 'BATCH 0 · SEED DIRECT EXPOSURE' : 'GLOBAL RERANKING（全局重排）';
+  byId('ranking-batch-title').textContent = isSeedBatch
+    ? 'Seed direct exposure（种子直接曝光）'
+    : `Batch ${timeStep} Global Reranking（全局重排）`;
+  const weights = payload.ranking_diagnostics_summary.main_weights;
+  byId('ranking-batch-description').textContent = isSeedBatch
+    ? '本批直接曝光预先声明的 seed union（种子并集），不使用三路 ranking score（排序分数）决定入选。'
+    : `平台对全部尚未处理的 eligible users（合格用户）重新计算排序：历史评论网络相关性 ${(weights.base_network * 100).toFixed(0)}%、已互动直接邻居信号 ${(weights.engaged_neighbor * 100).toFixed(0)}%、目标标签亲和度 ${(weights.tag_affinity * 100).toFixed(0)}%。`;
+  byId('ranking-batch-formula').hidden = isSeedBatch;
+  byId('reranking-evidence-contract').hidden = isSeedBatch;
   renderRankingRound();
   renderAblation();
   renderBatchDecisionEvidence();
@@ -2388,15 +2397,32 @@ function renderRankingRound() {
   const timeStep = interactionState.batch;
   const round = payload.ranking_rounds.find((row) => row.time_step === timeStep);
   if (!round) return;
-  const values = [
-    ['Eligible（合格候选）',count(round.eligible_count)],['Delivery Capacity（投放容量）',round.delivery_capacity],['Selected（已选择）',round.selected_count],
-    ['Target exposures（目标视频曝光）',round.target_exposures],['Provider failed（Provider 失败）',round.provider_failed],['Network-active selected（网络信号入选）',round.selected_with_positive_engaged_neighbor_signal],
-  ];
+  const isSeedBatch = timeStep === 0;
+  const values = isSeedBatch
+    ? [
+      ['Predeclared seeds（预声明种子）',round.selected_count],['Delivery Capacity（投放容量）',round.delivery_capacity],['Direct exposures（直接曝光）',round.target_exposures],
+      ['Provider succeeded（Provider 成功）',round.target_exposures - round.provider_failed],['Provider failed（Provider 失败）',round.provider_failed],
+    ]
+    : [
+      ['Eligible（合格候选）',count(round.eligible_count)],['Delivery Capacity（投放容量）',round.delivery_capacity],['Selected（已选择）',round.selected_count],
+      ['Target exposures（目标视频曝光）',round.target_exposures],['Provider failed（Provider 失败）',round.provider_failed],['Network-active selected（网络信号入选）',round.selected_with_positive_engaged_neighbor_signal],
+    ];
   const summary = byId('round-summary'); summary.replaceChildren(); values.forEach(([label,value]) => summary.appendChild(summaryItem(label,value)));
+  byId('ranking-candidate-title').textContent = isSeedBatch ? 'Batch 0 seed direct exposures（种子直接曝光）' : '逐批候选结果';
+  byId('ranking-candidate-description').textContent = isSeedBatch
+    ? '顺序仅用于追踪预声明 seeds，不表示 Global Reranking 名次。'
+    : '当前表格展示进入当批 Delivery Capacity（投放容量）的候选。';
+  const headers = isSeedBatch
+    ? ['Seed order（种子顺序）','User（用户）']
+    : ['Rank（名次）','User（用户）','Base network（历史网络）','Engaged neighbor（已互动邻居）','Tag affinity（标签亲和度）','Score（分数）'];
+  const head = byId('ranking-candidate-head-row'); head.replaceChildren(); headers.forEach((label) => head.appendChild(element('th','',label)));
   const body = byId('ranking-candidate-body'); body.replaceChildren();
   round.candidates.filter((candidate) => candidate.selected).forEach((candidate) => {
     const row = element('tr'); row.tabIndex = 0;
-    [candidate.ranking_position,candidate.user_id,fixed(candidate.base_network_relevance),`${candidate.engaged_neighbor_count} / ${fixed(candidate.engaged_neighbor_signal)}`,fixed(candidate.historical_tag_affinity),fixed(candidate.recommendation_score)].forEach((value) => row.appendChild(element('td','',display(value))));
+    const cells = isSeedBatch
+      ? [candidate.ranking_position,candidate.user_id]
+      : [candidate.ranking_position,candidate.user_id,fixed(candidate.base_network_relevance),`${candidate.engaged_neighbor_count} / ${fixed(candidate.engaged_neighbor_signal)}`,fixed(candidate.historical_tag_affinity),fixed(candidate.recommendation_score)];
+    cells.forEach((value) => row.appendChild(element('td','',display(value))));
     row.addEventListener('click',() => renderCandidateDetail(candidate,timeStep));
     row.addEventListener('keydown',(event) => { if (event.key === 'Enter') renderCandidateDetail(candidate,timeStep); });
     body.appendChild(row);
@@ -2420,6 +2446,15 @@ function renderCandidateDetail(candidate, timeStep) {
     ]),
   );
   const contributions = element('section','candidate-contributions');
+  if (timeStep === 0) {
+    contributions.append(
+      element('h3','','Seed selection evidence（种子选择证据）'),
+      element('p','muted','Batch 0 由预声明 seed union 直接曝光；持久化 ranking score 不决定本批选择。'),
+    );
+    root.appendChild(contributions);
+    openDrawer('candidate',{userId:candidate.user_id,batch:timeStep});
+    return;
+  }
   contributions.appendChild(element('h3','',`Score contribution（分数贡献） · ${fixed(candidate.recommendation_score)}`));
   [
     ['base_network_relevance',candidate.base_network_relevance,weights.base_network],
@@ -2643,14 +2678,11 @@ function renderUserDetail(row) {
 }
 
 renderHero(); renderSample(); renderLineageMetadata(); renderLineage(); renderRankingWorkedExample();
-populateRoundSelect('ranking-round-select',payload.ranking_rounds);
-const ablationBatches = payload.ranking_diagnostics.paired_ablation.batches; populateRoundSelect('ablation-round-select',ablationBatches);
 renderBatchTimeline(); selectBatch(interactionState.batch);
 renderNetworkSummary(); renderSensitivity();
 renderPromptFieldList('prompt-allowed',payload.prompt_contract.allowed_profile_fields,'allowed'); renderPromptFieldList('prompt-neutral',payload.prompt_contract.neutralized_fields,'neutral'); renderPromptFieldList('prompt-excluded',payload.prompt_contract.excluded_fields,'excluded'); fillList('limitations-list',payload.limitations.map((value) => limitationTranslations[value] || value));
 renderChartExplanations(); renderCharts(); populateUserFilters(); renderUsers();
 byId('lineage-search').addEventListener('input',renderLineage); byId('lineage-stage-filter').addEventListener('input',renderLineage);
-byId('ranking-round-select').addEventListener('input',(event) => selectBatch(Number(event.target.value))); byId('ablation-round-select').addEventListener('input',(event) => selectBatch(Number(event.target.value)));
 ['user-search','role-filter','result-filter','scope-filter','seed-filter','cohort-filter'].forEach((id) => byId(id).addEventListener('input',renderUsers));
 """
 
