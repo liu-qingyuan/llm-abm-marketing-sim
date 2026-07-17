@@ -1544,6 +1544,13 @@ def _render_ranking_report(payload: FinalResearchRankingReportPayload) -> str:
     explanation_catalog = ResearchExplanationCatalog.from_lineage(payload.field_lineage)
     sample = payload.sample_comparison
     total_exposures = sum(round_evidence.target_exposures for round_evidence in payload.ranking_rounds)
+    configured_delivery_slots = payload.run.horizon * payload.run.delivery_capacity
+    batch_zero_exposures = next(
+        (round_evidence.target_exposures for round_evidence in payload.ranking_rounds if round_evidence.time_step == 0),
+        0,
+    )
+    runtime_delivery_slots = batch_zero_exposures + max(0, payload.run.horizon - 1) * payload.run.delivery_capacity
+    effective_exposure_limit = min(payload.run.sample_size, runtime_delivery_slots)
     provider_decisions = next(stage.count for stage in payload.run_funnel if stage.key == "provider_decisions")
     sample_role_counts = Counter(user.sample_role for user in payload.users)
     result_status_counts = Counter(user.result_status for user in payload.users)
@@ -1597,6 +1604,8 @@ def _render_ranking_report(payload: FinalResearchRankingReportPayload) -> str:
     batch_zero_seeds_image = _embedded_report_image("batch-zero-seeds.webp")
     global_reranking_image = _embedded_report_image("global-reranking.webp")
     platform_llm_boundary_image = _embedded_report_image("platform-llm-boundary.webp")
+    neighbor_feedback_image = _embedded_report_image("neighbor-feedback.webp")
+    capacity_network_impact_image = _embedded_report_image("capacity-network-impact.webp")
     return f"""<!doctype html>
 <html lang="zh-CN">
 <head>
@@ -1689,9 +1698,23 @@ def _render_ranking_report(payload: FinalResearchRankingReportPayload) -> str:
       </div>
     </section>
 
-    <section id="network-feedback" class="mechanism-compact" data-section-anchor="network-feedback">
-      <div><span class="eyebrow">NETWORK FEEDBACK</span><h2>互动只改变下一轮机会</h2></div>
-      <p><code>like / comment / share</code> 可以激活 Comment-Derived User Interaction Graph 中的直接邻居排序信号；<code>ignore</code> 不传播，也不表示邻居真实看见了互动。</p>
+    <section id="network-feedback" class="mechanism-stage network-feedback-mechanism" data-section-anchor="network-feedback" data-testid="mechanism-network-feedback-section">
+      <div class="mechanism-copy">
+        <span class="eyebrow">NETWORK FEEDBACK</span><h2>互动只改变下一轮机会</h2>
+        <p><code>like / comment / share</code> 可以激活 Comment-Derived User Interaction Graph 中直接邻居的排序信号，只进入下一轮 Global Reranking。</p>
+        <p class="evidence-boundary"><strong>传播边界：</strong><code>ignore</code> 不传播；每次反馈只作用于一跳直接邻居。若邻居在后续批次成功互动，可能再形成新的直接邻居反馈；这不表示用户真实看见了邻居互动。</p>
+      </div>
+      <figure class="mechanism-figure">
+        <img data-testid="neighbor-feedback-illustration" src="{neighbor_feedback_image}" width="1672" height="941" alt="点赞评论分享激活三组直接邻居下一轮排序优先级而忽略不传播的无文字示意图">
+        <figcaption>三类成功互动只激活各自相连的直接邻居，随后回到下一轮全局排序。</figcaption>
+      </figure>
+      <details class="mechanism-network-impact" data-testid="mechanism-network-impact-details">
+        <summary>展开网络影响</summary>
+        <div class="mechanism-impact-grid">
+          <div class="mechanism-copy"><h3>容量内比较同批两种排序</h3><p>Delivery Capacity 决定每批实际曝光人数。Paired Network Ranking Ablation 在同批冻结 candidate evidence 上比较 full 与 no-network ranking，不额外调用 Decision Adapter。</p><p class="evidence-boundary"><strong>结果边界：</strong>图示不预设网络会改变 Top20。是否存在 Observed Recommendation Signal Effect，只能读取 persisted diagnostics。</p></div>
+          <figure class="mechanism-figure"><img data-testid="capacity-network-impact-illustration" src="{capacity_network_impact_image}" width="1672" height="941" alt="同一候选池在固定投放容量内比较完整排序与无网络排序的无文字示意图"><figcaption>同批候选与容量保持不变，只比较网络信号存在或移除时的排名与入选差异。</figcaption></figure>
+        </div>
+      </details>
     </section>
   </div>
 
@@ -1747,12 +1770,25 @@ def _render_ranking_report(payload: FinalResearchRankingReportPayload) -> str:
     <div id="round-summary" class="round-summary" data-testid="round-summary"></div><div class="table-wrap"><table data-testid="ranking-candidate-table"><thead><tr id="ranking-candidate-head-row"></tr></thead><tbody id="ranking-candidate-body"></tbody></table></div>
   </section>
 
-  <section id="network-effect" class="content-band" data-testid="network-effect-section" data-section-anchor="network-feedback">
-    <span class="eyebrow">NETWORK EVIDENCE（网络证据）</span><h2>Recommendation Signal Inclusion（推荐信号已纳入）与 Observed Recommendation Signal Effect（推荐信号产生可观测影响）</h2>
+  <section id="run-network-feedback" class="content-band" data-testid="network-feedback-section" data-section-anchor="network-feedback">
+    <span class="eyebrow">NETWORK FEEDBACK（网络反馈）</span><h2 id="network-feedback-title"></h2>
+    <p class="network-feedback-boundary"><code>like / comment / share</code> 激活 Comment-Derived User Interaction Graph 中直接邻居的优先级，只影响下一轮 Global Reranking。<code>ignore</code> 不传播；每次反馈只作用于一跳直接邻居，后续互动可能跨批形成新的直接邻居反馈。这不表示用户真实看见了邻居互动。</p>
+    <div id="network-feedback-summary" class="effect-grid" data-testid="network-feedback-summary"></div>
+    <details class="network-impact-details" data-testid="network-impact-details">
+      <summary>展开网络影响证据</summary>
+      <div id="network-effect" class="network-effect-content" data-testid="network-effect-section">
+    <span class="eyebrow">NETWORK EFFECT（网络影响）</span><h2>Recommendation Signal Inclusion（推荐信号已纳入）与 Observed Recommendation Signal Effect（推荐信号产生可观测影响）</h2>
+    <div class="capacity-layout" data-testid="delivery-capacity-evidence">
+      <article><h3>Delivery Capacity（投放容量）</h3><p>{payload.run.horizon} 批 × 每批 {payload.run.delivery_capacity} 人 = {configured_delivery_slots:,} 个配置投放槽位。Batch 0 持久化曝光 {batch_zero_exposures:,} 人，后续批次最多提供 {max(0, payload.run.horizon - 1) * payload.run.delivery_capacity:,} 个槽位，因此运行调度上限为 {runtime_delivery_slots:,} 人。样本 {payload.run.sample_size:,} 人，本次最多曝光 {effective_exposure_limit:,} 人；payload 配置上限为 {payload.run.maximum_target_exposures:,}。</p></article>
+      <article><h3>未曝光与曝光后不互动</h3><p>{result_status_counts['below_delivery_capacity']:,} 个 <code>below_delivery_capacity</code> 用户未曝光，{result_status_counts['ignore']:,} 个 <code>ignore</code> 用户已曝光后选择不互动。这两个状态不能互换。</p></article>
+    </div>
     {_render_section_explanation(section_explanations["network"], "network-section-explanation")}
     <div class="network-reading-note"><p><strong>Inclusion（纳入）</strong>只说明网络项进入公式并具有明确权重，不能单独证明投放结果改变。</p><p><strong>Observed Effect（可观测影响）</strong>要求移除网络项后，同批 Top{payload.run.delivery_capacity} membership（前 {payload.run.delivery_capacity} 名成员集合）实际发生变化。</p></div>
+    <p id="network-effect-reading" class="observed-effect-reading"></p>
     <div id="network-effect-summary" class="effect-grid"></div>
     <div class="diagnostic-layout"><article id="paired-ablation" class="diagnostic-panel" data-testid="paired-ablation-section"><div class="section-heading"><div><h3>Paired ranking（配对排序） · shadow diagnostic（影子诊断）</h3><p class="muted">同批冻结 persisted candidate evidence（持久化候选证据）并运行 shadow no-network（无网络影子排序），零额外 Decision Adapter calls（决策适配器调用）；它不是第二条完整 trajectory（轨迹），也不是因果实验。</p></div></div><div id="ablation-summary" class="ablation-summary" data-testid="ablation-summary"></div><div class="table-wrap rank-delta-table"><table data-testid="ablation-rank-deltas"><thead><tr><th>User（用户）</th><th>Full rank（完整排序名次）</th><th>No-network rank（无网络排序名次）</th><th>Rank delta（名次变化）</th><th>Selection effect（入选影响）</th></tr></thead><tbody id="ablation-rank-delta-body"></tbody></table></div></article><article class="diagnostic-panel" data-testid="sensitivity-section"><h3>Ranking Weight Sensitivity（排序权重敏感性）</h3><p id="sensitivity-reading-note" class="muted"></p><div id="sensitivity-variants" class="sensitivity-variants"></div></article></div>
+      </div>
+    </details>
   </section>
 
   <section class="content-band" data-testid="prompt-contract-section" data-section-anchor="llm-decision"><span class="eyebrow">LLM PROMPT CONTRACT（大模型提示合同）</span><h2>Prompt Isolation（提示证据隔离）</h2>{_render_section_explanation(section_explanations["prompt"], "prompt-section-explanation")}<div class="prompt-reading-note"><p><strong>阶段一：</strong>平台排序决定谁看到视频；<strong>阶段二：</strong>LLM（大模型）决定曝光后的 action（动作）。</p><p>使用 neutral PeerContext（中性同伴上下文）是为了防止评论网络 evidence（证据）同时进入 ranking（排序）和 LLM（大模型）决策，不是数据丢失。页面只展示 allowlisted evidence（允许证据），raw Prompt（原始提示）与 provider payload（服务提供方载荷）保持不可见。</p></div><div id="batch-decision-evidence" class="batch-decision-evidence" data-testid="batch-decision-evidence"></div><div class="prompt-grid"><article><h3>Allowed（允许字段）</h3><ul id="prompt-allowed"></ul></article><article><h3>Neutral（空缺 / 中性字段）</h3><ul id="prompt-neutral"></ul></article><article><h3>Excluded（排除字段）</h3><ul id="prompt-excluded"></ul></article></div></section>
@@ -1769,6 +1805,7 @@ def _render_ranking_report(payload: FinalResearchRankingReportPayload) -> str:
     <div id="drawer-candidate-detail" class="drawer-detail" data-drawer-kind="candidate" aria-live="polite" hidden></div>
     <div id="user-detail" class="drawer-detail user-detail" data-testid="user-detail" data-drawer-kind="user" aria-live="polite" hidden></div>
     <div id="lineage-detail" class="drawer-detail lineage-detail" data-testid="lineage-detail" data-drawer-kind="field" aria-live="polite" hidden></div>
+    <div id="network-detail" class="drawer-detail" data-drawer-kind="network" aria-live="polite" hidden></div>
   </aside>
 </main>
 <script id="final-research-ranking-payload" type="application/json">{payload_json}</script>
@@ -1800,6 +1837,7 @@ _RANKING_REPORT_CSS = r"""
 html { scroll-behavior:smooth; }
 body { margin:0; color:var(--ink); background:#fff; font:15px/1.5 system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }
 main { width:min(1280px,100%); margin:0 auto; border-inline:1px solid var(--line); }
+[data-section-anchor] { scroll-margin-top:136px; }
 h1,h2,h3,p { margin-top:0; }
 h1 { margin-bottom:10px; font-size:2.55rem; line-height:1.08; letter-spacing:0; }
 h2 { margin-bottom:10px; font-size:1.55rem; letter-spacing:0; }
@@ -1844,8 +1882,12 @@ label { display:grid; gap:5px; color:var(--muted); font-size:.76rem; font-weight
 .mechanism-figure { min-width:0; margin:0; }
 .mechanism-figure img { display:block; width:100%; height:auto; aspect-ratio:1672 / 941; border-radius:6px; object-fit:cover; }
 .mechanism-figure figcaption { margin-top:10px; color:var(--muted); font-size:.76rem; }
-.mechanism-compact { display:grid; grid-template-columns:minmax(260px,.7fr) minmax(0,1.3fr); gap:clamp(28px,7vw,96px); align-items:start; padding:46px clamp(22px,6vw,78px); border-bottom:1px solid var(--line); background:#fff; }
-.mechanism-compact p { max-width:740px; margin:0; color:var(--muted); }
+.network-feedback-mechanism { background:#fff; }
+.mechanism-network-impact { grid-column:1 / -1; border-top:1px solid var(--line); }
+.mechanism-network-impact > summary { padding:16px 0; color:var(--green); font-weight:800; cursor:pointer; }
+.mechanism-network-impact > summary:focus-visible { outline:2px solid var(--green); outline-offset:3px; }
+.mechanism-impact-grid { display:grid; grid-template-columns:minmax(0,.8fr) minmax(420px,1.2fr); gap:clamp(30px,5vw,72px); align-items:center; padding-top:18px; }
+.mechanism-impact-grid h3 { font-size:1.35rem; }
 .ranking-hero { min-height:460px; padding:38px clamp(18px,4vw,54px) 34px; background:#edf4f0; border-bottom:1px solid var(--line); }
 .hero-copy { display:grid; grid-template-columns:minmax(0,2fr) minmax(220px,1fr); gap:8px 36px; align-items:end; }
 .hero-copy > p { grid-column:1; margin-bottom:12px; color:var(--muted); }
@@ -1940,8 +1982,19 @@ code { color:var(--blue); }
 .effect-grid article:nth-child(2) { border-left-color:var(--gold); }
 .network-reading-note,.prompt-reading-note { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:20px; margin:0 0 18px; padding-block:12px; border-block:1px solid var(--line); }
 .network-reading-note p,.prompt-reading-note p { margin:0; color:var(--muted); }
+.network-feedback-boundary { max-width:900px; color:var(--muted); }
+.network-impact-details { margin-top:22px; border-top:1px solid var(--line); }
+.network-impact-details > summary { padding:14px 0; color:var(--green); font-weight:800; cursor:pointer; }
+.network-impact-details > summary:focus-visible { outline:2px solid var(--green); outline-offset:3px; }
+.network-effect-content { padding-top:18px; }
+.capacity-layout { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:18px; margin-bottom:18px; }
+.capacity-layout article { padding-left:14px; border-left:4px solid var(--gold); }
+.capacity-layout p,.observed-effect-reading { margin-bottom:0; color:var(--muted); }
+.observed-effect-reading { margin:0 0 18px; padding:12px 14px; background:var(--paper); font-weight:750; }
 .diagnostic-layout { display:grid; grid-template-columns:minmax(0,1.4fr) minmax(300px,.6fr); gap:16px; }
 .rank-delta-table { max-height:310px; }
+.rank-delta-table tbody tr,.interactive-evidence { cursor:pointer; }
+.rank-delta-table tbody tr:hover,.rank-delta-table tbody tr:focus,.interactive-evidence:hover,.interactive-evidence:focus { background:#edf4f0; outline:2px solid var(--green); outline-offset:-2px; }
 .sensitivity-variants { display:grid; gap:9px; }
 .sensitivity-variants article { padding:12px; border-left:4px solid var(--violet); background:var(--paper); }
 .sensitivity-variants strong,.sensitivity-variants span { display:block; }
@@ -2020,7 +2073,7 @@ code { color:var(--blue); }
 .limitations-band { display:grid; grid-template-columns:180px 1fr; background:#fff8ec; }
 .limitations-band li { margin:5px 0; }
 @media (max-width:1000px) { .hero-funnel { grid-template-columns:repeat(3,minmax(0,1fr)); }.sample-metrics,.effect-grid { grid-template-columns:repeat(2,minmax(0,1fr)); }.diagnostic-layout { grid-template-columns:1fr; }.lineage-detail { min-height:0; }.filters { grid-template-columns:repeat(3,minmax(0,1fr)); }.trace-groups { grid-template-columns:repeat(2,minmax(0,1fr)); }.drawer-detail .trace-groups { grid-template-columns:1fr; } }
-@media (max-width:700px) { main { border:0; }.topbar { position:static; display:flex; width:100%; align-items:stretch; flex-direction:column; gap:8px; }.brand,.workflow-nav { width:100%; overflow:visible; }.workflow-nav { justify-content:flex-start; flex-wrap:wrap; gap:7px 14px; }.workflow-nav a { font-size:.74rem; }.mode-switch { align-self:flex-start; }.ranking-hero { min-height:500px; padding:12px 18px; }.ranking-hero h1 { font-size:2.1rem; }.hero-copy { display:block; }.hero-meta { display:flex; flex-wrap:wrap; margin-top:12px; border:0; }.hero-meta span { padding:5px 9px; border:1px solid #cbd7d0; }.hero-funnel { grid-template-columns:repeat(3,minmax(0,1fr)); margin-top:16px; }.hero-funnel article { min-height:74px; padding:9px; }.hero-funnel article:nth-child(n+6),.hero-funnel p { display:none; }.hero-funnel strong { font-size:1.25rem; }.batch-control { top:0; grid-template-columns:140px minmax(0,1fr); gap:10px; padding-block:6px; }.object-flow { grid-template-columns:1fr; }.object-flow i { transform:rotate(90deg); justify-self:center; }.section-heading { align-items:flex-start; flex-direction:column; }.section-explanation,.sample-metrics,.effect-grid,.split-grid,.scope-intro,.lineage-legends,.prompt-grid,.chart-grid,.filters,.trace-groups,.ranking-term-grid,.ranking-method-notes,.ranking-worked-example-grid,.network-reading-note,.prompt-reading-note,.proxy-explanation-list { grid-template-columns:1fr; }.section-explanation article:nth-child(odd) { padding-right:0; border-right:0; }.section-explanation article + article { border-top:1px solid var(--line); }.ranking-term-grid article:nth-child(odd),.ranking-term-grid article:nth-child(even) { padding:12px 0; border-right:0; }.ranking-term-grid article + article { border-top:1px solid var(--line); }.lineage-legends section + section { padding-left:0; border-top:1px solid var(--line); border-left:0; }.round-summary,.ablation-summary { grid-template-columns:repeat(2,minmax(0,1fr)); }.chart-grid .wide { grid-column:auto; }.compact-filters { grid-template-columns:1fr; }.downloads { grid-template-columns:repeat(2,minmax(0,1fr)); }.limitations-band { grid-template-columns:1fr; }.users-table { max-height:540px; } }
+@media (max-width:700px) { main { border:0; }.topbar { position:static; display:flex; width:100%; align-items:stretch; flex-direction:column; gap:8px; }.brand,.workflow-nav { width:100%; overflow:visible; }.workflow-nav { justify-content:flex-start; flex-wrap:wrap; gap:7px 14px; }.workflow-nav a { font-size:.74rem; }.mode-switch { align-self:flex-start; }.ranking-hero { min-height:500px; padding:12px 18px; }.ranking-hero h1 { font-size:2.1rem; }.hero-copy { display:block; }.hero-meta { display:flex; flex-wrap:wrap; margin-top:12px; border:0; }.hero-meta span { padding:5px 9px; border:1px solid #cbd7d0; }.hero-funnel { grid-template-columns:repeat(3,minmax(0,1fr)); margin-top:16px; }.hero-funnel article { min-height:74px; padding:9px; }.hero-funnel article:nth-child(n+6),.hero-funnel p { display:none; }.hero-funnel strong { font-size:1.25rem; }.batch-control { top:0; grid-template-columns:140px minmax(0,1fr); gap:10px; padding-block:6px; }.object-flow { grid-template-columns:1fr; }.object-flow i { transform:rotate(90deg); justify-self:center; }.section-heading { align-items:flex-start; flex-direction:column; }.section-explanation,.sample-metrics,.effect-grid,.split-grid,.scope-intro,.lineage-legends,.prompt-grid,.chart-grid,.filters,.trace-groups,.ranking-term-grid,.ranking-method-notes,.ranking-worked-example-grid,.network-reading-note,.prompt-reading-note,.proxy-explanation-list,.capacity-layout,.mechanism-impact-grid { grid-template-columns:1fr; }.section-explanation article:nth-child(odd) { padding-right:0; border-right:0; }.section-explanation article + article { border-top:1px solid var(--line); }.ranking-term-grid article:nth-child(odd),.ranking-term-grid article:nth-child(even) { padding:12px 0; border-right:0; }.ranking-term-grid article + article { border-top:1px solid var(--line); }.lineage-legends section + section { padding-left:0; border-top:1px solid var(--line); border-left:0; }.round-summary,.ablation-summary { grid-template-columns:repeat(2,minmax(0,1fr)); }.chart-grid .wide { grid-column:auto; }.compact-filters { grid-template-columns:1fr; }.downloads { grid-template-columns:repeat(2,minmax(0,1fr)); }.limitations-band { grid-template-columns:1fr; }.users-table { max-height:540px; } }
 """
 
 
@@ -2113,7 +2166,7 @@ function openDrawer(kind, selection) {
   evidenceDrawer.querySelectorAll('[data-drawer-kind]').forEach((panel) => {
     panel.hidden = panel.dataset.drawerKind !== kind;
   });
-  const titles = {candidate:'Ranking candidate（排序候选）',user:'Research user（研究用户）',field:'Prompt / Field Lineage（提示 / 字段血缘）'};
+  const titles = {candidate:'Ranking candidate（排序候选）',user:'Research user（研究用户）',field:'Prompt / Field Lineage（提示 / 字段血缘）',network:'Network evidence（网络证据）'};
   byId('evidence-drawer-title').textContent = titles[kind] || '证据详情';
 }
 
@@ -2357,6 +2410,7 @@ function selectBatch(timeStep) {
   renderRankingRound();
   renderAblation();
   renderBatchDecisionEvidence();
+  renderNetworkFeedback();
 }
 
 function summaryItem(label, value) {
@@ -2501,6 +2555,58 @@ function renderBatchDecisionEvidence() {
   root.appendChild(list);
 }
 
+function renderNetworkFeedback() {
+  const timeStep = interactionState.batch;
+  const actions = users.filter((user) => user.exposure_time_step === timeStep);
+  const propagating = actions.filter((user) => ['like','comment','share'].includes(user.action));
+  const ignored = actions.filter((user) => user.action === 'ignore');
+  const currentRound = payload.ranking_rounds.find((round) => round.time_step === timeStep);
+  const nextRound = payload.ranking_rounds.find((round) => round.time_step === timeStep + 1);
+  const currentNeighborCounts = new Map(
+    (currentRound?.candidates || []).map((candidate) => [candidate.user_id,candidate.engaged_neighbor_count]),
+  );
+  const activatedCandidates = nextRound
+    ? nextRound.candidates.filter(
+        (candidate) => candidate.engaged_neighbor_count > (currentNeighborCounts.get(candidate.user_id) ?? 0),
+      )
+    : [];
+  byId('network-feedback-title').textContent = nextRound
+    ? `Batch ${timeStep} 互动如何进入下一轮排序`
+    : `Batch ${timeStep} 是最后一批，不再形成下一轮排序`;
+  const summary = byId('network-feedback-summary'); summary.replaceChildren();
+  [
+    ['当批已曝光',actions.length,`Batch ${timeStep}（第 ${timeStep} 批）的 persisted exposure decisions（持久化曝光决策）`,'exposure_time_step'],
+    ['可传播 action（动作）',`${count(propagating.length)} 个`,'like（点赞）/ comment（评论）/ share（分享）','action'],
+    ['ignore（忽略）',`${count(ignored.length)} 个`,'不激活直接邻居排序信号','action'],
+    ['新增直接邻居信号',`${count(activatedCandidates.length)} 位候选`,nextRound ? `Batch ${nextRound.time_step}（第 ${nextRound.time_step} 批）相对上一批的 engaged_neighbor_count（已互动邻居数）增加` : '本次运行已到最后一批','ranking_rounds.candidates.engaged_neighbor_count'],
+  ].forEach(([label,value,note,lineageField]) => {
+    const card = metric(label,value,note); card.tabIndex = 0; card.classList.add('interactive-evidence');
+    card.addEventListener('click',() => renderNetworkFeedbackDetail(label,value,note,lineageField,timeStep));
+    card.addEventListener('keydown',(event) => { if (event.key === 'Enter') renderNetworkFeedbackDetail(label,value,note,lineageField,timeStep); });
+    summary.appendChild(card);
+  });
+}
+
+function lineageContractGroup(fieldName, limitation) {
+  const lineage = payload.field_lineage.find((entry) => entry.field_name === fieldName);
+  return traceGroup('Evidence contract（证据合同）',[
+    ['Field（字段）',fieldName],
+    ['Field Provenance（字段来源）',provenanceLabels[lineage?.provenance] || lineage?.provenance],
+    ['Field Usage Stage（字段使用阶段）',(lineage?.usage_stages || []).map((stage) => usageLabels[stage] || stage).join(' · ')],
+    ['研究限制',limitation],
+  ]);
+}
+
+function renderNetworkFeedbackDetail(label, value, note, lineageField, timeStep) {
+  const root = byId('network-detail'); root.replaceChildren();
+  root.append(
+    element('h3','',`${label} · Batch ${timeStep}`),
+    traceGroup('Persisted evidence（持久化证据）',[[label,value],['口径',note]]),
+    lineageContractGroup(lineageField,'每次反馈只作用于一跳直接邻居；后续互动可能跨批形成新的直接邻居反馈。'),
+  );
+  openDrawer('network',{fieldName:lineageField,batch:timeStep});
+}
+
 function renderNetworkSummary() {
   const summary = payload.ranking_diagnostics_summary;
   const weights = summary.main_weights;
@@ -2508,6 +2614,9 @@ function renderNetworkSummary() {
   const inclusion = metric('Recommendation Signal Inclusion（推荐信号已纳入）',summary.network_signals_in_formula ? '已纳入' : '未纳入',`${weightLabel} 权重 · diagnostic adapter calls（诊断适配器调用）${summary.diagnostic_decision_adapter_calls}`);
   const effect = metric('Observed Recommendation Signal Effect（推荐信号产生可观测影响）',summary.top_selection_changed ? `${topLabel}（前列集合）已改变` : `${topLabel}（前列集合）未改变`,`${summary.batches_with_top_selection_change} / ${payload.ranking_rounds.length} 个批次的同批 ${topLabel} membership（成员集合）发生变化`);
   byId('network-effect-summary').append(inclusion,effect);
+  byId('network-effect-reading').textContent = summary.top_selection_changed
+    ? 'Observed Recommendation Signal Effect：本次运行存在可观测变化'
+    : 'Observed Recommendation Signal Effect：本次运行未观察到变化';
 }
 
 function renderAblation() {
@@ -2523,11 +2632,32 @@ function renderAblation() {
   const deltas = byId('ablation-rank-delta-body'); deltas.replaceChildren();
   batch.rank_deltas.forEach((row) => {
     const effect = batch.network_added_user_ids.includes(row.user_id) ? 'network-added（网络新增）' : batch.network_removed_user_ids.includes(row.user_id) ? 'network-removed（网络移除）' : batch.full_top_user_ids.includes(row.user_id) ? 'retained（保留）' : 'not-selected（未入选）';
-    const line = element('tr');
+    const line = element('tr'); line.tabIndex = 0;
     [row.user_id,row.full_rank,row.no_network_rank,`${row.network_rank_delta > 0 ? '+' : ''}${row.network_rank_delta}`].forEach((value) => line.appendChild(element('td','',display(value))));
     line.appendChild(element('td','effect-label',effect));
+    line.addEventListener('click',() => renderPairedRankingDetail(row,batch,effect));
+    line.addEventListener('keydown',(event) => { if (event.key === 'Enter') renderPairedRankingDetail(row,batch,effect); });
     deltas.appendChild(line);
   });
+}
+
+function renderPairedRankingDetail(row, batch, selectionEffect) {
+  const root = byId('network-detail'); root.replaceChildren();
+  const user = users.find((candidate) => candidate.user_id === row.user_id);
+  root.append(
+    element('h3','',`${user?.nickname || row.user_id} · ${row.user_id}`),
+    traceGroup('Frozen paired evidence（冻结配对证据）',[
+      ['Batch（批次）',batch.time_step],
+      ['full rank（完整排序名次）',row.full_rank],
+      ['no-network rank（无网络排序名次）',row.no_network_rank],
+      ['rank delta（名次变化）',row.network_rank_delta],
+      ['selection effect（入选影响）',selectionEffect],
+      ['action（动作）',actionLabels[user?.action] || user?.action],
+      ['reason（理由）',user?.reason],
+    ]),
+    lineageContractGroup('ranking_diagnostics.paired_ablation','同批冻结 candidate evidence 只重算 full / no-network ranking，不调用 Decision Adapter，不推进第二条 trajectory，也不是因果实验。'),
+  );
+  openDrawer('network',{userId:row.user_id,batch:batch.time_step});
 }
 
 function renderSensitivity() {

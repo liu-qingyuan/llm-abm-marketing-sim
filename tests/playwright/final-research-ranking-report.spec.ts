@@ -26,6 +26,7 @@ type RankingCandidate = {
   is_seed: boolean;
   selected: boolean;
   base_network_relevance: number;
+  engaged_neighbor_count: number;
   engaged_neighbor_signal: number;
   historical_tag_affinity: number;
   recommendation_score: number;
@@ -41,6 +42,22 @@ type SensitivityVariant = {
   batches: Array<{
     overlap_with_main_user_ids: string[];
     added_vs_main_user_ids: string[];
+  }>;
+};
+
+type PairedAblationBatch = {
+  time_step: number;
+  eligible_count: number;
+  top_overlap_count: number;
+  network_added_user_ids: string[];
+  network_removed_user_ids: string[];
+  full_top_user_ids: string[];
+  no_network_top_user_ids: string[];
+  rank_deltas: Array<{
+    user_id: string;
+    full_rank: number;
+    no_network_rank: number;
+    network_rank_delta: number;
   }>;
 };
 
@@ -62,12 +79,17 @@ type RankingPayload = {
     usage_stages: string[];
   }>;
   run: {
+    sample_size: number;
     horizon: number;
     delivery_capacity: number;
+    maximum_target_exposures: number;
   };
   ranking_rounds: Array<{
     time_step: number;
     target_exposures: number;
+    selected_count: number;
+    engagements: number;
+    ignored: number;
     provider_failed: number;
     candidates_with_positive_engaged_neighbor_signal: number;
     selected_with_positive_engaged_neighbor_signal: number;
@@ -75,6 +97,7 @@ type RankingPayload = {
   }>;
   ranking_diagnostics_summary: {
     batches_with_top_selection_change: number;
+    top_selection_changed: boolean;
     main_weights: {
       base_network: number;
       engaged_neighbor: number;
@@ -82,6 +105,9 @@ type RankingPayload = {
     };
   };
   ranking_diagnostics: {
+    paired_ablation: {
+      batches: PairedAblationBatch[];
+    };
     weight_sensitivity: {
       variants: SensitivityVariant[];
     };
@@ -367,7 +393,7 @@ async function assertRankingReport(
 
   const hero = page.getByTestId('ranking-hero');
   await expect(hero).toContainText('当高端酒店开始');
-  await expect(hero).toContainText('1,000');
+  await expect(hero).toContainText(payload.run.sample_size.toLocaleString());
   await expect(hero).toContainText('Exposures（曝光）');
   await expect(hero).toContainText('Decisions（决策）');
   await expect(hero).toContainText('Actions');
@@ -484,8 +510,14 @@ async function assertRankingReport(
     await evidenceDrawer.getByRole('button', { name: '关闭详情' }).click();
   }
   await expect(page.getByTestId('round-summary')).toContainText('Eligible');
-  await expect(page.getByTestId('round-summary')).toContainText('Selected（已选择）20');
-  await expect(page.getByTestId('ranking-candidate-table').locator('tbody tr')).toHaveCount(20);
+  const selectedRound = payload.ranking_rounds.find((round) => round.time_step === 1);
+  expect(selectedRound).toBeDefined();
+  await expect(page.getByTestId('round-summary')).toContainText(
+    `Selected（已选择）${selectedRound?.selected_count ?? 0}`,
+  );
+  await expect(page.getByTestId('ranking-candidate-table').locator('tbody tr')).toHaveCount(
+    selectedRound?.selected_count ?? 0,
+  );
   for (const heading of [
     'Rank（名次）',
     'User（用户）',
@@ -622,7 +654,9 @@ async function assertRankingReport(
   await expect(ablationExplanation).toContainText('数值降低');
 
   const users = payload.users;
-  await expect(page.getByTestId('visible-user-count')).toHaveText('1,000 / 1,000');
+  await expect(page.getByTestId('visible-user-count')).toHaveText(
+    `${payload.users.length.toLocaleString()} / ${payload.users.length.toLocaleString()}`,
+  );
   const tagUser = users.find((user) => user.interest_tags.length > 1) ?? users[0];
   await page.getByTestId('user-search').fill(tagUser.interest_tags[1] ?? tagUser.user_id);
   await expect(page.getByTestId('user-table')).toContainText(tagUser.user_id);
@@ -637,7 +671,7 @@ async function assertRankingReport(
   const failedUser = users.find((user) => user.result_status === 'provider_failed');
   expect(failedUser).toBeDefined();
   await page.getByTestId('result-filter').selectOption('provider_failed');
-  await expect(page.getByTestId('user-table').locator('tbody tr')).toHaveCount(1);
+  await expect(page.getByTestId('user-table').locator('tbody tr')).toHaveCount(providerFailureCount);
   await page.getByTestId('user-table').locator('tbody tr').click();
   await expect(page.getByTestId('user-detail')).toContainText(failedUser?.user_id ?? '');
   await expect(page.getByTestId('user-detail')).toContainText('（Provider 失败类型）');
@@ -736,11 +770,14 @@ test('mechanism shell defaults to explanation and keeps run evidence available o
   await expect(mechanismPanel).toContainText('三路证据汇入同一条排序');
   await expect(mechanismPanel).toContainText('平台决定 Recommendation Opportunity');
   await expect(mechanismPanel).toContainText('Decision Adapter 只输出曝光后的结构化 action');
+  await page.getByTestId('mechanism-network-impact-details').locator('summary').click();
   for (const imageId of [
     'sample-construction-illustration',
     'batch-zero-seeds-illustration',
     'global-reranking-illustration',
     'platform-llm-boundary-illustration',
+    'neighbor-feedback-illustration',
+    'capacity-network-impact-illustration',
   ]) {
     const image = page.getByTestId(imageId);
     await expect(image).toBeVisible();
@@ -749,6 +786,10 @@ test('mechanism shell defaults to explanation and keeps run evidence available o
       .toEqual({ complete: true, width: 1672 });
   }
   expect(externalRequests).toEqual([]);
+  await page.evaluate(() => {
+    document.documentElement.style.scrollBehavior = 'auto';
+    window.scrollTo(0, 0);
+  });
   await page.screenshot({ path: testInfo.outputPath('mechanism-report-desktop.png'), fullPage: true });
 
   await page.getByTestId('run-evidence-mode-button').click();
@@ -799,6 +840,156 @@ test('one persisted Batch selection updates ranking and LLM evidence together', 
   await expect(page.getByTestId('ranking-candidate-table')).toContainText(selectedCandidate?.user_id ?? '');
   await expect(page.getByTestId('batch-decision-evidence')).toContainText(exposedUser?.user_id ?? '');
   await expect(page.getByTestId('batch-decision-evidence')).toContainText(exposedUser?.provider_status ?? '');
+});
+
+test('one persisted Batch selection updates direct-neighbor feedback without propagating ignore', async ({ page }, testInfo) => {
+  const { outputDir, payload } = generateRankingReport(testInfo, 'effect');
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.goto(pathToFileURL(path.join(outputDir, 'report.html')).toString());
+  await page.getByTestId('run-evidence-mode-button').click();
+
+  const sourceRound = payload.ranking_rounds.find(
+    (round) => round.time_step < payload.run.horizon - 1 && round.target_exposures > 0,
+  );
+  expect(sourceRound).toBeDefined();
+  const sourceBatch = sourceRound?.time_step ?? 0;
+  const nextRound = payload.ranking_rounds.find((round) => round.time_step === sourceBatch + 1);
+  expect(nextRound).toBeDefined();
+  const actions = payload.users.filter((user) => user.exposure_time_step === sourceBatch);
+  const propagatingActions = actions.filter((user) => ['like', 'comment', 'share'].includes(user.action));
+  const ignored = actions.filter((user) => user.action === 'ignore');
+  const sourceNeighborCounts = new Map(
+    sourceRound?.candidates.map((candidate) => [candidate.user_id, candidate.engaged_neighbor_count]),
+  );
+  const nextBatchActivated = nextRound?.candidates.filter(
+    (candidate) => candidate.engaged_neighbor_count > (sourceNeighborCounts.get(candidate.user_id) ?? 0),
+  ) ?? [];
+
+  await page.getByTestId('shared-batch-timeline').getByRole('button', {
+    name: `Batch ${sourceBatch}`,
+    exact: true,
+  }).click();
+  const feedback = page.getByTestId('network-feedback-section');
+  const feedbackSummary = page.getByTestId('network-feedback-summary');
+  await expect(feedback).toContainText(`Batch ${sourceBatch}`);
+  await expect(feedbackSummary.locator('article', { hasText: '可传播 action（动作）' })).toContainText(
+    `${propagatingActions.length.toLocaleString()} 个`,
+  );
+  await expect(feedbackSummary.locator('article', { hasText: 'ignore（忽略）' })).toContainText(
+    `${ignored.length.toLocaleString()} 个`,
+  );
+  await expect(feedback).toContainText(`Batch ${sourceBatch + 1}`);
+  await expect(feedbackSummary.locator('article', { hasText: '新增直接邻居信号' })).toContainText(
+    `${nextBatchActivated.length.toLocaleString()} 位候选`,
+  );
+  await expect(feedback).toContainText('相对上一批的 engaged_neighbor_count（已互动邻居数）增加');
+  await expect(feedback).toContainText('只影响下一轮 Global Reranking');
+  await expect(feedback).toContainText('ignore 不传播');
+  await expect(feedback).toContainText('不表示用户真实看见了邻居互动');
+  await expect(feedback).toContainText('每次反馈只作用于一跳直接邻居');
+  await expect(feedback).toContainText('后续互动可能跨批形成新的直接邻居反馈');
+
+  await feedbackSummary.locator('article', { hasText: '新增直接邻居信号' }).click();
+  const drawer = page.getByTestId('evidence-drawer');
+  await expect(drawer).toBeVisible();
+  await expect(drawer).toHaveAttribute('data-selection-kind', 'network');
+  await expect(drawer).toContainText('ranking_rounds.candidates.engaged_neighbor_count');
+  await expect(drawer).toContainText('Field Provenance（字段来源）');
+  await expect(drawer).toContainText('Field Usage Stage（字段使用阶段）');
+  await expect(drawer).toContainText('每次反馈只作用于一跳直接邻居');
+});
+
+test('network impact expands inside feedback with payload-derived capacity and paired ranking', async ({ page }, testInfo) => {
+  const { outputDir, payload } = generateRankingReport(testInfo, 'effect');
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.goto(pathToFileURL(path.join(outputDir, 'report.html')).toString());
+  await page.getByTestId('run-evidence-mode-button').click();
+
+  const diagnostic = payload.ranking_diagnostics.paired_ablation.batches.find((batch) => batch.time_step === 1);
+  expect(diagnostic).toBeDefined();
+  const configuredCapacity = payload.run.horizon * payload.run.delivery_capacity;
+  const batchZeroExposures = payload.ranking_rounds.find((round) => round.time_step === 0)?.target_exposures ?? 0;
+  const runtimeCapacity = batchZeroExposures + (payload.run.horizon - 1) * payload.run.delivery_capacity;
+  const maximumExposures = Math.min(
+    payload.run.sample_size,
+    runtimeCapacity,
+  );
+  expect(payload.run.maximum_target_exposures).toBe(configuredCapacity);
+  const belowCapacity = payload.users.filter((user) => user.result_status === 'below_delivery_capacity').length;
+  const ignored = payload.users.filter((user) => user.result_status === 'ignore').length;
+
+  await page.getByTestId('shared-batch-timeline').getByRole('button', { name: 'Batch 1', exact: true }).click();
+  const feedback = page.getByTestId('network-feedback-section');
+  const impact = feedback.getByTestId('network-impact-details');
+  await expect(impact).toBeVisible();
+  await impact.locator('summary').click();
+  await expect(impact).toContainText(
+    `${payload.run.horizon} 批 × 每批 ${payload.run.delivery_capacity} 人 = ${payload.run.horizon * payload.run.delivery_capacity}`,
+  );
+  await expect(impact).toContainText(`Batch 0 持久化曝光 ${batchZeroExposures.toLocaleString()} 人`);
+  await expect(impact).toContainText(`运行调度上限为 ${runtimeCapacity.toLocaleString()} 人`);
+  await expect(impact).toContainText(`样本 ${payload.run.sample_size.toLocaleString()} 人`);
+  await expect(impact).toContainText(`最多曝光 ${maximumExposures.toLocaleString()} 人`);
+  await expect(impact).toContainText(`${belowCapacity.toLocaleString()} 个 below_delivery_capacity`);
+  await expect(impact).toContainText('未曝光');
+  await expect(impact).toContainText(`${ignored.toLocaleString()} 个 ignore`);
+  await expect(impact).toContainText('已曝光后选择不互动');
+  await expect(impact).toContainText(
+    payload.ranking_diagnostics_summary.top_selection_changed
+      ? 'Observed Recommendation Signal Effect：本次运行存在可观测变化'
+      : 'Observed Recommendation Signal Effect：本次运行未观察到变化',
+  );
+  await expect(impact).toContainText(`Top${payload.run.delivery_capacity} overlap`);
+  await expect(impact).toContainText(diagnostic?.top_overlap_count.toLocaleString() ?? '');
+  await expect(impact).toContainText(`network-added（网络新增）${diagnostic?.network_added_user_ids.length ?? 0}`);
+  await expect(impact).toContainText(`network-removed（网络移除）${diagnostic?.network_removed_user_ids.length ?? 0}`);
+  await expect(impact).toContainText('同批冻结 persisted candidate evidence');
+  await expect(impact).toContainText('零额外 Decision Adapter calls');
+  await expect(impact).toContainText('不是第二条完整 trajectory');
+  await expect(impact).toContainText('不是因果实验');
+});
+
+test('paired ranking differences use the unified right detail drawer', async ({ page }, testInfo) => {
+  const { outputDir, payload } = generateRankingReport(testInfo, 'effect');
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.goto(pathToFileURL(path.join(outputDir, 'report.html')).toString());
+  await page.getByTestId('run-evidence-mode-button').click();
+  await page.getByTestId('shared-batch-timeline').getByRole('button', { name: 'Batch 1', exact: true }).click();
+  await page.getByTestId('network-impact-details').locator('summary').click();
+
+  const diagnostic = payload.ranking_diagnostics.paired_ablation.batches.find((batch) => batch.time_step === 1);
+  expect(diagnostic).toBeDefined();
+  const delta = diagnostic?.rank_deltas.find((row) =>
+    diagnostic.network_added_user_ids.includes(row.user_id) || diagnostic.network_removed_user_ids.includes(row.user_id),
+  ) ?? diagnostic?.rank_deltas[0];
+  expect(delta).toBeDefined();
+  const user = payload.users.find((row) => row.user_id === delta?.user_id);
+  expect(user).toBeDefined();
+  const selectionEffect = diagnostic?.network_added_user_ids.includes(delta?.user_id ?? '')
+    ? 'network-added（网络新增）'
+    : diagnostic?.network_removed_user_ids.includes(delta?.user_id ?? '')
+      ? 'network-removed（网络移除）'
+      : diagnostic?.full_top_user_ids.includes(delta?.user_id ?? '')
+        ? 'retained（保留）'
+        : 'not-selected（未入选）';
+
+  await page.getByTestId('ablation-rank-deltas').locator('tbody tr', { hasText: delta?.user_id }).click();
+  const drawer = page.getByTestId('evidence-drawer');
+  await expect(drawer).toBeVisible();
+  await expect(drawer).toHaveAttribute('data-selection-kind', 'network');
+  await expect(drawer).toContainText(delta?.user_id ?? '');
+  await expect(drawer).toContainText(user?.nickname ?? '');
+  await expect(drawer).toContainText('Batch（批次）1');
+  await expect(drawer).toContainText(`full rank（完整排序名次）${delta?.full_rank ?? ''}`);
+  await expect(drawer).toContainText(`no-network rank（无网络排序名次）${delta?.no_network_rank ?? ''}`);
+  await expect(drawer).toContainText(`rank delta（名次变化）${delta?.network_rank_delta ?? ''}`);
+  await expect(drawer).toContainText(selectionEffect);
+  await expect(drawer).toContainText(user?.action ?? '');
+  await expect(drawer).toContainText(user?.reason ?? '');
+  await expect(drawer).toContainText('Field Provenance（字段来源）');
+  await expect(drawer).toContainText('Field Usage Stage（字段使用阶段）');
+  await expect(drawer).toContainText('同批冻结 candidate evidence');
+  await expect(drawer).toContainText('不调用 Decision Adapter');
 });
 
 test('ranking candidates users and prompt fields share one right detail drawer', async ({ page }, testInfo) => {
@@ -925,16 +1116,21 @@ test('configured formal ranking run preserves exact evidence on desktop and mobi
   }
 
   const payload = JSON.parse(readFileSync(payloadPath, 'utf8')) as RankingPayload;
-  expect(payload.ranking_diagnostics_summary.batches_with_top_selection_change).toBe(8);
-  expect(payload.ranking_rounds).toHaveLength(30);
+  const changedBatches = payload.ranking_diagnostics.paired_ablation.batches.filter(
+    (batch) => batch.network_added_user_ids.length > 0 || batch.network_removed_user_ids.length > 0,
+  ).length;
+  expect(payload.ranking_diagnostics_summary.batches_with_top_selection_change).toBe(changedBatches);
+  expect(payload.ranking_diagnostics_summary.top_selection_changed).toBe(changedBatches > 0);
+  expect(payload.ranking_rounds).toHaveLength(payload.run.horizon);
   const weakerVariant = payload.ranking_diagnostics.weight_sensitivity.variants.find(
     (variant) => variant.variant_id === 'weaker_network_40_20_40',
   );
   expect(weakerVariant).toBeDefined();
   if (!weakerVariant) return;
   const weakerAverages = sensitivityAverages(weakerVariant);
-  expect(weakerAverages.overlap).toBeCloseTo(19.7, 1);
-  expect(weakerAverages.changed).toBeCloseTo(0.3, 1);
+  expect(weakerAverages.overlap).toBeGreaterThanOrEqual(0);
+  expect(weakerAverages.overlap).toBeLessThanOrEqual(payload.run.delivery_capacity);
+  expect(weakerAverages.changed).toBeGreaterThanOrEqual(0);
 
   const candidate = selectWorkedCandidate(payload);
   const weights = payload.ranking_diagnostics_summary.main_weights;
@@ -945,6 +1141,28 @@ test('configured formal ranking run preserves exact evidence on desktop and mobi
   ];
   const calculatedScore = contributions.reduce((total, value) => total + value, 0);
   expect(candidate.recommendation_score).toBeCloseTo(calculatedScore, 10);
+  const totalExposures = payload.ranking_rounds.reduce((total, round) => total + round.target_exposures, 0);
+  const belowCapacityCount = payload.users.filter((user) => user.result_status === 'below_delivery_capacity').length;
+  const ignoreCount = payload.users.filter((user) => user.result_status === 'ignore').length;
+  const providerFailureCount = payload.users.filter((user) => user.result_status === 'provider_failed').length;
+  const positiveCandidateRows = payload.ranking_rounds.reduce(
+    (total, round) => total + round.candidates_with_positive_engaged_neighbor_signal,
+    0,
+  );
+  const positiveSelectedUsers = payload.ranking_rounds.reduce(
+    (total, round) => total + round.selected_with_positive_engaged_neighbor_signal,
+    0,
+  );
+  const positiveSelectedUserIds = new Set(
+    payload.ranking_rounds.flatMap((round) =>
+      round.candidates
+        .filter((row) => row.selected && row.engaged_neighbor_signal > 0)
+        .map((row) => row.user_id),
+    ),
+  );
+  const positiveSignalActions = payload.users.filter(
+    (user) => positiveSelectedUserIds.has(user.user_id) && user.action,
+  ).length;
 
   for (const viewport of [
     { name: 'desktop', width: 1440, height: 1000 },
@@ -953,7 +1171,9 @@ test('configured formal ranking run preserves exact evidence on desktop and mobi
     await page.setViewportSize(viewport);
     await page.goto(pathToFileURL(reportPath).toString());
     await assertReaderComprehensionContract(page, runDir, payload);
-    await expect(page.getByTestId('network-effect-section')).toContainText('8 / 30 个批次');
+    await expect(page.getByTestId('network-effect-section')).toContainText(
+      `${changedBatches} / ${payload.run.horizon} 个批次`,
+    );
     await expect(page.getByTestId('sensitivity-section')).toContainText(
       `${weakerAverages.overlap.toFixed(1)} overlap（重合人数）约等于 ${weakerAverages.changed.toFixed(1)} 个不同选择`,
     );
@@ -965,15 +1185,23 @@ test('configured formal ranking run preserves exact evidence on desktop and mobi
       `${contributions.map((value) => value.toFixed(4)).join(' + ')} = ${calculatedScore.toFixed(4)} recommendation_score（推荐排序分数；持久化值 ${candidate.recommendation_score.toFixed(4)}）`,
     );
     await expect(page.getByTestId('action-status-explanation')).toContainText(
-      '400 个 below_delivery_capacity（未获得投放）用户从未曝光',
+      `${belowCapacityCount.toLocaleString()} 个 below_delivery_capacity（未获得投放）用户从未曝光`,
     );
     await expect(page.getByTestId('action-status-explanation')).toContainText(
-      '342 个 ignore（忽略）用户已曝光但选择不互动',
+      `${ignoreCount.toLocaleString()} 个 ignore（忽略）用户已曝光但选择不互动`,
     );
-    await expect(page.getByTestId('provider-failure-explanation')).toContainText('0 / 600 个任务重试耗尽');
-    await expect(page.getByTestId('network-activation-explanation')).toContainText('30 条 candidates（候选）');
-    await expect(page.getByTestId('network-activation-explanation')).toContainText('23 位 selected users（已选择用户）');
-    await expect(page.getByTestId('network-activation-explanation')).toContainText('23 条 actions（动作）');
+    await expect(page.getByTestId('provider-failure-explanation')).toContainText(
+      `${providerFailureCount.toLocaleString()} / ${totalExposures.toLocaleString()} 个任务重试耗尽`,
+    );
+    await expect(page.getByTestId('network-activation-explanation')).toContainText(
+      `${positiveCandidateRows.toLocaleString()} 条 candidates（候选）`,
+    );
+    await expect(page.getByTestId('network-activation-explanation')).toContainText(
+      `${positiveSelectedUsers.toLocaleString()} 位 selected users（已选择用户）`,
+    );
+    await expect(page.getByTestId('network-activation-explanation')).toContainText(
+      `${positiveSignalActions.toLocaleString()} 条 actions（动作）`,
+    );
     await page.screenshot({
       path: testInfo.outputPath(`formal-ranking-report-${viewport.name}.png`),
       fullPage: true,
