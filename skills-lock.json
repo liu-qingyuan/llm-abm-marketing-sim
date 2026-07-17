@@ -25,6 +25,12 @@
       "skillPath": "skills/matt-lqy-in-progress/decision-mapping-lqy/SKILL.md",
       "computedHash": "552d5f37d55d397876453a392754a9c7836d2e6496cbe21a55a698e37b0d3bdd"
     },
+    "design-taste-frontend": {
+      "source": "Leonxlnx/taste-skill",
+      "sourceType": "github",
+      "skillPath": "skills/taste-skill/SKILL.md",
+      "computedHash": "6d838b246d0e35d0b53f4f23f98ba7a1dd561937e64f7d0c7553b0928e376c3e"
+    },
     "diagnosing-bugs-lqy": {
       "source": "liu-qingyuan/skills-sync-lqy",
       "sourceType": "github",
@@ -43,6 +49,12 @@
       "skillPath": "skills/lqy-local/gitnexus/SKILL.md",
       "computedHash": "42f2f18e032affa264bc3d81a3062a0e0113aea1765e2c3fb3eb98f3e7aa5833"
     },
+    "gpt-taste": {
+      "source": "Leonxlnx/taste-skill",
+      "sourceType": "github",
+      "skillPath": "skills/gpt-tasteskill/SKILL.md",
+      "computedHash": "cc8f0c601d8240a124e1d11634351a2be7b8a72fd807c75e5b6bf7afcd5ddee0"
+    },
     "grill-me-lqy": {
       "source": "liu-qingyuan/skills-sync-lqy",
       "sourceType": "github",
@@ -60,6 +72,24 @@
       "sourceType": "github",
       "skillPath": "skills/matt-lqy-core/grilling-lqy/SKILL.md",
       "computedHash": "5f3a64487e98486e578b664fc1a48503a92176ec857162fbc6e251a1975a0c0e"
+    },
+    "image-to-code": {
+      "source": "Leonxlnx/taste-skill",
+      "sourceType": "github",
+      "skillPath": "skills/image-to-code-skill/SKILL.md",
+      "computedHash": "58517b03b2a01f4c9ba65861559d03df931400871bbc200978c975b24bb92c73"
+    },
+    "imagegen-frontend-mobile": {
+      "source": "Leonxlnx/taste-skill",
+      "sourceType": "github",
+      "skillPath": "skills/imagegen-frontend-mobile/SKILL.md",
+      "computedHash": "9ab7f4f6ce66a3cff02bbf5894e5bd5af50bf5d6ef0adffdc88e8fab772fe44f"
+    },
+    "imagegen-frontend-web": {
+      "source": "Leonxlnx/taste-skill",
+      "sourceType": "github",
+      "skillPath": "skills/imagegen-frontend-web/SKILL.md",
+      "computedHash": "65f5ae59fa317567809438310b1c54f78cd133426deb43e4d3d4ca4c8f541628"
     },
     "implement-lqy": {
       "source": "liu-qingyuan/skills-sync-lqy",
