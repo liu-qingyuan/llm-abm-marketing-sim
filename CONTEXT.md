@@ -76,6 +76,10 @@ Target Delivery Ranking 的主模型把 `0.50 * base_network_relevance + 0.30 * 
 
 由 processed 视频字段 `source_challenge_name` 表达的真实采集来源分组。它用于视频分层切分和用户样本配额，不等同于视频语义类别。
 
+### Primary Video Source Scope
+
+用户在 Historical Set 中产生评论和回复次数最多的 Video Source Scope，用于 Seed-First Research Sample 的分组配额与报告解释。多个 scope 次数相同时按稳定来源顺序选择；它不改变用户在评论网络中的连接。
+
 ### Video Catalog
 
 processed 数据中可用于构建历史信号的视频集合。对于单目标视频 Final Research Report Run，Video Catalog 包含一条 Target Marketing Video 和其他历史视频；历史视频不作为 runtime 中主动竞争的对象。
@@ -188,9 +192,41 @@ Research Sample 中为 Comment-Derived User Interaction Graph 传播分析预留
 
 在保持总样本数和 Base Sample seeds 不变的前提下，把 Network Cohort 加入 Base Sample，并使用固定随机种子移除等量普通 non-seed 用户后形成的最终 Research Sample。报告必须分别展示 Base Sample 与 Network-Augmented Research Sample 的构成，并说明 Network Cohort 是传播识别设计，不是总体代表性抽样。
 
+### Global Influence Proxy
+
+基于用户粉丝数归一化得到的 0..1 可观测代理指标，表达潜在全平台覆盖能力。它不是抖音官方影响力指数或真实传播效果。
+
+### Local Influence Proxy
+
+结合历史评论网络位置与历史评论获赞认可得到的 0..1 可观测代理指标，表达用户在锦江历史互动语境中的局部影响力。`Local` 表示评论网络内部，不是地理位置或因果影响力。
+
+### Full-Pool Influence Seed Union
+
+在形成 Research Sample 之前，从全部合格 processed users 中取 Global Influence Proxy Top10 与 Local Influence Proxy Top10 的去重并集。它是 Seed-First Research Sample 的传播起点；两个 Top10 重叠时并集可能少于 20 人。
+
+### Seed Neighbor Cohort
+
+Full-Pool Influence Seed Union 在 holdout-safe Comment-Derived User Interaction Graph 中的直接历史互动邻居集合。该 cohort 用于确保评论网络信号有机会影响后续排序，不是代表性随机样本。
+
+### Seed-First Research Sample
+
+先从全部合格 processed users 中形成 Full-Pool Influence Seed Union，再纳入 Seed Neighbor Cohort，将两者计入 Primary Video Source Scope 配额后用分组固定随机普通用户补齐不足分组的 Research Sample。它是传播识别设计，只确保网络信号有作用机会，不预先保证 Observed Recommendation Signal Effect。
+
 ### Final Research Report Artifact
 
 Final Research Report Run 生成的研究展示产物集合。它至少包含网页版本报告、聚合图表、用户级表格，以及可下载 CSV/JSON artifact，使报告既能快速阅读，也能用于后续标注、复核和论文分析。
+
+### Interactive Mechanism Report
+
+在同一个页面叙事中同时提供通俗机制概览和可按需展开的本次运行证据的研究展示产物。它必须持续区分稳定研究规则与某次 Final Research Report Run 的观测结果，不能把预设权重或信号纳入误述为已观测效果。
+
+### Mechanism Explanation Mode
+
+Interactive Mechanism Report 的默认阅读模式，用通俗视觉和稳定术语解释研究机制，不展示或暗示某次运行才成立的结果。
+
+### Run Evidence Mode
+
+Interactive Mechanism Report 中基于持久化 artifacts 展示本次运行计数、逐轮排名、决策、诊断和限制的证据模式。基础版本直接使用允许公开的真实 processed/runtime 用户字段，不另设匿名或授权视图，也不暴露 raw Provider Payload。
 
 ### Documentation Navigation Contract
 
