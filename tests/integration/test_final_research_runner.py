@@ -904,6 +904,21 @@ def test_target_delivery_ranking_runtime_reranks_global_top20_after_seed_engagem
     ):
         assert "LLM Prompt" not in lineage[excluded_field]["usage_stages"]
     assert 'data-testid="final-research-ranking-report"' in report_html
+    assert 'data-report-mode="mechanism"' in report_html
+    assert 'data-testid="mechanism-mode-button"' in report_html
+    assert 'data-testid="run-evidence-mode-button"' in report_html
+    for anchor in ("overview", "sample", "exposure-ranking", "llm-decision", "network-feedback"):
+        assert f'href="#{anchor}"' in report_html
+    assert 'data-testid="sample-construction-illustration"' in report_html
+    assert 'data-testid="batch-zero-seeds-illustration"' in report_html
+    assert report_html.count('src="data:image/webp;base64,') == 2
+    assert "Proposed Seed-First Research Sample" in report_html
+    assert "20 seeds" in report_html
+    assert "60 Seed Neighbor Cohort" in report_html
+    assert "920 ordinary users" in report_html
+    assert "offline projection" in report_html
+    assert "Full-Pool Influence Seed Union" in report_html
+    assert "not Global Reranking Top20 winners" in report_html
     assert 'data-testid="ranking-funnel-section"' in report_html
     assert 'data-testid="ranking-hero"' in report_html
     assert 'data-testid="target-video-link"' in report_html

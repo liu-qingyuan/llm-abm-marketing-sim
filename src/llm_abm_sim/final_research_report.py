@@ -4,10 +4,12 @@ import csv
 import json
 import os
 import tempfile
+from base64 import b64encode
 from collections import Counter
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from html import escape
+from importlib.resources import files
 from pathlib import Path
 from typing import Literal
 
@@ -58,6 +60,8 @@ RankingResultStatus = Literal[
     "provider_failed",
     "below_delivery_capacity",
 ]
+
+
 def _render_section_explanation(explanation: RenderedConceptExplanation, test_id: str) -> str:
     entries = (
         ("是什么", explanation["what"]),
@@ -65,10 +69,13 @@ def _render_section_explanation(explanation: RenderedConceptExplanation, test_id
         ("怎么形成或计算", explanation["formation"]),
         ("本次结果怎么看", explanation["result"]),
     )
-    articles = "".join(
-        f"<article><h3>{escape(title)}</h3><p>{escape(copy)}</p></article>" for title, copy in entries
-    )
+    articles = "".join(f"<article><h3>{escape(title)}</h3><p>{escape(copy)}</p></article>" for title, copy in entries)
     return f'<div class="section-explanation" data-testid="{escape(test_id, quote=True)}">{articles}</div>'
+
+
+def _embedded_report_image(file_name: str) -> str:
+    image_bytes = files("llm_abm_sim").joinpath("report_assets").joinpath(file_name).read_bytes()
+    return f"data:image/webp;base64,{b64encode(image_bytes).decode('ascii')}"
 
 
 class FinalResearchTargetVideo(BaseModel):
@@ -1586,29 +1593,94 @@ def _render_ranking_report(payload: FinalResearchRankingReportPayload) -> str:
     )
     payload_json = safe_user_json(payload, indent=None).replace("</", "<\\/")
     explanation_json = safe_user_json(explanation_document, indent=None).replace("</", "<\\/")
+    sample_construction_image = _embedded_report_image("sample-construction.webp")
+    batch_zero_seeds_image = _embedded_report_image("batch-zero-seeds.webp")
     return f"""<!doctype html>
 <html lang="zh-CN">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{escape(payload.title)}</title>
+  <link rel="icon" href="data:,">
   <style>{_RANKING_REPORT_CSS}</style>
 </head>
 <body>
-<main data-testid="final-research-ranking-report">
+<main data-testid="final-research-ranking-report" data-report-mode="mechanism">
   <nav class="topbar" aria-label="研究报告导航">
-    <a class="brand" href="#top">Target Delivery Ranking（目标投放排序）</a>
-    <div class="workflow-nav"><a href="#sample">样本</a><a href="#lineage">字段血缘</a><a href="#ranking-rounds">逐轮排序</a><a href="#network-effect">网络影响</a><a href="#users">用户追踪</a></div>
+    <a class="brand" href="#overview">Interactive Mechanism Report（交互机制报告）</a>
+    <div class="workflow-nav"><a href="#overview">概览</a><a href="#sample">样本</a><a href="#exposure-ranking">曝光排序</a><a href="#llm-decision">LLM 决策</a><a href="#network-feedback">网络反馈</a></div>
+    <div class="mode-switch" role="tablist" aria-label="报告阅读模式">
+      <button id="mechanism-mode-tab" type="button" role="tab" aria-selected="true" aria-controls="mechanism-mode-panel" data-report-mode-target="mechanism" data-testid="mechanism-mode-button">机制说明</button>
+      <button id="run-evidence-mode-tab" type="button" role="tab" aria-selected="false" aria-controls="run-evidence-mode-panel" data-report-mode-target="run-evidence" data-testid="run-evidence-mode-button">本次运行</button>
+    </div>
   </nav>
 
-  <header id="top" class="ranking-hero" data-testid="ranking-hero">
+  <div id="mechanism-mode-panel" role="tabpanel" aria-labelledby="mechanism-mode-tab" data-report-mode-panel="mechanism" data-testid="mechanism-mode-panel">
+    <header id="overview" class="mechanism-overview" data-section-anchor="overview">
+      <div>
+        <span class="eyebrow">TARGET DELIVERY RANKING</span>
+        <h1>先理解机制，再核对运行证据</h1>
+        <p>平台先决定谁获得目标视频的 Recommendation Opportunity，LLM Decision Adapter 只决定曝光后的结构化动作。</p>
+      </div>
+      <dl class="mechanism-facts">
+        <div><dt>研究对象</dt><dd>单条 Target Marketing Video</dd></div>
+        <div><dt>投放单位</dt><dd>Batch 0 后逐批 Global Reranking</dd></div>
+        <div><dt>每批容量</dt><dd>Top20 Delivery Capacity</dd></div>
+        <div><dt>证据边界</dt><dd>机制目标与 persisted run 分开阅读</dd></div>
+      </dl>
+    </header>
+
+    <section id="sample" class="mechanism-stage sample-mechanism" data-section-anchor="sample" data-testid="mechanism-sample-section">
+      <div class="mechanism-copy">
+        <span class="eyebrow">PROPOSED SAMPLE</span>
+        <h2>Proposed Seed-First Research Sample</h2>
+        <p>目标方法先从完整合格用户池确定影响力 seeds，再纳入它们在 Historical Set 评论网络中的直接邻居，最后按来源配额补足普通用户。</p>
+        <p class="evidence-boundary"><strong>口径边界：</strong>20 seeds、60 Seed Neighbor Cohort 与 920 ordinary users 是当前数据的 offline projection，不是旧正式 run 的新结果，也不改写 payload v3 中的实际样本。</p>
+        <div class="projection-counts" aria-label="Seed-First Research Sample 离线投影">
+          <div><strong>20</strong><span>seeds</span></div>
+          <div><strong>60</strong><span>Seed Neighbor Cohort</span></div>
+          <div><strong>920</strong><span>ordinary users</span></div>
+        </div>
+      </div>
+      <figure class="mechanism-figure">
+        <img data-testid="sample-construction-illustration" src="{sample_construction_image}" width="1672" height="941" alt="从完整合格用户池选择影响力种子、历史直接邻居并补足研究样本的无文字示意图">
+        <figcaption>候选池、影响力 seeds、直接邻居与普通补足用户依次进入目标研究样本。</figcaption>
+      </figure>
+    </section>
+
+    <section id="exposure-ranking" class="mechanism-stage batch-zero-mechanism" data-section-anchor="exposure-ranking" data-testid="mechanism-batch-zero-section">
+      <figure class="mechanism-figure">
+        <img data-testid="batch-zero-seeds-illustration" src="{batch_zero_seeds_image}" width="1672" height="941" alt="目标视频直接投放给预先选定种子用户、普通候选等待后续排序的无文字示意图">
+        <figcaption>Batch 0 是预先声明的研究起点；其余 eligible users 从后续批次开始参与全局重排。</figcaption>
+      </figure>
+      <div class="mechanism-copy">
+        <span class="eyebrow">BATCH 0</span>
+        <h2>种子直接曝光，不是一次普通排名</h2>
+        <p>Batch 0 直接曝光预先选定的 Full-Pool Influence Seed Union。它们来自 Global Influence Proxy Top10 与 Local Influence Proxy Top10 的去重并集。</p>
+        <p class="evidence-boundary"><strong>不要误读：</strong>these seeds are not Global Reranking Top20 winners。Global Reranking 从后续 Batch 才对全部尚未处理的 eligible users 计算排名。</p>
+      </div>
+    </section>
+
+    <section id="llm-decision" class="mechanism-compact" data-section-anchor="llm-decision">
+      <div><span class="eyebrow">LLM DECISION</span><h2>LLM 只处理已曝光用户</h2></div>
+      <p>Decision Adapter 接收允许进入 Prompt 的用户与视频字段，输出 <code>like / comment / share / ignore</code>。ranking evidence、网络诊断与 holdout 不进入 Final Research LLM Prompt。</p>
+    </section>
+
+    <section id="network-feedback" class="mechanism-compact" data-section-anchor="network-feedback">
+      <div><span class="eyebrow">NETWORK FEEDBACK</span><h2>互动只改变下一轮机会</h2></div>
+      <p><code>like / comment / share</code> 可以激活 Comment-Derived User Interaction Graph 中的直接邻居排序信号；<code>ignore</code> 不传播，也不表示邻居真实看见了互动。</p>
+    </section>
+  </div>
+
+  <div id="run-evidence-mode-panel" role="tabpanel" aria-labelledby="run-evidence-mode-tab" data-report-mode-panel="run-evidence" data-testid="run-evidence-mode-panel" hidden>
+  <header id="top" class="ranking-hero" data-testid="ranking-hero" data-section-anchor="overview">
     <div class="hero-copy"><span class="eyebrow">TARGET VIDEO（目标视频） · {escape(target.video_id)}</span><h1>{escape(target.caption)}</h1><p>{escape(" ".join("#" + tag.lstrip("#") for tag in target.hashtags))}</p><a class="target-link" data-testid="target-video-link" href="{target_url}">查看真实 Target Video（目标视频）</a><div class="hero-meta"><span>{payload.run.sample_size:,} Users（用户）</span><span>{payload.run.horizon} Batches（批次）</span><span>Top{payload.run.delivery_capacity}（容量）</span></div></div>
     <div id="hero-funnel" class="hero-funnel" data-testid="ranking-funnel-section"></div>
   </header>
 
   <section class="object-band" data-testid="core-objects-section"><span class="eyebrow">CORE OBJECTS（核心对象）</span><div class="object-flow"><article><strong>TargetVideo（目标视频）</strong><span>唯一目标内容</span></article><i aria-hidden="true">→</i><article><strong>PlatformRecommendationModel（平台推荐模型）</strong><span>逐批全局重排</span></article><i aria-hidden="true">→</i><article><strong>ResearchUser（研究用户）</strong><span>曝光后结构化决策</span></article></div></section>
 
-  <section id="sample" class="content-band" data-testid="sample-comparison-section">
+  <section id="run-sample" class="content-band" data-testid="sample-comparison-section" data-section-anchor="sample">
     <div class="section-heading"><div><span class="eyebrow">SAMPLE（样本）</span><h2>Base Sample（基础样本）与 Final Sample（最终样本）</h2></div><p id="sample-summary"></p></div>
     {_render_section_explanation(section_explanations["sample"], "sample-section-explanation")}
     <div id="sample-metrics" class="sample-metrics"></div>
@@ -1627,7 +1699,7 @@ def _render_ranking_report(payload: FinalResearchRankingReportPayload) -> str:
     <div class="lineage-layout"><div class="table-wrap lineage-table"><table data-testid="lineage-table"><thead><tr><th>Field（字段）</th><th>中文名</th><th>Meaning（简要含义）</th><th>Field Provenance（字段来源）</th><th>Field Usage Stage（字段使用阶段）</th></tr></thead><tbody id="lineage-table-body"></tbody></table></div><aside id="lineage-detail" class="lineage-detail" data-testid="lineage-detail" aria-live="polite"></aside></div>
   </section>
 
-  <section id="ranking-rounds" class="content-band" data-testid="ranking-rounds-section">
+  <section id="ranking-rounds" class="content-band" data-testid="ranking-rounds-section" data-section-anchor="exposure-ranking">
     <div class="section-heading"><div><span class="eyebrow">GLOBAL RERANKING（全局重排）</span><h2>逐轮全局 Top{payload.run.delivery_capacity}（前 {payload.run.delivery_capacity} 名）</h2><p>平台使用 {base_network_weight:.0f}/{engaged_neighbor_weight:.0f}/{tag_affinity_weight:.0f} 公式排序：历史评论网络相关性 {base_network_weight:.0f}%、已互动直接邻居信号 {engaged_neighbor_weight:.0f}%、目标标签亲和度 {tag_affinity_weight:.0f}%。</p><p class="formula">{escape(payload.run.ranking_formula)}</p></div><label>Batch（批次）<select id="ranking-round-select" data-testid="ranking-round-select"></select></label></div>
     {_render_section_explanation(section_explanations["ranking"], "ranking-section-explanation")}
     <div class="ranking-term-grid" data-testid="ranking-formula-terms">
@@ -1645,7 +1717,7 @@ def _render_ranking_report(payload: FinalResearchRankingReportPayload) -> str:
     <div id="round-summary" class="round-summary" data-testid="round-summary"></div><div class="table-wrap"><table data-testid="ranking-candidate-table"><thead><tr><th>Rank（名次）</th><th>User（用户）</th><th>Base network（历史网络）</th><th>Engaged neighbor（已互动邻居）</th><th>Tag affinity（标签亲和度）</th><th>Score（分数）</th></tr></thead><tbody id="ranking-candidate-body"></tbody></table></div>
   </section>
 
-  <section id="network-effect" class="content-band" data-testid="network-effect-section">
+  <section id="network-effect" class="content-band" data-testid="network-effect-section" data-section-anchor="network-feedback">
     <span class="eyebrow">NETWORK EVIDENCE（网络证据）</span><h2>Recommendation Signal Inclusion（推荐信号已纳入）与 Observed Recommendation Signal Effect（推荐信号产生可观测影响）</h2>
     {_render_section_explanation(section_explanations["network"], "network-section-explanation")}
     <div class="network-reading-note"><p><strong>Inclusion（纳入）</strong>只说明网络项进入公式并具有明确权重，不能单独证明投放结果改变。</p><p><strong>Observed Effect（可观测影响）</strong>要求移除网络项后，同批 Top{payload.run.delivery_capacity} membership（前 {payload.run.delivery_capacity} 名成员集合）实际发生变化。</p></div>
@@ -1653,7 +1725,7 @@ def _render_ranking_report(payload: FinalResearchRankingReportPayload) -> str:
     <div class="diagnostic-layout"><article id="paired-ablation" class="diagnostic-panel" data-testid="paired-ablation-section"><div class="section-heading"><div><h3>Paired ranking（配对排序） · shadow diagnostic（影子诊断）</h3><p class="muted">同批冻结 persisted candidate evidence（持久化候选证据）并运行 shadow no-network（无网络影子排序），零额外 Decision Adapter calls（决策适配器调用）；它不是第二条完整 trajectory（轨迹），也不是因果实验。</p></div><label>Batch（批次）<select id="ablation-round-select" data-testid="ablation-round-select"></select></label></div><div id="ablation-summary" class="ablation-summary" data-testid="ablation-summary"></div><div class="table-wrap rank-delta-table"><table data-testid="ablation-rank-deltas"><thead><tr><th>User（用户）</th><th>Full rank（完整排序名次）</th><th>No-network rank（无网络排序名次）</th><th>Rank delta（名次变化）</th><th>Selection effect（入选影响）</th></tr></thead><tbody id="ablation-rank-delta-body"></tbody></table></div></article><article class="diagnostic-panel" data-testid="sensitivity-section"><h3>Ranking Weight Sensitivity（排序权重敏感性）</h3><p id="sensitivity-reading-note" class="muted"></p><div id="sensitivity-variants" class="sensitivity-variants"></div></article></div>
   </section>
 
-  <section class="content-band" data-testid="prompt-contract-section"><span class="eyebrow">LLM PROMPT CONTRACT（大模型提示合同）</span><h2>Prompt Isolation（提示证据隔离）</h2>{_render_section_explanation(section_explanations["prompt"], "prompt-section-explanation")}<div class="prompt-reading-note"><p><strong>阶段一：</strong>平台排序决定谁看到视频；<strong>阶段二：</strong>LLM（大模型）决定曝光后的 action（动作）。</p><p>使用 neutral PeerContext（中性同伴上下文）是为了防止评论网络 evidence（证据）同时进入 ranking（排序）和 LLM（大模型）决策，不是数据丢失。页面只展示 allowlisted evidence（允许证据），raw Prompt（原始提示）与 provider payload（服务提供方载荷）保持不可见。</p></div><div class="prompt-grid"><article><h3>Allowed（允许字段）</h3><ul id="prompt-allowed"></ul></article><article><h3>Neutral（空缺 / 中性字段）</h3><ul id="prompt-neutral"></ul></article><article><h3>Excluded（排除字段）</h3><ul id="prompt-excluded"></ul></article></div></section>
+  <section class="content-band" data-testid="prompt-contract-section" data-section-anchor="llm-decision"><span class="eyebrow">LLM PROMPT CONTRACT（大模型提示合同）</span><h2>Prompt Isolation（提示证据隔离）</h2>{_render_section_explanation(section_explanations["prompt"], "prompt-section-explanation")}<div class="prompt-reading-note"><p><strong>阶段一：</strong>平台排序决定谁看到视频；<strong>阶段二：</strong>LLM（大模型）决定曝光后的 action（动作）。</p><p>使用 neutral PeerContext（中性同伴上下文）是为了防止评论网络 evidence（证据）同时进入 ranking（排序）和 LLM（大模型）决策，不是数据丢失。页面只展示 allowlisted evidence（允许证据），raw Prompt（原始提示）与 provider payload（服务提供方载荷）保持不可见。</p></div><div class="prompt-grid"><article><h3>Allowed（允许字段）</h3><ul id="prompt-allowed"></ul></article><article><h3>Neutral（空缺 / 中性字段）</h3><ul id="prompt-neutral"></ul></article><article><h3>Excluded（排除字段）</h3><ul id="prompt-excluded"></ul></article></div></section>
 
   <section class="content-band" data-testid="aggregate-charts-section"><span class="eyebrow">AGGREGATES（聚合图表）</span><h2>同源聚合图表</h2>{_render_section_explanation(section_explanations["aggregate"], "aggregate-section-explanation")}<div class="chart-grid"><article><h3>逐批投放</h3><div id="batch-delivery-explanation" class="chart-explanation" data-testid="batch-delivery-explanation"></div><div id="batch-delivery-chart" class="batch-chart" data-testid="batch-delivery-chart"></div></article><article><h3>Action（动作）与容量状态</h3><div id="action-status-explanation" class="chart-explanation" data-testid="action-status-explanation"></div><div id="action-chart" class="bar-chart" data-testid="action-chart"></div></article><article><h3>Provider failure（Provider 失败）</h3><div id="provider-failure-explanation" class="chart-explanation" data-testid="provider-failure-explanation"></div><div id="provider-failure-chart" class="bar-chart" data-testid="provider-failure-chart"></div></article><article><h3>动态网络激活</h3><div id="network-activation-explanation" class="chart-explanation" data-testid="network-activation-explanation"></div><div id="network-activation-chart" class="bar-chart" data-testid="network-activation-chart"></div></article><article class="wide"><h3>Ablation（消融）Top{payload.run.delivery_capacity} overlap（重合人数）</h3><div id="ablation-overlap-explanation" class="chart-explanation" data-testid="ablation-overlap-explanation"></div><div id="ablation-overlap-chart" class="batch-chart" data-testid="ablation-overlap-chart"></div></article></div></section>
 
@@ -1661,6 +1733,7 @@ def _render_ranking_report(payload: FinalResearchRankingReportPayload) -> str:
 
   <section class="downloads-band"><span class="eyebrow">ARTIFACTS（交付物）</span><h2>同源下载</h2><div class="downloads">{download_links}</div></section>
   <section class="limitations-band"><span class="eyebrow">LIMITATIONS（研究限制）</span><ul id="limitations-list"></ul></section>
+  </div>
 </main>
 <script id="final-research-ranking-payload" type="application/json">{payload_json}</script>
 <script id="research-explanation-catalog" type="application/json">{explanation_json}</script>
@@ -1687,6 +1760,7 @@ def _ranking_download_label(key: str) -> str:
 _RANKING_REPORT_CSS = r"""
 :root { color-scheme:light; --ink:#17201b; --muted:#5c6761; --line:#d8dfda; --paper:#f6f8f6; --green:#086149; --blue:#28589b; --gold:#a5630b; --red:#a23636; --violet:#66509a; }
 * { box-sizing:border-box; }
+[hidden] { display:none !important; }
 html { scroll-behavior:smooth; }
 body { margin:0; color:var(--ink); background:#fff; font:15px/1.5 system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }
 main { width:min(1280px,100%); margin:0 auto; border-inline:1px solid var(--line); }
@@ -1700,10 +1774,40 @@ input,select { width:100%; padding:7px 9px; }
 label { display:grid; gap:5px; color:var(--muted); font-size:.76rem; font-weight:700; }
 .eyebrow { display:block; margin-bottom:8px; color:var(--green); font-size:.72rem; font-weight:800; text-transform:uppercase; }
 .muted { color:var(--muted); }
-.topbar { position:sticky; top:0; z-index:20; display:flex; align-items:center; justify-content:space-between; min-height:58px; padding:10px clamp(16px,4vw,48px); border-bottom:1px solid var(--line); background:rgba(255,255,255,.96); }
-.brand { color:var(--ink); font-weight:850; text-decoration:none; }
-.workflow-nav { display:flex; gap:18px; flex-wrap:wrap; }
+.topbar { position:sticky; top:0; z-index:20; display:grid; grid-template-columns:minmax(0,.7fr) minmax(160px,1.3fr) auto; gap:20px; align-items:center; min-height:64px; padding:10px clamp(16px,3vw,38px); border-bottom:1px solid var(--line); background:rgba(255,255,255,.97); }
+.brand { min-width:0; overflow-x:auto; overflow-y:hidden; color:var(--ink); font-size:.84rem; font-weight:850; text-decoration:none; white-space:nowrap; }
+.workflow-nav { display:flex; justify-content:center; gap:clamp(10px,1.5vw,20px); min-width:0; overflow-x:auto; white-space:nowrap; }
 .workflow-nav a { color:var(--muted); font-size:.82rem; font-weight:700; text-decoration:none; }
+.workflow-nav a:hover,.workflow-nav a:focus-visible { color:var(--green); text-decoration:underline; text-underline-offset:5px; }
+.mode-switch { display:grid; grid-template-columns:repeat(2,1fr); padding:3px; border:1px solid #bcc8c1; border-radius:6px; background:var(--paper); }
+.mode-switch button { min-height:30px; padding:4px 10px; border:0; border-radius:3px; background:transparent; color:var(--muted); font-size:.76rem; font-weight:800; white-space:nowrap; cursor:pointer; }
+.mode-switch button[aria-selected="true"] { background:var(--ink); color:#fff; }
+.mode-switch button:focus-visible { outline:2px solid var(--green); outline-offset:2px; }
+.mechanism-overview { min-height:500px; display:grid; grid-template-columns:minmax(0,1.2fr) minmax(340px,.8fr); gap:clamp(36px,7vw,100px); align-items:center; padding:clamp(54px,7vw,90px) clamp(22px,6vw,78px); border-bottom:1px solid var(--line); background:#f1f5f7; }
+.mechanism-overview h1 { max-width:690px; margin-bottom:18px; font-size:clamp(2.5rem,5vw,4.7rem); line-height:1.02; }
+.mechanism-overview p { max-width:660px; margin-bottom:0; color:var(--muted); font-size:1.05rem; }
+.mechanism-facts { margin:0; border-top:1px solid #b9c7cf; }
+.mechanism-facts div { display:grid; grid-template-columns:110px minmax(0,1fr); gap:16px; padding:15px 0; border-bottom:1px solid #cbd6dc; }
+.mechanism-facts dt { color:var(--muted); font-size:.76rem; font-weight:800; }
+.mechanism-facts dd { margin:0; font-weight:780; }
+.mechanism-stage { min-height:640px; display:grid; grid-template-columns:repeat(auto-fit,minmax(min(100%,430px),1fr)); gap:clamp(30px,5vw,72px); align-items:center; padding:clamp(48px,7vw,86px) clamp(22px,6vw,78px); border-bottom:1px solid var(--line); }
+.sample-mechanism { background:#fff; }
+.batch-zero-mechanism { background:#f7f8fa; }
+.mechanism-copy h2 { max-width:620px; margin-bottom:16px; font-size:clamp(2rem,3.5vw,3.3rem); line-height:1.08; }
+.mechanism-copy > p { max-width:640px; color:var(--muted); font-size:1rem; }
+.evidence-boundary { margin:22px 0; padding:15px 0 15px 18px; border-left:4px solid var(--gold); }
+.evidence-boundary strong { color:var(--ink); }
+.projection-counts { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); margin-top:26px; border-block:1px solid var(--line); }
+.projection-counts div { min-width:0; padding:16px 12px 16px 0; }
+.projection-counts div + div { padding-left:16px; border-left:1px solid var(--line); }
+.projection-counts strong,.projection-counts span { display:block; }
+.projection-counts strong { font-size:2rem; }
+.projection-counts span { color:var(--muted); font-size:.76rem; overflow-wrap:anywhere; }
+.mechanism-figure { min-width:0; margin:0; }
+.mechanism-figure img { display:block; width:100%; height:auto; aspect-ratio:1672 / 941; border-radius:6px; object-fit:cover; }
+.mechanism-figure figcaption { margin-top:10px; color:var(--muted); font-size:.76rem; }
+.mechanism-compact { display:grid; grid-template-columns:minmax(260px,.7fr) minmax(0,1.3fr); gap:clamp(28px,7vw,96px); align-items:start; padding:46px clamp(22px,6vw,78px); border-bottom:1px solid var(--line); background:#fff; }
+.mechanism-compact p { max-width:740px; margin:0; color:var(--muted); }
 .ranking-hero { min-height:460px; padding:38px clamp(18px,4vw,54px) 34px; background:#edf4f0; border-bottom:1px solid var(--line); }
 .hero-copy { display:grid; grid-template-columns:minmax(0,2fr) minmax(220px,1fr); gap:8px 36px; align-items:end; }
 .hero-copy > p { grid-column:1; margin-bottom:12px; color:var(--muted); }
@@ -1871,6 +1975,9 @@ payload.ranking_rounds.forEach((round) => round.candidates.forEach((candidate) =
   rankingHistoryByUser.get(candidate.user_id).push({time_step:round.time_step,...candidate});
 }));
 const byId = (id) => document.getElementById(id);
+const reportRoot = document.querySelector('[data-testid="final-research-ranking-report"]');
+const modeButtons = [...document.querySelectorAll('[data-report-mode-target]')];
+const modePanels = [...document.querySelectorAll('[data-report-mode-panel]')];
 const display = (value) => value === null || value === undefined || value === '' ? '—' : String(value);
 const fixed = (value) => value === null || value === undefined ? '—' : Number(value).toFixed(4);
 const provenanceLabels = Object.fromEntries(explanationDocument.provenance_categories.map((category) => [category.key,category.label]));
@@ -1905,6 +2012,37 @@ function element(tag, className, textValue) {
   if (textValue !== undefined) node.textContent = textValue;
   return node;
 }
+
+function setReportMode(mode) {
+  reportRoot.dataset.reportMode = mode;
+  modePanels.forEach((panel) => { panel.hidden = panel.dataset.reportModePanel !== mode; });
+  modeButtons.forEach((button) => button.setAttribute('aria-selected',String(button.dataset.reportModeTarget === mode)));
+}
+
+function activeSectionTarget(anchor) {
+  const panel = modePanels.find((candidate) => candidate.dataset.reportModePanel === reportRoot.dataset.reportMode);
+  return panel?.querySelector(`[data-section-anchor="${anchor}"]`) || null;
+}
+
+modeButtons.forEach((button,index) => {
+  button.addEventListener('click',() => setReportMode(button.dataset.reportModeTarget));
+  button.addEventListener('keydown',(event) => {
+    if (!['ArrowLeft','ArrowRight'].includes(event.key)) return;
+    event.preventDefault();
+    const offset = event.key === 'ArrowRight' ? 1 : -1;
+    const next = modeButtons[(index + offset + modeButtons.length) % modeButtons.length];
+    next.focus();
+    setReportMode(next.dataset.reportModeTarget);
+  });
+});
+document.querySelectorAll('.workflow-nav a').forEach((link) => link.addEventListener('click',(event) => {
+  const anchor = link.getAttribute('href')?.slice(1);
+  const target = anchor ? activeSectionTarget(anchor) : null;
+  if (!target) return;
+  event.preventDefault();
+  history.replaceState(null,'',`#${anchor}`);
+  target.scrollIntoView({block:'start'});
+}));
 
 function fillList(id, values) {
   const root = byId(id);

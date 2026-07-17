@@ -34,7 +34,7 @@ where = ["src"]
 
 
 [tool.setuptools.package-data]
-llm_abm_sim = ["vendor/*.js", "vendor/*.md", "web_static/*"]
+llm_abm_sim = ["report_assets/*.webp", "vendor/*.js", "vendor/*.md", "web_static/*"]
 
 [tool.ruff]
 line-length = 120

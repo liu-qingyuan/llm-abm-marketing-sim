@@ -242,7 +242,9 @@ async function expectBilingualReaderSurface(page: Page): Promise<void> {
       const copy = element.cloneNode(true) as HTMLElement;
       copy.querySelectorAll('code, .formula, input, select, option').forEach((child) => child.remove());
       const text = (copy.textContent ?? '').replace(/\s+/g, ' ').trim();
-      const withoutPairs = text.replace(/[A-Za-z][A-Za-z0-9_./–-]*(?: [A-Za-z0-9_./–-]+)*（[^）]+）/g, '');
+      const withoutPairs = text
+        .replace(/[A-Za-z][A-Za-z0-9_./–-]*(?: [A-Za-z0-9_./–-]+)*（[^）]+）/g, '')
+        .replace(/\bLLM\b/g, '');
       const unpaired = withoutPairs.match(/[A-Za-z][A-Za-z0-9_./-]*/g) ?? [];
       return unpaired.length ? [`${element.tagName}.${element.className}: ${unpaired.join(', ')}`] : [];
     });
@@ -344,6 +346,7 @@ async function assertRankingReport(
 ): Promise<void> {
   await page.goto(pathToFileURL(path.join(outputDir, 'report.html')).toString());
   await expect(page.getByTestId('final-research-ranking-report')).toBeVisible();
+  await page.getByTestId('run-evidence-mode-button').click();
 
   const hero = page.getByTestId('ranking-hero');
   await expect(hero).toContainText('当高端酒店开始');
@@ -362,8 +365,8 @@ async function assertRankingReport(
   await expect(page.getByTestId('core-objects-section')).toContainText('TargetVideo');
   await expect(page.getByTestId('core-objects-section')).toContainText('ResearchUser');
   await expect(page.getByTestId('core-objects-section')).toContainText('PlatformRecommendationModel');
-  await page.getByRole('link', { name: '逐轮排序' }).click();
-  await expect(page).toHaveURL(/#ranking-rounds$/);
+  await page.getByRole('link', { name: '曝光排序' }).click();
+  await expect(page).toHaveURL(/#exposure-ranking$/);
 
   const sampleSection = page.getByTestId('sample-comparison-section');
   await expect(sampleSection).toContainText(`Seed Users（种子用户） ${payload.sample_comparison.seed_count}`);
@@ -656,6 +659,78 @@ async function assertRankingReport(
   await assertReaderComprehensionContract(page, outputDir, payload);
 }
 
+test('mechanism shell defaults to explanation and keeps run evidence available on desktop', async ({ page }, testInfo) => {
+  const { outputDir, payload } = generateRankingReport(testInfo);
+  const externalRequests: string[] = [];
+  page.on('request', (request) => {
+    const protocol = new URL(request.url()).protocol;
+    if (protocol !== 'file:' && protocol !== 'data:') externalRequests.push(request.url());
+  });
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.goto(pathToFileURL(path.join(outputDir, 'report.html')).toString());
+
+  await expect(page).toHaveURL(/^file:/);
+  await expect(page.getByTestId('final-research-ranking-report')).toHaveAttribute('data-report-mode', 'mechanism');
+  await expect(page.getByTestId('mechanism-mode-button')).toHaveAttribute('aria-selected', 'true');
+  await expect(page.getByTestId('run-evidence-mode-button')).toHaveAttribute('aria-selected', 'false');
+  await expect(page.getByTestId('mechanism-mode-panel')).toBeVisible();
+  await expect(page.getByTestId('run-evidence-mode-panel')).toBeHidden();
+
+  const navigation = page.locator('.workflow-nav');
+  await expect(navigation.getByRole('link')).toHaveText([
+    '概览',
+    '样本',
+    '曝光排序',
+    'LLM 决策',
+    '网络反馈',
+  ]);
+  await expect(navigation).not.toContainText('网络影响');
+  for (const [label, anchor] of [
+    ['概览', 'overview'],
+    ['样本', 'sample'],
+    ['曝光排序', 'exposure-ranking'],
+    ['LLM 决策', 'llm-decision'],
+    ['网络反馈', 'network-feedback'],
+  ] as const) {
+    await navigation.getByRole('link', { name: label }).click();
+    await expect(page).toHaveURL(new RegExp(`#${anchor}$`));
+    await expect(page.locator(`[data-report-mode-panel="mechanism"] [data-section-anchor="${anchor}"]`)).toBeVisible();
+  }
+
+  const mechanismPanel = page.getByTestId('mechanism-mode-panel');
+  await expect(mechanismPanel).toContainText('Proposed Seed-First Research Sample');
+  await expect(mechanismPanel).toContainText('20 seeds');
+  await expect(mechanismPanel).toContainText('60 Seed Neighbor Cohort');
+  await expect(mechanismPanel).toContainText('920 ordinary users');
+  await expect(mechanismPanel).toContainText('offline projection');
+  await expect(mechanismPanel).toContainText('不是旧正式 run 的新结果');
+  await expect(mechanismPanel).toContainText('Full-Pool Influence Seed Union');
+  await expect(mechanismPanel).toContainText('not Global Reranking Top20 winners');
+  for (const imageId of ['sample-construction-illustration', 'batch-zero-seeds-illustration']) {
+    const image = page.getByTestId(imageId);
+    await expect(image).toBeVisible();
+    await expect(image).toHaveAttribute('src', /^data:image\/webp;base64,/);
+    expect(await image.evaluate((node: HTMLImageElement) => ({ complete: node.complete, width: node.naturalWidth })))
+      .toEqual({ complete: true, width: 1672 });
+  }
+  expect(externalRequests).toEqual([]);
+  await page.screenshot({ path: testInfo.outputPath('mechanism-report-desktop.png'), fullPage: true });
+
+  await page.getByTestId('run-evidence-mode-button').click();
+  await expect(page.getByTestId('final-research-ranking-report')).toHaveAttribute('data-report-mode', 'run-evidence');
+  await expect(page.getByTestId('mechanism-mode-panel')).toBeHidden();
+  await expect(page.getByTestId('run-evidence-mode-panel')).toBeVisible();
+  await expect(page.getByTestId('ranking-hero')).toContainText(payload.users.length.toLocaleString());
+  await expect(page.getByTestId('sample-comparison-section')).toContainText(
+    payload.sample_comparison.final_sample_count.toLocaleString(),
+  );
+
+  await page.getByTestId('mechanism-mode-button').focus();
+  await page.getByTestId('mechanism-mode-button').press('ArrowRight');
+  await expect(page.getByTestId('run-evidence-mode-button')).toBeFocused();
+  await expect(page.getByTestId('run-evidence-mode-button')).toHaveAttribute('aria-selected', 'true');
+});
+
 test('ranking research report is complete and interactive on desktop', async ({ page }, testInfo) => {
   const { outputDir, payload } = generateRankingReport(testInfo);
   await page.setViewportSize({ width: 1440, height: 1000 });
@@ -673,6 +748,7 @@ test('ranking research report remains usable on mobile', async ({ page }, testIn
 test('ranking research report exposes complete paired selection identities', async ({ page }, testInfo) => {
   const { outputDir } = generateRankingReport(testInfo, 'effect');
   await page.goto(pathToFileURL(path.join(outputDir, 'report.html')).toString());
+  await page.getByTestId('run-evidence-mode-button').click();
   await page.getByTestId('ablation-round-select').selectOption('1');
   const deltas = page.getByTestId('ablation-rank-deltas');
   await expect(deltas).toContainText('u60');
