@@ -15,6 +15,9 @@ type RankingUser = {
   sample_role: string;
   is_seed: boolean;
   is_network_cohort: boolean;
+  exposure_time_step: number | null;
+  provider_status: string;
+  confidence: number | null;
 };
 
 type RankingCandidate = {
@@ -191,11 +194,20 @@ async function expectNoLayoutFailures(page: Page): Promise<void> {
     }
     return {
       horizontalOverflow: document.documentElement.scrollWidth > window.innerWidth + 1,
+      navigationOverflow: [...document.querySelectorAll<HTMLElement>('.brand, .workflow-nav')]
+        .filter(visible)
+        .filter((element) => element.scrollWidth > element.clientWidth + 2)
+        .map((element) => `${element.className}:${element.clientWidth}/${element.scrollWidth}`),
       textOverflow,
       overlaps,
     };
   });
-  expect(failures).toEqual({ horizontalOverflow: false, textOverflow: [], overlaps: [] });
+  expect(failures).toEqual({
+    horizontalOverflow: false,
+    navigationOverflow: [],
+    textOverflow: [],
+    overlaps: [],
+  });
 }
 
 async function expectBilingualReaderSurface(page: Page): Promise<void> {
@@ -277,9 +289,11 @@ async function assertReaderComprehensionContract(
   await expect(page.getByTestId('lineage-table')).toContainText('Meaning（简要含义）');
   await page.getByTestId('lineage-search').fill('recommendation_score');
   await expect(page.getByTestId('lineage-table').locator('tbody tr')).not.toHaveCount(0);
-  await page.getByRole('button', { name: /^recommendation_score/ }).click();
+  await page.getByTestId('lineage-table').getByRole('button', { name: 'recommendation_score', exact: true }).click();
   await expect(page.getByTestId('lineage-detail')).toContainText('recommendation_score（推荐排序分数）');
   await page.getByTestId('lineage-search').fill('');
+  const detailDrawer = page.getByTestId('evidence-drawer');
+  await detailDrawer.getByRole('button', { name: '关闭详情' }).click();
 
   const promptSection = page.getByTestId('prompt-contract-section');
   await expect(promptSection).toContainText('平台排序决定谁看到视频');
@@ -326,6 +340,7 @@ async function assertReaderComprehensionContract(
   await expect(proxyExplanation).not.toHaveAttribute('open', '');
   await proxyExplanation.locator('summary').click();
   await expect(proxyExplanation).toContainText('不能用于因果或心理推断');
+  await detailDrawer.getByRole('button', { name: '关闭详情' }).click();
 
   for (const [label, relativePath] of Object.entries(payload.downloads)) {
     expect(existsSync(path.join(outputDir, relativePath)), `${label}: ${relativePath}`).toBeTruthy();
@@ -398,14 +413,17 @@ async function assertRankingReport(
   await page.getByTestId('lineage-search').fill('合成月收入标签');
   await expect(page.getByTestId('lineage-table').locator('tbody tr')).toHaveCount(1);
   await expect(page.getByTestId('lineage-table')).toContainText('实验用月收入区间，不是观测收入。');
-  await page.getByRole('button', { name: /latent_monthly_income/ }).click();
+  await page.getByTestId('lineage-table').getByRole('button', { name: 'latent_monthly_income', exact: true }).click();
   const lineageDetail = page.getByTestId('lineage-detail');
   await expect(lineageDetail).toContainText('latent_monthly_income（合成月收入标签）');
   for (const label of ['含义', '来源', '计算 / 形成方式', '范围', '用途', '高低值解读', '限制']) {
     await expect(lineageDetail).toContainText(label);
   }
   await page.getByTestId('lineage-search').fill('推荐排序分数');
-  const recommendationField = page.getByRole('button', { name: /^recommendation_score/ });
+  const recommendationField = page.getByTestId('lineage-table').getByRole('button', {
+    name: 'recommendation_score',
+    exact: true,
+  });
   await recommendationField.focus();
   await recommendationField.press('Enter');
   await expect(lineageDetail).toContainText('recommendation_score（推荐排序分数）');
@@ -458,7 +476,11 @@ async function assertRankingReport(
   await expect(workedExample).toContainText(
     `${contributions.map((value) => value.toFixed(4)).join(' + ')} = ${calculatedScore.toFixed(4)} recommendation_score（推荐排序分数；持久化值 ${candidate.recommendation_score.toFixed(4)}）`,
   );
-  await page.getByTestId('ranking-round-select').selectOption('1');
+  const evidenceDrawer = page.getByTestId('evidence-drawer');
+  if (await evidenceDrawer.isVisible()) {
+    await evidenceDrawer.getByRole('button', { name: '关闭详情' }).click();
+  }
+  await page.getByTestId('shared-batch-timeline').getByRole('button', { name: 'Batch 1', exact: true }).click();
   await expect(page.getByTestId('round-summary')).toContainText('Eligible');
   await expect(page.getByTestId('round-summary')).toContainText('Selected（已选择）20');
   await expect(page.getByTestId('ranking-candidate-table').locator('tbody tr')).toHaveCount(20);
@@ -488,7 +510,7 @@ async function assertRankingReport(
   await expect(ablationSection).toContainText('零额外 Decision Adapter calls');
   await expect(ablationSection).toContainText('不是第二条完整 trajectory（轨迹）');
   await expect(ablationSection).toContainText('不是因果实验');
-  await page.getByTestId('ablation-round-select').selectOption('1');
+  await page.getByTestId('shared-batch-timeline').getByRole('button', { name: 'Batch 1', exact: true }).click();
   await expect(page.getByTestId('ablation-summary')).toContainText(
     `Top${payload.run.delivery_capacity} overlap`,
   );
@@ -607,6 +629,7 @@ async function assertRankingReport(
   await expect(page.getByTestId('user-table')).toContainText('remaining_users（其余用户）');
   await page.getByTestId('user-table').locator('tbody tr').first().click();
   await expect(page.getByTestId('user-detail')).toContainText('mocked_provider（决策来源）');
+  await evidenceDrawer.getByRole('button', { name: '关闭详情' }).click();
   await page.getByTestId('user-search').fill('');
 
   const failedUser = users.find((user) => user.result_status === 'provider_failed');
@@ -645,11 +668,13 @@ async function assertRankingReport(
   await expect(proxyExplanation).toContainText('不能用于因果或心理推断');
   await expect(proxyValues).toBeVisible();
   await expect(page.getByTestId('user-detail')).toContainText('provider_failed');
+  await evidenceDrawer.getByRole('button', { name: '关闭详情' }).click();
 
   await page.getByTestId('result-filter').selectOption('below_delivery_capacity');
   await expect(page.getByTestId('user-table').locator('tbody tr').first()).toContainText('below_delivery_capacity');
   await page.getByTestId('user-table').locator('tbody tr').first().click();
   expect(await page.getByTestId('ranking-history-table').locator('tbody tr').count()).toBeGreaterThan(1);
+  await evidenceDrawer.getByRole('button', { name: '关闭详情' }).click();
   await page.getByTestId('result-filter').selectOption('');
   await page.getByTestId('scope-filter').selectOption(users[0].sample_source_scope);
   await expect(page.getByTestId('user-table').locator('tbody tr')).toHaveCount(
@@ -706,7 +731,15 @@ test('mechanism shell defaults to explanation and keeps run evidence available o
   await expect(mechanismPanel).toContainText('不是旧正式 run 的新结果');
   await expect(mechanismPanel).toContainText('Full-Pool Influence Seed Union');
   await expect(mechanismPanel).toContainText('not Global Reranking Top20 winners');
-  for (const imageId of ['sample-construction-illustration', 'batch-zero-seeds-illustration']) {
+  await expect(mechanismPanel).toContainText('三路证据汇入同一条排序');
+  await expect(mechanismPanel).toContainText('平台决定 Recommendation Opportunity');
+  await expect(mechanismPanel).toContainText('Decision Adapter 只输出曝光后的结构化 action');
+  for (const imageId of [
+    'sample-construction-illustration',
+    'batch-zero-seeds-illustration',
+    'global-reranking-illustration',
+    'platform-llm-boundary-illustration',
+  ]) {
     const image = page.getByTestId(imageId);
     await expect(image).toBeVisible();
     await expect(image).toHaveAttribute('src', /^data:image\/webp;base64,/);
@@ -731,6 +764,81 @@ test('mechanism shell defaults to explanation and keeps run evidence available o
   await expect(page.getByTestId('run-evidence-mode-button')).toHaveAttribute('aria-selected', 'true');
 });
 
+test('one persisted Batch selection updates ranking and LLM evidence together', async ({ page }, testInfo) => {
+  const { outputDir, payload } = generateRankingReport(testInfo);
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.goto(pathToFileURL(path.join(outputDir, 'report.html')).toString());
+  await page.getByTestId('run-evidence-mode-button').click();
+
+  const timeline = page.getByTestId('shared-batch-timeline');
+  await expect(timeline.getByRole('button')).toHaveCount(payload.run.horizon);
+  await expect(timeline.getByRole('button', { name: 'Batch 0', exact: true })).toHaveAttribute('aria-current', 'step');
+  await expect(page.getByTestId('batch-mechanism-label')).toContainText('Seed direct exposure');
+
+  const selectedBatch = payload.ranking_rounds.find((round) => round.time_step === 1);
+  expect(selectedBatch).toBeDefined();
+  const selectedCandidate = selectedBatch?.candidates.find((candidate) => candidate.selected);
+  const exposedUser = payload.users.find((user) => user.exposure_time_step === 1);
+  expect(selectedCandidate).toBeDefined();
+  expect(exposedUser).toBeDefined();
+
+  await timeline.getByRole('button', { name: 'Batch 1', exact: true }).click();
+  await expect(page.getByTestId('final-research-ranking-report')).toHaveAttribute('data-current-batch', '1');
+  await expect(timeline.getByRole('button', { name: 'Batch 1', exact: true })).toHaveAttribute('aria-current', 'step');
+  await expect(page.getByTestId('batch-mechanism-label')).toContainText('Global Reranking');
+  await expect(page.getByTestId('ranking-candidate-table')).toContainText(selectedCandidate?.user_id ?? '');
+  await expect(page.getByTestId('batch-decision-evidence')).toContainText(exposedUser?.user_id ?? '');
+  await expect(page.getByTestId('batch-decision-evidence')).toContainText(exposedUser?.provider_status ?? '');
+  await expect(page.getByTestId('ranking-round-select')).toHaveValue('1');
+  await expect(page.getByTestId('ablation-round-select')).toHaveValue('1');
+  await expect(page.getByTestId('ranking-round-select')).toBeHidden();
+  await expect(page.getByTestId('ablation-round-select')).toBeHidden();
+});
+
+test('ranking candidates users and prompt fields share one right detail drawer', async ({ page }, testInfo) => {
+  const { outputDir, payload } = generateRankingReport(testInfo);
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.goto(pathToFileURL(path.join(outputDir, 'report.html')).toString());
+  await page.getByTestId('run-evidence-mode-button').click();
+  await page.getByTestId('shared-batch-timeline').getByRole('button', { name: 'Batch 1', exact: true }).click();
+
+  const drawer = page.getByTestId('evidence-drawer');
+  await expect(drawer).toBeHidden();
+  const candidate = payload.ranking_rounds
+    .find((round) => round.time_step === 1)
+    ?.candidates.find((row) => row.selected);
+  expect(candidate).toBeDefined();
+  await page.getByTestId('ranking-candidate-table').locator('tbody tr').first().click();
+  await expect(drawer).toBeVisible();
+  await expect(drawer).toHaveAttribute('data-selection-kind', 'candidate');
+  await expect(drawer).toContainText(candidate?.user_id ?? '');
+  await expect(drawer).toContainText('Batch（批次）1');
+  await expect(drawer).toContainText('Score contribution（分数贡献）');
+  await page.screenshot({ path: testInfo.outputPath('ranking-candidate-drawer-desktop.png') });
+
+  const user = payload.users.find((row) => row.exposure_time_step === 1);
+  expect(user).toBeDefined();
+  await page.getByTestId('user-search').fill(user?.user_id ?? '');
+  await page.getByTestId('user-table').locator('.profile-id').filter({
+    hasText: new RegExp(`^${user?.user_id ?? ''}$`),
+  }).click();
+  await expect(drawer).toHaveAttribute('data-selection-kind', 'user');
+  await expect(drawer).toContainText(user?.user_id ?? '');
+  await expect(drawer).toContainText('Field Provenance（字段来源）');
+  await expect(drawer).toContainText('Field Usage Stage（字段使用阶段）');
+
+  const promptField = page.getByTestId('prompt-contract-section').getByRole('button').first();
+  const promptFieldName = (await promptField.textContent())?.split('（')[0] ?? '';
+  await promptField.click();
+  await expect(drawer).toHaveAttribute('data-selection-kind', 'field');
+  await expect(drawer).toContainText(promptFieldName);
+  await expect(drawer).toContainText('Field Provenance（字段来源）');
+  await expect(drawer).toContainText('Field Usage Stage（字段使用阶段）');
+
+  await drawer.getByRole('button', { name: '关闭详情' }).click();
+  await expect(drawer).toBeHidden();
+});
+
 test('ranking research report is complete and interactive on desktop', async ({ page }, testInfo) => {
   const { outputDir, payload } = generateRankingReport(testInfo);
   await page.setViewportSize({ width: 1440, height: 1000 });
@@ -749,7 +857,7 @@ test('ranking research report exposes complete paired selection identities', asy
   const { outputDir } = generateRankingReport(testInfo, 'effect');
   await page.goto(pathToFileURL(path.join(outputDir, 'report.html')).toString());
   await page.getByTestId('run-evidence-mode-button').click();
-  await page.getByTestId('ablation-round-select').selectOption('1');
+  await page.getByTestId('shared-batch-timeline').getByRole('button', { name: 'Batch 1', exact: true }).click();
   const deltas = page.getByTestId('ablation-rank-deltas');
   await expect(deltas).toContainText('u60');
   await expect(deltas).toContainText('network-added');

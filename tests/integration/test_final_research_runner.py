@@ -911,7 +911,9 @@ def test_target_delivery_ranking_runtime_reranks_global_top20_after_seed_engagem
         assert f'href="#{anchor}"' in report_html
     assert 'data-testid="sample-construction-illustration"' in report_html
     assert 'data-testid="batch-zero-seeds-illustration"' in report_html
-    assert report_html.count('src="data:image/webp;base64,') == 2
+    assert 'data-testid="global-reranking-illustration"' in report_html
+    assert 'data-testid="platform-llm-boundary-illustration"' in report_html
+    assert report_html.count('src="data:image/webp;base64,') == 4
     assert "Proposed Seed-First Research Sample" in report_html
     assert "20 seeds" in report_html
     assert "60 Seed Neighbor Cohort" in report_html
