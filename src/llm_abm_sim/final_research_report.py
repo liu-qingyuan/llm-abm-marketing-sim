@@ -1707,24 +1707,52 @@ def _render_ranking_report(payload: FinalResearchRankingReportPayload) -> str:
       </figure>
     </section>
 
-    <section id="network-feedback" class="mechanism-stage network-feedback-mechanism" data-section-anchor="network-feedback" data-testid="mechanism-network-feedback-section">
-      <div class="mechanism-copy">
-        <span class="eyebrow">NETWORK FEEDBACK</span><h2>互动只改变下一轮机会</h2>
-        <p><code>like / comment / share</code> 可以激活 Comment-Derived User Interaction Graph 中直接邻居的排序信号，只进入下一轮 Global Reranking。</p>
-        <p class="evidence-boundary"><strong>传播边界：</strong><code>ignore</code> 不传播；每次反馈只作用于一跳直接邻居。若邻居在后续批次成功互动，可能再形成新的直接邻居反馈；这不表示用户真实看见了邻居互动。</p>
-      </div>
-      <figure class="mechanism-figure">
-        <img data-testid="neighbor-feedback-illustration" src="{neighbor_feedback_image}" width="1672" height="941" alt="点赞评论分享激活三组直接邻居下一轮排序优先级而忽略不传播的无文字示意图">
-        <figcaption>三类成功互动只激活各自相连的直接邻居，随后回到下一轮全局排序。</figcaption>
-      </figure>
-      <details class="mechanism-network-impact" data-testid="mechanism-network-impact-details">
-        <summary>展开网络影响</summary>
-        <div class="mechanism-impact-grid">
-          <div class="mechanism-copy"><h3>容量内比较同批两种排序</h3><p>Delivery Capacity 决定每批实际曝光人数。Paired Network Ranking Ablation 在同批冻结 candidate evidence 上比较 full 与 no-network ranking，不额外调用 Decision Adapter。</p><p class="evidence-boundary"><strong>结果边界：</strong>图示不预设网络会改变 Top20。是否存在 Observed Recommendation Signal Effect，只能读取 persisted diagnostics。</p></div>
-          <figure class="mechanism-figure"><img data-testid="capacity-network-impact-illustration" src="{capacity_network_impact_image}" width="1672" height="941" alt="同一候选池在固定投放容量内比较完整排序与无网络排序的无文字示意图"><figcaption>同批候选与容量保持不变，只比较网络信号存在或移除时的排名与入选差异。</figcaption></figure>
+    <section id="network-feedback" class="mechanism-stage mechanism-scene network-feedback-mechanism" tabindex="-1" data-section-anchor="network-feedback" data-testid="mechanism-network-feedback-section">
+      <div class="mechanism-scene-header">
+        <div class="mechanism-copy">
+          <span class="eyebrow">DYNAMIC NETWORK RANKING SIGNAL</span>
+          <h2>成功互动只激活一跳直接邻居</h2>
         </div>
-      </details>
+        <div class="mechanism-copy">
+          <p><code>like / comment / share</code> 激活 Comment-Derived User Interaction Graph 中相连用户的排序信号，只进入下一轮 Global Reranking。<code>ignore</code> 在当前用户处停止。</p>
+          <p class="feedback-reader-boundary">这是平台排序信号，不表示用户真实看见了邻居互动。</p>
+        </div>
+      </div>
+      <figure class="mechanism-scene-visual neighbor-feedback-visual" data-testid="neighbor-feedback-scene-visual">
+        <img data-testid="neighbor-feedback-illustration" src="{neighbor_feedback_image}" width="1672" height="941" alt="点赞评论分享分别激活一跳直接邻居并进入下一轮排序，忽略动作停止传播的无文字示意图">
+        <button class="feedback-hotspot feedback-action feedback-like-hotspot" type="button" data-mechanism-key="feedback-like" data-testid="feedback-like-hotspot" aria-label="查看 like 激活直接邻居详情" aria-expanded="false" aria-controls="evidence-drawer"><strong>like</strong><span>激活</span></button>
+        <button class="feedback-hotspot feedback-action feedback-comment-hotspot" type="button" data-mechanism-key="feedback-comment" data-testid="feedback-comment-hotspot" aria-label="查看 comment 激活直接邻居详情" aria-expanded="false" aria-controls="evidence-drawer"><strong>comment</strong><span>激活</span></button>
+        <button class="feedback-hotspot feedback-action feedback-share-hotspot" type="button" data-mechanism-key="feedback-share" data-testid="feedback-share-hotspot" aria-label="查看 share 激活直接邻居详情" aria-expanded="false" aria-controls="evidence-drawer"><strong>share</strong><span>激活</span></button>
+        <button class="feedback-hotspot feedback-ignore-hotspot" type="button" data-mechanism-key="feedback-ignore" data-testid="feedback-ignore-hotspot" aria-label="查看 ignore 停止传播详情" aria-expanded="false" aria-controls="evidence-drawer"><strong>ignore</strong><span>停止传播</span></button>
+        <button class="feedback-hotspot feedback-neighbors-hotspot" type="button" data-mechanism-key="feedback-neighbors" data-testid="feedback-neighbors-hotspot" aria-label="查看一跳直接邻居详情" aria-expanded="false" aria-controls="evidence-drawer"><strong>一跳直接邻居</strong><span>只激活相连用户</span></button>
+        <button class="feedback-hotspot feedback-next-round-hotspot" type="button" data-mechanism-key="feedback-next-round" data-testid="feedback-next-round-hotspot" aria-label="查看下一轮 Global Reranking 详情" aria-expanded="false" aria-controls="evidence-drawer"><strong>下一轮 Global Reranking</strong><span>重新计算相对排序</span></button>
+        <p class="scene-status feedback-status"><strong>排序反馈边界</strong><br>单次 action 只传播一跳，后续成功互动才可能形成新的反馈。</p>
+      </figure>
     </section>
+    <details class="mechanism-network-impact" data-testid="mechanism-network-impact-details">
+      <summary>展开容量与网络影响</summary>
+      <section class="mechanism-stage mechanism-scene capacity-comparison-mechanism" data-testid="mechanism-capacity-comparison-section">
+        <div class="mechanism-scene-header">
+          <div class="mechanism-copy">
+            <span class="eyebrow">DELIVERY CAPACITY / PAIRED RANKING</span>
+            <h2>600 人容量内并列比较两种排序</h2>
+          </div>
+          <div class="mechanism-copy">
+            <p>1,000 人 Proposed Research Sample 中，30 个 Batch × Top20 使 600 人最多获得 Recommendation Opportunity；400 人保持 <code>below_delivery_capacity</code>：未曝光，不是 <code>ignore</code>。</p>
+            <p class="capacity-reader-boundary">Paired Network Ranking Ablation 使用同批冻结 candidate evidence，零额外 Decision Adapter calls，不推进第二条 trajectory，也不预设网络一定改变 Top20。</p>
+          </div>
+        </div>
+        <figure class="mechanism-scene-visual capacity-network-visual" data-testid="capacity-network-scene-visual">
+          <img data-testid="capacity-network-impact-illustration" src="{capacity_network_impact_image}" width="1672" height="941" alt="一千人研究样本在六百人最大投放容量边界内，使用同批候选证据并列比较完整排序与无网络排序的无文字示意图">
+          <button class="mechanism-hotspot capacity-hotspot capacity-limit-hotspot" type="button" data-mechanism-key="capacity-limit" data-testid="capacity-limit-hotspot" aria-label="查看 Delivery Capacity 上限详情" aria-expanded="false" aria-controls="evidence-drawer"><strong>600 max Delivery Capacity</strong><span>30 Batch × Top20</span></button>
+          <button class="mechanism-hotspot capacity-hotspot below-capacity-hotspot" type="button" data-mechanism-key="below-capacity" data-testid="below-capacity-hotspot" aria-label="查看 below delivery capacity 详情" aria-expanded="false" aria-controls="evidence-drawer"><strong>400 below_delivery_capacity</strong><span>未曝光，不是 ignore</span></button>
+          <button class="mechanism-hotspot capacity-hotspot frozen-evidence-hotspot" type="button" data-mechanism-key="frozen-evidence" data-testid="frozen-evidence-hotspot" aria-label="查看同批冻结 candidate evidence 详情" aria-expanded="false" aria-controls="evidence-drawer"><strong>同批冻结 evidence</strong><span>只做 paired ranking</span></button>
+          <button class="mechanism-hotspot capacity-hotspot full-ranking-hotspot" type="button" data-mechanism-key="full-ranking" data-testid="full-ranking-hotspot" aria-label="查看 full ranking 详情" aria-expanded="false" aria-controls="evidence-drawer"><strong>full ranking</strong><span>保留网络信号</span></button>
+          <button class="mechanism-hotspot capacity-hotspot no-network-ranking-hotspot" type="button" data-mechanism-key="no-network-ranking" data-testid="no-network-ranking-hotspot" aria-label="查看 no-network ranking 详情" aria-expanded="false" aria-controls="evidence-drawer"><strong>no-network ranking</strong><span>移除网络贡献</span></button>
+          <p class="scene-status capacity-status"><strong>1,000 人 Proposed Sample</strong><br>容量决定谁获得曝光，不决定已曝光用户的 action。</p>
+        </figure>
+      </section>
+    </details>
   </div>
 
   <div id="run-evidence-mode-panel" role="tabpanel" aria-labelledby="run-evidence-mode-tab" data-report-mode-panel="run-evidence" data-testid="run-evidence-mode-panel" hidden>
@@ -1965,15 +1993,38 @@ label { display:grid; gap:5px; color:var(--muted); font-size:.76rem; font-weight
 .projection-counts strong,.projection-counts span { display:block; }
 .projection-counts strong { font-size:2rem; }
 .projection-counts span { color:var(--muted); font-size:.76rem; overflow-wrap:anywhere; }
-.mechanism-figure { min-width:0; margin:0; }
-.mechanism-figure img { display:block; width:100%; height:auto; aspect-ratio:1672 / 941; border-radius:6px; object-fit:cover; }
-.mechanism-figure figcaption { margin-top:10px; color:var(--muted); font-size:.76rem; }
-.network-feedback-mechanism { background:#fff; }
-.mechanism-network-impact { grid-column:1 / -1; border-top:1px solid var(--line); }
-.mechanism-network-impact > summary { padding:16px 0; color:var(--green); font-weight:800; cursor:pointer; }
+.network-feedback-mechanism { min-height:1100px; grid-template-rows:auto minmax(820px,1fr) auto; background:#fbfcfe; }
+.neighbor-feedback-visual { min-height:820px; background:#f4f7fb; }
+.neighbor-feedback-visual > img { min-height:820px; object-position:center center; }
+.feedback-reader-boundary { padding-left:14px; border-left:3px solid var(--gold); color:var(--ink) !important; font-size:.84rem !important; font-weight:720; }
+.feedback-hotspot { position:absolute; z-index:4; min-height:54px; display:grid; align-content:center; gap:2px; padding:7px 10px; border:2px solid rgba(18,94,232,.7); border-radius:6px; background:rgba(251,252,254,.94); color:var(--ink); text-align:left; cursor:pointer; box-shadow:0 8px 24px rgba(23,32,27,.1); }
+.feedback-hotspot strong,.feedback-hotspot span { display:block; white-space:nowrap; }
+.feedback-hotspot strong { font-size:.76rem; line-height:1.15; }
+.feedback-hotspot span { color:var(--muted); font-size:.65rem; line-height:1.15; }
+.feedback-hotspot:hover,.feedback-hotspot:focus-visible,.feedback-hotspot[aria-expanded="true"] { border-color:var(--blue); background:#fff; outline:3px solid rgba(18,94,232,.22); outline-offset:2px; transform:translateY(-2px); }
+.feedback-hotspot:active { transform:translateY(1px); }
+.feedback-action { width:9%; min-width:92px; }
+.feedback-like-hotspot { top:18%; left:17%; }
+.feedback-comment-hotspot { top:36%; left:16%; width:10%; }
+.feedback-share-hotspot { top:54%; left:15%; }
+.feedback-ignore-hotspot { top:67%; left:3%; width:11%; min-width:112px; }
+.feedback-neighbors-hotspot { top:30%; right:3%; width:21%; }
+.feedback-next-round-hotspot { top:62%; right:3%; width:22%; }
+.feedback-status { top:13%; right:3%; max-width:24%; border-left-color:var(--gold); }
+.mechanism-network-impact { border-bottom:1px solid var(--line); background:#fbfcfe; }
+.mechanism-network-impact > summary { padding:18px clamp(22px,5vw,70px); color:var(--green); font-weight:800; cursor:pointer; }
 .mechanism-network-impact > summary:focus-visible { outline:2px solid var(--green); outline-offset:3px; }
-.mechanism-impact-grid { display:grid; grid-template-columns:minmax(0,.8fr) minmax(420px,1.2fr); gap:clamp(30px,5vw,72px); align-items:center; padding-top:18px; }
-.mechanism-impact-grid h3 { font-size:1.35rem; }
+.capacity-comparison-mechanism { min-height:1100px; grid-template-rows:auto minmax(820px,1fr); border-top:1px solid var(--line); border-bottom:0; background:#f7f9fc; }
+.capacity-network-visual { min-height:820px; background:#f2f5fa; }
+.capacity-network-visual > img { min-height:820px; object-position:center center; }
+.capacity-reader-boundary { padding-left:14px; border-left:3px solid var(--gold); color:var(--ink) !important; font-size:.84rem !important; font-weight:720; }
+.capacity-hotspot { min-width:150px; }
+.capacity-limit-hotspot { top:25%; left:3%; width:19%; }
+.below-capacity-hotspot { top:33%; left:3%; width:20%; }
+.frozen-evidence-hotspot { top:43%; left:40%; width:17%; }
+.full-ranking-hotspot { top:12%; right:2%; width:20%; }
+.no-network-ranking-hotspot { right:2%; bottom:3%; width:20%; }
+.capacity-status { top:13%; left:3%; max-width:24%; border-left-color:var(--gold); }
 .ranking-hero { min-height:460px; padding:38px clamp(18px,4vw,54px) 34px; background:#edf4f0; border-bottom:1px solid var(--line); }
 .hero-copy { display:grid; grid-template-columns:minmax(0,2fr) minmax(220px,1fr); gap:8px 36px; align-items:end; }
 .hero-copy > p { grid-column:1; margin-bottom:12px; color:var(--muted); }
@@ -2228,6 +2279,13 @@ const mechanismActionDetail = (action,meaning,limitation) => ({
   usage:'Report Only（仅报告展示）',
   limitation:`${limitation} ${mechanismPromptContract.excluded}`,
 });
+const mechanismFeedbackDetail = (action) => ({
+  title:`${action} 激活直接邻居`,
+  definition:`${action} 是已曝光用户的成功互动 action。Platform Environment 只把它转换为 Comment-Derived User Interaction Graph 中一跳直接邻居的动态排序信号，并在下一轮 Global Reranking 使用。`,
+  provenance:'Runtime Simulation Result（仿真运行结果） / Historical Behavioral Evidence（历史行为证据）',
+  usage:'Ranking（排序） / Report Only（仅报告展示）',
+  limitation:'该传播只作用于一跳直接邻居，不是用户可见同伴行为，也不证明网络信号一定改变下一轮 Top20。',
+});
 const mechanismDetails = {
   seed:{
     title:'Full-Pool Influence Seed Union',
@@ -2303,6 +2361,65 @@ const mechanismDetails = {
   'decision-comment':mechanismActionDetail('comment','生成文字互动','comment 不恢复或展示 raw Provider Payload；机制模式只解释结构化 Decision 的稳定含义。'),
   'decision-share':mechanismActionDetail('share','进一步传播内容','share 是仿真 action，不等同真实平台因果传播效果；机制模式不展示某次 run 的用户级结果。'),
   'decision-ignore':mechanismActionDetail('ignore','已曝光但不互动','ignore 与 below_delivery_capacity 不同。前者已经曝光后选择不互动，后者没有进入 Delivery Capacity。'),
+  'feedback-like':mechanismFeedbackDetail('like'),
+  'feedback-comment':mechanismFeedbackDetail('comment'),
+  'feedback-share':mechanismFeedbackDetail('share'),
+  'feedback-ignore':{
+    title:'ignore 停止传播',
+    definition:'ignore 表示用户已经获得 Target Marketing Video 曝光，但选择不互动。它不会激活任何直接邻居，也不会形成下一轮 engaged_neighbor_signal。',
+    provenance:'Runtime Simulation Result（仿真运行结果）',
+    usage:'Report Only（仅报告展示）',
+    limitation:'ignore 不是 below_delivery_capacity。前者已曝光后不互动，后者没有进入 Delivery Capacity。',
+  },
+  'feedback-neighbors':{
+    title:'一跳直接邻居',
+    definition:'一跳直接邻居来自 Historical Set 的 Comment-Derived User Interaction Graph。成功互动只激活与当前用户直接相连的候选。',
+    provenance:'Historical Behavioral Evidence（历史行为证据）',
+    usage:'Ranking（排序） / Report Only（仅报告展示）',
+    limitation:'评论、回复和 mention 派生的边不是好友或关注关系，也不是用户可见同伴行为。',
+  },
+  'feedback-next-round':{
+    title:'下一轮 Global Reranking',
+    definition:'下一轮对全部尚未处理的 eligible users 重新计算相对分数，其中 engaged_neighbor_signal = min(1, engaged_neighbor_count / 3)。',
+    provenance:'Derived Proxy Metric（派生代理指标） / Runtime Simulation Result（仿真运行结果）',
+    usage:'Ranking（排序） / Report Only（仅报告展示）',
+    limitation:'信号进入下一轮排序只表示 Recommendation Signal Inclusion，不预设或证明 Observed Recommendation Signal Effect。',
+  },
+  'capacity-limit':{
+    title:'Delivery Capacity 上限',
+    definition:'Proposed 方法使用 30 个 Batch，每批 Top20。最多 600 位用户获得 Target Marketing Video 的 Recommendation Opportunity。',
+    provenance:'Synthetic Experiment Label（合成实验标签）',
+    usage:'Ranking（排序） / Report Only（仅报告展示）',
+    limitation:'最多 600 是预声明投放容量，不是互动人数、曝光概率或旧正式 run 的新结果。',
+  },
+  'below-capacity':{
+    title:'below_delivery_capacity',
+    definition:'1,000 人 Proposed Research Sample 中最多 600 人获得 Recommendation Opportunity，其余 400 人没有获得目标视频曝光。',
+    provenance:'Runtime Simulation Result（仿真运行结果）',
+    usage:'Ranking（排序） / Report Only（仅报告展示）',
+    limitation:'below_delivery_capacity 不是 ignore。前者未进入容量且未曝光，后者已经曝光后选择不互动。',
+  },
+  'frozen-evidence':{
+    title:'同批冻结 candidate evidence',
+    definition:'Paired Network Ranking Ablation 对同一批 eligible users 和同一份 persisted candidate evidence 计算 full 与 no-network 两种排序，不调用 Decision Adapter。',
+    provenance:'Runtime Simulation Result（仿真运行结果）',
+    usage:'Ranking（排序） / Report Only（仅报告展示）',
+    limitation:'它不是第二条完整 trajectory，也不是因果实验；只在同批冻结证据上检查网络信号的排序差异。',
+  },
+  'full-ranking':{
+    title:'full ranking',
+    definition:'full ranking 在同批候选上保留 base_network_relevance、engaged_neighbor_signal 与 historical_tag_affinity 的预声明贡献。',
+    provenance:'Derived Proxy Metric（派生代理指标） / Runtime Simulation Result（仿真运行结果）',
+    usage:'Ranking（排序） / Report Only（仅报告展示）',
+    limitation:'保留网络信号不预设改变 Top20。具体 effect 只能由 Run Evidence Mode 的 persisted diagnostics 判断。',
+  },
+  'no-network-ranking':{
+    title:'no-network ranking',
+    definition:'no-network ranking 对同一批候选和同一份冻结证据移除评论网络贡献，再计算相对排序。',
+    provenance:'Derived Proxy Metric（派生代理指标） / Runtime Simulation Result（仿真运行结果）',
+    usage:'Ranking（排序） / Report Only（仅报告展示）',
+    limitation:'它与 full ranking 共用同一批候选，不额外执行 Decision Adapter，不推进第二条 trajectory，也不能解释为因果实验。',
+  },
 };
 let selectedLineageField = payload.field_lineage[0]?.field_name || '';
 const count = (value) => {

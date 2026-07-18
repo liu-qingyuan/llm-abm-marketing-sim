@@ -1186,13 +1186,14 @@ test('Platform Environment and Decision Adapter keep exposure and action respons
       return Math.round(node.getBoundingClientRect().height / Number.parseFloat(style.lineHeight));
     });
     expect(headingLines).toBeLessThanOrEqual(2);
-    const [topbarBox, headingBox] = await Promise.all([
-      page.locator('.topbar').boundingBox(),
-      section.getByRole('heading', { level: 2 }).boundingBox(),
-    ]);
-    expect(topbarBox).not.toBeNull();
-    expect(headingBox).not.toBeNull();
-    expect(headingBox?.y ?? 0).toBeGreaterThanOrEqual((topbarBox?.y ?? 0) + (topbarBox?.height ?? 0));
+    await expect.poll(async () => {
+      const [topbarBox, headingBox] = await Promise.all([
+        page.locator('.topbar').boundingBox(),
+        section.getByRole('heading', { level: 2 }).boundingBox(),
+      ]);
+      if (!topbarBox || !headingBox) return Number.NEGATIVE_INFINITY;
+      return headingBox.y - (topbarBox.y + topbarBox.height);
+    }).toBeGreaterThanOrEqual(0);
     await expectNoLayoutFailures(page);
     await visual.screenshot({ path: testInfo.outputPath(`platform-llm-scene-${viewport.name}.png`) });
 
@@ -1201,6 +1202,223 @@ test('Platform Environment and Decision Adapter keep exposure and action respons
     await page.getByTestId('run-evidence-mode-button').click();
     await expect(drawer).toBeHidden();
     await expect(page.getByTestId('run-evidence-mode-panel')).toBeVisible();
+  }
+  expect(externalRequests).toEqual([]);
+});
+
+test('successful actions activate direct neighbors only in the next Global Reranking', async ({ page }, testInfo) => {
+  test.slow();
+  const { outputDir } = generateRankingReport(testInfo);
+  const reportUrl = pathToFileURL(path.join(outputDir, 'report.html')).toString();
+  const externalRequests: string[] = [];
+  page.on('request', (request) => {
+    const protocol = new URL(request.url()).protocol;
+    if (protocol !== 'file:' && protocol !== 'data:') externalRequests.push(request.url());
+  });
+
+  for (const viewport of [
+    { name: '1440x900', width: 1440, height: 900 },
+    { name: '1600x1000', width: 1600, height: 1000 },
+  ]) {
+    await page.setViewportSize(viewport);
+    await page.goto(reportUrl);
+    const navigation = page.locator('.workflow-nav');
+    await navigation.getByRole('link', { name: '网络反馈' }).click();
+    await expect(page).toHaveURL(/#network-feedback$/);
+    await expect(navigation.getByRole('link', { name: '网络反馈' })).toHaveAttribute('aria-current', 'location');
+    await expect(navigation.getByRole('link')).toHaveCount(5);
+
+    const section = page.getByTestId('mechanism-network-feedback-section');
+    const visual = page.getByTestId('neighbor-feedback-scene-visual');
+    await expect(section).toBeFocused();
+    await expect(section.getByRole('heading', { name: '成功互动只激活一跳直接邻居' })).toBeVisible();
+    await expect(section).toContainText('只进入下一轮 Global Reranking');
+    await expect(section).toContainText('不表示用户真实看见了邻居互动');
+
+    const [sectionBox, visualBox] = await Promise.all([section.boundingBox(), visual.boundingBox()]);
+    expect(sectionBox).not.toBeNull();
+    expect(visualBox).not.toBeNull();
+    expect(((visualBox?.width ?? 0) * (visualBox?.height ?? 0)) /
+      ((sectionBox?.width ?? 1) * (sectionBox?.height ?? 1))).toBeGreaterThanOrEqual(0.6);
+
+    const image = page.getByTestId('neighbor-feedback-illustration');
+    expect(await image.evaluate((node: HTMLImageElement) => ({ complete: node.complete, width: node.naturalWidth })))
+      .toEqual({ complete: true, width: 1672 });
+
+    const drawer = page.getByTestId('evidence-drawer');
+    const detail = page.getByTestId('mechanism-detail');
+    const propagatingActions = [
+      ['feedback-like-hotspot', 'like 激活直接邻居'],
+      ['feedback-comment-hotspot', 'comment 激活直接邻居'],
+      ['feedback-share-hotspot', 'share 激活直接邻居'],
+    ] as const;
+    for (const [testId, title] of propagatingActions) {
+      const hotspot = page.getByTestId(testId);
+      await hotspot.focus();
+      await hotspot.press('Enter');
+      await expect(drawer).toHaveAttribute('data-selection-kind', 'mechanism');
+      await expect(detail).toContainText(title);
+      await expect(detail).toContainText('一跳直接邻居');
+      await expect(detail).toContainText('下一轮 Global Reranking');
+      await expect(detail).toContainText('不是用户可见同伴行为');
+      await drawer.getByRole('button', { name: '关闭详情' }).click();
+      await expect(hotspot).toBeFocused();
+    }
+
+    const ignoreHotspot = page.getByTestId('feedback-ignore-hotspot');
+    await ignoreHotspot.focus();
+    await ignoreHotspot.press('Space');
+    await expect(detail).toContainText('ignore 停止传播');
+    await expect(detail).toContainText('不会激活任何直接邻居');
+    await drawer.getByRole('button', { name: '关闭详情' }).click();
+    await expect(ignoreHotspot).toBeFocused();
+
+    for (const [testId, title, evidence] of [
+      ['feedback-neighbors-hotspot', '一跳直接邻居', 'Comment-Derived User Interaction Graph'],
+      ['feedback-next-round-hotspot', '下一轮 Global Reranking', 'engaged_neighbor_signal'],
+    ] as const) {
+      const hotspot = page.getByTestId(testId);
+      await hotspot.click();
+      await expect(detail).toContainText(title);
+      await expect(detail).toContainText(evidence);
+      await drawer.getByRole('button', { name: '关闭详情' }).click();
+    }
+
+    for (const forbiddenRunResult of ['Top20 overlap', 'network-added', 'network-removed', 'rank delta']) {
+      await expect(section).not.toContainText(forbiddenRunResult);
+    }
+    const headingLines = await section.getByRole('heading', { level: 2 }).evaluate((node) => {
+      const style = getComputedStyle(node);
+      return Math.round(node.getBoundingClientRect().height / Number.parseFloat(style.lineHeight));
+    });
+    expect(headingLines).toBeLessThanOrEqual(2);
+    await expectSceneOverlaysInsideAndSeparate(visual, '.feedback-hotspot, .scene-status');
+    for (const [testId, maximumRightRatio] of [
+      ['feedback-like-hotspot', 0.27],
+      ['feedback-comment-hotspot', 0.27],
+      ['feedback-share-hotspot', 0.25],
+      ['feedback-ignore-hotspot', 0.16],
+    ] as const) {
+      const [hotspotBox, currentVisualBox] = await Promise.all([
+        page.getByTestId(testId).boundingBox(),
+        visual.boundingBox(),
+      ]);
+      expect(hotspotBox).not.toBeNull();
+      expect(currentVisualBox).not.toBeNull();
+      expect(((hotspotBox?.x ?? 0) + (hotspotBox?.width ?? 0) - (currentVisualBox?.x ?? 0)) /
+        (currentVisualBox?.width ?? 1)).toBeLessThanOrEqual(maximumRightRatio);
+    }
+    const [topbarBox, feedbackStatusBox] = await Promise.all([
+      page.locator('.topbar').boundingBox(),
+      visual.locator('.feedback-status').boundingBox(),
+    ]);
+    expect(feedbackStatusBox?.y ?? 0).toBeGreaterThanOrEqual((topbarBox?.y ?? 0) + (topbarBox?.height ?? 0));
+    await expectNoLayoutFailures(page);
+    await visual.screenshot({
+      path: testInfo.outputPath(`neighbor-feedback-scene-${viewport.name}.png`),
+      style: '.topbar { display: none !important; }',
+    });
+  }
+  expect(externalRequests).toEqual([]);
+});
+
+test('Delivery Capacity compares full and no-network ranking on frozen candidate evidence', async ({ page }, testInfo) => {
+  test.slow();
+  const { outputDir } = generateRankingReport(testInfo);
+  const reportUrl = pathToFileURL(path.join(outputDir, 'report.html')).toString();
+  const externalRequests: string[] = [];
+  page.on('request', (request) => {
+    const protocol = new URL(request.url()).protocol;
+    if (protocol !== 'file:' && protocol !== 'data:') externalRequests.push(request.url());
+  });
+
+  for (const viewport of [
+    { name: '1440x900', width: 1440, height: 900 },
+    { name: '1600x1000', width: 1600, height: 1000 },
+  ]) {
+    await page.setViewportSize(viewport);
+    await page.goto(reportUrl);
+    await page.locator('.workflow-nav').getByRole('link', { name: '网络反馈' }).click();
+
+    const disclosure = page.getByTestId('mechanism-network-impact-details');
+    const section = page.getByTestId('mechanism-capacity-comparison-section');
+    await expect(section).toBeHidden();
+    await disclosure.locator('summary').click();
+    await expect(section).toBeVisible();
+    await expect(disclosure).toHaveAttribute('open', '');
+
+    const visual = page.getByTestId('capacity-network-scene-visual');
+    await expect(section.getByRole('heading', { name: '600 人容量内并列比较两种排序' })).toBeVisible();
+    await expect(section).toContainText('1,000 人 Proposed Research Sample');
+    await expect(section).toContainText('600 人最多获得 Recommendation Opportunity');
+    await expect(section).toContainText('400 人保持 below_delivery_capacity');
+    await expect(section).toContainText('未曝光，不是 ignore');
+    await expect(section).toContainText('同批冻结 candidate evidence');
+    await expect(section).toContainText('零额外 Decision Adapter calls');
+    await expect(section).toContainText('不推进第二条 trajectory');
+    await expect(section).toContainText('不预设网络一定改变 Top20');
+
+    const [sectionBox, visualBox] = await Promise.all([section.boundingBox(), visual.boundingBox()]);
+    expect(sectionBox).not.toBeNull();
+    expect(visualBox).not.toBeNull();
+    expect(((visualBox?.width ?? 0) * (visualBox?.height ?? 0)) /
+      ((sectionBox?.width ?? 1) * (sectionBox?.height ?? 1))).toBeGreaterThanOrEqual(0.6);
+    const image = page.getByTestId('capacity-network-impact-illustration');
+    expect(await image.evaluate((node: HTMLImageElement) => ({ complete: node.complete, width: node.naturalWidth })))
+      .toEqual({ complete: true, width: 1672 });
+
+    const drawer = page.getByTestId('evidence-drawer');
+    const detail = page.getByTestId('mechanism-detail');
+    const interactions = [
+      ['capacity-limit-hotspot', 'Delivery Capacity 上限', '30 个 Batch', '最多 600'],
+      ['below-capacity-hotspot', 'below_delivery_capacity', '没有获得目标视频曝光', '不是 ignore'],
+      ['frozen-evidence-hotspot', '同批冻结 candidate evidence', '不调用 Decision Adapter', '不是第二条完整 trajectory'],
+      ['full-ranking-hotspot', 'full ranking', '保留网络信号', '不预设改变 Top20'],
+      ['no-network-ranking-hotspot', 'no-network ranking', '移除评论网络贡献', '同一批候选'],
+    ] as const;
+    for (const [testId, title, firstEvidence, secondEvidence] of interactions) {
+      const hotspot = page.getByTestId(testId);
+      await hotspot.focus();
+      await hotspot.press('Enter');
+      await expect(drawer).toHaveAttribute('data-selection-kind', 'mechanism');
+      await expect(detail).toContainText(title);
+      await expect(detail).toContainText(firstEvidence);
+      await expect(detail).toContainText(secondEvidence);
+      await drawer.getByRole('button', { name: '关闭详情' }).click();
+      await expect(hotspot).toBeFocused();
+    }
+
+    for (const forbiddenRunResult of ['Top20 overlap', 'network-added', 'network-removed', 'rank delta']) {
+      await expect(section).not.toContainText(forbiddenRunResult);
+    }
+    const headingLines = await section.getByRole('heading', { level: 2 }).evaluate((node) => {
+      const style = getComputedStyle(node);
+      return Math.round(node.getBoundingClientRect().height / Number.parseFloat(style.lineHeight));
+    });
+    expect(headingLines).toBeLessThanOrEqual(2);
+    await expectSceneOverlaysInsideAndSeparate(visual, '.capacity-hotspot, .scene-status');
+    const safeCapacityLabels = [
+      ['capacity-limit-hotspot', 0.24, 0.34],
+      ['below-capacity-hotspot', 0.24, 0.42],
+      ['frozen-evidence-hotspot', 0.58, 0.54],
+    ] as const;
+    for (const [testId, maximumRightRatio, maximumBottomRatio] of safeCapacityLabels) {
+      const [hotspotBox, currentVisualBox] = await Promise.all([
+        page.getByTestId(testId).boundingBox(),
+        visual.boundingBox(),
+      ]);
+      expect(hotspotBox).not.toBeNull();
+      expect(currentVisualBox).not.toBeNull();
+      expect(((hotspotBox?.x ?? 0) + (hotspotBox?.width ?? 0) - (currentVisualBox?.x ?? 0)) /
+        (currentVisualBox?.width ?? 1)).toBeLessThanOrEqual(maximumRightRatio);
+      expect(((hotspotBox?.y ?? 0) + (hotspotBox?.height ?? 0) - (currentVisualBox?.y ?? 0)) /
+        (currentVisualBox?.height ?? 1)).toBeLessThanOrEqual(maximumBottomRatio);
+    }
+    await expectNoLayoutFailures(page);
+    await visual.screenshot({
+      path: testInfo.outputPath(`capacity-network-scene-${viewport.name}.png`),
+      style: '.topbar { display: none !important; }',
+    });
   }
   expect(externalRequests).toEqual([]);
 });
