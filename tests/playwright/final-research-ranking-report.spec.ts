@@ -771,7 +771,7 @@ test('mechanism shell defaults to explanation and keeps run evidence available o
   await expect(mechanismPanel).toContainText('不是旧正式 run 的新结果');
   await expect(mechanismPanel).toContainText('Full-Pool Influence Seed Union');
   await expect(mechanismPanel).toContainText('not Global Reranking Top20 winners');
-  await expect(mechanismPanel).toContainText('三路证据汇入同一条排序');
+  await expect(mechanismPanel).toContainText('三路信号形成相对排序');
   await expect(mechanismPanel).toContainText('平台决定 Recommendation Opportunity');
   await expect(mechanismPanel).toContainText('Decision Adapter 只输出曝光后的结构化 action');
   await page.getByTestId('mechanism-network-impact-details').locator('summary').click();
@@ -964,6 +964,122 @@ test('sample opening keeps its visual contract on both desktop reference viewpor
     await expect(seedHotspot).toBeFocused();
     await expectNoLayoutFailures(page);
     await page.screenshot({ path: testInfo.outputPath(`sample-opening-${viewport.name}.png`) });
+  }
+  expect(externalRequests).toEqual([]);
+});
+
+test('Batch 0 and Global Reranking are distinct accessible mechanism scenes', async ({ page }, testInfo) => {
+  test.slow();
+  const { outputDir } = generateRankingReport(testInfo);
+  const reportUrl = pathToFileURL(path.join(outputDir, 'report.html')).toString();
+  const externalRequests: string[] = [];
+  page.on('request', (request) => {
+    const protocol = new URL(request.url()).protocol;
+    if (protocol !== 'file:' && protocol !== 'data:') externalRequests.push(request.url());
+  });
+
+  for (const viewport of [
+    { name: '1440x900', width: 1440, height: 900 },
+    { name: '1600x1000', width: 1600, height: 1000 },
+  ]) {
+    await page.setViewportSize(viewport);
+    await page.goto(reportUrl);
+    const navigation = page.locator('.workflow-nav');
+    await navigation.getByRole('link', { name: '曝光排序' }).click();
+    await expect(page).toHaveURL(/#exposure-ranking$/);
+    await expect(navigation.getByRole('link', { name: '曝光排序' })).toHaveAttribute('aria-current', 'location');
+
+    const batchSection = page.getByTestId('mechanism-batch-zero-section');
+    const batchVisual = page.getByTestId('batch-zero-scene-visual');
+    await expect(batchSection).toBeFocused();
+    await expect(batchSection).toContainText('Full-Pool Influence Seed Union');
+    await expect(batchSection).toContainText('不是普通 Top20 胜出者');
+    const [batchSectionBox, batchVisualBox] = await Promise.all([batchSection.boundingBox(), batchVisual.boundingBox()]);
+    expect(batchSectionBox).not.toBeNull();
+    expect(batchVisualBox).not.toBeNull();
+    expect(((batchVisualBox?.width ?? 0) * (batchVisualBox?.height ?? 0)) /
+      ((batchSectionBox?.width ?? 1) * (batchSectionBox?.height ?? 1))).toBeGreaterThanOrEqual(0.6);
+
+    const drawer = page.getByTestId('evidence-drawer');
+    const detail = page.getByTestId('mechanism-detail');
+    const seedHotspot = page.getByTestId('batch-zero-hotspot-seeds');
+    await seedHotspot.focus();
+    await seedHotspot.press('Enter');
+    await expect(drawer).toHaveAttribute('data-selection-kind', 'mechanism');
+    await expect(detail).toContainText('Batch 0 seeds 直接曝光');
+    await expect(detail).toContainText('Field Provenance');
+    await expect(detail).toContainText('Field Usage Stage');
+    await expect(detail).toContainText('Recommendation Signal Inclusion');
+    await expect(detail).toContainText('不是普通 Global Reranking Top20 胜出者');
+    await drawer.getByRole('button', { name: '关闭详情' }).click();
+    await expect(seedHotspot).toBeFocused();
+
+    await expect(page.getByTestId('batch-zero-video-label')).toContainText('Target Marketing Video');
+    await batchSection.screenshot({ path: testInfo.outputPath(`batch-zero-scene-${viewport.name}.png`) });
+
+    const rerankingSection = page.getByTestId('mechanism-global-reranking-section');
+    const rerankingVisual = page.getByTestId('global-reranking-scene-visual');
+    await rerankingSection.scrollIntoViewIfNeeded();
+    const [rerankingSectionBox, rerankingVisualBox] = await Promise.all([
+      rerankingSection.boundingBox(),
+      rerankingVisual.boundingBox(),
+    ]);
+    expect(rerankingSectionBox).not.toBeNull();
+    expect(rerankingVisualBox).not.toBeNull();
+    expect(((rerankingVisualBox?.width ?? 0) * (rerankingVisualBox?.height ?? 0)) /
+      ((rerankingSectionBox?.width ?? 1) * (rerankingSectionBox?.height ?? 1))).toBeGreaterThanOrEqual(0.6);
+    await expect(rerankingSection).toContainText('预声明研究假设');
+    await expect(rerankingSection).toContainText('不是抖音平台学习参数或已观测效果');
+
+    const interactions = [
+      ['reranking-hotspot-network', 'Enter', '50% 历史评论网络位置', 'holdout-safe P95'],
+      ['reranking-hotspot-neighbor', 'Space', '30% 已互动直接邻居', '不是用户可见同伴行为'],
+      ['reranking-hotspot-affinity', 'Enter', '20% 历史标签亲和度', 'Historical Set'],
+      ['reranking-hotspot-top20', 'Space', 'Global Reranking Top20', 'Delivery Capacity'],
+    ] as const;
+    for (const [testId, key, title, evidence] of interactions) {
+      const hotspot = page.getByTestId(testId);
+      await hotspot.focus();
+      await hotspot.press(key);
+      await expect(detail).toContainText(title);
+      await expect(detail).toContainText(evidence);
+      await expect(detail).toContainText('Field Provenance');
+      await expect(detail).toContainText('Field Usage Stage');
+      await expect(detail).toContainText('Recommendation Signal Inclusion');
+      await expect(detail).toContainText('Observed Recommendation Signal Effect');
+      await drawer.getByRole('button', { name: '关闭详情' }).click();
+      await expect(hotspot).toBeFocused();
+    }
+
+    for (const section of [batchSection, rerankingSection]) {
+      const heading = section.getByRole('heading', { level: 2 });
+      const headingLines = await heading.evaluate((node) => {
+        const style = getComputedStyle(node);
+        return Math.round(node.getBoundingClientRect().height / Number.parseFloat(style.lineHeight));
+      });
+      expect(headingLines).toBeLessThanOrEqual(2);
+    }
+    const labelFailures = await rerankingVisual.locator('.mechanism-hotspot, .scene-status').evaluateAll((labels) => {
+      const visual = labels[0]?.parentElement?.getBoundingClientRect();
+      if (!visual) return ['missing visual'];
+      const boxes = labels.map((label) => label.getBoundingClientRect());
+      const failures: string[] = [];
+      boxes.forEach((box, index) => {
+        if (box.left < visual.left || box.right > visual.right || box.top < visual.top || box.bottom > visual.bottom) {
+          failures.push(`outside:${index}`);
+        }
+        boxes.slice(index + 1).forEach((other, offset) => {
+          if (Math.min(box.right, other.right) - Math.max(box.left, other.left) > 1 &&
+              Math.min(box.bottom, other.bottom) - Math.max(box.top, other.top) > 1) {
+            failures.push(`overlap:${index}-${index + offset + 1}`);
+          }
+        });
+      });
+      return failures;
+    });
+    expect(labelFailures).toEqual([]);
+    await expectNoLayoutFailures(page);
+    await rerankingSection.screenshot({ path: testInfo.outputPath(`global-reranking-scene-${viewport.name}.png`) });
   }
   expect(externalRequests).toEqual([]);
 });

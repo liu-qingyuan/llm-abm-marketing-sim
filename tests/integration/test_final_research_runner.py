@@ -923,6 +923,20 @@ def test_target_delivery_ranking_runtime_reranks_global_top20_after_seed_engagem
     assert "offline projection" in report_html
     assert "Full-Pool Influence Seed Union" in report_html
     assert "not Global Reranking Top20 winners" in report_html
+    for hotspot in (
+        "batch-zero-hotspot-seeds",
+        "reranking-hotspot-network",
+        "reranking-hotspot-neighbor",
+        "reranking-hotspot-affinity",
+        "reranking-hotspot-top20",
+    ):
+        assert f'data-testid="{hotspot}"' in report_html
+    assert 'data-testid="batch-zero-video-label"' in report_html
+    assert "50% 历史评论网络位置" in report_html
+    assert "30% 已互动直接邻居" in report_html
+    assert "20% 历史标签亲和度" in report_html
+    assert "Recommendation Signal Inclusion" in report_html
+    assert "Observed Recommendation Signal Effect" in report_html
     assert 'data-testid="ranking-funnel-section"' in report_html
     assert 'data-testid="ranking-hero"' in report_html
     assert 'data-testid="target-video-link"' in report_html

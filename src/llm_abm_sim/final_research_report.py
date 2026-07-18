@@ -1645,29 +1645,41 @@ def _render_ranking_report(payload: FinalResearchRankingReportPayload) -> str:
       </figure>
     </section>
 
-    <section id="exposure-ranking" class="mechanism-stage batch-zero-mechanism" data-section-anchor="exposure-ranking" data-testid="mechanism-batch-zero-section">
-      <figure class="mechanism-figure">
-        <img data-testid="batch-zero-seeds-illustration" src="{batch_zero_seeds_image}" width="1672" height="941" alt="目标视频直接投放给预先选定种子用户、普通候选等待后续排序的无文字示意图">
-        <figcaption>Batch 0 是预先声明的研究起点；其余 eligible users 从后续批次开始参与全局重排。</figcaption>
-      </figure>
-      <div class="mechanism-copy">
-        <span class="eyebrow">BATCH 0</span>
-        <h2>种子直接曝光，不是一次普通排名</h2>
-        <p>Batch 0 直接曝光预先选定的 Full-Pool Influence Seed Union。它们来自 Global Influence Proxy Top10 与 Local Influence Proxy Top10 的去重并集。</p>
-        <p class="evidence-boundary"><strong>不要误读：</strong>these seeds are not Global Reranking Top20 winners。Global Reranking 从后续 Batch 才对全部尚未处理的 eligible users 计算排名。</p>
+    <section id="exposure-ranking" class="mechanism-stage mechanism-scene batch-zero-mechanism" data-section-anchor="exposure-ranking" data-testid="mechanism-batch-zero-section">
+      <div class="mechanism-scene-header">
+        <div class="mechanism-copy">
+          <span class="eyebrow">BATCH 0</span>
+          <h2>种子直接曝光，不参加普通排名</h2>
+        </div>
+        <div class="mechanism-copy">
+          <p>Full-Pool Influence Seed Union 是预先选择的研究起点。平台把 Target Marketing Video 直接曝光给这些 seeds，不等待 Global Reranking Top20。</p>
+        </div>
       </div>
+      <figure class="mechanism-scene-visual batch-zero-visual" data-testid="batch-zero-scene-visual">
+        <img data-testid="batch-zero-seeds-illustration" src="{batch_zero_seeds_image}" width="1672" height="941" alt="预先选定的影响力种子沿直接路径获得目标营销视频曝光，普通候选等待后续排序的无文字示意图">
+        <div class="scene-object-label batch-zero-label-video" data-testid="batch-zero-video-label"><strong>Target Marketing Video</strong><span>直接曝光对象</span></div>
+        <button class="mechanism-hotspot batch-zero-hotspot-seeds" type="button" data-mechanism-key="batch-seeds" data-testid="batch-zero-hotspot-seeds" aria-label="查看 Batch 0 seeds 机制详情" aria-expanded="false" aria-controls="evidence-drawer"><strong>Full-Pool Influence Seed Union</strong><span>预先选择并直接曝光</span></button>
+        <p class="scene-status batch-zero-status"><strong>不是普通 Top20 胜出者</strong><br>not Global Reranking Top20 winners。其余 eligible users 从 Batch 1 开始参与排序。</p>
+      </figure>
     </section>
 
-    <section class="mechanism-stage global-reranking-mechanism" data-testid="mechanism-global-reranking-section">
-      <div class="mechanism-copy">
-        <span class="eyebrow">GLOBAL RERANKING</span>
-        <h2>三路证据汇入同一条排序</h2>
-        <p>后续 Batch 对全部尚未处理的 eligible users 重新计算排名。历史评论网络相关性、已互动直接邻居信号和历史标签亲和度分别以 {base_network_weight:.0f}%、{engaged_neighbor_weight:.0f}%、{tag_affinity_weight:.0f}% 进入本次 persisted ranking formula。</p>
-        <p class="evidence-boundary"><strong>排序不是决策：</strong>三项 contribution 只决定 Recommendation Opportunity 的相对位置，不决定用户曝光后的 <code>like / comment / share / ignore</code>。</p>
+    <section class="mechanism-stage mechanism-scene global-reranking-mechanism" data-testid="mechanism-global-reranking-section">
+      <div class="mechanism-scene-header">
+        <div class="mechanism-copy">
+          <span class="eyebrow">GLOBAL RERANKING</span>
+          <h2>三路信号形成相对排序</h2>
+        </div>
+        <div class="mechanism-copy">
+          <p>后续 Batch 对全部尚未处理的 eligible users 重新计算分数。{base_network_weight:.0f}%、{engaged_neighbor_weight:.0f}%、{tag_affinity_weight:.0f}% 是预声明研究假设，不是抖音平台学习参数或已观测效果。</p>
+        </div>
       </div>
-      <figure class="mechanism-figure">
-        <img data-testid="global-reranking-illustration" src="{global_reranking_image}" width="1672" height="941" alt="三路平台证据汇入同一全局排序并选出目标视频曝光用户的无文字示意图">
-        <figcaption>全部尚未处理候选经过三路 persisted evidence 计算后形成一条排序，容量外用户保留后续机会。</figcaption>
+      <figure class="mechanism-scene-visual reranking-visual" data-testid="global-reranking-scene-visual">
+        <img data-testid="global-reranking-illustration" src="{global_reranking_image}" width="1672" height="941" alt="三路平台信号汇入同一全局排序并在投放容量内选出目标视频曝光用户的无文字示意图">
+        <button class="mechanism-hotspot reranking-hotspot-network" type="button" data-mechanism-key="ranking-network" data-testid="reranking-hotspot-network" aria-label="查看 {base_network_weight:.0f}% 历史评论网络位置信号详情" aria-expanded="false" aria-controls="evidence-drawer"><strong>{base_network_weight:.0f}% 历史评论网络位置</strong><span>base_network_relevance</span></button>
+        <button class="mechanism-hotspot reranking-hotspot-neighbor" type="button" data-mechanism-key="ranking-neighbor" data-testid="reranking-hotspot-neighbor" aria-label="查看 {engaged_neighbor_weight:.0f}% 已互动直接邻居信号详情" aria-expanded="false" aria-controls="evidence-drawer"><strong>{engaged_neighbor_weight:.0f}% 已互动直接邻居</strong><span>engaged_neighbor_signal</span></button>
+        <button class="mechanism-hotspot reranking-hotspot-affinity" type="button" data-mechanism-key="ranking-affinity" data-testid="reranking-hotspot-affinity" aria-label="查看 {tag_affinity_weight:.0f}% 历史标签亲和度信号详情" aria-expanded="false" aria-controls="evidence-drawer"><strong>{tag_affinity_weight:.0f}% 历史标签亲和度</strong><span>historical_tag_affinity</span></button>
+        <button class="mechanism-hotspot reranking-hotspot-top20" type="button" data-mechanism-key="ranking-top20" data-testid="reranking-hotspot-top20" aria-label="查看 Global Reranking Top20 结果详情" aria-expanded="false" aria-controls="evidence-drawer"><strong>Global Reranking Top20</strong><span>相对排序结果</span></button>
+        <p class="scene-status reranking-status"><strong>Recommendation Signal Inclusion</strong><br>不等于 Observed Recommendation Signal Effect。</p>
       </figure>
     </section>
 
@@ -1884,8 +1896,34 @@ label { display:grid; gap:5px; color:var(--muted); font-size:.76rem; font-weight
 .sample-opening-boundary strong { color:var(--ink); }
 .mechanism-stage { min-height:640px; display:grid; grid-template-columns:repeat(auto-fit,minmax(min(100%,430px),1fr)); gap:clamp(30px,5vw,72px); align-items:center; padding:clamp(48px,7vw,86px) clamp(22px,6vw,78px); border-bottom:1px solid var(--line); }
 .sample-mechanism { background:#fff; }
+.mechanism-scene { min-height:920px; display:grid; grid-template-columns:1fr; grid-template-rows:auto minmax(680px,1fr); gap:24px; align-items:stretch; padding:clamp(82px,6vw,96px) clamp(22px,5vw,70px) clamp(48px,5vw,70px); scroll-margin-top:64px; }
+.mechanism-scene-header { display:grid; grid-template-columns:minmax(0,1.25fr) minmax(320px,.75fr); gap:clamp(28px,5vw,72px); align-items:end; }
+.mechanism-scene-header .mechanism-copy h2 { margin-bottom:0; }
+.mechanism-scene-header .mechanism-copy > p { margin:0; }
+.mechanism-scene-visual { position:relative; min-height:680px; margin:0; overflow:hidden; border-radius:6px; background:#f2f5f9; }
+.mechanism-scene-visual > img { display:block; width:100%; height:100%; min-height:680px; aspect-ratio:auto; border-radius:0; object-fit:cover; object-position:center; }
+.scene-status { position:absolute; z-index:3; margin:0; padding:8px 12px; border-left:3px solid var(--blue); background:rgba(251,252,254,.94); color:var(--ink); font-size:.72rem; font-weight:750; }
+.scene-object-label { position:absolute; z-index:3; min-height:52px; display:grid; align-content:center; gap:2px; padding:8px 11px; border:1px solid #9bb8e8; border-left:3px solid var(--blue); border-radius:6px; background:rgba(251,252,254,.92); color:var(--ink); }
+.scene-object-label strong,.scene-object-label span { display:block; }
+.scene-object-label strong { font-size:.78rem; line-height:1.2; }
+.scene-object-label span { color:var(--muted); font-size:.66rem; line-height:1.2; }
+.mechanism-hotspot { position:absolute; z-index:4; min-height:52px; display:grid; align-content:center; gap:2px; padding:8px 11px; border:2px solid rgba(18,94,232,.7); border-radius:6px; background:rgba(251,252,254,.92); color:var(--ink); text-align:left; cursor:pointer; box-shadow:0 8px 24px rgba(23,32,27,.1); }
+.mechanism-hotspot strong,.mechanism-hotspot span { display:block; }
+.mechanism-hotspot strong { font-size:.78rem; line-height:1.2; }
+.mechanism-hotspot span { color:var(--muted); font-size:.66rem; line-height:1.2; }
+.mechanism-hotspot:hover,.mechanism-hotspot:focus-visible,.mechanism-hotspot[aria-expanded="true"] { border-color:var(--blue); background:#fff; outline:3px solid rgba(18,94,232,.22); outline-offset:2px; transform:translateY(-2px); }
+.mechanism-hotspot:active { transform:translateY(1px); }
 .batch-zero-mechanism { background:#f7f8fa; }
+.batch-zero-visual > img { object-position:center center; }
+.batch-zero-label-video { top:5%; left:5%; width:22%; }
+.batch-zero-hotspot-seeds { top:34%; left:39%; width:25%; }
+.batch-zero-status { right:3%; bottom:6%; max-width:25%; }
 .global-reranking-mechanism { background:#eef5f2; }
+.reranking-hotspot-network { top:4%; left:32%; width:20%; }
+.reranking-hotspot-neighbor { top:37%; left:52%; width:20%; }
+.reranking-hotspot-affinity { top:84%; left:31%; width:20%; }
+.reranking-hotspot-top20 { top:28%; left:61%; width:18%; }
+.reranking-status { right:2%; bottom:5%; max-width:22%; border-left-color:var(--gold); }
 .platform-llm-mechanism { background:#f7f8fa; }
 .mechanism-copy h2 { max-width:620px; margin-bottom:16px; font-size:clamp(2rem,3.5vw,3.3rem); line-height:1.08; }
 .mechanism-copy > p { max-width:640px; color:var(--muted); font-size:1rem; }
@@ -2099,7 +2137,7 @@ code { color:var(--blue); }
 .downloads a { min-height:42px; display:flex; align-items:center; padding:8px 10px; border:1px solid var(--line); border-radius:4px; text-decoration:none; font-weight:750; }
 .limitations-band { display:grid; grid-template-columns:180px 1fr; background:#fff8ec; }
 .limitations-band li { margin:5px 0; }
-@media (max-width:1000px) { .hero-funnel { grid-template-columns:repeat(3,minmax(0,1fr)); }.sample-metrics,.effect-grid { grid-template-columns:repeat(2,minmax(0,1fr)); }.diagnostic-layout { grid-template-columns:1fr; }.lineage-detail { min-height:0; }.filters { grid-template-columns:repeat(3,minmax(0,1fr)); }.trace-groups { grid-template-columns:repeat(2,minmax(0,1fr)); }.drawer-detail .trace-groups { grid-template-columns:1fr; } }
+@media (max-width:1000px) { .hero-funnel { grid-template-columns:repeat(3,minmax(0,1fr)); }.mechanism-scene-header { grid-template-columns:1fr; }.sample-metrics,.effect-grid { grid-template-columns:repeat(2,minmax(0,1fr)); }.diagnostic-layout { grid-template-columns:1fr; }.lineage-detail { min-height:0; }.filters { grid-template-columns:repeat(3,minmax(0,1fr)); }.trace-groups { grid-template-columns:repeat(2,minmax(0,1fr)); }.drawer-detail .trace-groups { grid-template-columns:1fr; } }
 """
 
 
@@ -2171,6 +2209,41 @@ const mechanismDetails = {
     usage:'Sampling（抽样） / Report Only（仅报告展示）',
     limitation:'920 位是 offline projection，不是合成用户，也不表示总体代表性或某次 runtime 的实际用户结果。',
   },
+  'batch-seeds':{
+    title:'Batch 0 seeds 直接曝光',
+    definition:'Full-Pool Influence Seed Union 在 runtime 开始前由 Global Influence Proxy Top10 与 Local Influence Proxy Top10 的去重并集形成，并在 Batch 0 直接获得 Target Marketing Video 曝光。',
+    provenance:'Derived Proxy Metric（派生代理指标）',
+    usage:'Seed Selection（种子选择） / Ranking（排序） / Report Only（仅报告展示）',
+    limitation:'Batch 0 seeds 是预先选择并直接曝光的研究起点，不属于 Recommendation Signal Inclusion，也不是普通 Global Reranking Top20 胜出者或真实平台关键意见领袖。',
+  },
+  'ranking-network':{
+    title:`${Math.round(payload.ranking_diagnostics_summary.main_weights.base_network * 100)}% 历史评论网络位置`,
+    definition:'base_network_relevance 使用 Historical Set 的 Comment-Derived User Interaction Graph weighted degree 与 holdout-safe P95 reference 形成 0..1 相对信号。',
+    provenance:'Derived Proxy Metric（派生代理指标）',
+    usage:'Ranking（排序） / Report Only（仅报告展示）',
+    limitation:`${Math.round(payload.ranking_diagnostics_summary.main_weights.base_network * 100)}% 是预声明研究假设。Recommendation Signal Inclusion 只说明信号进入公式，不等于 Observed Recommendation Signal Effect，也不是抖音平台学习参数。`,
+  },
+  'ranking-neighbor':{
+    title:`${Math.round(payload.ranking_diagnostics_summary.main_weights.engaged_neighbor * 100)}% 已互动直接邻居`,
+    definition:'engaged_neighbor_signal = min(1, engaged_neighbor_count / 3)。它把已对 Target Marketing Video 产生 like、comment 或 share 的历史一跳直接邻居计数归一化，并在下一轮排序中使用。',
+    provenance:'Derived Proxy Metric（派生代理指标）',
+    usage:'Ranking（排序） / Report Only（仅报告展示）',
+    limitation:`${Math.round(payload.ranking_diagnostics_summary.main_weights.engaged_neighbor * 100)}% 是预声明研究假设。该信号不是用户可见同伴行为；Recommendation Signal Inclusion 不等于 Observed Recommendation Signal Effect。`,
+  },
+  'ranking-affinity':{
+    title:`${Math.round(payload.ranking_diagnostics_summary.main_weights.tag_affinity * 100)}% 历史标签亲和度`,
+    definition:'historical_tag_affinity 比较用户 Historical Set 互动标签与 Target Marketing Video 标签，形成 0..1 的内容亲和排序信号。',
+    provenance:'Derived Proxy Metric（派生代理指标）',
+    usage:'Ranking（排序） / Report Only（仅报告展示）',
+    limitation:`${Math.round(payload.ranking_diagnostics_summary.main_weights.tag_affinity * 100)}% 是预声明研究假设，不是已观测效果或真实平台参数。Recommendation Signal Inclusion 不等于 Observed Recommendation Signal Effect，也不证明它改变了本次 Top20。`,
+  },
+  'ranking-top20':{
+    title:'Global Reranking Top20',
+    definition:'后续每个 Batch 对全部尚未处理的 eligible users 重新计算相对分数，并在 Delivery Capacity 内选择当前 Top20 获得 Recommendation Opportunity。',
+    provenance:'Runtime Simulation Result（仿真运行结果）',
+    usage:'Ranking（排序） / Report Only（仅报告展示）',
+    limitation:'Top20 是 Recommendation Signal Inclusion 后的相对排序与容量结果，不是曝光概率或互动倾向，也不能证明某一信号产生 Observed Recommendation Signal Effect。只有成对消融的 persisted diagnostics 能判断该 effect。',
+  },
 };
 let selectedLineageField = payload.field_lineage[0]?.field_name || '';
 const count = (value) => {
@@ -2217,7 +2290,7 @@ function openDrawer(kind, selection, trigger=null) {
   evidenceDrawer.querySelectorAll('[data-drawer-kind]').forEach((panel) => {
     panel.hidden = panel.dataset.drawerKind !== kind;
   });
-  const titles = {mechanism:'样本机制详情',candidate:'Ranking candidate（排序候选）',user:'Research user（研究用户）',field:'Prompt / Field Lineage（提示 / 字段血缘）',network:'Network evidence（网络证据）'};
+  const titles = {mechanism:'机制详情',candidate:'Ranking candidate（排序候选）',user:'Research user（研究用户）',field:'Prompt / Field Lineage（提示 / 字段血缘）',network:'Network evidence（网络证据）'};
   byId('evidence-drawer-title').textContent = titles[kind] || '证据详情';
   byId('evidence-drawer-close').focus({preventScroll:true});
 }
