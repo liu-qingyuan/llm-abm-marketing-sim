@@ -828,6 +828,146 @@ test('mechanism shell defaults to explanation and keeps run evidence available o
   await expect(page.getByTestId('run-evidence-mode-button')).toHaveAttribute('aria-selected', 'true');
 });
 
+test('sample-led opening replaces the generic hero and keeps navigation focus in sync', async ({ page }, testInfo) => {
+  const { outputDir } = generateRankingReport(testInfo);
+  const reportUrl = pathToFileURL(path.join(outputDir, 'report.html')).toString();
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto(reportUrl);
+
+  const topbar = page.locator('.topbar');
+  const opening = page.getByTestId('mechanism-sample-opening');
+  const sampleDetail = page.getByTestId('mechanism-sample-detail');
+  const navigation = page.locator('.workflow-nav');
+  await expect(page.locator('.brand')).toHaveText('传播机制');
+  expect((await topbar.boundingBox())?.height ?? Infinity).toBeLessThanOrEqual(80);
+  await expect(page.locator('.mechanism-overview')).toHaveCount(0);
+  await expect(opening).toBeVisible();
+  await expect(opening.getByRole('heading', { name: '从 36,400 到 1,000' })).toBeVisible();
+  await expect(navigation.getByRole('link', { name: '概览' })).toHaveAttribute('aria-current', 'location');
+
+  const [openingBox, visualBox] = await Promise.all([
+    opening.boundingBox(),
+    sampleDetail.boundingBox(),
+  ]);
+  expect(openingBox).not.toBeNull();
+  expect(visualBox).not.toBeNull();
+  expect(((visualBox?.width ?? 0) * (visualBox?.height ?? 0)) / ((openingBox?.width ?? 1) * (openingBox?.height ?? 1)))
+    .toBeGreaterThanOrEqual(0.6);
+  await expect(opening.locator('figcaption')).toHaveCount(0);
+
+  await navigation.getByRole('link', { name: '样本' }).click();
+  await expect(page).toHaveURL(/#sample$/);
+  await expect(sampleDetail).toBeFocused();
+  await expect(navigation.getByRole('link', { name: '样本' })).toHaveAttribute('aria-current', 'location');
+  await expect(navigation.getByRole('link', { name: '概览' })).not.toHaveAttribute('aria-current', 'location');
+
+  await page.getByTestId('mechanism-batch-zero-section').scrollIntoViewIfNeeded();
+  await expect(navigation.getByRole('link', { name: '曝光排序' })).toHaveAttribute('aria-current', 'location');
+
+  await page.goto(`${reportUrl}#sample`);
+  await expect(page.getByTestId('mechanism-sample-detail')).toBeFocused();
+  await expect(navigation.getByRole('link', { name: '样本' })).toHaveAttribute('aria-current', 'location');
+});
+
+test('sample hotspots share the detail drawer and clear mechanism selection on mode change', async ({ page }, testInfo) => {
+  const { outputDir } = generateRankingReport(testInfo);
+  await page.setViewportSize({ width: 1600, height: 1000 });
+  await page.goto(pathToFileURL(path.join(outputDir, 'report.html')).toString());
+
+  const drawer = page.getByTestId('evidence-drawer');
+  const detail = page.getByTestId('mechanism-detail');
+  const seedHotspot = page.getByTestId('sample-hotspot-seed');
+  await seedHotspot.focus();
+  await seedHotspot.press('Enter');
+  await expect(drawer).toBeVisible();
+  await expect(drawer.getByRole('button', { name: '关闭详情' })).toBeFocused();
+  await expect(drawer).toHaveAttribute('data-selection-kind', 'mechanism');
+  await expect(detail).toContainText('Full-Pool Influence Seed Union');
+  await expect(detail).toContainText('Field Provenance');
+  await expect(detail).toContainText('Derived Proxy Metric');
+  await expect(detail).toContainText('Field Usage Stage');
+  await expect(detail).toContainText('Seed Selection');
+  await expect(detail).toContainText('研究限制');
+  await drawer.getByRole('button', { name: '关闭详情' }).click();
+  await expect(seedHotspot).toBeFocused();
+
+  const neighborHotspot = page.getByTestId('sample-hotspot-neighbor');
+  await neighborHotspot.click();
+  await expect(detail).toContainText('Seed Neighbor Cohort');
+  await expect(detail).toContainText('Comment-Derived User Interaction Graph');
+  await expect(detail).toContainText('Historical Behavioral Evidence');
+  await expect(detail).toContainText('Sampling');
+  await expect(detail).toContainText('Ranking');
+  await page.keyboard.press('Escape');
+  await expect(neighborHotspot).toBeFocused();
+
+  const ordinaryHotspot = page.getByTestId('sample-hotspot-ordinary');
+  await ordinaryHotspot.focus();
+  await ordinaryHotspot.press('Space');
+  await expect(detail).toContainText('普通补足用户');
+  await expect(detail).toContainText('Primary Video Source Scope');
+  await expect(detail).toContainText('Report Only');
+  await expect(detail).toContainText('不是合成用户');
+  await page.getByTestId('run-evidence-mode-button').click();
+  await expect(drawer).toBeHidden();
+  await expect(drawer).not.toHaveAttribute('data-selection-kind', 'mechanism');
+  await expect(ordinaryHotspot).toHaveAttribute('aria-expanded', 'false');
+});
+
+test('sample opening keeps its visual contract on both desktop reference viewports', async ({ page }, testInfo) => {
+  const { outputDir } = generateRankingReport(testInfo);
+  const reportUrl = pathToFileURL(path.join(outputDir, 'report.html')).toString();
+  const externalRequests: string[] = [];
+  page.on('request', (request) => {
+    const protocol = new URL(request.url()).protocol;
+    if (protocol !== 'file:' && protocol !== 'data:') externalRequests.push(request.url());
+  });
+
+  for (const viewport of [
+    { name: '1440x900', width: 1440, height: 900 },
+    { name: '1600x1000', width: 1600, height: 1000 },
+  ]) {
+    await page.setViewportSize(viewport);
+    await page.goto(reportUrl);
+    const opening = page.getByTestId('mechanism-sample-opening');
+    const headingLines = await opening.getByRole('heading', { name: '从 36,400 到 1,000' }).evaluate((node) => {
+      const style = getComputedStyle(node);
+      return Math.round(node.getBoundingClientRect().height / Number.parseFloat(style.lineHeight));
+    });
+    expect(headingLines).toBeLessThanOrEqual(2);
+
+    for (const [countId, hotspotId] of [
+      ['sample-count-seed', 'sample-hotspot-seed'],
+      ['sample-count-neighbor', 'sample-hotspot-neighbor'],
+      ['sample-count-ordinary', 'sample-hotspot-ordinary'],
+    ] as const) {
+      await expect(page.getByTestId(countId)).toBeVisible();
+      const [countBox, hotspotBox] = await Promise.all([
+        page.getByTestId(countId).boundingBox(),
+        page.getByTestId(hotspotId).boundingBox(),
+      ]);
+      expect(countBox).not.toBeNull();
+      expect(hotspotBox).not.toBeNull();
+      expect(Math.abs(
+        (countBox?.x ?? 0) + (countBox?.width ?? 0) / 2 -
+        ((hotspotBox?.x ?? 0) + (hotspotBox?.width ?? 0) / 2),
+      )).toBeLessThanOrEqual(2);
+    }
+
+    const image = page.getByTestId('sample-construction-illustration');
+    expect(await image.evaluate((node: HTMLImageElement) => ({ complete: node.complete, width: node.naturalWidth })))
+      .toEqual({ complete: true, width: 1672 });
+    const seedHotspot = page.getByTestId('sample-hotspot-seed');
+    await seedHotspot.click();
+    await expect(page.getByTestId('evidence-drawer')).toBeVisible();
+    await page.getByTestId('evidence-drawer').getByRole('button', { name: '关闭详情' }).click();
+    await expect(seedHotspot).toBeFocused();
+    await expectNoLayoutFailures(page);
+    await page.screenshot({ path: testInfo.outputPath(`sample-opening-${viewport.name}.png`) });
+  }
+  expect(externalRequests).toEqual([]);
+});
+
 test('one persisted Batch selection updates ranking and LLM evidence together', async ({ page }, testInfo) => {
   const { outputDir, payload } = generateRankingReport(testInfo);
   await page.setViewportSize({ width: 1440, height: 1000 });
@@ -861,6 +1001,13 @@ test('one persisted Batch selection updates ranking and LLM evidence together', 
   await expect(page.getByTestId('ranking-candidate-table')).toContainText(selectedCandidate?.user_id ?? '');
   await expect(page.getByTestId('batch-decision-evidence')).toContainText(exposedUser?.user_id ?? '');
   await expect(page.getByTestId('batch-decision-evidence')).toContainText(exposedUser?.provider_status ?? '');
+
+  await page.getByTestId('ranking-candidate-table').locator('tbody tr').first().click();
+  await expect(page.getByTestId('evidence-drawer')).toBeVisible();
+  const batchTwoButton = timeline.getByRole('button', { name: 'Batch 2', exact: true });
+  await batchTwoButton.click();
+  await expect(page.getByTestId('evidence-drawer')).toBeHidden();
+  await expect(batchTwoButton).toBeFocused();
 });
 
 test('one persisted Batch selection updates direct-neighbor feedback without propagating ignore', async ({ page }, testInfo) => {
@@ -1088,6 +1235,7 @@ test('ranking candidates users and prompt fields share one right detail drawer',
 });
 
 test('ranking research report is complete and interactive on desktop viewports', async ({ page }, testInfo) => {
+  test.slow();
   const { outputDir, payload } = generateRankingReport(testInfo);
   for (const viewport of [
     { name: 'laptop', width: 1280, height: 800 },

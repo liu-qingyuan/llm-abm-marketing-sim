@@ -1618,7 +1618,7 @@ def _render_ranking_report(payload: FinalResearchRankingReportPayload) -> str:
 <body>
 <main data-testid="final-research-ranking-report" data-report-mode="mechanism">
   <nav class="topbar" aria-label="研究报告导航">
-    <a class="brand" href="#overview">Interactive Mechanism Report（交互机制报告）</a>
+    <a class="brand" href="#overview">传播机制</a>
     <div class="workflow-nav"><a href="#overview">概览</a><a href="#sample">样本</a><a href="#exposure-ranking">曝光排序</a><a href="#llm-decision">LLM 决策</a><a href="#network-feedback">网络反馈</a></div>
     <div class="mode-switch" role="tablist" aria-label="报告阅读模式">
       <button id="mechanism-mode-tab" type="button" role="tab" aria-selected="true" aria-controls="mechanism-mode-panel" data-report-mode-target="mechanism" data-testid="mechanism-mode-button">机制说明</button>
@@ -1627,35 +1627,21 @@ def _render_ranking_report(payload: FinalResearchRankingReportPayload) -> str:
   </nav>
 
   <div id="mechanism-mode-panel" role="tabpanel" aria-labelledby="mechanism-mode-tab" data-report-mode-panel="mechanism" data-testid="mechanism-mode-panel">
-    <header id="overview" class="mechanism-overview" data-section-anchor="overview">
-      <div>
-        <span class="eyebrow">TARGET DELIVERY RANKING</span>
-        <h1>先理解机制，再核对运行证据</h1>
-        <p>平台先决定谁获得目标视频的 Recommendation Opportunity，LLM Decision Adapter 只决定曝光后的结构化动作。</p>
+    <section id="overview" class="sample-opening" data-section-anchor="overview" data-testid="mechanism-sample-opening">
+      <div class="sample-opening-copy">
+        <h1>从 36,400 到 1,000</h1>
+        <p>先选影响力种子，再纳入历史直接邻居，最后按来源配额补足普通用户。</p>
+        <span class="sample-method-status">ADR 0003 · Proposed · offline projection</span>
       </div>
-      <dl class="mechanism-facts">
-        <div><dt>研究对象</dt><dd>单条 Target Marketing Video</dd></div>
-        <div><dt>投放单位</dt><dd>Batch 0 后逐批 Global Reranking</dd></div>
-        <div><dt>每批容量</dt><dd>Top20 Delivery Capacity</dd></div>
-        <div><dt>证据边界</dt><dd>机制目标与 persisted run 分开阅读</dd></div>
-      </dl>
-    </header>
-
-    <section id="sample" class="mechanism-stage sample-mechanism" data-section-anchor="sample" data-testid="mechanism-sample-section">
-      <div class="mechanism-copy">
-        <span class="eyebrow">PROPOSED SAMPLE</span>
-        <h2>Proposed Seed-First Research Sample</h2>
-        <p>目标方法先从完整合格用户池确定影响力 seeds，再纳入它们在 Historical Set 评论网络中的直接邻居，最后按来源配额补足普通用户。</p>
-        <p class="evidence-boundary"><strong>口径边界：</strong>20 seeds、60 Seed Neighbor Cohort 与 920 ordinary users 是当前数据的 offline projection，不是旧正式 run 的新结果，也不改写 payload v3 中的实际样本。</p>
-        <div class="projection-counts" aria-label="Seed-First Research Sample 离线投影">
-          <div><strong>20</strong><span>seeds</span></div>
-          <div><strong>60</strong><span>Seed Neighbor Cohort</span></div>
-          <div><strong>920</strong><span>ordinary users</span></div>
-        </div>
-      </div>
-      <figure class="mechanism-figure">
+      <figure id="sample" class="sample-opening-visual" tabindex="-1" data-section-anchor="sample" data-testid="mechanism-sample-detail" aria-label="Proposed Seed-First Research Sample 离线投影">
         <img data-testid="sample-construction-illustration" src="{sample_construction_image}" width="1672" height="941" alt="从完整合格用户池选择影响力种子、历史直接邻居并补足研究样本的无文字示意图">
-        <figcaption>候选池、影响力 seeds、直接邻居与普通补足用户依次进入目标研究样本。</figcaption>
+        <div class="sample-projection-label sample-projection-seeds" data-testid="sample-count-seed" aria-label="20 seeds"><strong>20</strong> <span>seeds</span></div>
+        <div class="sample-projection-label sample-projection-neighbors" data-testid="sample-count-neighbor" aria-label="60 Seed Neighbor Cohort"><strong>60</strong> <span>Seed Neighbor Cohort</span></div>
+        <div class="sample-projection-label sample-projection-ordinary" data-testid="sample-count-ordinary" aria-label="920 ordinary users"><strong>920</strong> <span>ordinary users</span></div>
+        <button class="sample-hotspot sample-hotspot-seed" type="button" data-mechanism-key="seed" data-testid="sample-hotspot-seed" aria-label="查看影响力种子机制详情" aria-expanded="false" aria-controls="evidence-drawer" title="影响力种子"></button>
+        <button class="sample-hotspot sample-hotspot-neighbor" type="button" data-mechanism-key="neighbor" data-testid="sample-hotspot-neighbor" aria-label="查看历史直接邻居机制详情" aria-expanded="false" aria-controls="evidence-drawer" title="历史直接邻居"></button>
+        <button class="sample-hotspot sample-hotspot-ordinary" type="button" data-mechanism-key="ordinary" data-testid="sample-hotspot-ordinary" aria-label="查看普通补足用户机制详情" aria-expanded="false" aria-controls="evidence-drawer" title="普通补足用户"></button>
+        <p class="sample-opening-boundary"><strong>Proposed Seed-First Research Sample</strong> 的 offline projection，不是旧正式 run 的新结果。</p>
       </figure>
     </section>
 
@@ -1813,6 +1799,7 @@ def _render_ranking_report(payload: FinalResearchRankingReportPayload) -> str:
   </div>
   <aside id="evidence-drawer" class="evidence-drawer" data-testid="evidence-drawer" role="dialog" aria-labelledby="evidence-drawer-title" hidden>
     <header class="drawer-header"><div><span>Evidence detail</span><h2 id="evidence-drawer-title">证据详情</h2></div><button id="evidence-drawer-close" class="drawer-close" type="button" aria-label="关闭详情" title="关闭详情">×</button></header>
+    <div id="mechanism-detail" class="drawer-detail mechanism-detail" data-testid="mechanism-detail" data-drawer-kind="mechanism" aria-live="polite" hidden></div>
     <div id="drawer-candidate-detail" class="drawer-detail" data-drawer-kind="candidate" aria-live="polite" hidden></div>
     <div id="user-detail" class="drawer-detail user-detail" data-testid="user-detail" data-drawer-kind="user" aria-live="polite" hidden></div>
     <div id="lineage-detail" class="drawer-detail lineage-detail" data-testid="lineage-detail" data-drawer-kind="field" aria-live="polite" hidden></div>
@@ -1842,13 +1829,13 @@ def _ranking_download_label(key: str) -> str:
 
 
 _RANKING_REPORT_CSS = r"""
-:root { color-scheme:light; --ink:#17201b; --muted:#5c6761; --line:#d8dfda; --paper:#f6f8f6; --green:#086149; --blue:#28589b; --gold:#a5630b; --red:#a23636; --violet:#66509a; }
+:root { color-scheme:light; --ink:#0b1f46; --muted:#58657a; --line:#d8e0eb; --paper:#f5f7fb; --green:#125ee8; --blue:#125ee8; --gold:#9b6508; --red:#a23636; --violet:#66509a; }
 * { box-sizing:border-box; }
 [hidden] { display:none !important; }
 html { scroll-behavior:smooth; }
-body { margin:0; color:var(--ink); background:#fff; font:15px/1.5 system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }
-main { width:min(1280px,100%); margin:0 auto; border-inline:1px solid var(--line); }
-[data-section-anchor] { scroll-margin-top:136px; }
+body { margin:0; color:var(--ink); background:#fbfcfe; font:15px/1.5 system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }
+main { width:min(1600px,100%); margin:0 auto; border-inline:1px solid var(--line); }
+[data-section-anchor] { scroll-margin-top:76px; }
 h1,h2,h3,p { margin-top:0; }
 h1 { margin-bottom:10px; font-size:2.55rem; line-height:1.08; letter-spacing:0; }
 h2 { margin-bottom:10px; font-size:1.55rem; letter-spacing:0; }
@@ -1859,22 +1846,42 @@ input,select { width:100%; padding:7px 9px; }
 label { display:grid; gap:5px; color:var(--muted); font-size:.76rem; font-weight:700; }
 .eyebrow { display:block; margin-bottom:8px; color:var(--green); font-size:.72rem; font-weight:800; text-transform:uppercase; }
 .muted { color:var(--muted); }
-.topbar { position:sticky; top:0; z-index:20; display:grid; grid-template-columns:minmax(0,.7fr) minmax(160px,1.3fr) auto; gap:20px; align-items:center; min-height:64px; padding:10px clamp(16px,3vw,38px); border-bottom:1px solid var(--line); background:rgba(255,255,255,.97); }
-.brand { min-width:0; overflow-x:auto; overflow-y:hidden; color:var(--ink); font-size:.84rem; font-weight:850; text-decoration:none; white-space:nowrap; }
-.workflow-nav { display:flex; justify-content:center; gap:clamp(10px,1.5vw,20px); min-width:0; overflow-x:auto; white-space:nowrap; }
-.workflow-nav a { color:var(--muted); font-size:.82rem; font-weight:700; text-decoration:none; }
-.workflow-nav a:hover,.workflow-nav a:focus-visible { color:var(--green); text-decoration:underline; text-underline-offset:5px; }
+.topbar { position:sticky; top:0; z-index:20; display:grid; grid-template-columns:112px minmax(500px,1fr) auto; gap:clamp(20px,3vw,42px); align-items:center; min-height:68px; padding:10px clamp(22px,3vw,46px); border-bottom:1px solid var(--line); background:rgba(251,252,254,.98); }
+.brand { min-width:0; color:var(--ink); font-size:1rem; font-weight:850; text-decoration:none; white-space:nowrap; }
+.workflow-nav { height:48px; display:flex; justify-content:center; gap:clamp(18px,2.2vw,34px); min-width:0; overflow:hidden; white-space:nowrap; }
+.workflow-nav a { position:relative; display:flex; align-items:center; color:var(--muted); font-size:.84rem; font-weight:760; text-decoration:none; }
+.workflow-nav a::after { content:""; position:absolute; right:0; bottom:0; left:0; height:3px; background:transparent; }
+.workflow-nav a:hover,.workflow-nav a:focus-visible,.workflow-nav a[aria-current="location"] { color:var(--blue); }
+.workflow-nav a:focus-visible { outline:2px solid var(--blue); outline-offset:3px; }
+.workflow-nav a[aria-current="location"]::after { background:var(--blue); }
 .mode-switch { display:grid; grid-template-columns:repeat(2,1fr); padding:3px; border:1px solid #bcc8c1; border-radius:6px; background:var(--paper); }
 .mode-switch button { min-height:30px; padding:4px 10px; border:0; border-radius:3px; background:transparent; color:var(--muted); font-size:.76rem; font-weight:800; white-space:nowrap; cursor:pointer; }
-.mode-switch button[aria-selected="true"] { background:var(--ink); color:#fff; }
+.mode-switch button[aria-selected="true"] { background:var(--blue); color:#fff; }
 .mode-switch button:focus-visible { outline:2px solid var(--green); outline-offset:2px; }
-.mechanism-overview { min-height:500px; display:grid; grid-template-columns:minmax(0,1.2fr) minmax(340px,.8fr); gap:clamp(36px,7vw,100px); align-items:center; padding:clamp(54px,7vw,90px) clamp(22px,6vw,78px); border-bottom:1px solid var(--line); background:#f1f5f7; }
-.mechanism-overview h1 { max-width:690px; margin-bottom:18px; font-size:clamp(2.5rem,5vw,4.7rem); line-height:1.02; }
-.mechanism-overview p { max-width:660px; margin-bottom:0; color:var(--muted); font-size:1.05rem; }
-.mechanism-facts { margin:0; border-top:1px solid #b9c7cf; }
-.mechanism-facts div { display:grid; grid-template-columns:110px minmax(0,1fr); gap:16px; padding:15px 0; border-bottom:1px solid #cbd6dc; }
-.mechanism-facts dt { color:var(--muted); font-size:.76rem; font-weight:800; }
-.mechanism-facts dd { margin:0; font-weight:780; }
+.sample-opening { position:relative; min-height:calc(100dvh - 68px); overflow:hidden; border-bottom:1px solid var(--line); background:#fbfcfe; }
+.sample-opening-copy { position:relative; z-index:3; width:min(640px,48%); padding:clamp(50px,6vh,68px) 0 0 clamp(32px,4.5vw,72px); }
+.sample-opening-copy h1 { max-width:570px; margin-bottom:14px; font-size:3.5rem; line-height:1.06; }
+.sample-opening-copy p { max-width:430px; margin-bottom:22px; color:var(--ink); font-size:1.05rem; }
+.sample-method-status { color:var(--muted); font-size:.8rem; font-weight:650; }
+.sample-opening-visual { position:absolute; right:0; bottom:0; left:0; height:66%; margin:0; overflow:visible; outline:none; }
+.sample-opening-visual:focus-visible { outline:3px solid var(--blue); outline-offset:-5px; }
+.sample-opening-visual > img { display:block; width:100%; height:100%; object-fit:cover; object-position:center bottom; }
+.sample-projection-label { position:absolute; top:-48px; z-index:2; display:grid; min-width:120px; text-align:center; transform:translateX(-50%); }
+.sample-projection-label::after { content:""; justify-self:center; width:1px; height:clamp(50px,10vh,88px); margin-top:8px; background:#9aabc3; }
+.sample-projection-label strong { font-size:2.5rem; line-height:1; }
+.sample-projection-label span { margin-top:4px; color:var(--ink); font-size:.78rem; font-weight:750; }
+.sample-projection-seeds { left:31.5%; }
+.sample-projection-neighbors { left:49%; }
+.sample-projection-ordinary { left:68%; }
+.sample-hotspot { position:absolute; z-index:4; min-height:0; padding:0; border:2px dashed transparent; border-radius:6px; background:transparent; cursor:pointer; }
+.sample-hotspot::after { content:""; position:absolute; top:10px; left:50%; width:14px; height:14px; border:3px solid #fbfcfe; border-radius:50%; background:var(--blue); box-shadow:0 0 0 2px var(--blue); transform:translateX(-50%); }
+.sample-hotspot:hover,.sample-hotspot:focus-visible,.sample-hotspot[aria-expanded="true"] { border-color:var(--blue); background:rgba(18,94,232,.06); outline:none; }
+.sample-hotspot:active { transform:translateY(1px); }
+.sample-hotspot-seed { top:35%; left:25.5%; width:12%; height:59%; }
+.sample-hotspot-neighbor { top:37%; left:41.5%; width:15%; height:58%; }
+.sample-hotspot-ordinary { top:24%; left:58%; width:20%; height:70%; }
+.sample-opening-boundary { position:absolute; right:clamp(28px,4vw,62px); bottom:18px; z-index:2; max-width:520px; margin:0; padding:8px 0 0; border-top:1px solid var(--line); color:var(--muted); font-size:.72rem; }
+.sample-opening-boundary strong { color:var(--ink); }
 .mechanism-stage { min-height:640px; display:grid; grid-template-columns:repeat(auto-fit,minmax(min(100%,430px),1fr)); gap:clamp(30px,5vw,72px); align-items:center; padding:clamp(48px,7vw,86px) clamp(22px,6vw,78px); border-bottom:1px solid var(--line); }
 .sample-mechanism { background:#fff; }
 .batch-zero-mechanism { background:#f7f8fa; }
@@ -2073,6 +2080,13 @@ code { color:var(--blue); }
 .drawer-close { width:38px; min-height:38px; padding:0; border-color:var(--line); border-radius:3px; color:var(--ink); font-size:1.45rem; line-height:1; cursor:pointer; }
 .drawer-close:hover,.drawer-close:focus-visible { border-color:var(--green); color:var(--green); outline:2px solid var(--green); outline-offset:2px; }
 .drawer-detail { padding:18px; }
+.mechanism-detail { border-top:4px solid var(--blue); }
+.mechanism-detail h3 { margin-bottom:10px; font-size:1.25rem; }
+.mechanism-detail > p { color:var(--muted); }
+.mechanism-detail dl { margin:20px 0 0; }
+.mechanism-detail dl div { padding:13px 0; border-top:1px solid var(--line); }
+.mechanism-detail dt { color:var(--muted); font-size:.7rem; font-weight:800; text-transform:uppercase; }
+.mechanism-detail dd { margin:4px 0 0; font-weight:720; }
 .drawer-detail.user-detail,.drawer-detail.lineage-detail { min-height:0; margin:0; border:0; border-top:4px solid var(--green); background:#fff; }
 .drawer-detail .trace-groups { grid-template-columns:1fr; }
 .drawer-detail .trace-groups article { min-height:0; }
@@ -2119,6 +2133,7 @@ const interactionState = {
   batch:payload.ranking_rounds[0]?.time_step || 0,
   selection:null,
   drawerOpen:false,
+  returnFocusTarget:null,
 };
 const display = (value) => value === null || value === undefined || value === '' ? '—' : String(value);
 const fixed = (value) => value === null || value === undefined ? '—' : Number(value).toFixed(4);
@@ -2133,6 +2148,29 @@ const limitationTranslations = {
   'Ranking weights are predeclared research assumptions, not learned Douyin platform parameters.':'Ranking weights（排序权重）是预声明研究假设，不是从抖音平台学习得到的参数。',
   'Paired ablation is a frozen-evidence shadow ranking, not a second user-state trajectory.':'Paired ablation（配对消融）是冻结证据上的影子排序，不是第二条用户状态轨迹。',
   'No real exposure denominator is available; below delivery capacity is not a user ignore decision.':'没有真实曝光分母；below_delivery_capacity（未获得投放）不是用户的 ignore（忽略）决策。',
+};
+const mechanismDetails = {
+  seed:{
+    title:'Full-Pool Influence Seed Union',
+    definition:'从全部合格 processed users 中取 Global Influence Proxy Top10 与 Local Influence Proxy Top10 的去重并集，作为 Seed-First Research Sample 的研究起点。',
+    provenance:'Derived Proxy Metric（派生代理指标）',
+    usage:'Seed Selection（种子选择） / Sampling（抽样）',
+    limitation:'20 位是 ADR 0003 的 offline projection。它不是旧正式 run 的结果，也不是普通 Global Reranking Top20 胜出者。',
+  },
+  neighbor:{
+    title:'Seed Neighbor Cohort',
+    definition:'Full-Pool Influence Seed Union 在 holdout-safe Comment-Derived User Interaction Graph 中的历史一跳直接邻居。',
+    provenance:'Historical Behavioral Evidence（历史行为证据）',
+    usage:'Sampling（抽样） / Ranking（排序）',
+    limitation:'60 位是 offline projection。评论、回复与 mention 派生的连接不是好友或关注关系，也不代表总体随机样本。',
+  },
+  ordinary:{
+    title:'普通补足用户',
+    definition:'种子和直接邻居计入配额后，按 Primary Video Source Scope 使用固定随机规则补足到 1,000 位真实合格用户。',
+    provenance:'Historical Behavioral Evidence（历史行为证据）',
+    usage:'Sampling（抽样） / Report Only（仅报告展示）',
+    limitation:'920 位是 offline projection，不是合成用户，也不表示总体代表性或某次 runtime 的实际用户结果。',
+  },
 };
 let selectedLineageField = payload.field_lineage[0]?.field_name || '';
 const count = (value) => {
@@ -2163,38 +2201,78 @@ function appendBreakableFieldLabel(node, label) {
 }
 
 function setReportMode(mode) {
-  if (interactionState.mode !== mode) closeDrawer();
+  if (interactionState.mode !== mode) closeDrawer({restoreFocus:false});
   interactionState.mode = mode;
   reportRoot.dataset.reportMode = mode;
   modePanels.forEach((panel) => { panel.hidden = panel.dataset.reportModePanel !== mode; });
   modeButtons.forEach((button) => button.setAttribute('aria-selected',String(button.dataset.reportModeTarget === mode)));
 }
 
-function openDrawer(kind, selection) {
+function openDrawer(kind, selection, trigger=null) {
   interactionState.selection = {kind,...selection};
   interactionState.drawerOpen = true;
+  interactionState.returnFocusTarget = trigger || (document.activeElement instanceof HTMLElement && document.activeElement !== document.body ? document.activeElement : null);
   evidenceDrawer.dataset.selectionKind = kind;
   evidenceDrawer.hidden = false;
   evidenceDrawer.querySelectorAll('[data-drawer-kind]').forEach((panel) => {
     panel.hidden = panel.dataset.drawerKind !== kind;
   });
-  const titles = {candidate:'Ranking candidate（排序候选）',user:'Research user（研究用户）',field:'Prompt / Field Lineage（提示 / 字段血缘）',network:'Network evidence（网络证据）'};
+  const titles = {mechanism:'样本机制详情',candidate:'Ranking candidate（排序候选）',user:'Research user（研究用户）',field:'Prompt / Field Lineage（提示 / 字段血缘）',network:'Network evidence（网络证据）'};
   byId('evidence-drawer-title').textContent = titles[kind] || '证据详情';
+  byId('evidence-drawer-close').focus({preventScroll:true});
 }
 
-function closeDrawer() {
+function closeDrawer({restoreFocus=true}={}) {
+  const returnFocusTarget = interactionState.returnFocusTarget;
   interactionState.selection = null;
   interactionState.drawerOpen = false;
+  interactionState.returnFocusTarget = null;
   evidenceDrawer.removeAttribute('data-selection-kind');
   evidenceDrawer.hidden = true;
+  document.querySelectorAll('[data-mechanism-key]').forEach((hotspot) => hotspot.setAttribute('aria-expanded','false'));
+  if (restoreFocus && returnFocusTarget?.isConnected) returnFocusTarget.focus({preventScroll:true});
 }
 
 byId('evidence-drawer-close').addEventListener('click',closeDrawer);
 document.addEventListener('keydown',(event) => { if (event.key === 'Escape' && interactionState.drawerOpen) closeDrawer(); });
 
+function renderMechanismDetail(key) {
+  const detail = mechanismDetails[key];
+  if (!detail) return;
+  const root = byId('mechanism-detail');
+  root.replaceChildren();
+  root.append(element('h3','',detail.title),element('p','',detail.definition));
+  const facts = document.createElement('dl');
+  [
+    ['Field Provenance（字段来源）',detail.provenance],
+    ['Field Usage Stage（字段使用阶段）',detail.usage],
+    ['研究限制',detail.limitation],
+  ].forEach(([term,value]) => {
+    const row = document.createElement('div');
+    row.append(element('dt','',term),element('dd','',value));
+    facts.appendChild(row);
+  });
+  root.appendChild(facts);
+}
+
+document.querySelectorAll('[data-mechanism-key]').forEach((hotspot) => hotspot.addEventListener('click',() => {
+  const key = hotspot.dataset.mechanismKey;
+  renderMechanismDetail(key);
+  document.querySelectorAll('[data-mechanism-key]').forEach((candidate) => candidate.setAttribute('aria-expanded','false'));
+  hotspot.setAttribute('aria-expanded','true');
+  openDrawer('mechanism',{mechanismKey:key},hotspot);
+}));
+
 function activeSectionTarget(anchor) {
   const panel = modePanels.find((candidate) => candidate.dataset.reportModePanel === reportRoot.dataset.reportMode);
   return panel?.querySelector(`[data-section-anchor="${anchor}"]`) || null;
+}
+
+function setActiveNavigation(anchor) {
+  document.querySelectorAll('.workflow-nav a').forEach((link) => {
+    if (link.getAttribute('href') === `#${anchor}`) link.setAttribute('aria-current','location');
+    else link.removeAttribute('aria-current');
+  });
 }
 
 modeButtons.forEach((button,index) => {
@@ -2215,7 +2293,43 @@ document.querySelectorAll('.workflow-nav a').forEach((link) => link.addEventList
   event.preventDefault();
   history.replaceState(null,'',`#${anchor}`);
   target.scrollIntoView({block:'start'});
+  target.setAttribute('tabindex','-1');
+  target.focus({preventScroll:true});
+  setActiveNavigation(anchor);
 }));
+function locationNavigationAnchor() {
+  const anchor = window.location.hash.slice(1);
+  return anchor && activeSectionTarget(anchor) ? anchor : 'overview';
+}
+setActiveNavigation(locationNavigationAnchor());
+window.addEventListener('hashchange',() => {
+  const anchor = locationNavigationAnchor();
+  const target = activeSectionTarget(anchor);
+  setActiveNavigation(anchor);
+  if (target) {
+    target.setAttribute('tabindex','-1');
+    target.focus({preventScroll:true});
+  }
+});
+const visibleNavigationSections = new Set();
+const sectionObserver = new IntersectionObserver((entries) => {
+  entries.forEach((entry) => {
+    if (entry.isIntersecting && !entry.target.closest('[hidden]')) visibleNavigationSections.add(entry.target);
+    else visibleNavigationSections.delete(entry.target);
+  });
+  const visibleSections = [...visibleNavigationSections];
+  const locationAnchor = window.location.hash.slice(1);
+  const hashSection = visibleSections.find((section) => section.dataset.sectionAnchor === locationAnchor);
+  const nearestSection = visibleSections.sort((left,right) =>
+    Math.abs(left.getBoundingClientRect().top - 68) - Math.abs(right.getBoundingClientRect().top - 68)
+  )[0];
+  const activeSection = hashSection && nearestSection &&
+    Math.abs(hashSection.getBoundingClientRect().top - 68) <= Math.abs(nearestSection.getBoundingClientRect().top - 68) + 8
+    ? hashSection
+    : nearestSection;
+  if (activeSection) setActiveNavigation(activeSection.dataset.sectionAnchor);
+},{rootMargin:'-68px 0px -60% 0px',threshold:0});
+document.querySelectorAll('[data-report-mode-panel] [data-section-anchor]').forEach((section) => sectionObserver.observe(section));
 
 function fillList(id, values) {
   const root = byId(id);
@@ -2398,7 +2512,7 @@ function renderBatchTimeline() {
 function selectBatch(timeStep) {
   const round = payload.ranking_rounds.find((row) => row.time_step === timeStep);
   if (!round) return;
-  if (interactionState.batch !== timeStep) closeDrawer();
+  if (interactionState.batch !== timeStep) closeDrawer({restoreFocus:false});
   interactionState.batch = timeStep;
   reportRoot.dataset.currentBatch = String(timeStep);
   document.querySelectorAll('[data-batch]').forEach((button) => {
