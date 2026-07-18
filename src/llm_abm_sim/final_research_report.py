@@ -1683,17 +1683,28 @@ def _render_ranking_report(payload: FinalResearchRankingReportPayload) -> str:
       </figure>
     </section>
 
-    <section id="llm-decision" class="mechanism-stage platform-llm-mechanism" data-section-anchor="llm-decision" data-testid="mechanism-platform-llm-section">
-      <figure class="mechanism-figure">
-        <img data-testid="platform-llm-boundary-illustration" src="{platform_llm_boundary_image}" width="1672" height="941" alt="平台先选择曝光用户、决策适配器再输出四类结构化动作的无文字示意图">
-        <figcaption>平台 gate 与 Decision Adapter 是两个连续职责，不共享 ranking evidence。</figcaption>
-      </figure>
-      <div class="mechanism-copy">
-        <span class="eyebrow">PLATFORM / LLM RESPONSIBILITY</span>
-        <h2>平台决定 Recommendation Opportunity</h2>
-        <p>平台先决定谁看到视频。Decision Adapter 只输出曝光后的结构化 action：<code>like / comment / share / ignore</code>。</p>
-        <p class="evidence-boundary"><strong>Prompt contract：</strong>ranking、network evidence、holdout 与 raw Provider Payload 均不进入 Final Research LLM Prompt。只有 allowlisted 字段进入，neutral 字段保持中性。</p>
+    <section id="llm-decision" class="mechanism-stage mechanism-scene platform-llm-mechanism" tabindex="-1" data-section-anchor="llm-decision" data-testid="mechanism-platform-llm-section">
+      <div class="mechanism-scene-header">
+        <div class="mechanism-copy">
+          <span class="eyebrow">PLATFORM ENVIRONMENT / DECISION ADAPTER</span>
+          <h2>平台先决定谁获得 Recommendation Opportunity</h2>
+        </div>
+        <div class="mechanism-copy">
+          <p>LLM 不负责曝光调度。Decision Adapter 只为已曝光用户输出结构化 Decision：<code>like / comment / share / ignore</code>。</p>
+        </div>
       </div>
+      <figure class="mechanism-scene-visual platform-llm-visual" data-testid="platform-llm-scene-visual">
+        <img data-testid="platform-llm-boundary-illustration" src="{platform_llm_boundary_image}" width="1672" height="941" alt="平台先选择一位曝光用户，再由独立决策适配器输出点赞、评论、分享或忽略动作的无文字示意图">
+        <div class="platform-llm-label platform-zone-label"><strong>Platform Environment</strong><span>选择 Recommendation Opportunity</span></div>
+        <div class="platform-llm-label adapter-zone-label"><strong>Decision Adapter</strong><span>只处理已曝光用户</span></div>
+        <button class="platform-llm-hotspot platform-gate-hotspot" type="button" data-mechanism-key="platform-gate" data-testid="platform-gate-hotspot" aria-label="查看 Platform Environment gate 职责详情" aria-expanded="false" aria-controls="evidence-drawer" title="Platform Environment gate"></button>
+        <button class="platform-llm-hotspot decision-adapter-hotspot" type="button" data-mechanism-key="decision-adapter" data-testid="decision-adapter-hotspot" aria-label="查看 Decision Adapter 职责详情" aria-expanded="false" aria-controls="evidence-drawer" title="Decision Adapter"></button>
+        <button class="platform-llm-hotspot platform-llm-action decision-like-hotspot" type="button" data-mechanism-key="decision-like" data-testid="decision-like-hotspot" aria-label="查看 like action 结构化 Decision 详情" aria-expanded="false" aria-controls="evidence-drawer" title="like"></button>
+        <button class="platform-llm-hotspot platform-llm-action decision-comment-hotspot" type="button" data-mechanism-key="decision-comment" data-testid="decision-comment-hotspot" aria-label="查看 comment action 结构化 Decision 详情" aria-expanded="false" aria-controls="evidence-drawer" title="comment"></button>
+        <button class="platform-llm-hotspot platform-llm-action decision-share-hotspot" type="button" data-mechanism-key="decision-share" data-testid="decision-share-hotspot" aria-label="查看 share action 结构化 Decision 详情" aria-expanded="false" aria-controls="evidence-drawer" title="share"></button>
+        <button class="platform-llm-hotspot platform-llm-action decision-ignore-hotspot" type="button" data-mechanism-key="decision-ignore" data-testid="decision-ignore-hotspot" aria-label="查看 ignore action 结构化 Decision 详情" aria-expanded="false" aria-controls="evidence-drawer" title="ignore"></button>
+        <p class="scene-status platform-llm-status"><strong>Prompt contract</strong><br>ranking、network evidence、Target Holdout 与 raw Provider Payload 不进入 Final Research LLM Prompt。</p>
+      </figure>
     </section>
 
     <section id="network-feedback" class="mechanism-stage network-feedback-mechanism" data-section-anchor="network-feedback" data-testid="mechanism-network-feedback-section">
@@ -1924,7 +1935,26 @@ label { display:grid; gap:5px; color:var(--muted); font-size:.76rem; font-weight
 .reranking-hotspot-affinity { top:84%; left:31%; width:20%; }
 .reranking-hotspot-top20 { top:28%; left:61%; width:18%; }
 .reranking-status { right:2%; bottom:5%; max-width:22%; border-left-color:var(--gold); }
-.platform-llm-mechanism { background:#f7f8fa; }
+.platform-llm-mechanism { grid-template-rows:auto minmax(740px,1fr); background:#f7f8fa; }
+.platform-llm-mechanism .mechanism-copy h2 { max-width:780px; font-size:2.65rem; }
+.platform-llm-visual { min-height:740px; }
+.platform-llm-visual > img { min-height:740px; object-position:center center; }
+.platform-llm-label { position:absolute; z-index:3; min-height:52px; display:grid; align-content:center; gap:2px; padding:8px 11px; border-left:3px solid var(--blue); background:rgba(251,252,254,.94); color:var(--ink); }
+.platform-llm-label strong,.platform-llm-label span { display:block; }
+.platform-llm-label strong { font-size:.8rem; line-height:1.2; }
+.platform-llm-label span { color:var(--muted); font-size:.68rem; line-height:1.2; }
+.platform-zone-label { top:4%; left:3%; width:25%; }
+.adapter-zone-label { top:4%; left:55%; width:23%; }
+.platform-llm-hotspot { position:absolute; z-index:4; min-width:44px; min-height:44px; padding:0; border:2px dashed rgba(18,94,232,.72); border-radius:6px; background:rgba(18,94,232,.035); cursor:pointer; }
+.platform-llm-hotspot:hover,.platform-llm-hotspot:focus-visible,.platform-llm-hotspot[aria-expanded="true"] { border-style:solid; border-color:var(--blue); background:rgba(18,94,232,.1); outline:3px solid rgba(18,94,232,.22); outline-offset:2px; transform:translateY(-2px); }
+.platform-llm-hotspot:active { transform:translateY(1px); }
+.platform-gate-hotspot { top:18%; left:27%; width:17%; height:48%; }
+.decision-adapter-hotspot { top:31%; left:60%; width:17%; height:42%; }
+.decision-like-hotspot { top:18%; left:88%; width:10%; height:18%; }
+.decision-comment-hotspot { top:40%; left:88%; width:10%; height:19%; }
+.decision-share-hotspot { top:60%; left:85%; width:10%; height:17%; }
+.decision-ignore-hotspot { top:80%; left:84%; width:11%; height:17%; }
+.platform-llm-status { top:16%; left:48%; max-width:28%; border-left-color:var(--gold); }
 .mechanism-copy h2 { max-width:620px; margin-bottom:16px; font-size:clamp(2rem,3.5vw,3.3rem); line-height:1.08; }
 .mechanism-copy > p { max-width:640px; color:var(--muted); font-size:1rem; }
 .evidence-boundary { margin:22px 0; padding:15px 0 15px 18px; border-left:4px solid var(--gold); }
@@ -2187,6 +2217,17 @@ const limitationTranslations = {
   'Paired ablation is a frozen-evidence shadow ranking, not a second user-state trajectory.':'Paired ablation（配对消融）是冻结证据上的影子排序，不是第二条用户状态轨迹。',
   'No real exposure denominator is available; below delivery capacity is not a user ignore decision.':'没有真实曝光分母；below_delivery_capacity（未获得投放）不是用户的 ignore（忽略）决策。',
 };
+const mechanismPromptContract = {
+  allowed:`允许进入 Final Research LLM Prompt：Target Marketing Video content；allowlisted profile fields（${payload.prompt_contract.allowed_profile_fields.join(' / ')}）；neutral PeerContext。`,
+  excluded:'不进入 Final Research LLM Prompt：ranking、network evidence、Target Holdout 与 raw Provider Payload。',
+};
+const mechanismActionDetail = (action,meaning,limitation) => ({
+  title:`${action} action`,
+  definition:`${meaning}。它是已曝光用户的结构化 Decision。${mechanismPromptContract.allowed} 输出字段合同为 engage / probability / reason / confidence / action。`,
+  provenance:'Runtime Simulation Result（仿真运行结果）',
+  usage:'Report Only（仅报告展示）',
+  limitation:`${limitation} ${mechanismPromptContract.excluded}`,
+});
 const mechanismDetails = {
   seed:{
     title:'Full-Pool Influence Seed Union',
@@ -2244,6 +2285,24 @@ const mechanismDetails = {
     usage:'Ranking（排序） / Report Only（仅报告展示）',
     limitation:'Top20 是 Recommendation Signal Inclusion 后的相对排序与容量结果，不是曝光概率或互动倾向，也不能证明某一信号产生 Observed Recommendation Signal Effect。只有成对消融的 persisted diagnostics 能判断该 effect。',
   },
+  'platform-gate':{
+    title:'Platform Environment gate',
+    definition:`Platform Environment 先执行 Global Reranking，并在 Delivery Capacity 内选择获得 Recommendation Opportunity 的用户。LLM 不参与曝光调度。${mechanismPromptContract.allowed}`,
+    provenance:'Runtime Simulation Result（仿真运行结果）',
+    usage:'Ranking（排序） / Report Only（仅报告展示）',
+    limitation:`平台证据只负责选择曝光用户，不能被解释为用户互动倾向。${mechanismPromptContract.excluded}`,
+  },
+  'decision-adapter':{
+    title:'Decision Adapter',
+    definition:`Decision Adapter 只处理已曝光用户。${mechanismPromptContract.allowed} 输出字段合同为 engage / probability / reason / confidence / action。`,
+    provenance:'Derived Proxy Metric（派生代理指标） / Synthetic Experiment Label（合成实验标签）',
+    usage:'LLM Prompt（大模型提示） / Report Only（仅报告展示）',
+    limitation:`Decision 只表示已获得 Recommendation Opportunity 后的模拟互动倾向。${mechanismPromptContract.excluded}`,
+  },
+  'decision-like':mechanismActionDetail('like','正向轻量互动','like 不表示平台曝光调度，也不代表真实平台已观测结果；机制模式不展示某次 run 的行为计数。'),
+  'decision-comment':mechanismActionDetail('comment','生成文字互动','comment 不恢复或展示 raw Provider Payload；机制模式只解释结构化 Decision 的稳定含义。'),
+  'decision-share':mechanismActionDetail('share','进一步传播内容','share 是仿真 action，不等同真实平台因果传播效果；机制模式不展示某次 run 的用户级结果。'),
+  'decision-ignore':mechanismActionDetail('ignore','已曝光但不互动','ignore 与 below_delivery_capacity 不同。前者已经曝光后选择不互动，后者没有进入 Delivery Capacity。'),
 };
 let selectedLineageField = payload.field_lineage[0]?.field_name || '';
 const count = (value) => {

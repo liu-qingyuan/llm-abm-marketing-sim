@@ -78,6 +78,9 @@ type RankingPayload = {
     provenance: string;
     usage_stages: string[];
   }>;
+  prompt_contract: {
+    allowed_profile_fields: string[];
+  };
   run: {
     sample_size: number;
     horizon: number;
@@ -236,6 +239,39 @@ async function expectNoLayoutFailures(page: Page): Promise<void> {
     textOverflow: [],
     overlaps: [],
   });
+}
+
+async function expectSceneOverlaysInsideAndSeparate(visual: Locator, selector: string): Promise<void> {
+  const failures = await visual.locator(selector).evaluateAll((overlays) => {
+    const visualBox = overlays[0]?.parentElement?.getBoundingClientRect();
+    if (!visualBox) return ['missing visual'];
+    const boxes = overlays.map((overlay) => overlay.getBoundingClientRect());
+    const failures: string[] = [];
+    boxes.forEach((box, index) => {
+      if (box.left < visualBox.left || box.right > visualBox.right ||
+          box.top < visualBox.top || box.bottom > visualBox.bottom) {
+        failures.push(`outside:${index}`);
+      }
+      boxes.slice(index + 1).forEach((other, offset) => {
+        if (Math.min(box.right, other.right) - Math.max(box.left, other.left) > 1 &&
+            Math.min(box.bottom, other.bottom) - Math.max(box.top, other.top) > 1) {
+          failures.push(`overlap:${index}-${index + offset + 1}`);
+        }
+      });
+    });
+    return failures;
+  });
+  expect(failures).toEqual([]);
+}
+
+async function expectMechanismPromptContract(detail: Locator, allowedProfileFields: string[]): Promise<void> {
+  await expect(detail).toContainText('Target Marketing Video content');
+  await expect(detail).toContainText('neutral PeerContext');
+  for (const allowed of allowedProfileFields) await expect(detail).toContainText(allowed);
+  for (const excluded of ['ranking', 'network evidence', 'Target Holdout', 'raw Provider Payload']) {
+    await expect(detail).toContainText(excluded);
+  }
+  await expect(detail).toContainText('不进入 Final Research LLM Prompt');
 }
 
 async function expectBilingualReaderSurface(page: Page): Promise<void> {
@@ -772,8 +808,8 @@ test('mechanism shell defaults to explanation and keeps run evidence available o
   await expect(mechanismPanel).toContainText('Full-Pool Influence Seed Union');
   await expect(mechanismPanel).toContainText('not Global Reranking Top20 winners');
   await expect(mechanismPanel).toContainText('三路信号形成相对排序');
-  await expect(mechanismPanel).toContainText('平台决定 Recommendation Opportunity');
-  await expect(mechanismPanel).toContainText('Decision Adapter 只输出曝光后的结构化 action');
+  await expect(mechanismPanel).toContainText('平台先决定谁获得 Recommendation Opportunity');
+  await expect(mechanismPanel).toContainText('Decision Adapter 只为已曝光用户输出结构化 Decision');
   await page.getByTestId('mechanism-network-impact-details').locator('summary').click();
   for (const imageId of [
     'sample-construction-illustration',
@@ -1059,27 +1095,112 @@ test('Batch 0 and Global Reranking are distinct accessible mechanism scenes', as
       });
       expect(headingLines).toBeLessThanOrEqual(2);
     }
-    const labelFailures = await rerankingVisual.locator('.mechanism-hotspot, .scene-status').evaluateAll((labels) => {
-      const visual = labels[0]?.parentElement?.getBoundingClientRect();
-      if (!visual) return ['missing visual'];
-      const boxes = labels.map((label) => label.getBoundingClientRect());
-      const failures: string[] = [];
-      boxes.forEach((box, index) => {
-        if (box.left < visual.left || box.right > visual.right || box.top < visual.top || box.bottom > visual.bottom) {
-          failures.push(`outside:${index}`);
-        }
-        boxes.slice(index + 1).forEach((other, offset) => {
-          if (Math.min(box.right, other.right) - Math.max(box.left, other.left) > 1 &&
-              Math.min(box.bottom, other.bottom) - Math.max(box.top, other.top) > 1) {
-            failures.push(`overlap:${index}-${index + offset + 1}`);
-          }
-        });
-      });
-      return failures;
-    });
-    expect(labelFailures).toEqual([]);
+    await expectSceneOverlaysInsideAndSeparate(rerankingVisual, '.mechanism-hotspot, .scene-status');
     await expectNoLayoutFailures(page);
     await rerankingSection.screenshot({ path: testInfo.outputPath(`global-reranking-scene-${viewport.name}.png`) });
+  }
+  expect(externalRequests).toEqual([]);
+});
+
+test('Platform Environment and Decision Adapter keep exposure and action responsibilities separate', async ({ page }, testInfo) => {
+  test.slow();
+  const { outputDir, payload } = generateRankingReport(testInfo);
+  const reportUrl = pathToFileURL(path.join(outputDir, 'report.html')).toString();
+  const externalRequests: string[] = [];
+  page.on('request', (request) => {
+    const protocol = new URL(request.url()).protocol;
+    if (protocol !== 'file:' && protocol !== 'data:') externalRequests.push(request.url());
+  });
+
+  for (const viewport of [
+    { name: '1440x900', width: 1440, height: 900 },
+    { name: '1600x1000', width: 1600, height: 1000 },
+  ]) {
+    await page.setViewportSize(viewport);
+    await page.goto(reportUrl);
+    const navigation = page.locator('.workflow-nav');
+    await navigation.getByRole('link', { name: 'LLM 决策' }).click();
+    await expect(page).toHaveURL(/#llm-decision$/);
+    await expect(navigation.getByRole('link', { name: 'LLM 决策' })).toHaveAttribute('aria-current', 'location');
+
+    const section = page.getByTestId('mechanism-platform-llm-section');
+    const visual = page.getByTestId('platform-llm-scene-visual');
+    await expect(section).toBeFocused();
+    await expect(section.getByRole('heading', {
+      name: '平台先决定谁获得 Recommendation Opportunity',
+    })).toBeVisible();
+    await expect(section).toContainText('LLM 不负责曝光调度');
+    await expect(section).toContainText('Decision Adapter 只为已曝光用户输出结构化 Decision');
+
+    const [sectionBox, visualBox] = await Promise.all([section.boundingBox(), visual.boundingBox()]);
+    expect(sectionBox).not.toBeNull();
+    expect(visualBox).not.toBeNull();
+    expect(((visualBox?.width ?? 0) * (visualBox?.height ?? 0)) /
+      ((sectionBox?.width ?? 1) * (sectionBox?.height ?? 1))).toBeGreaterThanOrEqual(0.6);
+
+    const drawer = page.getByTestId('evidence-drawer');
+    const detail = page.getByTestId('mechanism-detail');
+    const responsibilityInteractions = [
+      ['platform-gate-hotspot', 'Enter', 'Platform Environment gate', 'Global Reranking', 'Delivery Capacity'],
+      ['decision-adapter-hotspot', 'Space', 'Decision Adapter', 'allowlisted profile fields', 'neutral PeerContext'],
+    ] as const;
+    for (const [testId, key, title, firstEvidence, secondEvidence] of responsibilityInteractions) {
+      const hotspot = page.getByTestId(testId);
+      await hotspot.focus();
+      await hotspot.press(key);
+      await expect(drawer).toHaveAttribute('data-selection-kind', 'mechanism');
+      await expect(detail).toContainText(title);
+      await expect(detail).toContainText(firstEvidence);
+      await expect(detail).toContainText(secondEvidence);
+      await expectMechanismPromptContract(detail, payload.prompt_contract.allowed_profile_fields);
+      await drawer.getByRole('button', { name: '关闭详情' }).click();
+      await expect(hotspot).toBeFocused();
+    }
+
+    const actionInteractions = [
+      ['decision-like-hotspot', 'like', '正向轻量互动'],
+      ['decision-comment-hotspot', 'comment', '生成文字互动'],
+      ['decision-share-hotspot', 'share', '进一步传播内容'],
+      ['decision-ignore-hotspot', 'ignore', '已曝光但不互动'],
+    ] as const;
+    for (const [testId, action, meaning] of actionInteractions) {
+      const hotspot = page.getByTestId(testId);
+      await hotspot.focus();
+      await hotspot.press('Enter');
+      await expect(detail).toContainText(`${action} action`);
+      await expect(detail).toContainText(meaning);
+      await expect(detail).toContainText('engage / probability / reason / confidence / action');
+      await expect(detail).toContainText('结构化 Decision');
+      await expectMechanismPromptContract(detail, payload.prompt_contract.allowed_profile_fields);
+      await expect(detail.locator('dl div', { hasText: 'Field Usage Stage' }).locator('dd'))
+        .toHaveText('Report Only（仅报告展示）');
+      await drawer.getByRole('button', { name: '关闭详情' }).click();
+      await expect(hotspot).toBeFocused();
+    }
+
+    await expectSceneOverlaysInsideAndSeparate(visual, '.platform-llm-label, .platform-llm-hotspot');
+
+    await navigation.getByRole('link', { name: 'LLM 决策' }).click();
+    const headingLines = await section.getByRole('heading', { level: 2 }).evaluate((node) => {
+      const style = getComputedStyle(node);
+      return Math.round(node.getBoundingClientRect().height / Number.parseFloat(style.lineHeight));
+    });
+    expect(headingLines).toBeLessThanOrEqual(2);
+    const [topbarBox, headingBox] = await Promise.all([
+      page.locator('.topbar').boundingBox(),
+      section.getByRole('heading', { level: 2 }).boundingBox(),
+    ]);
+    expect(topbarBox).not.toBeNull();
+    expect(headingBox).not.toBeNull();
+    expect(headingBox?.y ?? 0).toBeGreaterThanOrEqual((topbarBox?.y ?? 0) + (topbarBox?.height ?? 0));
+    await expectNoLayoutFailures(page);
+    await visual.screenshot({ path: testInfo.outputPath(`platform-llm-scene-${viewport.name}.png`) });
+
+    await page.getByTestId('decision-like-hotspot').click();
+    await expect(drawer).toBeVisible();
+    await page.getByTestId('run-evidence-mode-button').click();
+    await expect(drawer).toBeHidden();
+    await expect(page.getByTestId('run-evidence-mode-panel')).toBeVisible();
   }
   expect(externalRequests).toEqual([]);
 });
