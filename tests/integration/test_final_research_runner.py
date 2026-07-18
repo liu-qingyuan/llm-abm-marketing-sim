@@ -937,8 +937,30 @@ def test_target_delivery_ranking_runtime_reranks_global_top20_after_seed_engagem
     assert "20% 历史标签亲和度" in report_html
     assert "Recommendation Signal Inclusion" in report_html
     assert "Observed Recommendation Signal Effect" in report_html
-    assert 'data-testid="ranking-funnel-section"' in report_html
+    assert 'class="ranking-hero"' not in report_html
+    assert 'data-testid="ranking-funnel-section"' not in report_html
     assert 'data-testid="ranking-hero"' in report_html
+    assert 'class="run-evidence-intro"' in report_html
+    assert 'data-testid="run-evidence-method-status"' in report_html
+    assert "Persisted runtime evidence" in report_html
+    for role in ("seed", "network_cohort", "ordinary"):
+        role_count = sum(row["sample_role"] == role for row in report_payload["users"])
+        assert f'data-testid="run-evidence-{role.replace("_", "-")}-count"' in report_html
+        assert f">{role_count:,}</strong>" in report_html
+    for retired_visual_token in (
+        "#66509a",
+        "#b8c4bd",
+        "#bcc8c1",
+        "#d9d1f1",
+        "#ded9e9",
+        "#e5ebe7",
+        "#edf4f0",
+        "#eef2ef",
+        "#eef5f2",
+        "#f8f7fb",
+        "border-inline:1px solid var(--line)",
+    ):
+        assert retired_visual_token not in report_html
     assert 'data-testid="target-video-link"' in report_html
     assert 'data-testid="core-objects-section"' in report_html
     assert 'data-testid="sample-comparison-section"' in report_html
@@ -1059,6 +1081,9 @@ def test_target_delivery_ranking_report_rebuild_is_deterministic(tmp_path: Path)
     calls_before_rebuild = len(adapter.calls)
     report_path = run_dir / "report.html"
     payload_path = run_dir / "final_research_report_payload.json"
+    payload = FinalResearchRankingReportPayload.model_validate_json(payload_path.read_text(encoding="utf-8"))
+    direct_report = FinalResearchReportWriter.render_payload(payload).encode()
+    assert report_path.read_bytes() == direct_report
     preserved_artifacts = {
         path.name: path.read_bytes()
         for path in run_dir.iterdir()
@@ -1068,6 +1093,7 @@ def test_target_delivery_ranking_report_rebuild_is_deterministic(tmp_path: Path)
     assert rebuild_final_research_report(run_dir) == report_path
     first_payload = payload_path.read_bytes()
     first_report = report_path.read_bytes()
+    assert first_report == direct_report
     assert len(adapter.calls) == calls_before_rebuild
 
     assert rebuild_final_research_report(run_dir) == report_path

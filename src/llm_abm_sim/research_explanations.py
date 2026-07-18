@@ -216,7 +216,7 @@ _CHART_EXPLANATIONS = {
         measurement="每个 Batch（批次）实际产生的 Target Video（目标视频）exposure（曝光）数。",
         denominator=(
             "单位为 exposure（曝光）人次；每位用户最多一次，Batch 0（第 0 批）是 seeds（种子用户），"
-            "Batch 1–{final_batch}（第 1–{final_batch} 批）每批最多 {top_label}。"
+            "Batch 1-{final_batch}（第 1-{final_batch} 批）每批最多 {top_label}。"
         ),
         purpose="把固定 Delivery Capacity（投放容量）与实际逐批投放分开，避免把柱高误读成互动率。",
         result="{batch_count} 个批次合计 {total_exposures} 次 exposure（曝光）。",

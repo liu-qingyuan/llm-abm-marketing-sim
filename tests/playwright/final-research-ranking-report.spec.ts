@@ -203,7 +203,7 @@ async function expectNoLayoutFailures(page: Page): Promise<void> {
       .map((element) => `${element.tagName}:${element.textContent?.trim().slice(0, 40)}`);
     const overlappingGroups = [
       '.topbar > *',
-      '.hero-funnel > article',
+      '.run-evidence-facts > article',
       '.object-flow > *',
       '.sample-metrics > article',
       '.chart-grid > article',
@@ -278,9 +278,8 @@ async function expectBilingualReaderSurface(page: Page): Promise<void> {
   const failures = await page.evaluate(() => {
     const selectors = [
       '.topbar',
-      '.ranking-hero .eyebrow',
-      '.hero-meta',
-      '.hero-funnel > article > span',
+      '.run-method-status',
+      '.run-evidence-facts > article > span',
       '.object-band',
       '.section-heading',
       '.section-explanation',
@@ -432,13 +431,17 @@ async function assertRankingReport(
   await page.getByTestId('run-evidence-mode-button').click();
 
   const hero = page.getByTestId('ranking-hero');
+  const roleCount = (role: string) => payload.users.filter((user) => user.sample_role === role).length;
+  await expect(hero).toHaveClass('run-evidence-intro');
+  await expect(hero.getByTestId('run-evidence-method-status')).toContainText('Persisted runtime evidence');
   await expect(hero).toContainText('当高端酒店开始');
   await expect(hero).toContainText(payload.run.sample_size.toLocaleString());
-  await expect(hero).toContainText('Exposures（曝光）');
-  await expect(hero).toContainText('Decisions（决策）');
-  await expect(hero).toContainText('Actions');
-  await expect(hero).toContainText('ignore');
-  await expect(hero).toContainText('Below capacity（未投放）');
+  await expect(hero.getByTestId('run-evidence-seed-count')).toHaveText(roleCount('seed').toLocaleString());
+  await expect(hero.getByTestId('run-evidence-network-cohort-count'))
+    .toHaveText(roleCount('network_cohort').toLocaleString());
+  await expect(hero.getByTestId('run-evidence-ordinary-count')).toHaveText(roleCount('ordinary').toLocaleString());
+  await expect(hero).toContainText('不使用 Proposed `20 / 60 / 920` 投影改写本次运行');
+  await expect(hero.locator('.run-evidence-facts article')).toHaveCount(6);
   await expect(page.getByTestId('target-video-link')).toHaveAttribute('href', payload.target_video.video_url);
   const nextSectionTop = await page.getByTestId('core-objects-section').evaluate(
     (element) => element.getBoundingClientRect().top,
@@ -516,7 +519,7 @@ async function assertRankingReport(
   await expect(rankingSection).toContainText(`每批最多投放 ${payload.run.delivery_capacity} 人`);
   await expect(rankingSection).toContainText('不是用户互动概率或 action（动作）配额');
   await expect(rankingSection).toContainText('Batch 0');
-  await expect(rankingSection).toContainText(`Batch 1–${payload.run.horizon - 1}`);
+  await expect(rankingSection).toContainText(`Batch 1-${payload.run.horizon - 1}`);
   const workedExample = page.getByTestId('ranking-worked-example');
   const candidate = selectWorkedCandidate(payload);
   const contributions = [
@@ -658,7 +661,7 @@ async function assertRankingReport(
   );
   await expect(page.getByTestId('batch-delivery-explanation')).toContainText(`Batch 0`);
   await expect(page.getByTestId('batch-delivery-explanation')).toContainText(
-    `Batch 1–${payload.run.horizon - 1}`,
+    `Batch 1-${payload.run.horizon - 1}`,
   );
   await expect(page.getByTestId('batch-delivery-explanation')).toContainText(
     `Top${payload.run.delivery_capacity}`,
@@ -836,7 +839,17 @@ test('mechanism shell defaults to explanation and keeps run evidence available o
   await expect(page.getByTestId('final-research-ranking-report')).toHaveAttribute('data-report-mode', 'run-evidence');
   await expect(page.getByTestId('mechanism-mode-panel')).toBeHidden();
   await expect(page.getByTestId('run-evidence-mode-panel')).toBeVisible();
-  await expect(page.getByTestId('ranking-hero')).toContainText(payload.users.length.toLocaleString());
+  const runIntro = page.getByTestId('ranking-hero');
+  await expect(runIntro).toContainText(payload.users.length.toLocaleString());
+  await expect(runIntro.getByTestId('run-evidence-seed-count')).toHaveText(
+    payload.users.filter((user) => user.sample_role === 'seed').length.toLocaleString(),
+  );
+  await expect(runIntro.getByTestId('run-evidence-network-cohort-count')).toHaveText(
+    payload.users.filter((user) => user.sample_role === 'network_cohort').length.toLocaleString(),
+  );
+  await expect(runIntro.getByTestId('run-evidence-ordinary-count')).toHaveText(
+    payload.users.filter((user) => user.sample_role === 'ordinary').length.toLocaleString(),
+  );
   await expect(page.getByTestId('sample-comparison-section')).toContainText(
     payload.sample_comparison.final_sample_count.toLocaleString(),
   );
@@ -999,7 +1012,9 @@ test('sample opening keeps its visual contract on both desktop reference viewpor
     await page.getByTestId('evidence-drawer').getByRole('button', { name: '关闭详情' }).click();
     await expect(seedHotspot).toBeFocused();
     await expectNoLayoutFailures(page);
-    await page.screenshot({ path: testInfo.outputPath(`sample-opening-${viewport.name}.png`) });
+    await expect(page).toHaveScreenshot(`sample-opening-${viewport.name}.png`, {
+      animations: 'disabled',
+    });
   }
   expect(externalRequests).toEqual([]);
 });
@@ -1051,7 +1066,9 @@ test('Batch 0 and Global Reranking are distinct accessible mechanism scenes', as
     await expect(seedHotspot).toBeFocused();
 
     await expect(page.getByTestId('batch-zero-video-label')).toContainText('Target Marketing Video');
-    await batchSection.screenshot({ path: testInfo.outputPath(`batch-zero-scene-${viewport.name}.png`) });
+    await expect(batchSection).toHaveScreenshot(`batch-zero-scene-${viewport.name}.png`, {
+      animations: 'disabled',
+    });
 
     const rerankingSection = page.getByTestId('mechanism-global-reranking-section');
     const rerankingVisual = page.getByTestId('global-reranking-scene-visual');
@@ -1097,7 +1114,9 @@ test('Batch 0 and Global Reranking are distinct accessible mechanism scenes', as
     }
     await expectSceneOverlaysInsideAndSeparate(rerankingVisual, '.mechanism-hotspot, .scene-status');
     await expectNoLayoutFailures(page);
-    await rerankingSection.screenshot({ path: testInfo.outputPath(`global-reranking-scene-${viewport.name}.png`) });
+    await expect(rerankingSection).toHaveScreenshot(`global-reranking-scene-${viewport.name}.png`, {
+      animations: 'disabled',
+    });
   }
   expect(externalRequests).toEqual([]);
 });
@@ -1195,7 +1214,9 @@ test('Platform Environment and Decision Adapter keep exposure and action respons
       return headingBox.y - (topbarBox.y + topbarBox.height);
     }).toBeGreaterThanOrEqual(0);
     await expectNoLayoutFailures(page);
-    await visual.screenshot({ path: testInfo.outputPath(`platform-llm-scene-${viewport.name}.png`) });
+    await expect(section).toHaveScreenshot(`platform-llm-scene-${viewport.name}.png`, {
+      animations: 'disabled',
+    });
 
     await page.getByTestId('decision-like-hotspot').click();
     await expect(drawer).toBeVisible();
@@ -1314,9 +1335,10 @@ test('successful actions activate direct neighbors only in the next Global Reran
     ]);
     expect(feedbackStatusBox?.y ?? 0).toBeGreaterThanOrEqual((topbarBox?.y ?? 0) + (topbarBox?.height ?? 0));
     await expectNoLayoutFailures(page);
-    await visual.screenshot({
-      path: testInfo.outputPath(`neighbor-feedback-scene-${viewport.name}.png`),
-      style: '.topbar { display: none !important; }',
+    await navigation.getByRole('link', { name: '网络反馈' }).click();
+    await expect(section).toBeFocused();
+    await expect(page).toHaveScreenshot(`neighbor-feedback-scene-${viewport.name}.png`, {
+      animations: 'disabled',
     });
   }
   expect(externalRequests).toEqual([]);
@@ -1415,9 +1437,12 @@ test('Delivery Capacity compares full and no-network ranking on frozen candidate
         (currentVisualBox?.height ?? 1)).toBeLessThanOrEqual(maximumBottomRatio);
     }
     await expectNoLayoutFailures(page);
-    await visual.screenshot({
-      path: testInfo.outputPath(`capacity-network-scene-${viewport.name}.png`),
-      style: '.topbar { display: none !important; }',
+    await section.evaluate((element) => {
+      const top = element.getBoundingClientRect().top + window.scrollY - 68;
+      window.scrollTo({ top, behavior: 'instant' });
+    });
+    await expect(page).toHaveScreenshot(`capacity-network-scene-${viewport.name}.png`, {
+      animations: 'disabled',
     });
   }
   expect(externalRequests).toEqual([]);
@@ -1745,6 +1770,12 @@ test('configured formal ranking run preserves payload-derived evidence on deskto
   }
 
   const payload = JSON.parse(readFileSync(payloadPath, 'utf8')) as RankingPayload;
+  const formalRoleCounts = {
+    seed: payload.users.filter((user) => user.sample_role === 'seed').length,
+    networkCohort: payload.users.filter((user) => user.sample_role === 'network_cohort').length,
+    ordinary: payload.users.filter((user) => user.sample_role === 'ordinary').length,
+  };
+  expect(formalRoleCounts).toEqual({ seed: 20, networkCohort: 13, ordinary: 967 });
   const changedBatches = payload.ranking_diagnostics.paired_ablation.batches.filter(
     (batch) => batch.network_added_user_ids.length > 0 || batch.network_removed_user_ids.length > 0,
   ).length;
@@ -1800,6 +1831,10 @@ test('configured formal ranking run preserves payload-derived evidence on deskto
     await page.setViewportSize(viewport);
     await page.goto(pathToFileURL(reportPath).toString());
     await assertReaderComprehensionContract(page, runDir, payload);
+    const runIntro = page.getByTestId('ranking-hero');
+    await expect(runIntro.getByTestId('run-evidence-seed-count')).toHaveText('20');
+    await expect(runIntro.getByTestId('run-evidence-network-cohort-count')).toHaveText('13');
+    await expect(runIntro.getByTestId('run-evidence-ordinary-count')).toHaveText('967');
     await expect(page.getByTestId('network-effect-section')).toContainText(
       `${changedBatches} / ${payload.run.horizon} 个批次`,
     );
