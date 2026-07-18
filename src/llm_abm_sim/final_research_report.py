@@ -1618,7 +1618,7 @@ def _render_ranking_report(payload: FinalResearchRankingReportPayload) -> str:
 <body>
 <main data-testid="final-research-ranking-report" data-report-mode="mechanism">
   <nav class="topbar" aria-label="研究报告导航">
-    <a class="brand" href="#overview">传播机制</a>
+    <a class="brand" href="#overview">推荐机制</a>
     <div class="workflow-nav"><a href="#overview">概览</a><a href="#sample">样本</a><a href="#exposure-ranking">曝光排序</a><a href="#llm-decision">LLM 决策</a><a href="#network-feedback">网络反馈</a></div>
     <div class="mode-switch" role="tablist" aria-label="报告阅读模式">
       <button id="mechanism-mode-tab" type="button" role="tab" aria-selected="true" aria-controls="mechanism-mode-panel" data-report-mode-target="mechanism" data-testid="mechanism-mode-button">机制说明</button>
@@ -1912,7 +1912,7 @@ input,select { width:100%; padding:7px 9px; }
 label { display:grid; gap:5px; color:var(--muted); font-size:.76rem; font-weight:700; }
 .eyebrow { display:block; margin-bottom:8px; color:var(--green); font-size:.72rem; font-weight:800; text-transform:uppercase; }
 .muted { color:var(--muted); }
-.topbar { position:sticky; top:0; z-index:20; display:grid; grid-template-columns:112px minmax(500px,1fr) auto; gap:clamp(20px,3vw,42px); align-items:center; min-height:68px; padding:10px clamp(22px,3vw,46px); border-bottom:1px solid var(--line); background:rgba(251,252,254,.98); }
+.topbar { position:sticky; top:0; z-index:20; display:grid; grid-template-columns:112px minmax(500px,1fr) auto; gap:clamp(20px,3vw,42px); align-items:center; min-height:68px; padding:10px clamp(22px,3vw,46px); border-bottom:1px solid var(--line); background:#fbfcfe; }
 .brand { min-width:0; color:var(--ink); font-size:1rem; font-weight:850; text-decoration:none; white-space:nowrap; }
 .workflow-nav { height:48px; display:flex; justify-content:center; gap:clamp(18px,2.2vw,34px); min-width:0; overflow:hidden; white-space:nowrap; }
 .workflow-nav a { position:relative; display:flex; align-items:center; color:var(--muted); font-size:.84rem; font-weight:760; text-decoration:none; }

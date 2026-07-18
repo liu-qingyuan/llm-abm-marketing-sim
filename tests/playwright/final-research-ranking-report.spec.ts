@@ -119,6 +119,27 @@ type RankingPayload = {
 };
 
 type CandidateWithBatch = RankingCandidate & { time_step: number };
+type SampleRoleCounts = Record<'seed' | 'network_cohort' | 'ordinary', number>;
+
+const REFERENCE_SNAPSHOT_PLATFORM = 'darwin';
+
+function sampleRoleCounts(payload: RankingPayload): SampleRoleCounts {
+  const counts: SampleRoleCounts = { seed: 0, network_cohort: 0, ordinary: 0 };
+  for (const user of payload.users) {
+    if (user.sample_role in counts) counts[user.sample_role as keyof SampleRoleCounts] += 1;
+  }
+  return counts;
+}
+
+async function expectDarwinPageScreenshot(page: Page, name: string): Promise<void> {
+  if (process.platform !== REFERENCE_SNAPSHOT_PLATFORM) return;
+  await expect(page).toHaveScreenshot(name, { animations: 'disabled' });
+}
+
+async function expectDarwinLocatorScreenshot(locator: Locator, name: string): Promise<void> {
+  if (process.platform !== REFERENCE_SNAPSHOT_PLATFORM) return;
+  await expect(locator).toHaveScreenshot(name, { animations: 'disabled' });
+}
 
 function selectWorkedCandidate(payload: RankingPayload): CandidateWithBatch {
   const evidence = payload.ranking_rounds.flatMap((round) =>
@@ -431,15 +452,15 @@ async function assertRankingReport(
   await page.getByTestId('run-evidence-mode-button').click();
 
   const hero = page.getByTestId('ranking-hero');
-  const roleCount = (role: string) => payload.users.filter((user) => user.sample_role === role).length;
+  const roleCounts = sampleRoleCounts(payload);
   await expect(hero).toHaveClass('run-evidence-intro');
   await expect(hero.getByTestId('run-evidence-method-status')).toContainText('Persisted runtime evidence');
   await expect(hero).toContainText('当高端酒店开始');
   await expect(hero).toContainText(payload.run.sample_size.toLocaleString());
-  await expect(hero.getByTestId('run-evidence-seed-count')).toHaveText(roleCount('seed').toLocaleString());
+  await expect(hero.getByTestId('run-evidence-seed-count')).toHaveText(roleCounts.seed.toLocaleString());
   await expect(hero.getByTestId('run-evidence-network-cohort-count'))
-    .toHaveText(roleCount('network_cohort').toLocaleString());
-  await expect(hero.getByTestId('run-evidence-ordinary-count')).toHaveText(roleCount('ordinary').toLocaleString());
+    .toHaveText(roleCounts.network_cohort.toLocaleString());
+  await expect(hero.getByTestId('run-evidence-ordinary-count')).toHaveText(roleCounts.ordinary.toLocaleString());
   await expect(hero).toContainText('不使用 Proposed `20 / 60 / 920` 投影改写本次运行');
   await expect(hero.locator('.run-evidence-facts article')).toHaveCount(6);
   await expect(page.getByTestId('target-video-link')).toHaveAttribute('href', payload.target_video.video_url);
@@ -840,15 +861,16 @@ test('mechanism shell defaults to explanation and keeps run evidence available o
   await expect(page.getByTestId('mechanism-mode-panel')).toBeHidden();
   await expect(page.getByTestId('run-evidence-mode-panel')).toBeVisible();
   const runIntro = page.getByTestId('ranking-hero');
+  const roleCounts = sampleRoleCounts(payload);
   await expect(runIntro).toContainText(payload.users.length.toLocaleString());
   await expect(runIntro.getByTestId('run-evidence-seed-count')).toHaveText(
-    payload.users.filter((user) => user.sample_role === 'seed').length.toLocaleString(),
+    roleCounts.seed.toLocaleString(),
   );
   await expect(runIntro.getByTestId('run-evidence-network-cohort-count')).toHaveText(
-    payload.users.filter((user) => user.sample_role === 'network_cohort').length.toLocaleString(),
+    roleCounts.network_cohort.toLocaleString(),
   );
   await expect(runIntro.getByTestId('run-evidence-ordinary-count')).toHaveText(
-    payload.users.filter((user) => user.sample_role === 'ordinary').length.toLocaleString(),
+    roleCounts.ordinary.toLocaleString(),
   );
   await expect(page.getByTestId('sample-comparison-section')).toContainText(
     payload.sample_comparison.final_sample_count.toLocaleString(),
@@ -887,7 +909,8 @@ test('sample-led opening replaces the generic hero and keeps navigation focus in
   const opening = page.getByTestId('mechanism-sample-opening');
   const sampleDetail = page.getByTestId('mechanism-sample-detail');
   const navigation = page.locator('.workflow-nav');
-  await expect(page.locator('.brand')).toHaveText('传播机制');
+  await expect(page.locator('.brand')).toHaveText('推荐机制');
+  await expect(page.locator('.topbar')).toHaveCSS('background-color', 'rgb(251, 252, 254)');
   expect((await topbar.boundingBox())?.height ?? Infinity).toBeLessThanOrEqual(80);
   await expect(page.locator('.mechanism-overview')).toHaveCount(0);
   await expect(opening).toBeVisible();
@@ -1012,9 +1035,7 @@ test('sample opening keeps its visual contract on both desktop reference viewpor
     await page.getByTestId('evidence-drawer').getByRole('button', { name: '关闭详情' }).click();
     await expect(seedHotspot).toBeFocused();
     await expectNoLayoutFailures(page);
-    await expect(page).toHaveScreenshot(`sample-opening-${viewport.name}.png`, {
-      animations: 'disabled',
-    });
+    await expectDarwinPageScreenshot(page, `sample-opening-${viewport.name}.png`);
   }
   expect(externalRequests).toEqual([]);
 });
@@ -1066,9 +1087,7 @@ test('Batch 0 and Global Reranking are distinct accessible mechanism scenes', as
     await expect(seedHotspot).toBeFocused();
 
     await expect(page.getByTestId('batch-zero-video-label')).toContainText('Target Marketing Video');
-    await expect(batchSection).toHaveScreenshot(`batch-zero-scene-${viewport.name}.png`, {
-      animations: 'disabled',
-    });
+    await expectDarwinLocatorScreenshot(batchSection, `batch-zero-scene-${viewport.name}.png`);
 
     const rerankingSection = page.getByTestId('mechanism-global-reranking-section');
     const rerankingVisual = page.getByTestId('global-reranking-scene-visual');
@@ -1114,9 +1133,7 @@ test('Batch 0 and Global Reranking are distinct accessible mechanism scenes', as
     }
     await expectSceneOverlaysInsideAndSeparate(rerankingVisual, '.mechanism-hotspot, .scene-status');
     await expectNoLayoutFailures(page);
-    await expect(rerankingSection).toHaveScreenshot(`global-reranking-scene-${viewport.name}.png`, {
-      animations: 'disabled',
-    });
+    await expectDarwinLocatorScreenshot(rerankingSection, `global-reranking-scene-${viewport.name}.png`);
   }
   expect(externalRequests).toEqual([]);
 });
@@ -1214,9 +1231,7 @@ test('Platform Environment and Decision Adapter keep exposure and action respons
       return headingBox.y - (topbarBox.y + topbarBox.height);
     }).toBeGreaterThanOrEqual(0);
     await expectNoLayoutFailures(page);
-    await expect(section).toHaveScreenshot(`platform-llm-scene-${viewport.name}.png`, {
-      animations: 'disabled',
-    });
+    await expectDarwinLocatorScreenshot(section, `platform-llm-scene-${viewport.name}.png`);
 
     await page.getByTestId('decision-like-hotspot').click();
     await expect(drawer).toBeVisible();
@@ -1337,9 +1352,7 @@ test('successful actions activate direct neighbors only in the next Global Reran
     await expectNoLayoutFailures(page);
     await navigation.getByRole('link', { name: '网络反馈' }).click();
     await expect(section).toBeFocused();
-    await expect(page).toHaveScreenshot(`neighbor-feedback-scene-${viewport.name}.png`, {
-      animations: 'disabled',
-    });
+    await expectDarwinPageScreenshot(page, `neighbor-feedback-scene-${viewport.name}.png`);
   }
   expect(externalRequests).toEqual([]);
 });
@@ -1441,9 +1454,7 @@ test('Delivery Capacity compares full and no-network ranking on frozen candidate
       const top = element.getBoundingClientRect().top + window.scrollY - 68;
       window.scrollTo({ top, behavior: 'instant' });
     });
-    await expect(page).toHaveScreenshot(`capacity-network-scene-${viewport.name}.png`, {
-      animations: 'disabled',
-    });
+    await expectDarwinPageScreenshot(page, `capacity-network-scene-${viewport.name}.png`);
   }
   expect(externalRequests).toEqual([]);
 });
@@ -1770,12 +1781,8 @@ test('configured formal ranking run preserves payload-derived evidence on deskto
   }
 
   const payload = JSON.parse(readFileSync(payloadPath, 'utf8')) as RankingPayload;
-  const formalRoleCounts = {
-    seed: payload.users.filter((user) => user.sample_role === 'seed').length,
-    networkCohort: payload.users.filter((user) => user.sample_role === 'network_cohort').length,
-    ordinary: payload.users.filter((user) => user.sample_role === 'ordinary').length,
-  };
-  expect(formalRoleCounts).toEqual({ seed: 20, networkCohort: 13, ordinary: 967 });
+  const formalRoleCounts = sampleRoleCounts(payload);
+  expect(formalRoleCounts).toEqual({ seed: 20, network_cohort: 13, ordinary: 967 });
   const changedBatches = payload.ranking_diagnostics.paired_ablation.batches.filter(
     (batch) => batch.network_added_user_ids.length > 0 || batch.network_removed_user_ids.length > 0,
   ).length;

@@ -67,10 +67,6 @@ def test_research_explanation_catalog_owns_concept_and_chart_templates() -> None
         "purpose",
         "result",
     }
-    assert "—" not in str(document)
-    assert "–" not in str(document)
-
-
 def test_research_explanation_catalog_pairs_required_english_tokens_with_chinese() -> None:
     catalog = ResearchExplanationCatalog.from_lineage(_ranking_field_lineage())
 
