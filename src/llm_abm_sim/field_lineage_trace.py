@@ -4,6 +4,7 @@ from collections import Counter
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from dataclasses import field as dataclass_field
+from functools import cache
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -267,6 +268,72 @@ _DISPLAY_NAMES_ZH = {
     "ranking_diagnostics.historical_top20_diagnostic": "Historical Top20 诊断",
     "ranking_diagnostics.summary": "排序诊断摘要",
 }
+
+_FIELD_TOKEN_DISPLAY_NAMES_ZH = {
+    "user_id": "用户标识",
+    "video_id": "视频标识",
+    "source_challenge_name": "采集来源",
+    "caption": "视频文案",
+    "hashtags": "视频标签",
+    "creator_user_id": "创作者标识",
+    "video_url": "视频链接",
+    "source_challenge_rank": "采集来源排名",
+    "sample_size": "样本数量",
+    "horizon": "批次数量",
+    "random_seed": "随机种子",
+    "delivery_capacity": "投放容量",
+    "maximum_target_exposures": "最大目标曝光数",
+    "ranking_formula": "排序公式",
+    "engaged_neighbor_formula": "已互动邻居公式",
+    "sampling_method": "抽样方法",
+    "sampling_status": "运行状态",
+    "base_sample_count": "Base Sample 数量",
+    "final_sample_count": "最终样本数量",
+    "seed_count": "Seed 数量",
+    "network_cohort_count": "Network Cohort 数量",
+    "network_cohort_added_count": "新增 Network Cohort 数量",
+    "replacement_count": "替换用户数量",
+    "base_source_scope_counts": "Base Sample 来源分布",
+    "final_source_scope_counts": "最终样本来源分布",
+    "ordinary_count": "普通用户数量",
+    "time_step": "批次",
+    "eligible_count": "合格候选数量",
+    "selected_count": "入选数量",
+    "selected_user_ids": "入选用户标识",
+    "target_exposures": "目标曝光数量",
+    "decisions": "成功决策数量",
+    "engagements": "互动数量",
+    "ignored": "忽略数量",
+    "provider_failed": "Provider 失败数量",
+    "below_delivery_capacity": "低于投放容量数量",
+    "candidates_with_positive_engaged_neighbor_signal": "具有正向邻居信号的候选数量",
+    "selected_with_positive_engaged_neighbor_signal": "具有正向邻居信号的入选数量",
+    "maximum_engaged_neighbor_signal": "最大已互动邻居信号",
+    "ranking_position": "排序名次",
+    "is_seed": "是否 Seed",
+    "selected": "是否入选",
+    "base_network_relevance": "历史网络相关性",
+    "engaged_neighbor_count": "已互动直接邻居数",
+    "engaged_neighbor_signal": "已互动邻居排序信号",
+    "historical_tag_affinity": "历史标签亲和度",
+    "recommendation_score": "推荐排序分数",
+    "report_path": "报告路径",
+    "payload_path": "Payload 路径",
+    "json_path": "用户 JSON 路径",
+    "manifest_path": "Manifest 路径",
+}
+
+
+@dataclass(frozen=True)
+class _ReportFieldSpec:
+    artifact_id: str
+    record_key_fields: tuple[str, ...]
+    source_fields: tuple[str, ...]
+    transformation_method: str
+    transformation_description: str
+    value_range: str
+    interpretation: str
+    limitations: tuple[str, ...]
 
 
 class SourceRecordLocator(BaseModel):
@@ -537,7 +604,7 @@ class FieldLineageTraceModule:
                     )
                     for definition in catalog
                     if definition.field_name not in base_field_names
-                    and "user_id" in definition.record_key_fields
+                    and is_user_field_trace_definition(definition)
                 ),
             ]
 
@@ -698,161 +765,209 @@ def field_lineage_definitions(
     return definitions
 
 
+def is_user_field_trace_definition(definition: FieldLineageDefinition) -> bool:
+    return "user_id" in definition.record_key_fields or definition.field_name in _DIAGNOSTIC_FIELDS
+
+
 def _report_field_definition(entry: LineageEntry) -> FieldLineageDefinition:
     field_name = entry.field_name
-    artifact_id = _report_field_artifact_id(field_name)
-    record_key_fields = _report_field_record_key_fields(field_name)
-    source_fields = _report_field_source_fields(field_name)
-    transformation_method, transformation_description = _report_field_transformation(field_name)
-    display_name = _DISPLAY_NAMES_ZH.get(field_name, field_name.split(".")[-1].replace("_", " "))
+    spec = _report_field_spec(field_name)
+    field_token = field_name.split(".")[-1]
+    display_name = (
+        _DISPLAY_NAMES_ZH[field_name]
+        if field_name in _DISPLAY_NAMES_ZH
+        else _FIELD_TOKEN_DISPLAY_NAMES_ZH[field_token]
+    )
     return FieldLineageDefinition(
         field_name=field_name,
         display_name_zh=display_name,
         meaning=f"报告中 {field_name} 的同源记录级证据。",
         provenance=entry.provenance,
-        source_artifact_kind=f"persisted {artifact_id} record",
-        record_key_fields=record_key_fields,
-        source_fields=source_fields,
-        transformation_method=transformation_method,
-        transformation_description=transformation_description,
+        source_artifact_kind=f"persisted {spec.artifact_id} record",
+        record_key_fields=list(spec.record_key_fields),
+        source_fields=list(spec.source_fields),
+        transformation_method=spec.transformation_method,
+        transformation_description=spec.transformation_description,
         declared_usage_stages=list(entry.usage_stages),
-        value_range=_report_field_value_range(field_name),
-        interpretation=_report_field_interpretation(field_name),
-        limitations=_report_field_limitations(field_name),
+        value_range=spec.value_range,
+        interpretation=spec.interpretation,
+        limitations=list(spec.limitations),
     )
 
 
-def _report_field_artifact_id(field_name: str) -> str:
-    if field_name in _DECISION_FIELDS:
-        return "runtime_decisions"
-    if field_name == "provider_failure_type":
-        return "runtime_provider_failures"
-    if field_name in _OUTCOME_FIELDS:
-        return "ranking_runtime_outcomes"
-    if field_name in _USER_RANKING_FIELDS or field_name.startswith("ranking_rounds.candidates."):
-        return "ranking_runtime_candidates"
-    if field_name in _SAMPLE_RUNTIME_FIELDS:
-        return "seed_first_sample_audit"
-    if field_name in _REPORT_LINK_FIELDS:
-        return "final_research_users_json"
-    if field_name.startswith("target_video."):
-        return "target_video_snapshot"
-    if field_name.startswith("run."):
-        return "ranking_runtime_summary"
-    if field_name.startswith("sample_comparison."):
-        return "seed_first_sample_audit"
-    if field_name.startswith("ranking_rounds."):
-        return "ranking_runtime_steps"
-    if field_name == "ranking_diagnostics.paired_ablation":
-        return "ranking_ablation_diagnostics_csv"
-    if field_name == "ranking_diagnostics.weight_sensitivity":
-        return "ranking_weight_sensitivity_csv"
-    if field_name == "ranking_diagnostics.summary":
-        return "ranking_diagnostics_summary"
-    if field_name == "ranking_diagnostics.historical_top20_diagnostic":
-        return "ranking_diagnostics"
-    raise ValueError(f"unsupported report field trace definition: {field_name}")
-
-
-def _report_field_record_key_fields(field_name: str) -> list[str]:
-    if field_name in _DECISION_FIELDS:
-        return ["user_id", "video_id", "time_step"]
-    if field_name == "provider_failure_type":
-        return ["user_id", "video_id", "time_step"]
-    if field_name in _OUTCOME_FIELDS:
-        return ["user_id"]
-    if field_name in _USER_RANKING_FIELDS or field_name.startswith("ranking_rounds.candidates."):
-        return ["user_id", "time_step"]
-    if field_name in _SAMPLE_RUNTIME_FIELDS or field_name in _REPORT_LINK_FIELDS:
-        return ["user_id"]
-    if field_name in _DIAGNOSTIC_FIELDS:
-        return ["user_id", "time_step"] if field_name != "ranking_diagnostics.summary" else ["user_id"]
-    if field_name.startswith("target_video."):
-        return ["video_id"]
-    if field_name.startswith("ranking_rounds."):
-        return ["time_step"]
-    if field_name.startswith(("run.", "sample_comparison.")):
-        return ["sampling_method"]
-    return []
-
-
-def _report_field_source_fields(field_name: str) -> list[str]:
-    if field_name in _DECISION_FIELDS:
-        return ["action", "engage", "probability", "reason", "confidence", "decision_source"]
-    if field_name == "provider_failure_type":
-        return ["failure_type"]
-    if field_name in _OUTCOME_FIELDS:
-        return ["exposure_time_step", "ranking_position", "result_status", "provider_status"]
-    if field_name in _USER_RANKING_FIELDS or field_name.startswith("ranking_rounds.candidates."):
-        return [
-            "ranking_position",
-            "base_network_relevance",
-            "engaged_neighbor_count",
-            "engaged_neighbor_signal",
-            "historical_tag_affinity",
-            "recommendation_score",
-            "selected",
-        ]
-    if field_name in _DIAGNOSTIC_FIELDS:
-        return ["user_id", "time_step", field_name.split(".")[-1]]
-    return [field_name.split(".")[-1]]
-
-
-def _report_field_transformation(field_name: str) -> tuple[str, str]:
+@cache
+def _report_field_spec(field_name: str) -> _ReportFieldSpec:
+    token = field_name.rsplit(".", 1)[-1]
+    value_range = (
+        "true 或 false；未产生 Decision 时可 unavailable。"
+        if field_name in {"engage", "selected_for_exposure", "in_base_sample", "is_seed", "is_network_cohort"}
+        else "0.0 到 1.0；未产生成功 Decision 时 unavailable。"
+        if field_name in {"probability", "confidence"}
+        else "大于或等于 0 的整数；不适用时 unavailable。"
+        if field_name.endswith(("position", "time_step", "count", "capacity"))
+        else "由对应 persisted artifact schema 约束。"
+    )
+    common_interpretation = "该值按 catalog 声明的阶段解释，不自动成为 LLM Prompt 输入。"
+    common_limitations = ("只引用本次 run 的 allowlisted persisted evidence。",)
     if field_name == "action":
-        return (
+        return _ReportFieldSpec(
+            "runtime_decisions",
+            ("user_id", "video_id", "time_step"),
+            ("action", "engage", "probability", "reason", "confidence", "decision_source"),
             "structured_decision_and_direct_neighbor_feedback_v1",
             "保留同一次结构化 Decision 的 action；like/comment/share 只对下一轮仍 eligible 的直接邻居形成排序信号，ignore 不传播。",
+            value_range,
+            "该值只描述本次 Recommendation Opportunity 的结构化决策或 Provider 结果。",
+            (
+                "只引用本次 run 的 allowlisted persisted evidence。",
+                "同批 action 不互相影响；只有下一批仍 eligible 的直接邻居可能获得动态信号。",
+                "不保存原始 Prompt、Provider request/response 或异常消息。",
+            ),
         )
     if field_name in _DECISION_FIELDS:
-        return "structured_decision_v1", "从同一次 Recommendation Opportunity 的安全结构化 Decision 原样投影。"
+        return _ReportFieldSpec(
+            "runtime_decisions",
+            ("user_id", "video_id", "time_step"),
+            ("action", "engage", "probability", "reason", "confidence", "decision_source"),
+            "structured_decision_v1",
+            "从同一次 Recommendation Opportunity 的安全结构化 Decision 原样投影。",
+            value_range,
+            "该值只描述本次 Recommendation Opportunity 的结构化决策或 Provider 结果。",
+            (
+                "只引用本次 run 的 allowlisted persisted evidence。",
+                "不保存原始 Prompt、Provider request/response 或异常消息。",
+            ),
+        )
     if field_name == "provider_failure_type":
-        return "provider_failure_classification_v1", "仅保留稳定失败类型，不保存异常消息或 Provider Payload。"
+        return _ReportFieldSpec(
+            "runtime_provider_failures",
+            ("user_id", "video_id", "time_step"),
+            ("failure_type",),
+            "provider_failure_classification_v1",
+            "仅保留稳定失败类型，不保存异常消息或 Provider Payload。",
+            value_range,
+            "该值只描述本次 Recommendation Opportunity 的结构化决策或 Provider 结果。",
+            (
+                "只引用本次 run 的 allowlisted persisted evidence。",
+                "不保存原始 Prompt、Provider request/response 或异常消息。",
+            ),
+        )
     if field_name in _OUTCOME_FIELDS:
-        return "target_delivery_outcome_v1", "从每用户唯一的 persisted ranking outcome 记录投影。"
+        interpretation = (
+            "below_delivery_capacity 表示未曝光；ignore 表示曝光后不互动，两者不可互换。"
+            if field_name == "result_status"
+            else "该值只描述本次 Recommendation Opportunity 的结构化决策或 Provider 结果。"
+            if field_name == "provider_status"
+            else common_interpretation
+        )
+        return _ReportFieldSpec(
+            "ranking_runtime_outcomes",
+            ("user_id",),
+            ("exposure_time_step", "ranking_position", "result_status", "provider_status"),
+            "target_delivery_outcome_v1",
+            "从每用户唯一的 persisted ranking outcome 记录投影。",
+            value_range,
+            str(interpretation),
+            common_limitations,
+        )
     if field_name in _USER_RANKING_FIELDS or field_name.startswith("ranking_rounds.candidates."):
-        return (
+        return _ReportFieldSpec(
+            "ranking_runtime_candidates",
+            ("user_id", "time_step"),
+            (
+                "ranking_position",
+                "base_network_relevance",
+                "engaged_neighbor_count",
+                "engaged_neighbor_signal",
+                "historical_tag_affinity",
+                "recommendation_score",
+                "selected",
+            ),
             "global_reranking_candidate_evidence_v1",
             "使用同一 Batch 的冻结 candidate components 全局排序；相同 score 以 user_id 稳定打破并列。",
+            value_range,
+            common_interpretation,
+            common_limitations,
         )
-    if field_name in _DIAGNOSTIC_FIELDS:
-        return "same_run_ranking_diagnostic_v1", "只引用本次 run 基于 persisted candidate evidence 生成的 diagnostics。"
     if field_name in _SAMPLE_RUNTIME_FIELDS:
-        return "seed_first_sample_membership_v1", "从本次 Seed-First sample audit 的互斥角色与成员记录投影。"
+        return _ReportFieldSpec(
+            "seed_first_sample_audit",
+            ("user_id",),
+            (token,),
+            "seed_first_sample_membership_v1",
+            "从本次 Seed-First sample audit 的互斥角色与成员记录投影。",
+            value_range,
+            common_interpretation,
+            common_limitations,
+        )
     if field_name in _REPORT_LINK_FIELDS:
-        return "report_artifact_link_v1", "由本次 manifest 登记的相对 artifact 路径生成。"
-    return "persisted_report_projection_v1", "从本次 run 的 allowlisted persisted artifact 原样或确定性投影。"
-
-
-def _report_field_value_range(field_name: str) -> str:
-    if field_name in {"engage", "selected_for_exposure", "in_base_sample", "is_seed", "is_network_cohort"}:
-        return "true 或 false；未产生 Decision 时可 unavailable。"
-    if field_name in {"probability", "confidence"}:
-        return "0.0 到 1.0；未产生成功 Decision 时 unavailable。"
-    if field_name.endswith(("position", "time_step", "count", "capacity")):
-        return "大于或等于 0 的整数；不适用时 unavailable。"
-    return "由对应 persisted artifact schema 约束。"
-
-
-def _report_field_interpretation(field_name: str) -> str:
-    if field_name == "result_status":
-        return "below_delivery_capacity 表示未曝光；ignore 表示曝光后不互动，两者不可互换。"
-    if field_name in _DECISION_FIELDS or field_name in {"provider_status", "provider_failure_type"}:
-        return "该值只描述本次 Recommendation Opportunity 的结构化决策或 Provider 结果。"
-    if field_name.startswith("ranking_diagnostics."):
-        return "诊断只解释本次 persisted run，不构成真实平台因果或准确率结论。"
-    return "该值按 catalog 声明的阶段解释，不自动成为 LLM Prompt 输入。"
-
-
-def _report_field_limitations(field_name: str) -> list[str]:
-    limitations = ["只引用本次 run 的 allowlisted persisted evidence。"]
-    if field_name.startswith("ranking_diagnostics."):
-        limitations.append("不得复用其他 run 的 rank delta、Top20 或 action 结果。")
-    if field_name == "action":
-        limitations.append("同批 action 不互相影响；只有下一批仍 eligible 的直接邻居可能获得动态信号。")
-    if field_name in _DECISION_FIELDS or field_name == "provider_failure_type":
-        limitations.append("不保存原始 Prompt、Provider request/response 或异常消息。")
-    return limitations
+        return _ReportFieldSpec(
+            "final_research_users_json",
+            ("user_id",),
+            (token,),
+            "report_artifact_link_v1",
+            "由本次 manifest 登记的相对 artifact 路径生成。",
+            value_range,
+            common_interpretation,
+            common_limitations,
+        )
+    diagnostic_specs = {
+        "ranking_diagnostics.paired_ablation": (
+            "ranking_ablation_diagnostics_csv",
+            ("user_id", "time_step"),
+            ("user_id", "time_step", "paired_ablation"),
+        ),
+        "ranking_diagnostics.weight_sensitivity": (
+            "ranking_weight_sensitivity_csv",
+            ("variant_id", "time_step"),
+            ("variant_id", "time_step", "weight_sensitivity"),
+        ),
+        "ranking_diagnostics.historical_top20_diagnostic": (
+            "ranking_diagnostics",
+            ("schema_version", "section"),
+            ("schema_version", "historical_top20_diagnostic"),
+        ),
+        "ranking_diagnostics.summary": (
+            "ranking_diagnostics_summary",
+            ("schema_version",),
+            ("schema_version", "summary"),
+        ),
+    }
+    if field_name in diagnostic_specs:
+        artifact_id, record_key_fields, source_fields = diagnostic_specs[field_name]
+        return _ReportFieldSpec(
+            artifact_id,
+            record_key_fields,
+            source_fields,
+            "same_run_ranking_diagnostic_v1",
+            "只引用本次 run 基于 persisted candidate evidence 生成的 diagnostics。",
+            value_range,
+            "诊断只解释本次 persisted run，不构成真实平台因果或准确率结论。",
+            (
+                "只引用本次 run 的 allowlisted persisted evidence。",
+                "不得复用其他 run 的 rank delta、Top20 或 action 结果。",
+            ),
+        )
+    if field_name.startswith("target_video."):
+        artifact_id, record_key_fields = "target_video_snapshot", ("video_id",)
+    elif field_name.startswith("run."):
+        artifact_id, record_key_fields = "ranking_runtime_summary", ("sampling_method",)
+    elif field_name.startswith("sample_comparison."):
+        artifact_id, record_key_fields = "seed_first_sample_audit", ("sampling_method",)
+    elif field_name.startswith("ranking_rounds."):
+        artifact_id, record_key_fields = "ranking_runtime_steps", ("time_step",)
+    else:
+        raise ValueError(f"unsupported report field trace definition: {field_name}")
+    return _ReportFieldSpec(
+        artifact_id,
+        record_key_fields,
+        (token,),
+        "persisted_report_projection_v1",
+        "从本次 run 的 allowlisted persisted artifact 原样或确定性投影。",
+        value_range,
+        common_interpretation,
+        common_limitations,
+    )
 
 
 def _report_field_trace(
@@ -865,7 +980,7 @@ def _report_field_trace(
     field_name = definition.field_name
     value = user.get(field_name)
     value_status = field_value_status(value) if field_name in user else "unavailable"
-    artifact_id = _report_field_artifact_id(field_name)
+    artifact_id = _report_field_spec(field_name).artifact_id
     if field_name in _DECISION_FIELDS and value_status != "present":
         artifact_id = "ranking_runtime_outcomes"
     if field_name == "provider_failure_type" and value_status != "present":
@@ -892,9 +1007,18 @@ def _report_field_trace(
         propagation = user.get("action_propagation_evidence")
         if isinstance(propagation, Mapping):
             evidence = [FieldEvidenceReference.model_validate(dict(propagation))]
-    actual_usage_stages = list(definition.declared_usage_stages)
-    if field_name == "action" and value not in {"like", "comment", "share"}:
-        actual_usage_stages = ["Report Only"]
+    actual_usage_stages: list[FieldUsageStage] = list(definition.declared_usage_stages)
+    if field_name == "action":
+        affected_count = next(
+            (
+                int(item.split("=", 1)[1])
+                for item in evidence[0].matched_values
+                if item.startswith("affected_direct_neighbor_count=")
+            ),
+            0,
+        )
+        if value not in {"like", "comment", "share"} or affected_count == 0:
+            actual_usage_stages = ["Report Only"]
     return UserFieldTrace(
         user_id=user_id,
         field_name=field_name,
@@ -913,7 +1037,16 @@ def _report_field_record_key(
     user: Mapping[str, object],
     artifact_id: str | None = None,
 ) -> dict[str, str | int]:
-    fields = ["user_id"] if artifact_id == "ranking_runtime_outcomes" else _report_field_record_key_fields(field_name)
+    if field_name == "ranking_diagnostics.weight_sensitivity":
+        return {
+            "variant_id": "main_50_30_20",
+            "time_step": _integer_value(user.get("latest_ranking_time_step")),
+        }
+    if field_name == "ranking_diagnostics.historical_top20_diagnostic":
+        return {"schema_version": "ranking-diagnostics-v1", "section": "historical_top20_diagnostic"}
+    if field_name == "ranking_diagnostics.summary":
+        return {"schema_version": "ranking-diagnostics-summary-v1"}
+    fields = ["user_id"] if artifact_id == "ranking_runtime_outcomes" else _report_field_spec(field_name).record_key_fields
     key: dict[str, str | int] = {}
     for key_field in fields:
         if key_field == "user_id":

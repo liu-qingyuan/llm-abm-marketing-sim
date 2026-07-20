@@ -495,6 +495,7 @@ class _RankingRuntimeArtifacts:
     summary: dict[str, object]
     decision_adapter_calls: int
     prompt_field_inclusion_by_user: dict[str, dict[str, PromptFieldInclusion]]
+    feedback_evidence_by_user: dict[str, dict[str, object]]
 
 
 @dataclass(frozen=True)
@@ -1455,10 +1456,9 @@ class FinalResearchRunner:
                 derived_proxy_inputs_by_user={
                     user.user_id: prepared.derived_proxy_inputs_by_user[user.user_id] for user in sample_users
                 },
-                target_scope_neighbors={
-                    user.user_id: set(prepared.target_scope_neighbors.get(user.user_id, set()))
-                    for user in sample_users
-                },
+                runtime_feedback_evidence_by_user=(
+                    ranking_runtime.feedback_evidence_by_user if ranking_runtime is not None else {}
+                ),
                 prompt_field_inclusion_by_user=(
                     ranking_runtime.prompt_field_inclusion_by_user if ranking_runtime is not None else {}
                 ),
@@ -1515,6 +1515,7 @@ class FinalResearchRunner:
         provider_failure_rows: list[dict[str, object]] = []
         outcomes_by_user: dict[str, dict[str, object]] = {}
         prompt_field_inclusion_by_user: dict[str, dict[str, PromptFieldInclusion]] = {}
+        feedback_evidence_by_user: dict[str, dict[str, object]] = {}
         step_rows: list[dict[str, object]] = []
         decision_adapter_calls = 0
         schedule_position = 0
@@ -1553,6 +1554,7 @@ class FinalResearchRunner:
             step_engagements = 0
             step_ignored = 0
             step_provider_failed = 0
+            step_action_start = len(action_rows)
             for candidate in selected_candidates:
                 user_id = candidate.user_id
                 user = prepared.users_by_id[user_id]
@@ -1617,6 +1619,28 @@ class FinalResearchRunner:
                 schedule_position += 1
 
             eligible_user_ids.difference_update(selected_user_ids)
+            for action_row in action_rows[step_action_start:]:
+                action_user_id = str(action_row["user_id"])
+                action = str(action_row["action"])
+                affected_neighbors = sorted(
+                    prepared.target_scope_neighbors.get(action_user_id, set()) & eligible_user_ids
+                    if action in {"like", "comment", "share"}
+                    else set()
+                )
+                feedback_evidence_by_user[action_user_id] = _runtime_feedback_evidence(
+                    user_id=action_user_id,
+                    time_step=time_step,
+                    action=action,
+                    affected_neighbor_user_ids=affected_neighbors,
+                )
+            for user_id in selected_user_ids - set(feedback_evidence_by_user):
+                feedback_evidence_by_user[user_id] = _runtime_feedback_evidence(
+                    user_id=user_id,
+                    time_step=time_step,
+                    action="",
+                    affected_neighbor_user_ids=[],
+                    evidence_kind="provider_failure_no_action",
+                )
             for user_id in pending_target_exposures:
                 platform.record_target_exposure(user_id)
             for user_id, action in pending_engagements:
@@ -1648,6 +1672,13 @@ class FinalResearchRunner:
                 "result_status": "below_delivery_capacity",
                 "provider_status": "not_called",
             }
+            feedback_evidence_by_user[user_id] = _runtime_feedback_evidence(
+                user_id=user_id,
+                time_step=-1,
+                action="",
+                affected_neighbor_user_ids=[],
+                evidence_kind="not_exposed_no_action",
+            )
         outcomes = [outcomes_by_user[user_id] for user_id in prepared.sample_user_ids]
         summary = {
             "runtime_version": TARGET_DELIVERY_RUNTIME_VERSION,
@@ -1694,6 +1725,7 @@ class FinalResearchRunner:
             summary=summary,
             decision_adapter_calls=decision_adapter_calls,
             prompt_field_inclusion_by_user=prompt_field_inclusion_by_user,
+            feedback_evidence_by_user=feedback_evidence_by_user,
         )
 
     def _run_runtime(
@@ -1943,6 +1975,39 @@ def _runtime_decision_rows(
         "action": decision.action,
     }
     return decision_row, action_row
+
+
+def _runtime_feedback_evidence(
+    *,
+    user_id: str,
+    time_step: int,
+    action: str,
+    affected_neighbor_user_ids: Sequence[str],
+    evidence_kind: str | None = None,
+) -> dict[str, object]:
+    next_time_step = time_step + 1 if time_step >= 0 else None
+    matched_values = [
+        f"action={action or 'unavailable'}",
+        f"affected_direct_neighbor_count={len(affected_neighbor_user_ids)}",
+    ]
+    if next_time_step is not None:
+        matched_values.append(f"next_time_step={next_time_step}")
+    if action in {"like", "comment", "share"}:
+        matched_values.append(
+            "affected_direct_neighbor_user_ids="
+            + json.dumps(list(affected_neighbor_user_ids), ensure_ascii=False, separators=(",", ":"))
+        )
+    return {
+        "evidence_kind": evidence_kind
+        or (
+            "next_batch_direct_neighbor_signal"
+            if action in {"like", "comment", "share"}
+            else "no_propagation_action"
+        ),
+        "record_key": {"user_id": user_id, "time_step": time_step},
+        "source_fields": ["action", "next_time_step", "affected_direct_neighbor_user_ids"],
+        "matched_values": matched_values,
+    }
 
 
 def _fixed_batch_assignments(

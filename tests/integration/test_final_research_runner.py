@@ -605,9 +605,16 @@ class _RecordingAdapter(LLMDecisionAdapter):
 
 
 class _TargetDeliveryAdapter(LLMDecisionAdapter):
-    def __init__(self, *, failed_user_id: str | None = None, mark_live_api_triggered: bool = False) -> None:
+    def __init__(
+        self,
+        *,
+        failed_user_id: str | None = None,
+        mark_live_api_triggered: bool = False,
+        engage_all: bool = False,
+    ) -> None:
         self.failed_user_id = failed_user_id
         self.mark_live_api_triggered = mark_live_api_triggered
+        self.engage_all = engage_all
         self.live_api_triggered = False
         self.calls: list[dict[str, object]] = []
 
@@ -641,7 +648,7 @@ class _TargetDeliveryAdapter(LLMDecisionAdapter):
         )
         if profile.user_id == self.failed_user_id:
             raise ProviderDecisionError(TimeoutError("mocked exhausted provider failure"))
-        if profile.user_id == "u80":
+        if self.engage_all or profile.user_id == "u80":
             return EngageDecision(
                 engage=True,
                 probability=0.9,
@@ -1269,6 +1276,11 @@ def test_target_delivery_ranking_runtime_caps_delivery_and_marks_final_below_cap
     assert below_traces["result_status"]["source_record_locator"]["artifact_id"] == "ranking_runtime_outcomes"
     assert below_traces["action"]["evidence"][0]["evidence_kind"] == "not_exposed_no_action"
     assert below_traces["action"]["source_record_locator"]["artifact_id"] == "ranking_runtime_outcomes"
+    assert below_traces["action"]["actual_usage_stages"] == ["Report Only"]
+    assert below_traces["action"]["evidence"][0]["matched_values"] == [
+        "action=unavailable",
+        "affected_direct_neighbor_count=0",
+    ]
 
 
 def test_target_delivery_ranking_v4_persists_interest_and_historical_field_traces(tmp_path: Path) -> None:
@@ -1305,7 +1317,7 @@ def test_target_delivery_ranking_v4_persists_interest_and_historical_field_trace
     expected_trace_fields = {
         field_name
         for field_name, definition in catalog_by_field.items()
-        if "user_id" in definition["record_key_fields"]
+        if "user_id" in definition["record_key_fields"] or field_name.startswith("ranking_diagnostics.")
     }
     assert set(catalog_by_field) == expected_catalog_fields
     assert {entry["provenance"] for entry in payload["field_lineage_catalog"]} == {
@@ -1367,6 +1379,10 @@ def test_target_delivery_ranking_v4_persists_interest_and_historical_field_trace
     assert u1_traces["ranking_diagnostics.paired_ablation"]["source_record_locator"][
         "artifact_id"
     ] == "ranking_ablation_diagnostics_csv"
+    assert u1_traces["ranking_diagnostics.paired_ablation"]["source_record_locator"]["record_key"] == {
+        "time_step": 0,
+        "user_id": "u1",
+    }
     assert u1_traces["ranking_diagnostics.paired_ablation"]["evidence"][0]["matched_values"] == [
         "user_id=u1",
         "paired_ablation=True"
@@ -1374,6 +1390,19 @@ def test_target_delivery_ranking_v4_persists_interest_and_historical_field_trace
     assert u1_traces["ranking_diagnostics.summary"]["source_record_locator"]["artifact_id"] == (
         "ranking_diagnostics_summary"
     )
+    assert u1_traces["ranking_diagnostics.weight_sensitivity"]["source_record_locator"]["record_key"] == {
+        "time_step": 0,
+        "variant_id": "main_50_30_20",
+    }
+    assert u1_traces["ranking_diagnostics.historical_top20_diagnostic"]["source_record_locator"][
+        "record_key"
+    ] == {
+        "schema_version": "ranking-diagnostics-v1",
+        "section": "historical_top20_diagnostic",
+    }
+    assert u1_traces["ranking_diagnostics.summary"]["source_record_locator"]["record_key"] == {
+        "schema_version": "ranking-diagnostics-summary-v1"
+    }
 
     u2_traces = {trace["field_name"]: trace for trace in payload["user_field_trace_index"]["u2"]}
     assert u2_traces["interest_tags"]["value_status"] == "empty"
@@ -1462,6 +1491,40 @@ def test_target_delivery_trace_records_feedback_and_provider_failure_from_the_sa
     assert failed["provider_failure_type"]["value_status"] == "present"
     assert failed["action"]["value_status"] == "empty"
     assert failed["action"]["source_record_locator"]["artifact_id"] == "ranking_runtime_outcomes"
+    assert failed["action"]["evidence"][0]["evidence_kind"] == "provider_failure_no_action"
+    assert failed["action"]["actual_usage_stages"] == ["Report Only"]
+    failed_evidence = failed["action"]["evidence"][0]
+    assert "action=unavailable" in failed_evidence["matched_values"]
+    assert "affected_direct_neighbor_count=0" in failed_evidence["matched_values"]
+    assert f"next_time_step={failed_evidence['record_key']['time_step'] + 1}" in failed_evidence["matched_values"]
+
+
+def test_target_delivery_trace_does_not_claim_ranking_usage_without_affected_neighbors(tmp_path: Path) -> None:
+    dataset_dir = _make_target_delivery_fixture(tmp_path)
+    provider_config = ProviderLLMConfig(enabled=True, model="mock-model", require_live_env=False)
+    run_dir = FinalResearchRunner(
+        FinalResearchConfig(dataset_dir=dataset_dir, sample_size=70, provider=provider_config),
+        _TargetDeliveryAdapter(engage_all=True),
+    ).run_and_write(tmp_path / "ranking-runtime-final-batch-trace")
+
+    payload = json.loads((run_dir / "final_research_report_payload.json").read_text(encoding="utf-8"))
+    final_time_step = max(
+        user["exposure_time_step"] for user in payload["users"] if user["exposure_time_step"] is not None
+    )
+    final_batch_user = next(
+        user for user in payload["users"] if user["exposure_time_step"] == final_time_step
+    )
+    action_trace = next(
+        trace
+        for trace in payload["user_field_trace_index"][final_batch_user["user_id"]]
+        if trace["field_name"] == "action"
+    )
+
+    assert final_batch_user["action"] == "like"
+    assert action_trace["evidence"][0]["evidence_kind"] == "next_batch_direct_neighbor_signal"
+    assert "affected_direct_neighbor_count=0" in action_trace["evidence"][0]["matched_values"]
+    assert "affected_direct_neighbor_user_ids=[]" in action_trace["evidence"][0]["matched_values"]
+    assert action_trace["actual_usage_stages"] == ["Report Only"]
 
 
 def test_probability_runtime_persists_probability_formal_status_after_adapter_call(tmp_path: Path) -> None:

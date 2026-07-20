@@ -10,14 +10,15 @@
 - Prompt audit 为 `not_allowlisted=62,000`、`not_exposed=5,200`、`not_rendered=7,200`、`empty_omitted=600`。ranking、网络和 diagnostics evidence 没有进入 Decision Adapter Prompt。
 - 本次 `RuleBasedDecisionAdapter` 的 600 次 Decision 全部为 `ignore`，trace 如实记录 `no_propagation_action=600`；400 位 `below_delivery_capacity` 用户记录 `not_exposed_no_action`，没有从方法投影补造 runtime 结果。`like/comment/share` 的下一批直接邻居信号由 deterministic integration fixture 验证。
 - paired ablation、weight sensitivity、Historical Top20 和 summary 全部定位本次 run 的 diagnostics artifacts；rebuild 会校验 runtime、diagnostics 与复合 locator 后再发布报告。
+- runtime 持久化层直接记录传播反馈，report writer 只消费该 evidence；成功 action 只有实际影响下一批 eligible 直接邻居时才把 `Ranking` 列为 Actual Usage，provider failure、未曝光和零影响成功 action 均不会虚报排序用途。
 
 ## 验证输出
 
-- Run directory：`runs/jinjiang-runtime-trace-mock-validation-20260720T120534Z/`
+- Run directory：`runs/jinjiang-runtime-trace-mock-validation-20260720T123453Z/`
 - 报告：`report.html`
-- Report SHA-256：`a0bbc16e2b69f35c4c0bc82b0c768c4a4d1f5f7cdde49f55ad0417d4e787787b`
-- Catalog SHA-256：`8d6d4edf4f06b140cb77eae3ecd3f4e9aba2c4b8e51e30059a1c6c9acc0d3097`
-- Trace SHA-256：`f1ec5f8849d19d2029c3faf3615c6afccae617608bd9867ff3168c463b14a690`
+- Report SHA-256：`196589dd8c401841a36e8e2b7f1232aab4a3d1b95c4c8d9ee845908c6eb32f26`
+- Catalog SHA-256：`e5c8eb2896b1486a89fedbde62f14b56975583db4f318f02293d337265f356a5`
+- Trace SHA-256：`6275d075e66afb8b595f5db39ab685903199bc9029858c2580174ac730de3225`
 - Sampling：`seed_first_research_sample_v1` / `validation_run`
 - 角色：20 seed、60 network cohort、920 ordinary；600 次本地 deterministic Decision，400 位 `below_delivery_capacity`
 
@@ -27,15 +28,14 @@
 
 ```bash
 . .venv/bin/activate
-pytest -q tests/unit/test_field_lineage_trace.py
-pytest -q tests/integration/test_final_research_runner.py
+pytest -q
 mypy --python-version 3.12 src/llm_abm_sim
-npx playwright test tests/playwright/final-research-ranking-report.spec.ts --grep "user drawer expands v4 field traces"
+npx playwright test tests/playwright/final-research-ranking-report.spec.ts
 python -m py_compile $(find src tests scripts -name '*.py' -print)
 ruff check src/llm_abm_sim/data_sources tests scripts src/llm_abm_sim
 ```
 
-最终结果：完整 Python suite 为 `287 passed, 2 deselected`；ranking report Playwright 为 `16 passed, 1 skipped`，跳过项仅为未设置 `FINAL_RESEARCH_FORMAL_RUN_DIR` 的既有 formal run 验收；ruff、Python 编译和 mypy 均通过。桌面与 laptop 截图已检查，无横向溢出或 incoherent overlap。
+最终结果：完整 Python suite 为 `288 passed, 2 deselected`；ranking report Playwright 为 `16 passed, 1 skipped`，跳过项仅为未设置 `FINAL_RESEARCH_FORMAL_RUN_DIR` 的既有 formal run 验收；ruff、Python 编译和 mypy 均通过。Playwright 已覆盖成功传播、provider failure 和 `below_delivery_capacity` 的 drawer trace；桌面与 laptop 检查无横向溢出或 incoherent overlap。
 
 ## 边界与风险
 

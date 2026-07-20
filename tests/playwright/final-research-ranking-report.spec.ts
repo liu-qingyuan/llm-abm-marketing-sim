@@ -798,6 +798,9 @@ async function assertRankingReport(
   await page.getByTestId('user-table').locator('tbody tr').click();
   await expect(page.getByTestId('user-detail')).toContainText(failedUser?.user_id ?? '');
   await expect(page.getByTestId('user-detail')).toContainText('（Provider 失败类型）');
+  await evidenceDrawer.getByTestId('user-field-trace-action').click();
+  await expect(evidenceDrawer.getByTestId('user-field-trace-detail')).toContainText('provider_failure_no_action');
+  await expect(evidenceDrawer.getByTestId('user-field-trace-detail')).toContainText('affected_direct_neighbor_count=0');
   for (const group of ['直接观测', '历史行为', '派生代理', '合成标签', '样本与 ranking', '曝光与 provider', '最终 action']) {
     await expect(page.getByTestId('user-detail')).toContainText(group);
   }
@@ -833,6 +836,9 @@ async function assertRankingReport(
   await expect(page.getByTestId('user-table').locator('tbody tr').first()).toContainText('below_delivery_capacity');
   await page.getByTestId('user-table').locator('tbody tr').first().click();
   expect(await page.getByTestId('ranking-history-table').locator('tbody tr').count()).toBeGreaterThan(1);
+  await evidenceDrawer.getByTestId('user-field-trace-action').click();
+  await expect(evidenceDrawer.getByTestId('user-field-trace-detail')).toContainText('not_exposed_no_action');
+  await expect(evidenceDrawer.getByTestId('user-field-trace-detail')).toContainText('Report Only（仅报告）');
   await evidenceDrawer.getByRole('button', { name: '关闭详情' }).click();
   await page.getByTestId('result-filter').selectOption('');
   await page.getByTestId('scope-filter').selectOption(users[0].sample_source_scope);
@@ -1904,6 +1910,19 @@ test('user drawer expands v4 field traces with keyboard focus restoration', asyn
   await page.keyboard.press('Escape');
   await expect(drawer).toBeHidden();
   await expect(nonEmptyUserRow).toBeFocused();
+
+  await page.getByTestId('user-search').fill('u80');
+  const engagedUserId = page.locator('.profile-id').filter({ hasText: /^u80$/ });
+  const engagedUserRow = page.getByTestId('user-table').locator('tbody tr').filter({ has: engagedUserId });
+  await engagedUserRow.click();
+  await drawer.getByTestId('user-field-trace-action').click();
+  await expect(detail).toContainText('next_batch_direct_neighbor_signal');
+  await expect(detail).toContainText('affected_direct_neighbor_user_ids=');
+  await expect(detail).toContainText('Ranking（排序）');
+
+  await page.keyboard.press('Escape');
+  await expect(drawer).toBeHidden();
+  await expect(engagedUserRow).toBeFocused();
 });
 
 test('configured formal ranking run preserves payload-derived evidence on desktop', async ({ page }, testInfo) => {
