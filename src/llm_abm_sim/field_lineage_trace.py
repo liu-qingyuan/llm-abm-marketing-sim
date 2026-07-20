@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from collections import Counter
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
@@ -334,6 +335,7 @@ class _ReportFieldSpec:
     value_range: str
     interpretation: str
     limitations: tuple[str, ...]
+    record_key_defaults: tuple[tuple[str, str | int], ...] = ()
 
 
 class SourceRecordLocator(BaseModel):
@@ -351,6 +353,71 @@ class FieldEvidenceReference(BaseModel):
     record_key: dict[str, str | int]
     source_fields: list[str]
     matched_values: list[str]
+
+
+RuntimeFeedbackKind = Literal[
+    "next_batch_direct_neighbor_signal",
+    "no_eligible_direct_neighbor_signal",
+    "no_next_batch_signal",
+    "no_propagation_action",
+    "provider_failure_no_action",
+    "not_exposed_no_action",
+]
+
+
+class RuntimeFeedbackEvidence(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    evidence_kind: RuntimeFeedbackKind
+    user_id: str
+    time_step: int
+    action: Literal["", "like", "comment", "share", "ignore"]
+    next_time_step: int | None
+    affected_direct_neighbor_user_ids: list[str]
+
+    @model_validator(mode="after")
+    def _validate_feedback_semantics(self) -> RuntimeFeedbackEvidence:
+        engaging = self.action in {"like", "comment", "share"}
+        if self.affected_direct_neighbor_user_ids != sorted(set(self.affected_direct_neighbor_user_ids)):
+            raise ValueError("runtime feedback affected user ids must be unique and sorted")
+        if self.evidence_kind == "next_batch_direct_neighbor_signal":
+            if not engaging or self.next_time_step is None or not self.affected_direct_neighbor_user_ids:
+                raise ValueError("next-batch feedback requires an engaging action, batch, and affected users")
+        elif self.evidence_kind == "no_eligible_direct_neighbor_signal":
+            if not engaging or self.next_time_step is None or self.affected_direct_neighbor_user_ids:
+                raise ValueError("no-eligible feedback requires an engaging action and empty next-batch impact")
+        elif self.evidence_kind == "no_next_batch_signal":
+            if not engaging or self.next_time_step is not None or self.affected_direct_neighbor_user_ids:
+                raise ValueError("no-next-batch feedback requires an engaging action without future impact")
+        elif self.evidence_kind == "no_propagation_action":
+            if self.action != "ignore" or self.affected_direct_neighbor_user_ids:
+                raise ValueError("no-propagation feedback requires ignore and no affected users")
+        elif self.action or self.affected_direct_neighbor_user_ids:
+            raise ValueError("missing-action feedback cannot contain an action or affected users")
+        return self
+
+    def as_field_evidence(self) -> FieldEvidenceReference:
+        matched_values = [
+            f"action={self.action or 'unavailable'}",
+            f"affected_direct_neighbor_count={len(self.affected_direct_neighbor_user_ids)}",
+        ]
+        if self.next_time_step is not None:
+            matched_values.append(f"next_time_step={self.next_time_step}")
+        if self.action in {"like", "comment", "share"}:
+            matched_values.append(
+                "affected_direct_neighbor_user_ids="
+                + json.dumps(
+                    self.affected_direct_neighbor_user_ids,
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                )
+            )
+        return FieldEvidenceReference(
+            evidence_kind=self.evidence_kind,
+            record_key={"user_id": self.user_id, "time_step": self.time_step},
+            source_fields=["action", "next_time_step", "affected_direct_neighbor_user_ids"],
+            matched_values=matched_values,
+        )
 
 
 class FieldLineageDefinition(BaseModel):
@@ -769,6 +836,10 @@ def is_user_field_trace_definition(definition: FieldLineageDefinition) -> bool:
     return "user_id" in definition.record_key_fields or definition.field_name in _DIAGNOSTIC_FIELDS
 
 
+def is_decision_trace_field(field_name: str) -> bool:
+    return field_name in _DECISION_FIELDS or field_name == "provider_failure_type"
+
+
 def _report_field_definition(entry: LineageEntry) -> FieldLineageDefinition:
     field_name = entry.field_name
     spec = _report_field_spec(field_name)
@@ -916,25 +987,32 @@ def _report_field_spec(field_name: str) -> _ReportFieldSpec:
             "ranking_ablation_diagnostics_csv",
             ("user_id", "time_step"),
             ("user_id", "time_step", "paired_ablation"),
+            (),
         ),
         "ranking_diagnostics.weight_sensitivity": (
             "ranking_weight_sensitivity_csv",
             ("variant_id", "time_step"),
             ("variant_id", "time_step", "weight_sensitivity"),
+            (("variant_id", "main_50_30_20"),),
         ),
         "ranking_diagnostics.historical_top20_diagnostic": (
             "ranking_diagnostics",
             ("schema_version", "section"),
             ("schema_version", "historical_top20_diagnostic"),
+            (
+                ("schema_version", "ranking-diagnostics-v1"),
+                ("section", "historical_top20_diagnostic"),
+            ),
         ),
         "ranking_diagnostics.summary": (
             "ranking_diagnostics_summary",
             ("schema_version",),
             ("schema_version", "summary"),
+            (("schema_version", "ranking-diagnostics-summary-v1"),),
         ),
     }
     if field_name in diagnostic_specs:
-        artifact_id, record_key_fields, source_fields = diagnostic_specs[field_name]
+        artifact_id, record_key_fields, source_fields, record_key_defaults = diagnostic_specs[field_name]
         return _ReportFieldSpec(
             artifact_id,
             record_key_fields,
@@ -947,6 +1025,7 @@ def _report_field_spec(field_name: str) -> _ReportFieldSpec:
                 "只引用本次 run 的 allowlisted persisted evidence。",
                 "不得复用其他 run 的 rank delta、Top20 或 action 结果。",
             ),
+            record_key_defaults,
         )
     if field_name.startswith("target_video."):
         artifact_id, record_key_fields = "target_video_snapshot", ("video_id",)
@@ -1003,21 +1082,27 @@ def _report_field_trace(
     if field_name == "provider_failure_type":
         evidence_values["failure_type"] = value
     evidence = field_trace_evidence(definition, evidence_values, locator)
+    if artifact_id == "ranking_runtime_outcomes" and is_decision_trace_field(field_name):
+        outcome_fields = [
+            source_field
+            for source_field in ("result_status", "provider_status")
+            if source_field in user
+        ]
+        evidence = [
+            FieldEvidenceReference(
+                evidence_kind="runtime_value_unavailable",
+                record_key=locator.record_key,
+                source_fields=outcome_fields,
+                matched_values=[f"{source_field}={user[source_field]}" for source_field in outcome_fields],
+            )
+        ]
     if field_name == "action":
         propagation = user.get("action_propagation_evidence")
         if isinstance(propagation, Mapping):
             evidence = [FieldEvidenceReference.model_validate(dict(propagation))]
     actual_usage_stages: list[FieldUsageStage] = list(definition.declared_usage_stages)
     if field_name == "action":
-        affected_count = next(
-            (
-                int(item.split("=", 1)[1])
-                for item in evidence[0].matched_values
-                if item.startswith("affected_direct_neighbor_count=")
-            ),
-            0,
-        )
-        if value not in {"like", "comment", "share"} or affected_count == 0:
+        if not evidence or evidence[0].evidence_kind != "next_batch_direct_neighbor_signal":
             actual_usage_stages = ["Report Only"]
     return UserFieldTrace(
         user_id=user_id,
@@ -1037,19 +1122,14 @@ def _report_field_record_key(
     user: Mapping[str, object],
     artifact_id: str | None = None,
 ) -> dict[str, str | int]:
-    if field_name == "ranking_diagnostics.weight_sensitivity":
-        return {
-            "variant_id": "main_50_30_20",
-            "time_step": _integer_value(user.get("latest_ranking_time_step")),
-        }
-    if field_name == "ranking_diagnostics.historical_top20_diagnostic":
-        return {"schema_version": "ranking-diagnostics-v1", "section": "historical_top20_diagnostic"}
-    if field_name == "ranking_diagnostics.summary":
-        return {"schema_version": "ranking-diagnostics-summary-v1"}
-    fields = ["user_id"] if artifact_id == "ranking_runtime_outcomes" else _report_field_spec(field_name).record_key_fields
+    spec = _report_field_spec(field_name)
+    fields = ["user_id"] if artifact_id == "ranking_runtime_outcomes" else spec.record_key_fields
+    defaults = dict(spec.record_key_defaults)
     key: dict[str, str | int] = {}
     for key_field in fields:
-        if key_field == "user_id":
+        if key_field in defaults:
+            key[key_field] = defaults[key_field]
+        elif key_field == "user_id":
             key[key_field] = user_id
         elif key_field == "time_step":
             key[key_field] = _integer_value(user.get("latest_ranking_time_step"))

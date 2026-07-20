@@ -1281,6 +1281,12 @@ def test_target_delivery_ranking_runtime_caps_delivery_and_marks_final_below_cap
         "action=unavailable",
         "affected_direct_neighbor_count=0",
     ]
+    for field_name in ("engage", "probability", "reason", "confidence", "decision_source"):
+        trace = below_traces[field_name]
+        assert trace["source_record_locator"]["artifact_id"] == "ranking_runtime_outcomes"
+        assert trace["evidence"][0]["evidence_kind"] == "runtime_value_unavailable"
+        assert "result_status=below_delivery_capacity" in trace["evidence"][0]["matched_values"]
+        assert "provider_status=not_called" in trace["evidence"][0]["matched_values"]
 
 
 def test_target_delivery_ranking_v4_persists_interest_and_historical_field_traces(tmp_path: Path) -> None:
@@ -1497,13 +1503,19 @@ def test_target_delivery_trace_records_feedback_and_provider_failure_from_the_sa
     assert "action=unavailable" in failed_evidence["matched_values"]
     assert "affected_direct_neighbor_count=0" in failed_evidence["matched_values"]
     assert f"next_time_step={failed_evidence['record_key']['time_step'] + 1}" in failed_evidence["matched_values"]
+    for field_name in ("engage", "probability", "reason", "confidence", "decision_source"):
+        trace = failed[field_name]
+        assert trace["source_record_locator"]["artifact_id"] == "ranking_runtime_outcomes"
+        assert trace["evidence"][0]["evidence_kind"] == "runtime_value_unavailable"
+        assert "result_status=provider_failed" in trace["evidence"][0]["matched_values"]
+        assert "provider_status=provider_failed" in trace["evidence"][0]["matched_values"]
 
 
 def test_target_delivery_trace_does_not_claim_ranking_usage_without_affected_neighbors(tmp_path: Path) -> None:
-    dataset_dir = _make_target_delivery_fixture(tmp_path)
+    dataset_dir = _make_processed_fixture(tmp_path, user_count=1010)
     provider_config = ProviderLLMConfig(enabled=True, model="mock-model", require_live_env=False)
     run_dir = FinalResearchRunner(
-        FinalResearchConfig(dataset_dir=dataset_dir, sample_size=70, provider=provider_config),
+        FinalResearchConfig(dataset_dir=dataset_dir, sample_size=1000, provider=provider_config),
         _TargetDeliveryAdapter(engage_all=True),
     ).run_and_write(tmp_path / "ranking-runtime-final-batch-trace")
 
@@ -1521,9 +1533,12 @@ def test_target_delivery_trace_does_not_claim_ranking_usage_without_affected_nei
     )
 
     assert final_batch_user["action"] == "like"
-    assert action_trace["evidence"][0]["evidence_kind"] == "next_batch_direct_neighbor_signal"
+    assert action_trace["evidence"][0]["evidence_kind"] == "no_next_batch_signal"
     assert "affected_direct_neighbor_count=0" in action_trace["evidence"][0]["matched_values"]
     assert "affected_direct_neighbor_user_ids=[]" in action_trace["evidence"][0]["matched_values"]
+    assert not any(
+        value.startswith("next_time_step=") for value in action_trace["evidence"][0]["matched_values"]
+    )
     assert action_trace["actual_usage_stages"] == ["Report Only"]
 
 

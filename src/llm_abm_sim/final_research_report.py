@@ -23,12 +23,14 @@ from .field_lineage_trace import (
     FieldLineageTraceSource,
     FieldSourceRecord,
     PromptInclusionStatus,
+    RuntimeFeedbackEvidence,
     SourceRecordLocator,
     UserFieldTrace,
     field_lineage_coverage_audit,
     field_lineage_definitions,
     field_trace_evidence,
     field_value_status,
+    is_decision_trace_field,
     is_user_field_trace_definition,
 )
 from .prompt_field_summary import JINJIANG_PROMPT_V2_PROFILE_FIELDS
@@ -803,7 +805,7 @@ class FinalResearchReportSource:
     ranking_diagnostics_summary: Mapping[str, object] | None = None
     ranking_runtime_summary: Mapping[str, object] | None = None
     derived_proxy_inputs_by_user: Mapping[str, Mapping[str, int | float]] = dataclass_field(default_factory=dict)
-    runtime_feedback_evidence_by_user: Mapping[str, Mapping[str, object]] = dataclass_field(default_factory=dict)
+    runtime_feedback_evidence_by_user: Mapping[str, RuntimeFeedbackEvidence] = dataclass_field(default_factory=dict)
 
 
 class FinalResearchReportWriter:
@@ -1058,7 +1060,7 @@ class FinalResearchReportWriter:
                     "ranking_diagnostics.weight_sensitivity": self.source.ranking_diagnostics is not None,
                     "ranking_diagnostics.historical_top20_diagnostic": self.source.ranking_diagnostics is not None,
                     "ranking_diagnostics.summary": self.source.ranking_diagnostics_summary is not None,
-                    "action_propagation_evidence": dict(propagation_evidence),
+                    "action_propagation_evidence": propagation_evidence.as_field_evidence().model_dump(mode="json"),
                 }
             )
             trace_users.append(user)
@@ -4095,6 +4097,13 @@ def _validate_ranking_rebuild_evidence(
                 definition = catalog_by_field[trace.field_name]
                 if artifacts.get(locator.artifact_id) != locator.relative_path:
                     raise ValueError(f"field trace locator does not match artifact manifest for {user_id}")
+                expected_key_fields = (
+                    {"user_id"}
+                    if locator.artifact_id == "ranking_runtime_outcomes" and is_decision_trace_field(trace.field_name)
+                    else set(definition.record_key_fields)
+                )
+                if set(locator.record_key) != expected_key_fields:
+                    raise ValueError(f"field trace locator has an invalid key shape for {user_id}")
                 if "user_id" in definition.record_key_fields and locator.record_key.get("user_id") != user_id:
                     raise ValueError(f"field trace locator has an invalid record key for {user_id}")
                 _validate_trace_locator_record(
@@ -4118,6 +4127,7 @@ def _validate_ranking_rebuild_evidence(
                         trace=trace,
                         payload_value=payload_value,
                         candidate_records_by_key=candidate_records_by_key,
+                        outcome_records_by_user=outcome_records_by_user,
                     )
                     continue
                 _validate_trace_source_value(
@@ -4544,15 +4554,11 @@ def _validate_trace_locator_record(
     sensitivity_records_by_key: Mapping[tuple[str, int], Mapping[str, object]],
 ) -> None:
     if locator.artifact_id == "ranking_runtime_candidates":
-        if set(locator.record_key) != {"user_id", "time_step"}:
-            raise ValueError(f"field trace locator has an invalid candidate key for {user_id}")
         time_step = _as_int(locator.record_key.get("time_step"))
         if (user_id, time_step) not in candidate_records_by_key:
             raise ValueError(f"field trace locator has no ranking candidate record for {user_id}")
         return
     if locator.artifact_id == "runtime_decisions":
-        if set(locator.record_key) != {"user_id", "video_id", "time_step"}:
-            raise ValueError(f"field trace locator has an invalid decision key for {user_id}")
         record = decision_records_by_user.get(user_id)
         if record is None or str(record.get("video_id", "")) != str(locator.record_key.get("video_id", "")):
             raise ValueError(f"field trace locator has no runtime decision record for {user_id}")
@@ -4560,8 +4566,6 @@ def _validate_trace_locator_record(
             raise ValueError(f"field trace locator has the wrong decision batch for {user_id}")
         return
     if locator.artifact_id == "runtime_provider_failures":
-        if set(locator.record_key) != {"user_id", "video_id", "time_step"}:
-            raise ValueError(f"field trace locator has an invalid provider failure key for {user_id}")
         record = failure_records_by_user.get(user_id)
         if record is None or str(record.get("video_id", "")) != str(locator.record_key.get("video_id", "")):
             raise ValueError(f"field trace locator has no provider failure record for {user_id}")
@@ -4569,15 +4573,11 @@ def _validate_trace_locator_record(
             raise ValueError(f"field trace locator has the wrong provider failure batch for {user_id}")
         return
     if locator.artifact_id == "ranking_ablation_diagnostics_csv":
-        if set(locator.record_key) != {"user_id", "time_step"}:
-            raise ValueError(f"field trace locator has an invalid ablation key for {user_id}")
         key = (user_id, _as_int(locator.record_key.get("time_step")))
         if key not in ablation_records_by_key:
             raise ValueError(f"field trace locator has no ranking ablation record for {user_id}")
         return
     if locator.artifact_id == "ranking_weight_sensitivity_csv":
-        if set(locator.record_key) != {"variant_id", "time_step"}:
-            raise ValueError(f"field trace locator has an invalid sensitivity key for {user_id}")
         key = (str(locator.record_key.get("variant_id", "")), _as_int(locator.record_key.get("time_step")))
         if key not in sensitivity_records_by_key:
             raise ValueError(f"field trace locator has no weight sensitivity batch for {user_id}")
@@ -4726,17 +4726,34 @@ def _validate_runtime_trace_evidence(
     trace: UserFieldTrace,
     payload_value: object,
     candidate_records_by_key: Mapping[tuple[str, int], Mapping[str, object]],
+    outcome_records_by_user: Mapping[str, Mapping[str, object]],
 ) -> None:
     if not trace.evidence and trace.field_name == "ranking_rounds.candidates.user_id":
         return
     if not trace.evidence:
         raise ValueError(f"runtime field trace has no evidence for {trace.user_id} {trace.field_name}")
+    if (
+        trace.field_name != "action"
+        and trace.source_record_locator.artifact_id == "ranking_runtime_outcomes"
+        and is_decision_trace_field(trace.field_name)
+    ):
+        evidence = trace.evidence[0]
+        outcome = outcome_records_by_user[trace.user_id]
+        if evidence.evidence_kind != "runtime_value_unavailable":
+            raise ValueError(f"unavailable runtime value has the wrong evidence kind for {trace.user_id}")
+        if any(f"{field}={outcome.get(field)}" not in evidence.matched_values for field in evidence.source_fields):
+            raise ValueError(f"unavailable runtime value does not match its outcome for {trace.user_id}")
+        return
     if trace.field_name != "action":
         return
     evidence = trace.evidence[0]
     action = str(payload_value or "")
     expected_kinds = (
-        {"next_batch_direct_neighbor_signal"}
+        {
+            "next_batch_direct_neighbor_signal",
+            "no_eligible_direct_neighbor_signal",
+            "no_next_batch_signal",
+        }
         if action in {"like", "comment", "share"}
         else {"no_propagation_action"}
         if action == "ignore"
@@ -4749,6 +4766,14 @@ def _validate_runtime_trace_evidence(
     if action not in {"like", "comment", "share"}:
         if "affected_direct_neighbor_count=0" not in evidence.matched_values:
             raise ValueError(f"non-propagating action has affected neighbors for {trace.user_id}")
+        return
+    if evidence.evidence_kind in {"no_eligible_direct_neighbor_signal", "no_next_batch_signal"}:
+        if "affected_direct_neighbor_count=0" not in evidence.matched_values:
+            raise ValueError(f"zero-impact action has affected neighbors for {trace.user_id}")
+        if evidence.evidence_kind == "no_next_batch_signal" and any(
+            value.startswith("next_time_step=") for value in evidence.matched_values
+        ):
+            raise ValueError(f"last-batch action points to a nonexistent next batch for {trace.user_id}")
         return
     next_step_value = next(
         (value for value in evidence.matched_values if value.startswith("next_time_step=")),

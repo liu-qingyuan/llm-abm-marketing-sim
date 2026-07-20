@@ -1890,6 +1890,18 @@ test('user drawer expands v4 field traces with keyboard focus restoration', asyn
   await drawer.getByTestId('user-field-trace-ranking_diagnostics.paired_ablation').click();
   await expect(detail).toContainText('ranking_ablation_diagnostics.csv');
   await expect(detail).toContainText('same_run_ranking_diagnostic_v1');
+  for (const [fieldName, artifactName] of [
+    ['ranking_diagnostics.weight_sensitivity', 'ranking_weight_sensitivity.csv'],
+    ['ranking_diagnostics.historical_top20_diagnostic', 'ranking_diagnostics.json'],
+    ['ranking_diagnostics.summary', 'ranking_diagnostics_summary.json'],
+  ] as const) {
+    await drawer.getByTestId(`user-field-trace-${fieldName}`).click();
+    await expect(detail).toContainText(artifactName);
+    const expectedLocator = payload.user_field_trace_index.u2.find(
+      (trace) => trace.field_name === fieldName,
+    )?.source_record_locator.record_key;
+    await expect(detail).toContainText(JSON.stringify(expectedLocator));
+  }
   await provenanceFilter.selectOption('');
 
   await page.keyboard.press('Escape');

@@ -14,11 +14,11 @@
 
 ## 验证输出
 
-- Run directory：`runs/jinjiang-runtime-trace-mock-validation-20260720T123453Z/`
+- Run directory：`runs/jinjiang-runtime-trace-mock-validation-20260720T130020Z/`
 - 报告：`report.html`
-- Report SHA-256：`196589dd8c401841a36e8e2b7f1232aab4a3d1b95c4c8d9ee845908c6eb32f26`
+- Report SHA-256：`3541e405583aac0f8eaac8aa90c28023603028c08824614fd7de0b75532558ad`
 - Catalog SHA-256：`e5c8eb2896b1486a89fedbde62f14b56975583db4f318f02293d337265f356a5`
-- Trace SHA-256：`6275d075e66afb8b595f5db39ab685903199bc9029858c2580174ac730de3225`
+- Trace SHA-256：`02b290587a6fca16c7fe5cf614bef7cdc87708c93810c9e7b2698d209fe8a3bb`
 - Sampling：`seed_first_research_sample_v1` / `validation_run`
 - 角色：20 seed、60 network cohort、920 ordinary；600 次本地 deterministic Decision，400 位 `below_delivery_capacity`
 
