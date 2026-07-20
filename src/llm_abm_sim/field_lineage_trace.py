@@ -159,10 +159,10 @@ _DERIVED_PROXY_FIELDS: dict[str, _DerivedProxySpec] = {
     ),
     "engaged_neighbor_count": _DerivedProxySpec(
         "已互动直接邻居数",
-        "当前 Batch 前已对目标视频互动的直接邻居数量。",
+        "当前 Batch 前已对目标视频互动的直接邻居聚合数量。",
         ("engaged_neighbor_count",),
         "engaged_direct_neighbor_count_v1",
-        "从已持久化互动用户集合与 Historical Set 直接邻接关系计算。",
+        "runtime 从互动用户集合与 Historical Set 直接邻接关系计算，并在 candidate record 持久化聚合计数。",
         ("Ranking", "Report Only"),
         "ranking_runtime_candidates",
         ("user_id", "time_step"),
@@ -181,9 +181,9 @@ _DERIVED_PROXY_FIELDS: dict[str, _DerivedProxySpec] = {
     "historical_tag_affinity": _DerivedProxySpec(
         "历史标签亲和度",
         "Historical Set 互动标签与目标视频标签之间的亲和度代理。",
-        ("historical_tags", "historical_tag_affinity"),
+        ("historical_tag_affinity",),
         "historical_tag_affinity_v1",
-        "根据已持久化历史标签集合与目标视频 hashtags 的稳定匹配结果计算。",
+        "根据历史标签与目标视频 hashtags 计算，并在 candidate record 持久化聚合亲和度。",
         ("Ranking", "Report Only"),
         "ranking_runtime_candidates",
         ("user_id", "time_step"),
@@ -339,6 +339,8 @@ class FieldLineageTraceModule:
         if not sample_path:
             raise ValueError("field trace requires the sample_manifest_json artifact path")
 
+        catalog = field_lineage_definitions()
+        definitions_by_name = {definition.field_name: definition for definition in catalog}
         trace_index: dict[str, list[UserFieldTrace]] = {}
         source_records: list[FieldSourceRecord] = []
         seen_user_ids: set[str] = set()
@@ -440,6 +442,7 @@ class FieldLineageTraceModule:
                         user_id=user_id,
                         field_name=field_name,
                         spec=spec,
+                        definition=definitions_by_name[field_name],
                         user=user,
                         source=source,
                         locator=proxy_locators[spec.source_artifact_id],
@@ -450,6 +453,7 @@ class FieldLineageTraceModule:
                     _synthetic_trace(
                         user_id=user_id,
                         field_name=field_name,
+                        definition=definitions_by_name[field_name],
                         latent_attributes=latent_attributes,
                         source=source,
                         locator=sample_locator,
@@ -459,6 +463,7 @@ class FieldLineageTraceModule:
                 _historical_scalar_trace(
                     user_id=user_id,
                     field_name="sample_source_scope",
+                    definition=definitions_by_name["sample_source_scope"],
                     user=user,
                     locator=sample_locator,
                     actual_usage_stages=["Sampling", "Report Only"],
@@ -466,6 +471,7 @@ class FieldLineageTraceModule:
                 _historical_scalar_trace(
                     user_id=user_id,
                     field_name="historical_comment_network_weighted_degree",
+                    definition=definitions_by_name["historical_comment_network_weighted_degree"],
                     user=user,
                     locator=offline_locator,
                     actual_usage_stages=["Ranking", "Report Only"],
@@ -474,7 +480,7 @@ class FieldLineageTraceModule:
             ]
 
         return FieldLineageTraceBundle(
-            catalog=field_lineage_definitions(),
+            catalog=catalog,
             trace_index=trace_index,
             source_records=source_records,
         )
@@ -626,6 +632,7 @@ def _derived_proxy_trace(
     user_id: str,
     field_name: str,
     spec: _DerivedProxySpec,
+    definition: FieldLineageDefinition,
     user: Mapping[str, object],
     source: FieldLineageTraceSource,
     locator: SourceRecordLocator,
@@ -641,19 +648,7 @@ def _derived_proxy_trace(
         **source.derived_proxy_inputs_by_user.get(user_id, {}),
         **{key: value for key, value in user.items() if key in spec.source_fields},
     }
-    available_fields = [field for field in spec.source_fields if field in inputs]
-    evidence = (
-        [
-            FieldEvidenceReference(
-                evidence_kind="derived_proxy_inputs",
-                record_key=locator.record_key,
-                source_fields=available_fields,
-                matched_values=[f"{field}={inputs[field]}" for field in available_fields],
-            )
-        ]
-        if available_fields
-        else []
-    )
+    evidence = field_trace_evidence(definition, inputs, locator)
     actual_stages: list[FieldUsageStage] = [
         stage for stage in spec.declared_usage_stages if stage != "LLM Prompt"
     ]
@@ -675,6 +670,7 @@ def _synthetic_trace(
     *,
     user_id: str,
     field_name: str,
+    definition: FieldLineageDefinition,
     latent_attributes: Mapping[str, object],
     source: FieldLineageTraceSource,
     locator: SourceRecordLocator,
@@ -688,20 +684,7 @@ def _synthetic_trace(
         value_status=value_status,
         source=source,
     )
-    source_fields = _synthetic_source_fields(field_name)
-    available_fields = [field for field in source_fields if field in latent_attributes]
-    evidence = (
-        [
-            FieldEvidenceReference(
-                evidence_kind="synthetic_experiment_contract",
-                record_key={"user_id": user_id},
-                source_fields=available_fields,
-                matched_values=[f"{field}={latent_attributes[field]}" for field in available_fields],
-            )
-        ]
-        if available_fields
-        else []
-    )
+    evidence = field_trace_evidence(definition, latent_attributes, locator)
     declared_stages: list[FieldUsageStage] = (
         ["LLM Prompt", "Report Only"]
         if field_name in JINJIANG_PROMPT_V2_PROFILE_FIELDS
@@ -731,22 +714,17 @@ def _historical_scalar_trace(
     *,
     user_id: str,
     field_name: str,
+    definition: FieldLineageDefinition,
     user: Mapping[str, object],
     locator: SourceRecordLocator,
     actual_usage_stages: list[FieldUsageStage],
     source_field_name: str | None = None,
 ) -> UserFieldTrace:
     value_status = field_value_status(user.get(field_name)) if field_name in user else "unavailable"
-    evidence = []
-    if field_name in user:
-        evidence = [
-            FieldEvidenceReference(
-                evidence_kind="historical_aggregate_evidence",
-                record_key=locator.record_key,
-                source_fields=[source_field_name or field_name],
-                matched_values=[f"{source_field_name or field_name}={user[field_name]}"],
-            )
-        ]
+    evidence_values = dict(user)
+    if source_field_name is not None and field_name in user:
+        evidence_values[source_field_name] = user[field_name]
+    evidence = field_trace_evidence(definition, evidence_values, locator)
     return UserFieldTrace(
         user_id=user_id,
         field_name=field_name,
@@ -808,6 +786,42 @@ def field_value_status(value: object) -> ValueStatus:
     if value == "" or (isinstance(value, Sequence) and not isinstance(value, (str, bytes)) and not value):
         return "empty"
     return "present"
+
+
+def field_trace_evidence(
+    definition: FieldLineageDefinition,
+    values: Mapping[str, object],
+    locator: SourceRecordLocator,
+) -> list[FieldEvidenceReference]:
+    if definition.provenance == "Direct Observed Profile Field":
+        return []
+    if definition.provenance == "Historical Behavioral Evidence":
+        source_field = definition.source_fields[0]
+        if source_field not in values:
+            return []
+        return [
+            FieldEvidenceReference(
+                evidence_kind="historical_aggregate_evidence",
+                record_key=locator.record_key,
+                source_fields=[source_field],
+                matched_values=[f"{source_field}={values[source_field]}"],
+            )
+        ]
+    available_fields = [field for field in definition.source_fields if field in values]
+    if not available_fields:
+        return []
+    return [
+        FieldEvidenceReference(
+            evidence_kind=(
+                "synthetic_experiment_contract"
+                if definition.provenance == "Synthetic Experiment Label"
+                else "derived_proxy_inputs"
+            ),
+            record_key=locator.record_key,
+            source_fields=available_fields,
+            matched_values=[f"{field}={values[field]}" for field in available_fields],
+        )
+    ]
 
 
 def field_lineage_coverage_audit(

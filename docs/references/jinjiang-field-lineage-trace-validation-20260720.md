@@ -15,14 +15,14 @@
 
 ## 验证输出
 
-- Run directory：`runs/jinjiang-field-lineage-mock-validation-20260720T111651Z/`
+- Run directory：`runs/jinjiang-field-lineage-mock-validation-20260720T112854Z/`
 - 报告：`report.html`
 - Field Lineage Catalog：`field_lineage_catalog.json`
 - User Field Trace：`user_field_trace.json`
 - Field source records：`field_source_records.json`
-- Report SHA-256：`ac762cf9e4e12338881384ea3e6cc49ea7cf24362ab8c74bb3fa4b4dbbf63055`
-- Catalog SHA-256：`044b631a37f733b2f07df56fc7e4a26159c0aa419d5b387598d4a30fda709763`
-- Trace SHA-256：`77e399077f7f065aacb4f1aba5edafb8d393fa4c647b141725c70284ab61c051`
+- Report SHA-256：`60da8af133d0c64795e9bf349689f02d37040194ddb14df05401845579845e64`
+- Catalog SHA-256：`a8cb693cd623cab2ad3f9ace596c5eedf04feccda50de1d140b7f447eb43636c`
+- Trace SHA-256：`5edbf3ee6127890eb9a76eba262f1f08e8e9b95acc4179aabe5e7ea31692db33`
 - Source records SHA-256：`4a2ed2b0eb6d4f4e3ebaf32d490fb040e5bfa47a589f53b58792782116ed03a9`
 
 该 run 使用 `sampling_method=seed_first_research_sample_v1`、`sampling_status=validation_run`，实际角色为 20 位 seed、60 位 network cohort 和 920 位 ordinary user；600 次本地 deterministic decision 后有 400 位用户保持 `below_delivery_capacity`。报告执行 deterministic rebuild 后 SHA-256 不变。

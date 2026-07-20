@@ -111,6 +111,7 @@ def test_field_lineage_trace_records_recomputable_derived_proxy_inputs_and_promp
     assert catalog["base_network_relevance"].record_key_fields == ["user_id"]
     assert catalog["engaged_neighbor_count"].record_key_fields == ["user_id", "time_step"]
     assert catalog["engaged_neighbor_count"].value_range == "大于或等于 0 的整数。"
+    assert catalog["historical_tag_affinity"].source_fields == ["historical_tag_affinity"]
     source_record = bundle.source_records[0]
     assert source_record.derived_proxy_inputs["comment_count"] == 4
     traces = {trace.field_name: trace for trace in bundle.trace_index["u1"]}

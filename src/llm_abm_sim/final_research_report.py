@@ -17,7 +17,6 @@ from typing import Literal, cast
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from .field_lineage_trace import (
-    FieldEvidenceReference,
     FieldLineageDefinition,
     FieldLineageTraceBundle,
     FieldLineageTraceModule,
@@ -28,6 +27,7 @@ from .field_lineage_trace import (
     UserFieldTrace,
     field_lineage_coverage_audit,
     field_lineage_definitions,
+    field_trace_evidence,
     field_value_status,
 )
 from .prompt_field_summary import JINJIANG_PROMPT_V2_PROFILE_FIELDS
@@ -3955,6 +3955,8 @@ def _validate_ranking_rebuild_evidence(
         if not isinstance(name, str) or not isinstance(relative_path, str):
             raise ValueError("artifact manifest names and paths must be strings")
         artifact_paths[name] = _artifact_path(run_path, relative_path, name)
+    candidate_records = _read_csv_rows(artifact_paths["ranking_runtime_candidates"])
+    candidate_records_by_key = _candidate_record_index(candidate_records)
 
     if v4_payload is not None:
         catalog_document = _read_json_object(artifact_paths["field_lineage_catalog"])
@@ -4000,7 +4002,6 @@ def _validate_ranking_rebuild_evidence(
             _read_csv_rows(artifact_paths["offline_scores"]),
             "offline scores",
         )
-        candidate_records = _read_csv_rows(artifact_paths["ranking_runtime_candidates"])
         for user_id, traces in v4_payload.user_field_trace_index.items():
             source_record = source_records_by_user[user_id]
             payload_user = payload_users_by_id[user_id]
@@ -4018,7 +4019,7 @@ def _validate_ranking_rebuild_evidence(
                     sample_records_by_user=sample_records_by_user,
                     source_records_by_user=source_records_by_user,
                     offline_records_by_user=offline_records_by_user,
-                    candidate_records=candidate_records,
+                    candidate_records_by_key=candidate_records_by_key,
                 )
                 _validate_trace_source_value(
                     trace=trace,
@@ -4026,7 +4027,7 @@ def _validate_ranking_rebuild_evidence(
                     payload_value=payload_values[trace.field_name],
                     sample_record=sample_records_by_user[user_id],
                     offline_record=offline_records_by_user[user_id],
-                    candidate_records=candidate_records,
+                    candidate_records_by_key=candidate_records_by_key,
                 )
                 if trace.field_name == "interest_tags":
                     values = source_record.interest_tags
@@ -4036,12 +4037,10 @@ def _validate_ranking_rebuild_evidence(
                     source_evidence = source_record.historical_tag_evidence
                 else:
                     values = payload_values[trace.field_name]
-                    source_evidence = _expected_trace_evidence(
-                        definition=definition,
-                        user_id=user_id,
-                        payload_values=payload_values,
-                        derived_proxy_inputs=source_record.derived_proxy_inputs,
-                        locator=locator,
+                    source_evidence = field_trace_evidence(
+                        definition,
+                        {**source_record.derived_proxy_inputs, **payload_values},
+                        locator,
                     )
                 if values != payload_values[trace.field_name]:
                     raise ValueError(f"field source record value does not match ranking report user for {user_id}")
@@ -4199,18 +4198,9 @@ def _validate_ranking_rebuild_evidence(
         if _optional_int(outcome, "exposure_time_step") != user_row.exposure_time_step:
             raise ValueError(f"ranking exposure batch does not match report user {user_row.user_id}")
 
-    candidate_rows = _read_csv_rows(artifact_paths["ranking_runtime_candidates"])
     candidates_by_step: dict[int, list[Mapping[str, object]]] = {}
-    candidate_keys: set[tuple[int, str]] = set()
-    for candidate_row in candidate_rows:
-        candidate_key = (
-            _as_int(candidate_row.get("time_step")),
-            str(candidate_row.get("user_id", "")),
-        )
-        if not candidate_key[1] or candidate_key in candidate_keys:
-            raise ValueError("ranking runtime candidates contain duplicate batch user evidence")
-        candidate_keys.add(candidate_key)
-        candidates_by_step.setdefault(candidate_key[0], []).append(candidate_row)
+    for (_, time_step), candidate_row in candidate_records_by_key.items():
+        candidates_by_step.setdefault(time_step, []).append(candidate_row)
     expected_rounds = _ranking_round_summaries(
         _read_csv_rows(artifact_paths["ranking_runtime_steps"]),
         candidates_by_step,
@@ -4439,45 +4429,6 @@ def _parse_report_payload(document: Mapping[str, object]) -> FinalResearchReport
     raise ValueError(f"unsupported Final Research report payload schema: {schema_version!r}")
 
 
-def _expected_trace_evidence(
-    *,
-    definition: FieldLineageDefinition,
-    user_id: str,
-    payload_values: Mapping[str, object],
-    derived_proxy_inputs: Mapping[str, int | float],
-    locator: SourceRecordLocator,
-) -> list[FieldEvidenceReference]:
-    if definition.provenance == "Direct Observed Profile Field":
-        return []
-    if definition.provenance == "Historical Behavioral Evidence":
-        source_field = definition.source_fields[0]
-        value = payload_values[definition.field_name]
-        return [
-            FieldEvidenceReference(
-                evidence_kind="historical_aggregate_evidence",
-                record_key=locator.record_key,
-                source_fields=[source_field],
-                matched_values=[f"{source_field}={value}"],
-            )
-        ]
-    values = {**derived_proxy_inputs, **payload_values}
-    available_fields = [field for field in definition.source_fields if field in values]
-    if not available_fields:
-        return []
-    return [
-        FieldEvidenceReference(
-            evidence_kind=(
-                "synthetic_experiment_contract"
-                if definition.provenance == "Synthetic Experiment Label"
-                else "derived_proxy_inputs"
-            ),
-            record_key=locator.record_key,
-            source_fields=available_fields,
-            matched_values=[f"{field}={values[field]}" for field in available_fields],
-        )
-    ]
-
-
 def _validate_trace_locator_record(
     *,
     locator: SourceRecordLocator,
@@ -4485,16 +4436,13 @@ def _validate_trace_locator_record(
     sample_records_by_user: Mapping[str, Mapping[str, object]],
     source_records_by_user: Mapping[str, FieldSourceRecord],
     offline_records_by_user: Mapping[str, Mapping[str, object]],
-    candidate_records: Sequence[Mapping[str, object]],
+    candidate_records_by_key: Mapping[tuple[str, int], Mapping[str, object]],
 ) -> None:
     if locator.artifact_id == "ranking_runtime_candidates":
         if set(locator.record_key) != {"user_id", "time_step"}:
             raise ValueError(f"field trace locator has an invalid candidate key for {user_id}")
         time_step = _as_int(locator.record_key.get("time_step"))
-        if not any(
-            str(record.get("user_id", "")) == user_id and _as_int(record.get("time_step")) == time_step
-            for record in candidate_records
-        ):
+        if (user_id, time_step) not in candidate_records_by_key:
             raise ValueError(f"field trace locator has no ranking candidate record for {user_id}")
         return
     if locator.record_key != {"user_id": user_id}:
@@ -4519,7 +4467,7 @@ def _validate_trace_source_value(
     payload_value: object,
     sample_record: Mapping[str, object],
     offline_record: Mapping[str, object],
-    candidate_records: Sequence[Mapping[str, object]],
+    candidate_records_by_key: Mapping[tuple[str, int], Mapping[str, object]],
 ) -> None:
     locator = trace.source_record_locator
     source_value: object
@@ -4542,12 +4490,7 @@ def _validate_trace_source_value(
         source_value = offline_record.get(source_field)
     elif locator.artifact_id == "ranking_runtime_candidates":
         time_step = _as_int(locator.record_key.get("time_step"))
-        source_record = next(
-            record
-            for record in candidate_records
-            if str(record.get("user_id", "")) == trace.user_id
-            and _as_int(record.get("time_step")) == time_step
-        )
+        source_record = candidate_records_by_key[(trace.user_id, time_step)]
         if trace.field_name not in source_record:
             raise ValueError(f"ranking candidate is missing {trace.field_name} for {trace.user_id}")
         source_value = source_record.get(trace.field_name)
@@ -4565,6 +4508,18 @@ def _trace_source_value_matches(source_value: object, payload_value: object) -> 
     if isinstance(payload_value, float):
         return _as_float(source_value) == payload_value
     return source_value == payload_value
+
+
+def _candidate_record_index(
+    records: Sequence[Mapping[str, object]],
+) -> dict[tuple[str, int], Mapping[str, object]]:
+    records_by_key: dict[tuple[str, int], Mapping[str, object]] = {}
+    for record in records:
+        key = (str(record.get("user_id", "")), _as_int(record.get("time_step")))
+        if not key[0] or key in records_by_key:
+            raise ValueError("ranking runtime candidates contain duplicate batch user evidence")
+        records_by_key[key] = record
+    return records_by_key
 
 
 def _read_json_records(path: Path, artifact_name: str) -> list[Mapping[str, object]]:
