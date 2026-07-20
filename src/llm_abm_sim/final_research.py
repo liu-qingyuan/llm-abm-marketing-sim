@@ -556,6 +556,7 @@ class _PreparedInputs:
     historical_tags_by_user: dict[str, set[str]]
     interest_tag_evidence_by_user: dict[str, list[dict[str, object]]]
     historical_tag_evidence_by_user: dict[str, list[dict[str, object]]]
+    derived_proxy_inputs_by_user: dict[str, dict[str, int | float]]
     target_scope_weighted_degree: dict[str, int]
     target_scope_neighbors: dict[str, set[str]]
     source_scope_sample_counts: dict[str, int]
@@ -888,6 +889,21 @@ class _ResearchInputBuilder:
             historical_tags_by_user=historical_tags_by_user,
             interest_tag_evidence_by_user=interest_tag_evidence_by_user,
             historical_tag_evidence_by_user=historical_tag_evidence_by_user,
+            derived_proxy_inputs_by_user={
+                user_id: {
+                    "video_count": users_by_id[user_id].video_count,
+                    "comment_count": history_counts.get(user_id, Counter())["comment"],
+                    "reply_count": history_counts.get(user_id, Counter())["reply"],
+                    "edge_degree": all_history_degree.get(user_id, 0),
+                    "comment_like_sum": history_likes.get(user_id, 0),
+                    "video_count_p95": thresholds["video_count"],
+                    "comment_count_p95": thresholds["comment_count"],
+                    "reply_count_p95": thresholds["reply_count"],
+                    "edge_degree_p95": thresholds["edge_degree"],
+                    "comment_like_sum_p95": thresholds["comment_like_sum"],
+                }
+                for user_id in users_by_id
+            },
             target_scope_weighted_degree=target_scope_degree,
             target_scope_neighbors=target_scope_neighbors,
             source_scope_sample_counts=dict(sorted(Counter(sample_scope_by_user.values()).items())),
@@ -1433,6 +1449,9 @@ class FinalResearchRunner:
                 historical_tag_evidence_by_user={
                     user.user_id: prepared.historical_tag_evidence_by_user.get(user.user_id, [])
                     for user in sample_users
+                },
+                derived_proxy_inputs_by_user={
+                    user.user_id: prepared.derived_proxy_inputs_by_user[user.user_id] for user in sample_users
                 },
                 prompt_field_inclusion_by_user=(
                     ranking_runtime.prompt_field_inclusion_by_user if ranking_runtime is not None else {}

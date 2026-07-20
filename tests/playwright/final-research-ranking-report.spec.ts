@@ -1858,6 +1858,20 @@ test('user drawer expands v4 field traces with keyboard focus restoration', asyn
   )?.value_status;
   await expect(detail).toContainText(expectedHistoryStatus === 'present' ? 'present（有值）' : 'empty（空值）');
 
+  const provenanceFilter = drawer.getByTestId('user-field-trace-provenance-filter');
+  await provenanceFilter.selectOption('Direct Observed Profile Field');
+  await expect(drawer.getByTestId('user-field-trace-nickname')).toBeVisible();
+  await expect(drawer.getByTestId('user-field-trace-interest_tags')).toHaveCount(0);
+  await provenanceFilter.selectOption('Derived Proxy Metric');
+  await drawer.getByTestId('user-field-trace-activity_score').click();
+  await expect(detail).toContainText('activity_score（活跃度代理）');
+  await expect(detail).toContainText('derived_proxy_inputs');
+  await provenanceFilter.selectOption('Synthetic Experiment Label');
+  await drawer.getByTestId('user-field-trace-latent_hotel_class').click();
+  await expect(detail).toContainText('latent_hotel_class（合成酒店偏好类别）');
+  await expect(detail).toContainText('synthetic_experiment_contract');
+  await provenanceFilter.selectOption('');
+
   await page.keyboard.press('Escape');
   await expect(drawer).toBeHidden();
   await expect(userRow).toBeFocused();

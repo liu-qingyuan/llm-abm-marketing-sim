@@ -76,12 +76,13 @@ docs/
 10. [锦江 Final Research 真实 Provider 验收记录](references/jinjiang-final-research-live-validation-20260713.md)
 11. [锦江 Target Delivery Ranking 正式研究验收记录](references/jinjiang-target-delivery-ranking-final-validation-20260715.md)
 12. [锦江 Seed-First Research Sample 离线验证记录](references/jinjiang-seed-first-offline-validation-20260720.md)
-13. [锦江酒店 Douyin 最终数据集审计](references/jinjiang-final-dataset-audit-20260624.md)
-14. [Final Research 离线基线](architecture/final-research-offline-baseline.md)
-15. [Final Research 30 批次 Runtime 与报告合同](architecture/final-research-runtime.md)
-16. [源码结构分析](architecture/source-tree-and-entrypoints.md)
-17. [组件清单](architecture/runtime-component-inventory.md)
-18. [测试策略](architecture/testing-strategy.md)
+13. [锦江用户字段血缘与逐用户追溯离线验证记录](references/jinjiang-field-lineage-trace-validation-20260720.md)
+14. [锦江酒店 Douyin 最终数据集审计](references/jinjiang-final-dataset-audit-20260624.md)
+15. [Final Research 离线基线](architecture/final-research-offline-baseline.md)
+16. [Final Research 30 批次 Runtime 与报告合同](architecture/final-research-runtime.md)
+17. [源码结构分析](architecture/source-tree-and-entrypoints.md)
+18. [组件清单](architecture/runtime-component-inventory.md)
+19. [测试策略](architecture/testing-strategy.md)
 
 ## 快速命令
 

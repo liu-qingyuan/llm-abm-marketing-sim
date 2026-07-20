@@ -8,6 +8,7 @@ from base64 import b64encode
 from collections import Counter
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from dataclasses import field as dataclass_field
 from html import escape
 from importlib.resources import files
 from pathlib import Path
@@ -16,12 +17,14 @@ from typing import Literal, cast
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from .field_lineage_trace import (
+    FieldEvidenceReference,
     FieldLineageDefinition,
     FieldLineageTraceBundle,
     FieldLineageTraceModule,
     FieldLineageTraceSource,
     FieldSourceRecord,
     PromptInclusionStatus,
+    SourceRecordLocator,
     UserFieldTrace,
 )
 from .prompt_field_summary import JINJIANG_PROMPT_V2_PROFILE_FIELDS
@@ -740,6 +743,25 @@ class FinalResearchRankingReportPayload(_FinalResearchRankingReportPayloadBase):
         catalog_names = [definition.field_name for definition in self.field_lineage_catalog]
         if len(catalog_names) != len(set(catalog_names)):
             raise ValueError("field lineage catalog must declare each field exactly once")
+        traceable_provenance = {
+            "Direct Observed Profile Field",
+            "Historical Behavioral Evidence",
+            "Derived Proxy Metric",
+            "Synthetic Experiment Label",
+        }
+        lineage_by_name = {
+            entry.field_name: entry
+            for entry in self.field_lineage
+            if entry.field_name in RankingUserReportRow.model_fields and entry.provenance in traceable_provenance
+        }
+        if set(catalog_names) != set(lineage_by_name):
+            raise ValueError("field lineage catalog must cover every non-runtime report user field exactly once")
+        for definition in self.field_lineage_catalog:
+            lineage = lineage_by_name[definition.field_name]
+            if definition.provenance != lineage.provenance:
+                raise ValueError(f"field lineage catalog provenance mismatch for {definition.field_name}")
+            if definition.declared_usage_stages != lineage.usage_stages:
+                raise ValueError(f"field lineage catalog usage stages mismatch for {definition.field_name}")
         user_ids = [user.user_id for user in self.users]
         if set(self.user_field_trace_index) != set(user_ids):
             raise ValueError("user field trace index must cover every report user exactly once")
@@ -749,8 +771,8 @@ class FinalResearchRankingReportPayload(_FinalResearchRankingReportPayloadBase):
                 raise ValueError(f"user field trace contains duplicate fields for {user_id}")
             if any(trace.user_id != user_id for trace in traces):
                 raise ValueError(f"user field trace key does not match trace user_id for {user_id}")
-            if not set(trace_names) <= set(catalog_names):
-                raise ValueError(f"user field trace references an unknown catalog field for {user_id}")
+            if set(trace_names) != set(catalog_names):
+                raise ValueError(f"user field trace does not cover the field lineage catalog for {user_id}")
         return self
 
 
@@ -781,6 +803,7 @@ class FinalResearchReportSource:
     ranking_diagnostics: Mapping[str, object] | None = None
     ranking_diagnostics_summary: Mapping[str, object] | None = None
     ranking_runtime_summary: Mapping[str, object] | None = None
+    derived_proxy_inputs_by_user: Mapping[str, Mapping[str, int | float]] = dataclass_field(default_factory=dict)
 
 
 class FinalResearchReportWriter:
@@ -944,19 +967,59 @@ class FinalResearchReportWriter:
 
     def _build_field_trace_bundle(self) -> FieldLineageTraceBundle:
         outcomes = _unique_user_rows(self.source.ranking_outcomes, "ranking outcomes")
+        offline_scores = _unique_user_rows(self.source.offline_scores, "offline scores")
+        candidates_by_user: dict[str, list[Mapping[str, object]]] = {}
+        for candidate in self.source.ranking_candidates:
+            candidates_by_user.setdefault(str(candidate.get("user_id", "")), []).append(candidate)
         exposed_user_ids = {
             user_id for user_id, row in outcomes.items() if row.get("result_status") != "below_delivery_capacity"
         }
+        trace_users: list[dict[str, object]] = []
+        for raw_user in self.source.users:
+            user = dict(raw_user)
+            user_id = str(user.get("user_id", ""))
+            outcome = outcomes.get(user_id, {})
+            candidates = candidates_by_user.get(user_id, [])
+            latest_candidate = max(candidates, key=lambda row: _as_int(row.get("time_step"))) if candidates else {}
+            exposure_time_step = _optional_int(outcome, "exposure_time_step")
+            if exposure_time_step is not None:
+                latest_candidate = next(
+                    (
+                        candidate
+                        for candidate in candidates
+                        if _as_int(candidate.get("time_step")) == exposure_time_step
+                    ),
+                    latest_candidate,
+                )
+            score = offline_scores.get(user_id, {})
+            user.update(
+                {
+                    "historical_tags": sorted(
+                        {str(tag) for tag in self.source.historical_tags_by_user.get(user_id, ())}
+                    ),
+                    "historical_comment_network_weighted_degree": _as_int(
+                        score.get("target_scope_weighted_degree")
+                    ),
+                    "latest_ranking_time_step": _as_int(latest_candidate.get("time_step")),
+                    "base_network_relevance": _as_float(latest_candidate.get("base_network_relevance")),
+                    "engaged_neighbor_count": _as_int(latest_candidate.get("engaged_neighbor_count")),
+                    "engaged_neighbor_signal": _as_float(latest_candidate.get("engaged_neighbor_signal")),
+                    "historical_tag_affinity": _as_float(latest_candidate.get("historical_tag_affinity")),
+                    "recommendation_score": _as_float(latest_candidate.get("recommendation_score")),
+                }
+            )
+            trace_users.append(user)
         artifacts = _required_mapping(self.source.artifact_manifest, "artifacts", "artifact manifest")
         return FieldLineageTraceModule().build(
             FieldLineageTraceSource(
-                users=self.source.users,
+                users=trace_users,
                 historical_tags_by_user=self.source.historical_tags_by_user,
                 interest_tag_evidence_by_user=self.source.interest_tag_evidence_by_user,
                 historical_tag_evidence_by_user=self.source.historical_tag_evidence_by_user,
                 exposed_user_ids=exposed_user_ids,
                 prompt_inclusion_by_user=self.source.prompt_field_inclusion_by_user,
                 artifact_paths={str(key): str(value) for key, value in artifacts.items()},
+                derived_proxy_inputs_by_user=self.source.derived_proxy_inputs_by_user,
             )
         )
 
@@ -1719,7 +1782,8 @@ def _ranking_field_lineage() -> list[FieldLineageEntry]:
     stages["activity_score"] = ["LLM Prompt", "Report Only"]
     stages["interest_tags"] = ["LLM Prompt", "Report Only"]
     for field in JINJIANG_PROMPT_V2_PROFILE_FIELDS:
-        stages[field] = ["LLM Prompt", "Report Only"]
+        if "LLM Prompt" not in stages[field]:
+            stages[field] = [*stages[field][:-1], "LLM Prompt", stages[field][-1]]
     for field in (
         "historical_tags",
         "historical_comment_network_weighted_degree",
@@ -2519,6 +2583,9 @@ code { color:var(--blue); }
 .drawer-detail .trace-groups article { min-height:0; }
 .drawer-detail .ranking-history table { min-width:720px; }
 .user-field-trace { margin:18px 0; padding-top:16px; border-top:1px solid var(--line); }
+.user-field-trace-controls { display:flex; justify-content:flex-end; margin:0 0 8px; }
+.user-field-trace-controls label { display:grid; gap:3px; color:var(--muted); font-size:.7rem; font-weight:800; }
+.user-field-trace-controls select { min-width:230px; }
 .user-field-trace-list { display:grid; border:1px solid var(--line); }
 .user-field-trace-button { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:3px 12px; min-width:0; min-height:62px; padding:10px 12px; border:0; border-bottom:1px solid var(--line); border-radius:0; text-align:left; cursor:pointer; }
 .user-field-trace-button:last-child { border-bottom:0; }
@@ -3509,25 +3576,37 @@ function renderUserFieldTrace(row) {
   if (!traces.length) return null;
   const section = element('section','user-field-trace'); section.dataset.testid = 'user-field-trace';
   section.appendChild(element('h3','','User Field Trace（用户字段追溯）'));
-  const list = element('div','user-field-trace-list');
-  traces.forEach((trace) => {
-    const definition = fieldLineageCatalog.get(trace.field_name);
-    if (!definition) return;
-    const button = element('button','user-field-trace-button'); button.type = 'button';
-    button.dataset.fieldName = trace.field_name; button.dataset.testid = `user-field-trace-${trace.field_name}`;
-    button.setAttribute('aria-expanded','false'); button.setAttribute('aria-controls','user-field-trace-detail');
-    button.append(
-      element('strong','',`${definition.field_name}（${definition.display_name_zh}）`),
-      element('span','',fieldTraceValue(row,trace.field_name)),
-      element('small','',`${valueStatusLabels[trace.value_status] || trace.value_status} · ${provenanceLabels[definition.provenance] || definition.provenance}`),
-    );
-    button.addEventListener('click',() => {
-      list.querySelectorAll('button').forEach((candidate) => candidate.setAttribute('aria-expanded',String(candidate === button)));
-      renderUserFieldTraceDetail(row,trace,definition);
-    });
-    list.appendChild(button);
+  const controls = element('div','user-field-trace-controls');
+  const provenanceLabel = element('label','','Field Provenance（字段来源）');
+  const provenanceFilter = element('select'); provenanceFilter.dataset.testid = 'user-field-trace-provenance-filter';
+  const allOption = element('option','','全部'); allOption.value = ''; provenanceFilter.appendChild(allOption);
+  [...new Set(traces.map((trace) => fieldLineageCatalog.get(trace.field_name)?.provenance).filter(Boolean))].forEach((provenance) => {
+    const option = element('option','',provenanceLabels[provenance] || provenance); option.value = provenance; provenanceFilter.appendChild(option);
   });
+  provenanceLabel.appendChild(provenanceFilter); controls.appendChild(provenanceLabel); section.appendChild(controls);
+  const list = element('div','user-field-trace-list');
   const detail = element('div','user-field-trace-detail'); detail.id = 'user-field-trace-detail'; detail.dataset.testid = 'user-field-trace-detail'; detail.hidden = true;
+  const renderTraceList = () => {
+    list.replaceChildren(); detail.replaceChildren(); detail.hidden = true;
+    traces.forEach((trace) => {
+      const definition = fieldLineageCatalog.get(trace.field_name);
+      if (!definition || (provenanceFilter.value && definition.provenance !== provenanceFilter.value)) return;
+      const button = element('button','user-field-trace-button'); button.type = 'button';
+      button.dataset.fieldName = trace.field_name; button.dataset.testid = `user-field-trace-${trace.field_name}`;
+      button.setAttribute('aria-expanded','false'); button.setAttribute('aria-controls','user-field-trace-detail');
+      button.append(
+        element('strong','',`${definition.field_name}（${definition.display_name_zh}）`),
+        element('span','',fieldTraceValue(row,trace.field_name)),
+        element('small','',`${valueStatusLabels[trace.value_status] || trace.value_status} · ${provenanceLabels[definition.provenance] || definition.provenance}`),
+      );
+      button.addEventListener('click',() => {
+        list.querySelectorAll('button').forEach((candidate) => candidate.setAttribute('aria-expanded',String(candidate === button)));
+        renderUserFieldTraceDetail(row,trace,definition);
+      });
+      list.appendChild(button);
+    });
+  };
+  provenanceFilter.addEventListener('input',renderTraceList); renderTraceList();
   section.append(list,detail);
   return section;
 }
@@ -3940,15 +4019,32 @@ def _validate_ranking_rebuild_evidence(
         if set(source_records_by_user) != set(v4_payload.user_field_trace_index):
             raise ValueError("field source records do not match ranking report users")
         payload_users_by_id = {user.user_id: user for user in v4_payload.users}
+        catalog_by_field = {definition.field_name: definition for definition in v4_payload.field_lineage_catalog}
+        sample_records = _read_json_records(artifact_paths["sample_manifest_json"], "sample manifest")
+        sample_records_by_user = _unique_user_rows(sample_records, "sample manifest")
+        offline_records_by_user = _unique_user_rows(
+            _read_csv_rows(artifact_paths["offline_scores"]),
+            "offline scores",
+        )
+        candidate_records = _read_csv_rows(artifact_paths["ranking_runtime_candidates"])
         for user_id, traces in v4_payload.user_field_trace_index.items():
             source_record = source_records_by_user[user_id]
             payload_user = payload_users_by_id[user_id]
+            payload_values = payload_user.model_dump(mode="json")
             for trace in traces:
                 locator = trace.source_record_locator
                 if artifacts.get(locator.artifact_id) != locator.relative_path:
                     raise ValueError(f"field trace locator does not match artifact manifest for {user_id}")
-                if locator.record_key != {"user_id": user_id}:
+                if locator.record_key.get("user_id") != user_id:
                     raise ValueError(f"field trace locator has an invalid record key for {user_id}")
+                _validate_trace_locator_record(
+                    locator=locator,
+                    user_id=user_id,
+                    sample_records_by_user=sample_records_by_user,
+                    source_records_by_user=source_records_by_user,
+                    offline_records_by_user=offline_records_by_user,
+                    candidate_records=candidate_records,
+                )
                 if trace.field_name == "interest_tags":
                     values = source_record.interest_tags
                     source_evidence = source_record.interest_tag_evidence
@@ -3956,10 +4052,18 @@ def _validate_ranking_rebuild_evidence(
                     values = source_record.historical_tags
                     source_evidence = source_record.historical_tag_evidence
                 else:
-                    raise ValueError(f"field trace references an unsupported source field for {user_id}")
-                if values != getattr(payload_user, trace.field_name):
+                    values = payload_values[trace.field_name]
+                    definition = catalog_by_field[trace.field_name]
+                    source_evidence = _expected_trace_evidence(
+                        definition=definition,
+                        user_id=user_id,
+                        payload_values=payload_values,
+                        derived_proxy_inputs=source_record.derived_proxy_inputs,
+                        locator=locator,
+                    )
+                if values != payload_values[trace.field_name]:
                     raise ValueError(f"field source record value does not match ranking report user for {user_id}")
-                expected_status = "present" if values else "empty"
+                expected_status = _trace_value_status(values)
                 if trace.value_status != expected_status:
                     raise ValueError(f"field trace value status does not match source record for {user_id}")
                 if trace.evidence != source_evidence:
@@ -4351,6 +4455,97 @@ def _parse_report_payload(document: Mapping[str, object]) -> FinalResearchReport
         base_document["schema_version"] = "final-research-report-payload-v1"
         return FinalResearchReportPayloadV1.model_validate(base_document)
     raise ValueError(f"unsupported Final Research report payload schema: {schema_version!r}")
+
+
+def _expected_trace_evidence(
+    *,
+    definition: FieldLineageDefinition,
+    user_id: str,
+    payload_values: Mapping[str, object],
+    derived_proxy_inputs: Mapping[str, int | float],
+    locator: SourceRecordLocator,
+) -> list[FieldEvidenceReference]:
+    if definition.provenance == "Direct Observed Profile Field":
+        return []
+    if definition.provenance == "Historical Behavioral Evidence":
+        source_field = definition.source_fields[0]
+        value = payload_values[definition.field_name]
+        return [
+            FieldEvidenceReference(
+                evidence_kind="historical_aggregate_evidence",
+                record_key=locator.record_key,
+                source_fields=[source_field],
+                matched_values=[f"{source_field}={value}"],
+            )
+        ]
+    values = {**derived_proxy_inputs, **payload_values}
+    available_fields = [field for field in definition.source_fields if field in values]
+    if not available_fields:
+        return []
+    return [
+        FieldEvidenceReference(
+            evidence_kind=(
+                "synthetic_experiment_contract"
+                if definition.provenance == "Synthetic Experiment Label"
+                else "derived_proxy_inputs"
+            ),
+            record_key=locator.record_key,
+            source_fields=available_fields,
+            matched_values=[f"{field}={values[field]}" for field in available_fields],
+        )
+    ]
+
+
+def _validate_trace_locator_record(
+    *,
+    locator: SourceRecordLocator,
+    user_id: str,
+    sample_records_by_user: Mapping[str, Mapping[str, object]],
+    source_records_by_user: Mapping[str, FieldSourceRecord],
+    offline_records_by_user: Mapping[str, Mapping[str, object]],
+    candidate_records: Sequence[Mapping[str, object]],
+) -> None:
+    if locator.artifact_id == "ranking_runtime_candidates":
+        if set(locator.record_key) != {"user_id", "time_step"}:
+            raise ValueError(f"field trace locator has an invalid candidate key for {user_id}")
+        time_step = _as_int(locator.record_key.get("time_step"))
+        if not any(
+            str(record.get("user_id", "")) == user_id and _as_int(record.get("time_step")) == time_step
+            for record in candidate_records
+        ):
+            raise ValueError(f"field trace locator has no ranking candidate record for {user_id}")
+        return
+    if locator.record_key != {"user_id": user_id}:
+        raise ValueError(f"field trace locator has an invalid record key for {user_id}")
+    records: Mapping[str, object]
+    if locator.artifact_id == "sample_manifest_json":
+        records = sample_records_by_user
+    elif locator.artifact_id == "field_source_records":
+        records = source_records_by_user
+    elif locator.artifact_id == "offline_scores":
+        records = offline_records_by_user
+    else:
+        raise ValueError(f"field trace locator uses an unsupported artifact for {user_id}")
+    if user_id not in records:
+        raise ValueError(f"field trace locator has no source record for {user_id}")
+
+
+def _trace_value_status(value: object) -> str:
+    if value is None:
+        return "unavailable"
+    if value == "" or (isinstance(value, Sequence) and not isinstance(value, (str, bytes)) and not value):
+        return "empty"
+    return "present"
+
+
+def _read_json_records(path: Path, artifact_name: str) -> list[Mapping[str, object]]:
+    try:
+        document = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise ValueError(f"cannot read valid JSON from {path.name}") from exc
+    if not isinstance(document, list) or not all(isinstance(record, dict) for record in document):
+        raise ValueError(f"{artifact_name} must contain a JSON record list")
+    return document
 
 
 def _read_json_object(path: Path) -> dict[str, object]:

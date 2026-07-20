@@ -1292,10 +1292,34 @@ def test_target_delivery_ranking_v4_persists_interest_and_historical_field_trace
     assert source_document["schema_version"] == "field-source-records-v1"
     assert payload["field_lineage_catalog"] == catalog_document["definitions"]
     assert payload["user_field_trace_index"] == trace_document["users"]
-    assert {entry["field_name"] for entry in payload["field_lineage_catalog"]} == {
-        "interest_tags",
-        "historical_tags",
+    traceable_provenance = {
+        "Direct Observed Profile Field",
+        "Historical Behavioral Evidence",
+        "Derived Proxy Metric",
+        "Synthetic Experiment Label",
     }
+    report_user_fields = set(payload["users"][0])
+    expected_trace_fields = {
+        entry["field_name"]
+        for entry in payload["field_lineage"]
+        if entry["field_name"] in report_user_fields and entry["provenance"] in traceable_provenance
+    }
+    catalog_by_field = {entry["field_name"]: entry for entry in payload["field_lineage_catalog"]}
+    assert set(catalog_by_field) == expected_trace_fields
+    assert {
+        entry["provenance"] for entry in payload["field_lineage_catalog"]
+    } == traceable_provenance
+    assert all(
+        {trace["field_name"] for trace in traces} == expected_trace_fields
+        for traces in payload["user_field_trace_index"].values()
+    )
+    coverage_audit = catalog_document["coverage_audit"]
+    assert coverage_audit["user_count"] == len(payload["users"])
+    assert coverage_audit["catalog_field_count"] == len(expected_trace_fields)
+    assert coverage_audit["trace_count"] == len(payload["users"]) * len(expected_trace_fields)
+    assert sum(coverage_audit["value_status_counts"].values()) == coverage_audit["trace_count"]
+    assert {record["field_name"] for record in coverage_audit["field_coverage"]} == expected_trace_fields
+    assert sum(coverage_audit["provenance_field_counts"].values()) == len(expected_trace_fields)
 
     u1_traces = {trace["field_name"]: trace for trace in payload["user_field_trace_index"]["u1"]}
     assert u1_traces["interest_tags"]["value_status"] == "present"
@@ -1312,6 +1336,11 @@ def test_target_delivery_ranking_v4_persists_interest_and_historical_field_trace
     locator = u1_traces["interest_tags"]["source_record_locator"]
     assert manifest["artifacts"][locator["artifact_id"]] == locator["relative_path"]
     assert locator["record_key"] == {"user_id": "u1"}
+    assert u1_traces["nickname"]["source_record_locator"]["artifact_id"] == "sample_manifest_json"
+    assert u1_traces["activity_score"]["source_record_locator"]["artifact_id"] == "field_source_records"
+    assert u1_traces["activity_score"]["evidence"][0]["evidence_kind"] == "derived_proxy_inputs"
+    assert u1_traces["latent_hotel_class"]["source_record_locator"]["artifact_id"] == "sample_manifest_json"
+    assert u1_traces["latent_hotel_class"]["evidence"][0]["evidence_kind"] == "synthetic_experiment_contract"
 
     u2_traces = {trace["field_name"]: trace for trace in payload["user_field_trace_index"]["u2"]}
     assert u2_traces["interest_tags"]["value_status"] == "empty"
