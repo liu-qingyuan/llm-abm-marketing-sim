@@ -48,12 +48,17 @@ TARGET_NETWORK_SCOPE = "锦江酒店"
 PROFILE_INDEX_METHOD = "log1p_p95_reference_weighted_v2"
 NETWORK_AUGMENTED_SAMPLE_AUDIT_VERSION = "network-augmented-sample-audit-v1"
 SEED_FIRST_SAMPLE_AUDIT_VERSION = "seed-first-sample-audit-v1"
-SEED_FIRST_SAMPLING_METHOD = "seed_first_research_sample_v1"
-HISTORICAL_SAMPLING_METHOD = "network_augmented_research_sample"
+SEED_FIRST_SAMPLING_METHOD: Literal["seed_first_research_sample_v1"] = "seed_first_research_sample_v1"
+HISTORICAL_SAMPLING_METHOD: Literal["network_augmented_research_sample"] = "network_augmented_research_sample"
 VALIDATION_RUN_STATUS = "validation_run"
 FORMAL_RUN_STATUS = "persisted_seed_first_formal_run"
 PRIMARY_SOURCE_SCOPE_QUOTA = 100
 OFFLINE_BASELINE_VERSION = "final-research-offline-v2"
+ResearchSamplingMethod = Literal[
+    "source_scope_stratified_sample_v1",
+    "network_augmented_research_sample",
+    "seed_first_research_sample_v1",
+]
 TARGET_DELIVERY_BASE_NETWORK_WEIGHT = MAIN_RANKING_WEIGHTS.base_network
 TARGET_DELIVERY_ENGAGED_NEIGHBOR_WEIGHT = MAIN_RANKING_WEIGHTS.engaged_neighbor
 TARGET_DELIVERY_TAG_AFFINITY_WEIGHT = MAIN_RANKING_WEIGHTS.tag_affinity
@@ -239,7 +244,7 @@ class FinalResearchModel(str, Enum):
 class _ResearchModelPolicy:
     model: FinalResearchModel
     augment_network_sample: bool
-    sampling_method: str
+    sampling_method: ResearchSamplingMethod
     network_normalization: str
     network_weight: float
     tag_affinity_weight: float
@@ -290,6 +295,8 @@ class FinalResearchConfig(BaseModel):
     def _validate_dataset_and_weights(self) -> FinalResearchConfig:
         if not math.isclose(self.network_weight + self.tag_affinity_weight, 1.0, abs_tol=1e-9):
             raise ValueError("network_weight and tag_affinity_weight must sum to 1.0")
+        if self.research_model is FinalResearchModel.TARGET_DELIVERY_RANKING_V2 and self.sample_size < 2:
+            raise ValueError("target_delivery_ranking_v2 requires sample_size >= 2 for the seed union")
         if self.provider.enabled:
             if self.provider.fail_closed_action is not FailClosedAction.RAISE:
                 raise ValueError("enabled final research provider must use fail_closed_action=raise")
@@ -543,7 +550,7 @@ class _PreparedInputs:
     base_source_scope_sample_counts: dict[str, int]
     final_source_scope_sample_counts: dict[str, int]
     target_scope_p95_weighted_degree: float
-    sampling_method: str
+    sampling_method: ResearchSamplingMethod
     sample_audit: dict[str, object]
 
 
@@ -1072,12 +1079,7 @@ class FinalResearchRunner:
         model_policy = _research_model_policy(self.config)
         builder = _ResearchInputBuilder(self.config, model_policy)
         prepared = builder.prepare()
-        sampling_status = (
-            FORMAL_RUN_STATUS if _adapter_live_api_triggered(self.decision_adapter) else VALIDATION_RUN_STATUS
-        )
         sample_audit = dict(prepared.sample_audit)
-        if sample_audit:
-            sample_audit["sampling_status"] = sampling_status
         platform = PlatformRecommendationModel(self.config, prepared, model_policy)
         scores = platform.score_all()
         ranked_scores = sorted(scores, key=lambda item: (-item.recommendation_score, item.user_id))
@@ -1090,6 +1092,11 @@ class FinalResearchRunner:
                 ranking_runtime = self._run_target_delivery_runtime(prepared, platform)
             else:
                 probability_runtime = self._run_runtime(prepared, platform)
+        sampling_status = (
+            FORMAL_RUN_STATUS if _adapter_live_api_triggered(self.decision_adapter) else VALIDATION_RUN_STATUS
+        )
+        if sample_audit:
+            sample_audit["sampling_status"] = sampling_status
         holdout_comments = builder.reveal_holdout()
         holdout_participant_ids = sorted({comment.commenter_user_id for comment in holdout_comments})
         diagnostic = _holdout_diagnostic(holdout_participant_ids, top_scores, scores_by_user)

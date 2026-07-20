@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from html import escape
 from importlib.resources import files
 from pathlib import Path
-from typing import Literal
+from typing import Literal, cast
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -60,6 +60,43 @@ RankingResultStatus = Literal[
     "provider_failed",
     "below_delivery_capacity",
 ]
+SamplingMethod = Literal[
+    "source_scope_stratified_sample_v1",
+    "network_augmented_research_sample",
+    "seed_first_research_sample_v1",
+]
+SamplingStatus = Literal[
+    "historical_network_augmented_run",
+    "validation_run",
+    "persisted_seed_first_formal_run",
+]
+SampleRole = Literal["seed", "network_cohort", "ordinary"]
+
+
+def _sampling_method(value: object) -> SamplingMethod:
+    if value not in {
+        "source_scope_stratified_sample_v1",
+        "network_augmented_research_sample",
+        "seed_first_research_sample_v1",
+    }:
+        raise ValueError(f"unsupported sampling_method: {value!r}")
+    return cast(SamplingMethod, value)
+
+
+def _sampling_status(value: object) -> SamplingStatus:
+    if value not in {
+        "historical_network_augmented_run",
+        "validation_run",
+        "persisted_seed_first_formal_run",
+    }:
+        raise ValueError(f"unsupported sampling_status: {value!r}")
+    return cast(SamplingStatus, value)
+
+
+def _sample_role(value: object) -> SampleRole:
+    if value not in {"seed", "network_cohort", "ordinary"}:
+        raise ValueError(f"unsupported sample_role: {value!r}")
+    return cast(SampleRole, value)
 
 
 def _render_section_explanation(explanation: RenderedConceptExplanation, test_id: str) -> str:
@@ -97,6 +134,8 @@ class FinalResearchReportRun(BaseModel):
     horizon: int
     random_seed: int
     runtime_enabled: bool
+    sampling_method: SamplingMethod = "network_augmented_research_sample"
+    sampling_status: SamplingStatus = "historical_network_augmented_run"
 
 
 class FinalResearchScoreSummary(BaseModel):
@@ -141,6 +180,7 @@ class FinalResearchSampleSummary(BaseModel):
     seed_count: int
     historical_video_count: int
     historical_interaction_rows: int
+    sample_role_counts: dict[SampleRole, int] = Field(default_factory=dict)
 
 
 class HoldoutSignalRow(BaseModel):
@@ -250,6 +290,7 @@ class UserReportRow(BaseModel):
     latent_attributes: dict[str, str | int | float] = Field(default_factory=dict)
     sample_source_scope: str = ""
     is_seed: bool = False
+    sample_role: SampleRole = "ordinary"
     assigned_step: int | None = None
     base_network_score: float | None = None
     dynamic_network_score: float | None = None
@@ -441,8 +482,8 @@ class RankingReportRun(BaseModel):
     maximum_target_exposures: int
     ranking_formula: str
     engaged_neighbor_formula: str
-    sampling_method: str = "network_augmented_research_sample"
-    sampling_status: str = "historical_network_augmented_run"
+    sampling_method: SamplingMethod = "network_augmented_research_sample"
+    sampling_status: SamplingStatus = "historical_network_augmented_run"
 
 
 class RankingSampleComparison(BaseModel):
@@ -584,7 +625,7 @@ class RankingUserReportRow(BaseModel):
     in_base_sample: bool
     is_seed: bool
     is_network_cohort: bool
-    sample_role: Literal["seed", "network_cohort", "ordinary"]
+    sample_role: SampleRole
     historical_comment_network_weighted_degree: int
     latest_ranking_time_step: int
     latest_ranking_position: int
@@ -740,6 +781,19 @@ class FinalResearchReportWriter:
         score_summary = dict(self.source.offline_score_summary)
         audit = dict(self.source.holdout_safe_audit)
         diagnostic = dict(self.source.holdout_diagnostic)
+        sampling_method = _sampling_method(
+            self.source.artifact_manifest.get(
+                "sampling_method",
+                audit.get("sampling_method", "network_augmented_research_sample"),
+            )
+        )
+        sampling_status = _sampling_status(
+            self.source.artifact_manifest.get(
+                "sampling_status",
+                audit.get("sampling_status", "historical_network_augmented_run"),
+            )
+        )
+        sample_role_counts = self.source.artifact_manifest.get("sample_role_counts", {})
         target_video = safe_user_data(dict(self.source.target_video))
         if not isinstance(target_video, dict):  # pragma: no cover
             raise TypeError("safe target video must remain an object")
@@ -752,6 +806,8 @@ class FinalResearchReportWriter:
                 horizon=_as_int(self.source.config.get("horizon")),
                 random_seed=_as_int(self.source.config.get("random_seed")),
                 runtime_enabled=self.source.runtime_enabled,
+                sampling_method=sampling_method,
+                sampling_status=sampling_status,
             ),
             recommendation_model=FinalResearchRecommendationModel(
                 formula=str(score_summary.get("formula", "")),
@@ -782,11 +838,16 @@ class FinalResearchReportWriter:
                     "seed_count": audit.get("seed_count", 0),
                     "historical_video_count": audit.get("historical_video_count", 0),
                     "historical_interaction_rows": audit.get("historical_interaction_rows", 0),
+                    "sample_role_counts": sample_role_counts,
                 }
             ),
             diagnostics=FinalResearchDiagnostics(
                 holdout=HoldoutDiagnostic.model_validate(diagnostic),
-                seed_method="global top10 and holdout-safe local top10 union within the sample",
+                seed_method=(
+                    "global top10 and holdout-safe local top10 union from the full eligible pool"
+                    if sampling_method == "seed_first_research_sample_v1"
+                    else "global top10 and holdout-safe local top10 union within the sample"
+                ),
                 proxy_method=str(audit.get("profile_index_method", "")),
                 proxy_semantics=str(audit.get("proxy_semantics", "")),
             ),
@@ -852,6 +913,7 @@ class FinalResearchReportWriter:
                     latent_attributes=latent_attributes,
                     sample_source_scope=str(user.get("sample_source_scope", "")),
                     is_seed=bool(user.get("is_seed", False)),
+                    sample_role=_sample_role(user.get("sample_role", "ordinary")),
                     assigned_step=_optional_int(exposure, "assigned_step"),
                     base_network_score=_optional_float(exposure, "base_network_score"),
                     dynamic_network_score=_optional_float(exposure, "dynamic_network_score"),
@@ -937,6 +999,16 @@ class FinalResearchReportWriter:
         opportunity_note = (
             "每个用户最多一次 TargetVideo 机会" if payload.run.runtime_enabled else "Provider runtime 未执行"
         )
+        run_method_status = (
+            "Persisted Seed-First Formal Run（已持久化的 Seed-First 正式运行）"
+            if payload.run.sampling_status == "persisted_seed_first_formal_run"
+            else "Validation Run（验证运行） · Seed-First Research Sample（先选种子研究样本）"
+            if payload.run.sampling_method == "seed_first_research_sample_v1"
+            else "Historical Network-Augmented Run（历史 Network-Augmented 运行）"
+            if payload.run.sampling_status == "historical_network_augmented_run"
+            else "Validation Run（验证运行）"
+        )
+        sample_role_counts = payload.sample_summary.sample_role_counts
         seed_exposures = sum(row.is_seed and row.exposure_status == "target_exposed" for row in payload.users)
         non_seed_exposures = sum(not row.is_seed and row.exposure_status == "target_exposed" for row in payload.users)
         exposure_breakdown = (
@@ -957,7 +1029,7 @@ class FinalResearchReportWriter:
 <body>
   <main data-testid="final-research-report">
     <header class="topbar">
-      <div><span class="eyebrow">FINAL RESEARCH · JINJIANG</span><h1>{escape(payload.title)}</h1></div>
+      <div><span class="eyebrow">FINAL RESEARCH · JINJIANG</span><h1>{escape(payload.title)}</h1><span class="quiet-badge" data-testid="run-method-status">{escape(run_method_status)}</span></div>
       <nav class="downloads" aria-label="Artifact downloads">
         <a href="{payload.downloads.csv}" download>下载 CSV</a>
         <a href="{payload.downloads.users_json}" download>下载 JSON</a>
@@ -1008,6 +1080,8 @@ class FinalResearchReportWriter:
       <article><span>Background</span><strong id="metric-background">0</strong></article>
       <article><span>Provider failed</span><strong id="metric-failed">0</strong></article>
       <article><span>Seed users</span><strong>{payload.sample_summary.seed_count}</strong></article>
+      <article><span>Seed Neighbor Cohort</span><strong>{sample_role_counts.get("network_cohort", 0)}</strong></article>
+      <article><span>Ordinary users</span><strong>{sample_role_counts.get("ordinary", 0)}</strong></article>
     </section>
 
     <section class="content-band" id="recommendation" data-testid="recommendation-section">
@@ -1165,9 +1239,7 @@ def _build_ranking_report_payload(source: FinalResearchReportSource) -> FinalRes
         result_status = _ranking_result_status(outcome.get("result_status"))
         is_seed = bool(safe_user.get("is_seed", False))
         is_network_cohort = user_id in cohort_user_ids
-        sample_role: Literal["seed", "network_cohort", "ordinary"] = (
-            "seed" if is_seed else "network_cohort" if is_network_cohort else "ordinary"
-        )
+        sample_role: SampleRole = "seed" if is_seed else "network_cohort" if is_network_cohort else "ordinary"
         rows.append(
             RankingUserReportRow(
                 user_id=user_id,
@@ -1271,12 +1343,12 @@ def _build_ranking_report_payload(source: FinalResearchReportSource) -> FinalRes
             maximum_target_exposures=_as_int(runtime_summary.get("maximum_target_exposures")),
             ranking_formula=str(runtime_summary.get("ranking_formula", "")),
             engaged_neighbor_formula=str(runtime_summary.get("engaged_neighbor_formula", "")),
-            sampling_method=str(
+            sampling_method=_sampling_method(
                 runtime_summary.get("sampling_method")
                 or source.artifact_manifest.get("sampling_method")
                 or "network_augmented_research_sample"
             ),
-            sampling_status=str(
+            sampling_status=_sampling_status(
                 runtime_summary.get("sampling_status")
                 or source.artifact_manifest.get("sampling_status")
                 or "historical_network_augmented_run"
@@ -3426,6 +3498,7 @@ def _build_explainable_payload(
     neighbor_activated = maximum_actual_boost > 0.0
     sample_size = len(users)
     runtime_enabled = base_payload.run.runtime_enabled
+    seed_first_run = base_payload.run.sampling_method == "seed_first_research_sample_v1"
     video_method = (
         "仅一条真实 TargetVideo 进入 runtime，历史视频只提供信号。"
         if runtime_enabled
@@ -3457,7 +3530,11 @@ def _build_explainable_payload(
                     "research_sample",
                     "Research Sample",
                     sample_size,
-                    "按 source scope 配额、去重与稳定补齐形成研究样本。",
+                    (
+                        "从 full eligible pool 先选 seeds、再纳入一跳直接邻居，并按 Primary Video Source Scope 稳定补足。"
+                        if seed_first_run
+                        else "按 source scope 配额、去重与稳定补齐形成研究样本。"
+                    ),
                 ),
                 _funnel_stage(
                     "recommendation_opportunity",
@@ -3487,7 +3564,15 @@ def _build_explainable_payload(
             ],
             "methodology_flow": [
                 _method_stage("data", "数据来源", "读取 processed Video Catalog、用户画像和评论派生互动证据。"),
-                _method_stage("sampling", "用户筛选", "按 source scope 配额抽样，去重后使用稳定顺序补齐。"),
+                _method_stage(
+                    "sampling",
+                    "用户筛选",
+                    (
+                        "从全量合格用户形成 seed union，纳入 Historical Set 一跳邻居，再按来源配额稳定补足。"
+                        if seed_first_run
+                        else "按 source scope 配额抽样，去重后使用稳定顺序补齐。"
+                    ),
+                ),
                 _method_stage("video", "视频用途", video_method),
                 _method_stage("network", "评论网络", "一级评论、回复和 @ mention 构成历史互动图，不等同关注关系。"),
                 _method_stage(
@@ -3509,8 +3594,16 @@ def _build_explainable_payload(
             },
             "sampling_explanation": {
                 "source_scope_counts": base_payload.sample_summary.source_scope_counts,
-                "quota_method": "按 source_challenge_name 分配 Research Sample 配额。",
-                "deduplication_and_refill": "用户按 user_id 去重；配额不足时使用稳定候选顺序补齐到固定样本数。",
+                "quota_method": (
+                    "Seeds 与 Seed Neighbor Cohort 先占用 Primary Video Source Scope 配额，普通真实用户补足剩余配额。"
+                    if seed_first_run
+                    else "按 source_challenge_name 分配 Research Sample 配额。"
+                ),
+                "deduplication_and_refill": (
+                    "角色按 user_id 互斥去重；scope 不足时使用 audit 记录的 deterministic fallback 补足。"
+                    if seed_first_run
+                    else "用户按 user_id 去重；配额不足时使用稳定候选顺序补齐到固定样本数。"
+                ),
                 "holdout_safe_projection": "TargetVideo 互动在画像投影、抽样、seed 选择和推荐评分完成前保持 holdout。",
                 "seed_union_method": base_payload.diagnostics.seed_method,
                 "seed_forced_exposure": (
@@ -3688,6 +3781,23 @@ def _validate_ranking_rebuild_evidence(
     summary = _read_json_object(artifact_paths["ranking_runtime_summary"])
     if summary.get("runtime_version") != FINAL_RESEARCH_RANKING_RUNTIME_VERSION:
         raise ValueError("unsupported Target Delivery Ranking runtime summary schema")
+    expected_sampling_method = payload.run.sampling_method
+    expected_sampling_status = payload.run.sampling_status
+    for evidence_name, evidence in (
+        ("artifact manifest", manifest),
+        ("ranking runtime summary", summary),
+    ):
+        evidence_method = evidence.get("sampling_method") or "network_augmented_research_sample"
+        evidence_status = evidence.get("sampling_status") or "historical_network_augmented_run"
+        if evidence_method != expected_sampling_method:
+            raise ValueError(f"{evidence_name} sampling_method does not match report payload")
+        if evidence_status != expected_sampling_status:
+            raise ValueError(f"{evidence_name} sampling_status does not match report payload")
+    if seed_first:
+        if audit.get("sampling_method") != expected_sampling_method:
+            raise ValueError("seed-first sample audit sampling_method does not match report payload")
+        if audit.get("sampling_status") != expected_sampling_status:
+            raise ValueError("seed-first sample audit sampling_status does not match report payload")
     summary_counts = _mapping_counts(summary, "counts", "ranking runtime summary")
     derived_counts = {
         "sample_users": len(payload.users),
@@ -3881,6 +3991,12 @@ def _validate_rebuild_evidence(
         raise ValueError("report payload seed_user_ids are inconsistent")
     if set(payload.sample_summary.seed_user_ids) != {row.user_id for row in payload.users if row.is_seed}:
         raise ValueError("report payload seed_user_ids do not match users")
+    actual_role_counts = dict(sorted(Counter(row.sample_role for row in payload.users).items()))
+    declared_role_counts = dict(sorted(payload.sample_summary.sample_role_counts.items()))
+    if declared_role_counts and declared_role_counts != actual_role_counts:
+        raise ValueError("report payload sample role counts do not match users")
+    if payload.run.sampling_method == "seed_first_research_sample_v1" and not declared_role_counts:
+        raise ValueError("Seed-First report payload requires sample role counts")
     expected_aggregates = _build_report_aggregates(payload.users, payload.run.horizon)
     if payload.aggregates.model_dump(mode="json") != expected_aggregates.model_dump(mode="json"):
         raise ValueError("report payload aggregates do not match users")

@@ -1812,7 +1812,11 @@ test('configured formal ranking run preserves payload-derived evidence on deskto
 
   const payload = JSON.parse(readFileSync(payloadPath, 'utf8')) as RankingPayload;
   const formalRoleCounts = sampleRoleCounts(payload);
-  expect(formalRoleCounts).toEqual({ seed: 20, network_cohort: 13, ordinary: 967 });
+  expect(formalRoleCounts).toEqual({
+    seed: payload.sample_comparison.seed_count,
+    network_cohort: payload.sample_comparison.network_cohort_count,
+    ordinary: payload.sample_comparison.ordinary_count,
+  });
   const changedBatches = payload.ranking_diagnostics.paired_ablation.batches.filter(
     (batch) => batch.network_added_user_ids.length > 0 || batch.network_removed_user_ids.length > 0,
   ).length;
@@ -1869,9 +1873,13 @@ test('configured formal ranking run preserves payload-derived evidence on deskto
     await page.goto(pathToFileURL(reportPath).toString());
     await assertReaderComprehensionContract(page, runDir, payload);
     const runIntro = page.getByTestId('ranking-hero');
-    await expect(runIntro.getByTestId('run-evidence-seed-count')).toHaveText('20');
-    await expect(runIntro.getByTestId('run-evidence-network-cohort-count')).toHaveText('13');
-    await expect(runIntro.getByTestId('run-evidence-ordinary-count')).toHaveText('967');
+    await expect(runIntro.getByTestId('run-evidence-seed-count')).toHaveText(formalRoleCounts.seed.toLocaleString());
+    await expect(runIntro.getByTestId('run-evidence-network-cohort-count')).toHaveText(
+      formalRoleCounts.network_cohort.toLocaleString(),
+    );
+    await expect(runIntro.getByTestId('run-evidence-ordinary-count')).toHaveText(
+      formalRoleCounts.ordinary.toLocaleString(),
+    );
     await expect(page.getByTestId('network-effect-section')).toContainText(
       `${changedBatches} / ${payload.run.horizon} 个批次`,
     );

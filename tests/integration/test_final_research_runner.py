@@ -600,8 +600,10 @@ class _RecordingAdapter(LLMDecisionAdapter):
 
 
 class _TargetDeliveryAdapter(LLMDecisionAdapter):
-    def __init__(self, *, failed_user_id: str | None = None) -> None:
+    def __init__(self, *, failed_user_id: str | None = None, mark_live_api_triggered: bool = False) -> None:
         self.failed_user_id = failed_user_id
+        self.mark_live_api_triggered = mark_live_api_triggered
+        self.live_api_triggered = False
         self.calls: list[dict[str, object]] = []
 
     def decide(
@@ -612,6 +614,8 @@ class _TargetDeliveryAdapter(LLMDecisionAdapter):
         platform_context: PlatformContext | None = None,
         time_step: int = 0,
     ) -> EngageDecision:
+        if self.mark_live_api_triggered:
+            self.live_api_triggered = True
         self.calls.append(
             {
                 "post": post,
@@ -700,6 +704,7 @@ def test_offline_final_research_baseline_is_holdout_safe_and_deterministic(tmp_p
     assert len(offline_report_rows) == 4
     assert {row["result_status"] for row in offline_report_rows} == {"runtime_not_run"}
     assert {row["provider_status"] for row in offline_report_rows} == {"runtime_not_run"}
+    assert {row["sample_role"] for row in offline_report_rows} == {"seed"}
 
     score_rows = {row["user_id"]: row for row in _read_csv(first_output / "offline_scores.csv")}
     assert len(score_rows) == 6
@@ -731,6 +736,11 @@ def test_offline_final_research_baseline_is_holdout_safe_and_deterministic(tmp_p
     assert "Signature 1" in artifact_text
     offline_payload = json.loads((first_output / "final_research_report_payload.json").read_text(encoding="utf-8"))
     offline_html = (first_output / "report.html").read_text(encoding="utf-8")
+    assert offline_payload["run"]["sampling_method"] == "seed_first_research_sample_v1"
+    assert offline_payload["run"]["sampling_status"] == "validation_run"
+    assert offline_payload["sample_summary"]["sample_role_counts"] == {"seed": 4}
+    assert {row["sample_role"] for row in offline_payload["users"]} == {"seed"}
+    assert offline_payload["diagnostics"]["seed_method"].endswith("from the full eligible pool")
     assert offline_payload["recommendation_model"]["network_weight"] == 0.5
     assert offline_payload["recommendation_model"]["tag_affinity_weight"] == 0.2
     assert offline_payload["video_usage"]["runtime_target_video_count"] == 0
@@ -739,6 +749,8 @@ def test_offline_final_research_baseline_is_holdout_safe_and_deterministic(tmp_p
     assert "runtime 未启用" in offline_payload["batch_explanation"]["assignment_method"]
     assert "Batch 0 为 seeds" not in offline_html
     assert "30 个固定推荐批次" not in offline_html
+    assert "Validation Run（验证运行） · Seed-First Research Sample（先选种子研究样本）" in offline_html
+    assert "union within the sample" not in offline_html
     assert "<dt>推荐批次</dt><dd>未执行</dd>" in offline_html
     for relative_path in manifest["artifacts"].values():
         assert (first_output / relative_path).read_bytes() == (second_output / relative_path).read_bytes()
@@ -1234,6 +1246,35 @@ def test_target_delivery_ranking_runtime_caps_delivery_and_marks_final_below_cap
     } == {"not_called"}
 
 
+def test_target_delivery_ranking_runtime_persists_live_status_after_adapter_call(tmp_path: Path) -> None:
+    dataset_dir = _make_target_delivery_fixture(tmp_path)
+    provider_config = ProviderLLMConfig(enabled=True, model="mock-model", require_live_env=False)
+    adapter = _TargetDeliveryAdapter(mark_live_api_triggered=True)
+    run_dir = FinalResearchRunner(
+        FinalResearchConfig(dataset_dir=dataset_dir, sample_size=70, provider=provider_config),
+        adapter,
+    ).run_and_write(tmp_path / "ranking-live-status")
+
+    documents = [
+        json.loads((run_dir / file_name).read_text(encoding="utf-8"))
+        for file_name in (
+            "config_snapshot.json",
+            "seed_first_sample_audit.json",
+            "holdout_safe_audit.json",
+            "artifact_manifest.json",
+            "ranking_runtime_summary.json",
+        )
+    ]
+    report_payload = json.loads((run_dir / "final_research_report_payload.json").read_text(encoding="utf-8"))
+
+    assert adapter.live_api_triggered is True
+    assert all(document["sampling_status"] == "persisted_seed_first_formal_run" for document in documents)
+    assert report_payload["run"]["sampling_status"] == "persisted_seed_first_formal_run"
+    assert documents[3]["live_api_triggered"] is True
+    assert "Persisted Seed-First Formal Run" in (run_dir / "report.html").read_text(encoding="utf-8")
+    assert rebuild_final_research_report(run_dir) == run_dir / "report.html"
+
+
 def test_target_delivery_ranking_report_rebuild_is_deterministic(tmp_path: Path) -> None:
     dataset_dir = _make_target_delivery_fixture(tmp_path)
     provider_config = ProviderLLMConfig(enabled=True, model="mock-model", require_live_env=False)
@@ -1322,6 +1363,7 @@ def test_target_delivery_ranking_report_escapes_download_paths_in_html(tmp_path:
         "duplicate_payload_user",
         "duplicate_runtime_user",
         "count_mismatch",
+        "sampling_status_mismatch",
         "diagnostic_boolean_string",
         "csv_unsafe_link",
         "unsafe_path",
@@ -1362,6 +1404,11 @@ def test_target_delivery_ranking_report_rebuild_rejects_invalid_evidence_before_
         summary = json.loads(summary_path.read_text(encoding="utf-8"))
         summary["counts"]["sample_users"] += 1
         summary_path.write_text(json.dumps(summary, ensure_ascii=False) + "\n", encoding="utf-8")
+    elif corruption == "sampling_status_mismatch":
+        manifest_path = run_dir / "artifact_manifest.json"
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest["sampling_status"] = "persisted_seed_first_formal_run"
+        manifest_path.write_text(json.dumps(manifest, ensure_ascii=False) + "\n", encoding="utf-8")
     elif corruption == "diagnostic_boolean_string":
         diagnostics_path = run_dir / "ranking_diagnostics_summary.json"
         diagnostics = json.loads(diagnostics_path.read_text(encoding="utf-8"))
@@ -1941,6 +1988,16 @@ def test_final_research_config_rejects_missing_target_and_oversized_sample(tmp_p
     dataset_dir = _make_processed_fixture(tmp_path / "fresh")
     with pytest.raises(ValidationError, match="sample_size"):
         FinalResearchConfig(dataset_dir=dataset_dir, sample_size=7)
+    with pytest.raises(ValidationError, match="requires sample_size >= 2"):
+        FinalResearchConfig(dataset_dir=dataset_dir, sample_size=1)
+    assert (
+        FinalResearchConfig(
+            dataset_dir=dataset_dir,
+            sample_size=1,
+            research_model=FinalResearchModel.PROBABILITY_V1,
+        ).sample_size
+        == 1
+    )
 
     with pytest.raises(ValidationError, match="must sum to 1.0"):
         FinalResearchConfig(dataset_dir=dataset_dir, sample_size=4, network_weight=0.8, tag_affinity_weight=0.3)
