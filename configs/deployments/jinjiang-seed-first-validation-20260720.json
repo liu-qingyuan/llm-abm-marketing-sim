@@ -1,0 +1,21 @@
+{
+  "schema_version": "abm-report-release-contract-v1",
+  "source_directory": "runs/jinjiang-runtime-trace-mock-validation-20260720T130020Z",
+  "payload_schema_version": "final-research-ranking-report-payload-v4",
+  "manifest_version": "final-research-ranking-runtime-v2",
+  "sampling_method": "seed_first_research_sample_v1",
+  "sampling_status": "validation_run",
+  "sample_role_counts": {
+    "seed": 20,
+    "network_cohort": 60,
+    "ordinary": 920
+  },
+  "artifact_sha256": {
+    "report.html": "3541e405583aac0f8eaac8aa90c28023603028c08824614fd7de0b75532558ad",
+    "artifact_manifest.json": "39c35c88cb19d4e5938c12377777b3d5ec1b2811daf8950e570c073fe6a19335",
+    "final_research_report_payload.json": "a7135a91c14631e77054c5fe5e2078a39748820922bda524e2730ef2b49c56cb",
+    "seed_first_sample_audit.json": "f95f6dc269f3ac60c03220d3f26babd2f3bca1b45a7e2c1c73410c9582c9995e",
+    "field_lineage_catalog.json": "e5c8eb2896b1486a89fedbde62f14b56975583db4f318f02293d337265f356a5",
+    "user_field_trace.json": "02b290587a6fca16c7fe5cf614bef7cdc87708c93810c9e7b2698d209fe8a3bb"
+  }
+}
