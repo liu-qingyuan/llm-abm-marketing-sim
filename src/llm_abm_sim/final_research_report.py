@@ -26,6 +26,9 @@ from .field_lineage_trace import (
     PromptInclusionStatus,
     SourceRecordLocator,
     UserFieldTrace,
+    field_lineage_coverage_audit,
+    field_lineage_definitions,
+    field_value_status,
 )
 from .prompt_field_summary import JINJIANG_PROMPT_V2_PROFILE_FIELDS
 from .research_explanations import (
@@ -1728,37 +1731,14 @@ def _ranking_lineage_field_names() -> set[str]:
 
 
 def _ranking_field_lineage() -> list[FieldLineageEntry]:
+    trace_definitions = {
+        definition.field_name: definition for definition in field_lineage_definitions()
+    }
     direct = {
-        "user_id",
-        "nickname",
-        "bio",
-        "signature",
-        "follower_count",
-        "following_count",
-        "video_count",
         *(f"target_video.{field}" for field in FinalResearchTargetVideo.model_fields),
         "ranking_rounds.candidates.user_id",
     }
-    historical = {
-        "interest_tags",
-        "historical_tags",
-        "sample_source_scope",
-        "historical_comment_network_weighted_degree",
-    }
     derived = {
-        "activity_score",
-        "activity_video_score",
-        "activity_comment_score",
-        "activity_reply_score",
-        "global_influence_score",
-        "local_influence_score",
-        "local_network_score",
-        "local_recognition_score",
-        "base_network_relevance",
-        "engaged_neighbor_count",
-        "engaged_neighbor_signal",
-        "historical_tag_affinity",
-        "recommendation_score",
         "run.ranking_formula",
         "run.engaged_neighbor_formula",
         "ranking_rounds.candidates.base_network_relevance",
@@ -1767,31 +1747,17 @@ def _ranking_field_lineage() -> list[FieldLineageEntry]:
         "ranking_rounds.candidates.historical_tag_affinity",
         "ranking_rounds.candidates.recommendation_score",
     }
-    synthetic = {field for field in RankingUserReportRow.model_fields if field.startswith("latent_")}
+    synthetic: set[str] = set()
     synthetic.update({"run.random_seed", "run.delivery_capacity", "run.maximum_target_exposures"})
     all_fields = _ranking_lineage_field_names()
     stages: dict[str, list[FieldUsageStage]] = {field: ["Report Only"] for field in all_fields}
-    stages["user_id"] = ["Sampling", "Seed Selection", "Ranking", "Report Only"]
-    stages["sample_source_scope"] = ["Sampling", "Report Only"]
+    for field_name, definition in trace_definitions.items():
+        stages[field_name] = list(definition.declared_usage_stages)
     stages["in_base_sample"] = ["Sampling", "Report Only"]
     stages["is_network_cohort"] = ["Sampling", "Ranking", "Report Only"]
     stages["sample_role"] = ["Sampling", "Report Only"]
     stages["is_seed"] = ["Seed Selection", "Ranking", "Report Only"]
-    stages["global_influence_score"] = ["Seed Selection", "LLM Prompt", "Report Only"]
-    stages["local_influence_score"] = ["Seed Selection", "LLM Prompt", "Report Only"]
-    stages["activity_score"] = ["LLM Prompt", "Report Only"]
-    stages["interest_tags"] = ["LLM Prompt", "Report Only"]
-    for field in JINJIANG_PROMPT_V2_PROFILE_FIELDS:
-        if "LLM Prompt" not in stages[field]:
-            stages[field] = [*stages[field][:-1], "LLM Prompt", stages[field][-1]]
     for field in (
-        "historical_tags",
-        "historical_comment_network_weighted_degree",
-        "base_network_relevance",
-        "engaged_neighbor_count",
-        "engaged_neighbor_signal",
-        "historical_tag_affinity",
-        "recommendation_score",
         "latest_ranking_time_step",
         "latest_ranking_position",
         "selected_for_exposure",
@@ -1821,10 +1787,10 @@ def _ranking_field_lineage() -> list[FieldLineageEntry]:
     entries: list[FieldLineageEntry] = []
     for field_name in sorted(all_fields):
         provenance: FieldProvenance
-        if field_name in direct:
+        if field_name in trace_definitions:
+            provenance = trace_definitions[field_name].provenance
+        elif field_name in direct:
             provenance = "Direct Observed Profile Field"
-        elif field_name in historical:
-            provenance = "Historical Behavioral Evidence"
         elif field_name in derived:
             provenance = "Derived Proxy Metric"
         elif field_name in synthetic:
@@ -4004,6 +3970,14 @@ def _validate_ranking_rebuild_evidence(
             definition.model_dump(mode="json") for definition in v4_payload.field_lineage_catalog
         ]:
             raise ValueError("field lineage catalog artifact does not match ranking report payload")
+        if v4_payload.field_lineage_catalog != field_lineage_definitions():
+            raise ValueError("field lineage catalog does not match the supported field definitions")
+        expected_coverage_audit = field_lineage_coverage_audit(
+            v4_payload.field_lineage_catalog,
+            v4_payload.user_field_trace_index,
+        )
+        if catalog_document.get("coverage_audit") != expected_coverage_audit:
+            raise ValueError("field lineage coverage audit does not match ranking report payload")
         if trace_document.get("users") != {
             user_id: [trace.model_dump(mode="json") for trace in traces]
             for user_id, traces in v4_payload.user_field_trace_index.items()
@@ -4033,6 +4007,7 @@ def _validate_ranking_rebuild_evidence(
             payload_values = payload_user.model_dump(mode="json")
             for trace in traces:
                 locator = trace.source_record_locator
+                definition = catalog_by_field[trace.field_name]
                 if artifacts.get(locator.artifact_id) != locator.relative_path:
                     raise ValueError(f"field trace locator does not match artifact manifest for {user_id}")
                 if locator.record_key.get("user_id") != user_id:
@@ -4045,6 +4020,14 @@ def _validate_ranking_rebuild_evidence(
                     offline_records_by_user=offline_records_by_user,
                     candidate_records=candidate_records,
                 )
+                _validate_trace_source_value(
+                    trace=trace,
+                    definition=definition,
+                    payload_value=payload_values[trace.field_name],
+                    sample_record=sample_records_by_user[user_id],
+                    offline_record=offline_records_by_user[user_id],
+                    candidate_records=candidate_records,
+                )
                 if trace.field_name == "interest_tags":
                     values = source_record.interest_tags
                     source_evidence = source_record.interest_tag_evidence
@@ -4053,7 +4036,6 @@ def _validate_ranking_rebuild_evidence(
                     source_evidence = source_record.historical_tag_evidence
                 else:
                     values = payload_values[trace.field_name]
-                    definition = catalog_by_field[trace.field_name]
                     source_evidence = _expected_trace_evidence(
                         definition=definition,
                         user_id=user_id,
@@ -4063,7 +4045,7 @@ def _validate_ranking_rebuild_evidence(
                     )
                 if values != payload_values[trace.field_name]:
                     raise ValueError(f"field source record value does not match ranking report user for {user_id}")
-                expected_status = _trace_value_status(values)
+                expected_status = field_value_status(values)
                 if trace.value_status != expected_status:
                     raise ValueError(f"field trace value status does not match source record for {user_id}")
                 if trace.evidence != source_evidence:
@@ -4530,12 +4512,59 @@ def _validate_trace_locator_record(
         raise ValueError(f"field trace locator has no source record for {user_id}")
 
 
-def _trace_value_status(value: object) -> str:
-    if value is None:
-        return "unavailable"
-    if value == "" or (isinstance(value, Sequence) and not isinstance(value, (str, bytes)) and not value):
-        return "empty"
-    return "present"
+def _validate_trace_source_value(
+    *,
+    trace: UserFieldTrace,
+    definition: FieldLineageDefinition,
+    payload_value: object,
+    sample_record: Mapping[str, object],
+    offline_record: Mapping[str, object],
+    candidate_records: Sequence[Mapping[str, object]],
+) -> None:
+    locator = trace.source_record_locator
+    source_value: object
+    if locator.artifact_id == "sample_manifest_json":
+        if definition.provenance == "Synthetic Experiment Label":
+            latent_attributes = sample_record.get("latent_attributes")
+            if not isinstance(latent_attributes, Mapping):
+                raise ValueError(f"sample manifest has no latent attribute record for {trace.user_id}")
+            if trace.field_name not in latent_attributes:
+                raise ValueError(f"sample manifest is missing {trace.field_name} for {trace.user_id}")
+            source_value = latent_attributes.get(trace.field_name)
+        else:
+            if trace.field_name not in sample_record:
+                raise ValueError(f"sample manifest is missing {trace.field_name} for {trace.user_id}")
+            source_value = sample_record.get(trace.field_name)
+    elif locator.artifact_id == "offline_scores":
+        source_field = definition.source_fields[0]
+        if source_field not in offline_record:
+            raise ValueError(f"offline scores are missing {source_field} for {trace.user_id}")
+        source_value = offline_record.get(source_field)
+    elif locator.artifact_id == "ranking_runtime_candidates":
+        time_step = _as_int(locator.record_key.get("time_step"))
+        source_record = next(
+            record
+            for record in candidate_records
+            if str(record.get("user_id", "")) == trace.user_id
+            and _as_int(record.get("time_step")) == time_step
+        )
+        if trace.field_name not in source_record:
+            raise ValueError(f"ranking candidate is missing {trace.field_name} for {trace.user_id}")
+        source_value = source_record.get(trace.field_name)
+    else:
+        return
+    if not _trace_source_value_matches(source_value, payload_value):
+        raise ValueError(f"field trace source value does not match ranking report user for {trace.user_id}")
+
+
+def _trace_source_value_matches(source_value: object, payload_value: object) -> bool:
+    if isinstance(payload_value, bool):
+        return source_value is payload_value
+    if isinstance(payload_value, int):
+        return _as_int(source_value) == payload_value
+    if isinstance(payload_value, float):
+        return _as_float(source_value) == payload_value
+    return source_value == payload_value
 
 
 def _read_json_records(path: Path, artifact_name: str) -> list[Mapping[str, object]]:

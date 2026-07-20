@@ -91,6 +91,8 @@ def test_field_lineage_trace_records_recomputable_derived_proxy_inputs_and_promp
                 "reply_count_p95": 5.0,
                 "edge_degree_p95": 12.0,
                 "comment_like_sum_p95": 20.0,
+                "target_scope_weighted_degree": 5,
+                "target_scope_p95_weighted_degree": 12.0,
             }
         },
     )
@@ -102,11 +104,18 @@ def test_field_lineage_trace_records_recomputable_derived_proxy_inputs_and_promp
     assert catalog["activity_score"].transformation_method == "holdout_safe_activity_proxy_v1"
     assert catalog["activity_comment_score"].source_fields == ["comment_count", "comment_count_p95"]
     assert catalog["local_influence_score"].source_fields == ["local_network_score", "local_recognition_score"]
+    assert catalog["base_network_relevance"].source_fields == [
+        "target_scope_weighted_degree",
+        "target_scope_p95_weighted_degree",
+    ]
+    assert catalog["base_network_relevance"].record_key_fields == ["user_id"]
+    assert catalog["engaged_neighbor_count"].record_key_fields == ["user_id", "time_step"]
+    assert catalog["engaged_neighbor_count"].value_range == "大于或等于 0 的整数。"
     source_record = bundle.source_records[0]
     assert source_record.derived_proxy_inputs["comment_count"] == 4
     traces = {trace.field_name: trace for trace in bundle.trace_index["u1"]}
     activity = traces["activity_score"]
-    assert activity.source_record_locator.artifact_id == "field_source_records"
+    assert activity.source_record_locator.artifact_id == "sample_manifest_json"
     assert activity.source_record_locator.record_key == {"user_id": "u1"}
     assert activity.actual_usage_stages == ["LLM Prompt", "Report Only"]
     assert activity.prompt_inclusion_status == "included"
@@ -121,6 +130,12 @@ def test_field_lineage_trace_records_recomputable_derived_proxy_inputs_and_promp
         "activity_video_score=0.2",
         "activity_comment_score=0.6",
         "activity_reply_score=0.4",
+    ]
+    base_network = traces["base_network_relevance"]
+    assert base_network.source_record_locator.artifact_id == "field_source_records"
+    assert base_network.evidence[0].matched_values == [
+        "target_scope_weighted_degree=5",
+        "target_scope_p95_weighted_degree=12.0",
     ]
     assert traces["activity_video_score"].prompt_inclusion_status == "not_allowlisted"
 

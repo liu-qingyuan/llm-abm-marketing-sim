@@ -901,6 +901,8 @@ class _ResearchInputBuilder:
                     "reply_count_p95": thresholds["reply_count"],
                     "edge_degree_p95": thresholds["edge_degree"],
                     "comment_like_sum_p95": thresholds["comment_like_sum"],
+                    "target_scope_weighted_degree": target_scope_degree.get(user_id, 0),
+                    "target_scope_p95_weighted_degree": target_scope_p95_weighted_degree,
                 }
                 for user_id in users_by_id
             },

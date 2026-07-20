@@ -77,6 +77,8 @@ class _DerivedProxySpec:
     transformation_description: str
     declared_usage_stages: tuple[FieldUsageStage, ...]
     source_artifact_id: str = "field_source_records"
+    record_key_fields: tuple[str, ...] = ("user_id",)
+    value_range: str = "0.0 到 1.0。"
 
 
 _DERIVED_PROXY_FIELDS: dict[str, _DerivedProxySpec] = {
@@ -87,6 +89,7 @@ _DERIVED_PROXY_FIELDS: dict[str, _DerivedProxySpec] = {
         "holdout_safe_activity_proxy_v1",
         "0.25 * activity_video_score + 0.45 * activity_comment_score + 0.30 * activity_reply_score。",
         ("LLM Prompt", "Report Only"),
+        "sample_manifest_json",
     ),
     "activity_video_score": _DerivedProxySpec(
         "视频活跃分量",
@@ -119,6 +122,7 @@ _DERIVED_PROXY_FIELDS: dict[str, _DerivedProxySpec] = {
         "processed_global_influence_proxy_v1",
         "保留 processed variant 已计算的全平台影响力代理，并关联实际 follower_count。",
         ("Seed Selection", "LLM Prompt", "Report Only"),
+        "sample_manifest_json",
     ),
     "local_influence_score": _DerivedProxySpec(
         "局部影响力代理",
@@ -127,6 +131,7 @@ _DERIVED_PROXY_FIELDS: dict[str, _DerivedProxySpec] = {
         "holdout_safe_local_influence_proxy_v1",
         "0.60 * local_network_score + 0.40 * local_recognition_score。",
         ("Seed Selection", "LLM Prompt", "Report Only"),
+        "sample_manifest_json",
     ),
     "local_network_score": _DerivedProxySpec(
         "局部网络分量",
@@ -147,11 +152,10 @@ _DERIVED_PROXY_FIELDS: dict[str, _DerivedProxySpec] = {
     "base_network_relevance": _DerivedProxySpec(
         "历史网络相关性",
         "由 Historical Set 评论网络 weighted degree 形成的 holdout-safe 排序代理。",
-        ("historical_comment_network_weighted_degree", "base_network_relevance"),
+        ("target_scope_weighted_degree", "target_scope_p95_weighted_degree"),
         "holdout_safe_network_relevance_v1",
         "使用 Historical Set weighted degree 与 P95 reference 执行 log1p 归一化并截断到 0–1。",
         ("Ranking", "Report Only"),
-        "ranking_runtime_candidates",
     ),
     "engaged_neighbor_count": _DerivedProxySpec(
         "已互动直接邻居数",
@@ -161,6 +165,8 @@ _DERIVED_PROXY_FIELDS: dict[str, _DerivedProxySpec] = {
         "从已持久化互动用户集合与 Historical Set 直接邻接关系计算。",
         ("Ranking", "Report Only"),
         "ranking_runtime_candidates",
+        ("user_id", "time_step"),
+        "大于或等于 0 的整数。",
     ),
     "engaged_neighbor_signal": _DerivedProxySpec(
         "已互动邻居排序信号",
@@ -170,6 +176,7 @@ _DERIVED_PROXY_FIELDS: dict[str, _DerivedProxySpec] = {
         "min(1, engaged_neighbor_count / 3)。",
         ("Ranking", "Report Only"),
         "ranking_runtime_candidates",
+        ("user_id", "time_step"),
     ),
     "historical_tag_affinity": _DerivedProxySpec(
         "历史标签亲和度",
@@ -179,6 +186,7 @@ _DERIVED_PROXY_FIELDS: dict[str, _DerivedProxySpec] = {
         "根据已持久化历史标签集合与目标视频 hashtags 的稳定匹配结果计算。",
         ("Ranking", "Report Only"),
         "ranking_runtime_candidates",
+        ("user_id", "time_step"),
     ),
     "recommendation_score": _DerivedProxySpec(
         "推荐排序分数",
@@ -188,6 +196,7 @@ _DERIVED_PROXY_FIELDS: dict[str, _DerivedProxySpec] = {
         "0.50 * base_network_relevance + 0.30 * engaged_neighbor_signal + 0.20 * historical_tag_affinity。",
         ("Ranking", "Report Only"),
         "ranking_runtime_candidates",
+        ("user_id", "time_step"),
     ),
 }
 
@@ -285,38 +294,10 @@ class FieldLineageTraceBundle(BaseModel):
     source_records: list[FieldSourceRecord]
 
     def catalog_document(self) -> dict[str, object]:
-        field_coverage: list[dict[str, object]] = []
-        value_status_counts: Counter[str] = Counter()
-        for definition in self.catalog:
-            counts = Counter(
-                trace.value_status
-                for traces in self.trace_index.values()
-                for trace in traces
-                if trace.field_name == definition.field_name
-            )
-            field_coverage.append(
-                {
-                    "field_name": definition.field_name,
-                    "value_status_counts": {
-                        status: counts.get(status, 0) for status in ("present", "empty", "unavailable")
-                    },
-                }
-            )
-            value_status_counts.update(counts)
-        provenance_field_counts = Counter(definition.provenance for definition in self.catalog)
         return {
             "schema_version": "field-lineage-catalog-v1",
             "definitions": [definition.model_dump(mode="json") for definition in self.catalog],
-            "coverage_audit": {
-                "user_count": len(self.trace_index),
-                "catalog_field_count": len(self.catalog),
-                "trace_count": sum(len(traces) for traces in self.trace_index.values()),
-                "value_status_counts": {
-                    status: value_status_counts.get(status, 0) for status in ("present", "empty", "unavailable")
-                },
-                "provenance_field_counts": dict(sorted(provenance_field_counts.items())),
-                "field_coverage": field_coverage,
-            },
+            "coverage_audit": field_lineage_coverage_audit(self.catalog, self.trace_index),
         }
 
     def trace_document(self) -> dict[str, object]:
@@ -403,6 +384,11 @@ class FieldLineageTraceModule:
                     "time_step": _integer_value(user.get("latest_ranking_time_step")),
                 },
             )
+            proxy_locators = {
+                "field_source_records": locator,
+                "sample_manifest_json": sample_locator,
+                "ranking_runtime_candidates": candidate_locator,
+            }
             latent_source = user.get("latent_attributes")
             latent_attributes: Mapping[str, object] = latent_source if isinstance(latent_source, Mapping) else {}
             interest_prompt_status, interest_omission = _interest_prompt_status(
@@ -415,7 +401,7 @@ class FieldLineageTraceModule:
                     UserFieldTrace(
                         user_id=user_id,
                         field_name=field_name,
-                        value_status=_value_status_object(user.get(field_name)) if field_name in user else "unavailable",
+                        value_status=field_value_status(user.get(field_name)) if field_name in user else "unavailable",
                         source_record_locator=sample_locator,
                         actual_usage_stages=(
                             ["Sampling", "Seed Selection", "Ranking", "Report Only"]
@@ -456,7 +442,7 @@ class FieldLineageTraceModule:
                         spec=spec,
                         user=user,
                         source=source,
-                        locator=(candidate_locator if spec.source_artifact_id == "ranking_runtime_candidates" else locator),
+                        locator=proxy_locators[spec.source_artifact_id],
                     )
                     for field_name, spec in _DERIVED_PROXY_FIELDS.items()
                 ),
@@ -488,13 +474,13 @@ class FieldLineageTraceModule:
             ]
 
         return FieldLineageTraceBundle(
-            catalog=_catalog(),
+            catalog=field_lineage_definitions(),
             trace_index=trace_index,
             source_records=source_records,
         )
 
 
-def _catalog() -> list[FieldLineageDefinition]:
+def field_lineage_definitions() -> list[FieldLineageDefinition]:
     return [
         *(
             FieldLineageDefinition(
@@ -558,13 +544,13 @@ def _catalog() -> list[FieldLineageDefinition]:
                 display_name_zh=spec.display_name_zh,
                 meaning=spec.meaning,
                 provenance="Derived Proxy Metric",
-                source_artifact_kind="allowlisted derived proxy evidence snapshot",
-                record_key_fields=["user_id"],
+                source_artifact_kind=_derived_source_artifact_kind(spec.source_artifact_id),
+                record_key_fields=list(spec.record_key_fields),
                 source_fields=list(spec.source_fields),
                 transformation_method=spec.transformation_method,
                 transformation_description=spec.transformation_description,
                 declared_usage_stages=list(spec.declared_usage_stages),
-                value_range="0.0 到 1.0。",
+                value_range=spec.value_range,
                 interpretation="代理指标用于研究排序、抽样或 Prompt，不等同于真实影响力、活跃度或心理属性。",
                 limitations=[
                     "依赖本项目声明的 Historical Set、reference 与归一化方法。",
@@ -644,7 +630,7 @@ def _derived_proxy_trace(
     source: FieldLineageTraceSource,
     locator: SourceRecordLocator,
 ) -> UserFieldTrace:
-    value_status = _value_status_object(user.get(field_name)) if field_name in user else "unavailable"
+    value_status = field_value_status(user.get(field_name)) if field_name in user else "unavailable"
     prompt_status, omission_reason = _prompt_status(
         user_id=user_id,
         field_name=field_name,
@@ -694,7 +680,7 @@ def _synthetic_trace(
     locator: SourceRecordLocator,
 ) -> UserFieldTrace:
     value_status = (
-        _value_status_object(latent_attributes.get(field_name)) if field_name in latent_attributes else "unavailable"
+        field_value_status(latent_attributes.get(field_name)) if field_name in latent_attributes else "unavailable"
     )
     prompt_status, omission_reason = _prompt_status(
         user_id=user_id,
@@ -750,7 +736,7 @@ def _historical_scalar_trace(
     actual_usage_stages: list[FieldUsageStage],
     source_field_name: str | None = None,
 ) -> UserFieldTrace:
-    value_status = _value_status_object(user.get(field_name)) if field_name in user else "unavailable"
+    value_status = field_value_status(user.get(field_name)) if field_name in user else "unavailable"
     evidence = []
     if field_name in user:
         evidence = [
@@ -813,17 +799,58 @@ def _prompt_status(
 
 
 def _value_status(value: Sequence[str] | None) -> ValueStatus:
-    if value is None:
-        return "unavailable"
-    return "present" if value else "empty"
+    return field_value_status(value)
 
 
-def _value_status_object(value: object) -> ValueStatus:
+def field_value_status(value: object) -> ValueStatus:
     if value is None:
         return "unavailable"
     if value == "" or (isinstance(value, Sequence) and not isinstance(value, (str, bytes)) and not value):
         return "empty"
     return "present"
+
+
+def field_lineage_coverage_audit(
+    catalog: Sequence[FieldLineageDefinition],
+    trace_index: Mapping[str, Sequence[UserFieldTrace]],
+) -> dict[str, object]:
+    field_coverage: list[dict[str, object]] = []
+    value_status_counts: Counter[str] = Counter()
+    for definition in catalog:
+        counts = Counter(
+            trace.value_status
+            for traces in trace_index.values()
+            for trace in traces
+            if trace.field_name == definition.field_name
+        )
+        field_coverage.append(
+            {
+                "field_name": definition.field_name,
+                "value_status_counts": {
+                    status: counts.get(status, 0) for status in ("present", "empty", "unavailable")
+                },
+            }
+        )
+        value_status_counts.update(counts)
+    provenance_field_counts = Counter(definition.provenance for definition in catalog)
+    return {
+        "user_count": len(trace_index),
+        "catalog_field_count": len(catalog),
+        "trace_count": sum(len(traces) for traces in trace_index.values()),
+        "value_status_counts": {
+            status: value_status_counts.get(status, 0) for status in ("present", "empty", "unavailable")
+        },
+        "provenance_field_counts": dict(sorted(provenance_field_counts.items())),
+        "field_coverage": field_coverage,
+    }
+
+
+def _derived_source_artifact_kind(artifact_id: str) -> str:
+    return {
+        "field_source_records": "allowlisted derived proxy evidence snapshot",
+        "sample_manifest_json": "persisted processed research sample record",
+        "ranking_runtime_candidates": "persisted ranking candidate record",
+    }[artifact_id]
 
 
 def _integer_value(value: object) -> int:

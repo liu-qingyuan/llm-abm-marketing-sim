@@ -1337,7 +1337,8 @@ def test_target_delivery_ranking_v4_persists_interest_and_historical_field_trace
     assert manifest["artifacts"][locator["artifact_id"]] == locator["relative_path"]
     assert locator["record_key"] == {"user_id": "u1"}
     assert u1_traces["nickname"]["source_record_locator"]["artifact_id"] == "sample_manifest_json"
-    assert u1_traces["activity_score"]["source_record_locator"]["artifact_id"] == "field_source_records"
+    assert u1_traces["activity_score"]["source_record_locator"]["artifact_id"] == "sample_manifest_json"
+    assert u1_traces["base_network_relevance"]["source_record_locator"]["artifact_id"] == "field_source_records"
     assert u1_traces["activity_score"]["evidence"][0]["evidence_kind"] == "derived_proxy_inputs"
     assert u1_traces["latent_hotel_class"]["source_record_locator"]["artifact_id"] == "sample_manifest_json"
     assert u1_traces["latent_hotel_class"]["evidence"][0]["evidence_kind"] == "synthetic_experiment_contract"
@@ -1543,6 +1544,9 @@ def test_target_delivery_ranking_report_escapes_download_paths_in_html(tmp_path:
         "duplicate_source_record",
         "source_value_mismatch",
         "source_evidence_mismatch",
+        "direct_source_mismatch",
+        "derived_input_mismatch",
+        "coverage_audit_mismatch",
         "trace_unsafe_locator",
         "unsafe_path",
     ],
@@ -1608,6 +1612,21 @@ def test_target_delivery_ranking_report_rebuild_rejects_invalid_evidence_before_
             record = next(item for item in source["records"] if item["historical_tag_evidence"])
             record["historical_tag_evidence"] = []
         source_path.write_text(json.dumps(source, ensure_ascii=False) + "\n", encoding="utf-8")
+    elif corruption == "direct_source_mismatch":
+        sample_path = run_dir / "sample_manifest.json"
+        sample = json.loads(sample_path.read_text(encoding="utf-8"))
+        sample[0]["nickname"] = "tampered"
+        sample_path.write_text(json.dumps(sample, ensure_ascii=False) + "\n", encoding="utf-8")
+    elif corruption == "derived_input_mismatch":
+        source_path = run_dir / "field_source_records.json"
+        source = json.loads(source_path.read_text(encoding="utf-8"))
+        source["records"][0]["derived_proxy_inputs"]["comment_count"] += 1
+        source_path.write_text(json.dumps(source, ensure_ascii=False) + "\n", encoding="utf-8")
+    elif corruption == "coverage_audit_mismatch":
+        catalog_path = run_dir / "field_lineage_catalog.json"
+        catalog = json.loads(catalog_path.read_text(encoding="utf-8"))
+        catalog["coverage_audit"]["trace_count"] += 1
+        catalog_path.write_text(json.dumps(catalog, ensure_ascii=False) + "\n", encoding="utf-8")
     elif corruption == "trace_unsafe_locator":
         payload = json.loads(payload_path.read_text(encoding="utf-8"))
         payload["user_field_trace_index"]["u1"][0]["source_record_locator"]["relative_path"] = "../outside.json"
