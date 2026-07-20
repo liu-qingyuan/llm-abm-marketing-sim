@@ -1455,6 +1455,10 @@ class FinalResearchRunner:
                 derived_proxy_inputs_by_user={
                     user.user_id: prepared.derived_proxy_inputs_by_user[user.user_id] for user in sample_users
                 },
+                target_scope_neighbors={
+                    user.user_id: set(prepared.target_scope_neighbors.get(user.user_id, set()))
+                    for user in sample_users
+                },
                 prompt_field_inclusion_by_user=(
                     ranking_runtime.prompt_field_inclusion_by_user if ranking_runtime is not None else {}
                 ),

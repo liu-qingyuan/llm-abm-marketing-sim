@@ -746,19 +746,9 @@ class FinalResearchRankingReportPayload(_FinalResearchRankingReportPayloadBase):
         catalog_names = [definition.field_name for definition in self.field_lineage_catalog]
         if len(catalog_names) != len(set(catalog_names)):
             raise ValueError("field lineage catalog must declare each field exactly once")
-        traceable_provenance = {
-            "Direct Observed Profile Field",
-            "Historical Behavioral Evidence",
-            "Derived Proxy Metric",
-            "Synthetic Experiment Label",
-        }
-        lineage_by_name = {
-            entry.field_name: entry
-            for entry in self.field_lineage
-            if entry.field_name in RankingUserReportRow.model_fields and entry.provenance in traceable_provenance
-        }
+        lineage_by_name = {entry.field_name: entry for entry in self.field_lineage}
         if set(catalog_names) != set(lineage_by_name):
-            raise ValueError("field lineage catalog must cover every non-runtime report user field exactly once")
+            raise ValueError("field lineage catalog must cover every report field exactly once")
         for definition in self.field_lineage_catalog:
             lineage = lineage_by_name[definition.field_name]
             if definition.provenance != lineage.provenance:
@@ -768,14 +758,19 @@ class FinalResearchRankingReportPayload(_FinalResearchRankingReportPayloadBase):
         user_ids = [user.user_id for user in self.users]
         if set(self.user_field_trace_index) != set(user_ids):
             raise ValueError("user field trace index must cover every report user exactly once")
+        trace_field_names = {
+            definition.field_name
+            for definition in self.field_lineage_catalog
+            if "user_id" in definition.record_key_fields
+        }
         for user_id, traces in self.user_field_trace_index.items():
             trace_names = [trace.field_name for trace in traces]
             if len(trace_names) != len(set(trace_names)):
                 raise ValueError(f"user field trace contains duplicate fields for {user_id}")
             if any(trace.user_id != user_id for trace in traces):
                 raise ValueError(f"user field trace key does not match trace user_id for {user_id}")
-            if set(trace_names) != set(catalog_names):
-                raise ValueError(f"user field trace does not cover the field lineage catalog for {user_id}")
+            if set(trace_names) != trace_field_names:
+                raise ValueError(f"user field trace does not cover every user-keyed catalog field for {user_id}")
         return self
 
 
@@ -807,6 +802,7 @@ class FinalResearchReportSource:
     ranking_diagnostics_summary: Mapping[str, object] | None = None
     ranking_runtime_summary: Mapping[str, object] | None = None
     derived_proxy_inputs_by_user: Mapping[str, Mapping[str, int | float]] = dataclass_field(default_factory=dict)
+    target_scope_neighbors: Mapping[str, set[str]] = dataclass_field(default_factory=dict)
 
 
 class FinalResearchReportWriter:
@@ -970,6 +966,8 @@ class FinalResearchReportWriter:
 
     def _build_field_trace_bundle(self) -> FieldLineageTraceBundle:
         outcomes = _unique_user_rows(self.source.ranking_outcomes, "ranking outcomes")
+        decisions = _unique_user_rows(self.source.runtime_decisions, "runtime decisions")
+        failures = _unique_user_rows(self.source.runtime_provider_failures, "runtime provider failures")
         offline_scores = _unique_user_rows(self.source.offline_scores, "offline scores")
         candidates_by_user: dict[str, list[Mapping[str, object]]] = {}
         for candidate in self.source.ranking_candidates:
@@ -995,6 +993,36 @@ class FinalResearchReportWriter:
                     latest_candidate,
                 )
             score = offline_scores.get(user_id, {})
+            decision = decisions.get(user_id)
+            failure = failures.get(user_id)
+            result_status = _ranking_result_status(outcome.get("result_status"))
+            exposure_time_step = _optional_int(outcome, "exposure_time_step")
+            action = _report_action(decision.get("action") if decision else "")
+            next_time_step = exposure_time_step + 1 if exposure_time_step is not None else None
+            next_candidates = {
+                str(candidate.get("user_id", ""))
+                for candidate in self.source.ranking_candidates
+                if next_time_step is not None and _as_int(candidate.get("time_step")) == next_time_step
+            }
+            affected_neighbors = sorted(
+                self.source.target_scope_neighbors.get(user_id, set()) & next_candidates
+                if action in {"like", "comment", "share"}
+                else set()
+            )
+            propagation_kind = (
+                "next_batch_direct_neighbor_signal"
+                if action in {"like", "comment", "share"}
+                else "no_propagation_action"
+                if action == "ignore"
+                else "not_exposed_no_action"
+            )
+            propagation_values = [f"action={action or 'unavailable'}", f"affected_direct_neighbor_count={len(affected_neighbors)}"]
+            if next_time_step is not None:
+                propagation_values.append(f"next_time_step={next_time_step}")
+            if affected_neighbors:
+                propagation_values.append(
+                    f"affected_direct_neighbor_user_ids={json.dumps(affected_neighbors, ensure_ascii=False, separators=(',', ':'))}"
+                )
             user.update(
                 {
                     "historical_tags": sorted(
@@ -1009,6 +1037,61 @@ class FinalResearchReportWriter:
                     "engaged_neighbor_signal": _as_float(latest_candidate.get("engaged_neighbor_signal")),
                     "historical_tag_affinity": _as_float(latest_candidate.get("historical_tag_affinity")),
                     "recommendation_score": _as_float(latest_candidate.get("recommendation_score")),
+                    "in_base_sample": False,
+                    "is_network_cohort": user.get("sample_role") == "network_cohort",
+                    "latest_ranking_position": _as_int(latest_candidate.get("ranking_position")),
+                    "selected_for_exposure": result_status != "below_delivery_capacity",
+                    "exposure_time_step": exposure_time_step,
+                    "result_status": result_status,
+                    "provider_status": _ranking_provider_status(outcome.get("provider_status")),
+                    "action": action,
+                    "engage": _optional_bool(decision, "engage"),
+                    "probability": _optional_float(decision, "probability"),
+                    "reason": str(decision.get("reason", "")) if decision else "",
+                    "confidence": _optional_float(decision, "confidence"),
+                    "decision_source": str(decision.get("decision_source", "")) if decision else "",
+                    "provider_failure_type": str(failure.get("failure_type", "")) if failure else "",
+                    "report_path": FINAL_RESEARCH_REPORT_ARTIFACTS["final_research_report"],
+                    "payload_path": FINAL_RESEARCH_REPORT_ARTIFACTS["final_research_report_payload"],
+                    "json_path": FINAL_RESEARCH_REPORT_ARTIFACTS["final_research_users_json"],
+                    "manifest_path": "artifact_manifest.json",
+                    "target_video_id": str(self.source.target_video.get("video_id", "")),
+                    "ranking_rounds.candidates.ranking_position": _as_int(latest_candidate.get("ranking_position")),
+                    "ranking_rounds.candidates.user_id": user_id,
+                    "ranking_rounds.candidates.is_seed": _as_bool(latest_candidate.get("is_seed")),
+                    "ranking_rounds.candidates.selected": _as_bool(latest_candidate.get("selected")),
+                    "ranking_rounds.candidates.base_network_relevance": _as_float(
+                        latest_candidate.get("base_network_relevance")
+                    ),
+                    "ranking_rounds.candidates.engaged_neighbor_count": _as_int(
+                        latest_candidate.get("engaged_neighbor_count")
+                    ),
+                    "ranking_rounds.candidates.engaged_neighbor_signal": _as_float(
+                        latest_candidate.get("engaged_neighbor_signal")
+                    ),
+                    "ranking_rounds.candidates.historical_tag_affinity": _as_float(
+                        latest_candidate.get("historical_tag_affinity")
+                    ),
+                    "ranking_rounds.candidates.recommendation_score": _as_float(
+                        latest_candidate.get("recommendation_score")
+                    ),
+                    "ranking_diagnostics.paired_ablation": self.source.ranking_diagnostics is not None,
+                    "ranking_diagnostics.weight_sensitivity": self.source.ranking_diagnostics is not None,
+                    "ranking_diagnostics.historical_top20_diagnostic": self.source.ranking_diagnostics is not None,
+                    "ranking_diagnostics.summary": self.source.ranking_diagnostics_summary is not None,
+                    "action_propagation_evidence": {
+                        "evidence_kind": propagation_kind,
+                        "record_key": {
+                            "user_id": user_id,
+                            "time_step": exposure_time_step if exposure_time_step is not None else -1,
+                        },
+                        "source_fields": [
+                            "action",
+                            "next_time_step",
+                            "affected_direct_neighbor_user_ids",
+                        ],
+                        "matched_values": propagation_values,
+                    },
                 }
             )
             trace_users.append(user)
@@ -1023,6 +1106,7 @@ class FinalResearchReportWriter:
                 prompt_inclusion_by_user=self.source.prompt_field_inclusion_by_user,
                 artifact_paths={str(key): str(value) for key, value in artifacts.items()},
                 derived_proxy_inputs_by_user=self.source.derived_proxy_inputs_by_user,
+                report_lineage=_ranking_field_lineage(),
             )
         )
 
@@ -1763,6 +1847,7 @@ def _ranking_field_lineage() -> list[FieldLineageEntry]:
         "selected_for_exposure",
     ):
         stages[field] = ["Ranking", "Report Only"]
+    stages["action"] = ["Ranking", "Report Only"]
     stages["target_video.caption"] = ["LLM Prompt", "Report Only"]
     stages["target_video.hashtags"] = ["Ranking", "LLM Prompt", "Report Only"]
     stages["run.random_seed"] = ["Sampling", "Report Only"]
@@ -3502,9 +3587,20 @@ function renderProxyExplanationGuide() {
   return details;
 }
 
-function fieldTraceValue(row, fieldName) {
-  const value = row[fieldName];
+function fieldTraceValue(row, fieldName, trace=null) {
+  let value = row[fieldName];
+  if (fieldName.startsWith('ranking_rounds.candidates.')) {
+    const candidateField = fieldName.split('.').at(-1);
+    const timeStep = trace?.source_record_locator?.record_key?.time_step;
+    const history = rankingHistoryByUser.get(row.user_id) || [];
+    const candidate = history.find((item) => item.time_step === timeStep) || history.at(-1);
+    value = candidate?.[candidateField];
+  } else if (fieldName.startsWith('ranking_diagnostics.')) {
+    const diagnosticField = fieldName.split('.').at(-1);
+    value = payload.ranking_diagnostics?.[diagnosticField] ? 'persisted same-run diagnostic evidence' : null;
+  }
   if (Array.isArray(value)) return value.length ? value.join(', ') : '-';
+  if (value && typeof value === 'object') return JSON.stringify(value);
   return display(value);
 }
 
@@ -3515,7 +3611,7 @@ function renderUserFieldTraceDetail(row, trace, definition) {
   const locator = trace.source_record_locator;
   const evidence = trace.evidence.map((item) => `${item.evidence_kind}: ${item.matched_values.join(', ')} · ${JSON.stringify(item.record_key)}`).join(' | ') || '-';
   [
-    ['Value（字段值）',fieldTraceValue(row,definition.field_name)],
+    ['Value（字段值）',fieldTraceValue(row,definition.field_name,trace)],
     ['Value status（值状态）',valueStatusLabels[trace.value_status] || trace.value_status],
     ['Field Provenance（字段来源）',provenanceLabels[definition.provenance] || definition.provenance],
     ['Source artifact kind（来源 artifact 类型）',definition.source_artifact_kind],
@@ -3562,7 +3658,7 @@ function renderUserFieldTrace(row) {
       button.setAttribute('aria-expanded','false'); button.setAttribute('aria-controls','user-field-trace-detail');
       button.append(
         element('strong','',`${definition.field_name}（${definition.display_name_zh}）`),
-        element('span','',fieldTraceValue(row,trace.field_name)),
+        element('span','',fieldTraceValue(row,trace.field_name,trace)),
         element('small','',`${valueStatusLabels[trace.value_status] || trace.value_status} · ${provenanceLabels[definition.provenance] || definition.provenance}`),
       );
       button.addEventListener('click',() => {
@@ -3957,6 +4053,26 @@ def _validate_ranking_rebuild_evidence(
         artifact_paths[name] = _artifact_path(run_path, relative_path, name)
     candidate_records = _read_csv_rows(artifact_paths["ranking_runtime_candidates"])
     candidate_records_by_key = _candidate_record_index(candidate_records)
+    decision_records_by_user = _unique_user_rows(
+        _read_csv_rows(artifact_paths["runtime_decisions"]),
+        "runtime decisions",
+    )
+    outcome_records_by_user = _unique_user_rows(
+        _read_csv_rows(artifact_paths["ranking_runtime_outcomes"]),
+        "ranking outcomes",
+    )
+    failure_records_by_user = _unique_user_rows(
+        _read_csv_rows(artifact_paths["runtime_provider_failures"]),
+        "runtime provider failures",
+    )
+    ablation_records_by_key = _user_time_record_index(
+        _read_csv_rows(artifact_paths["ranking_ablation_diagnostics_csv"]),
+        "ranking ablation diagnostics",
+    )
+    sensitivity_time_steps = {
+        _as_int(record.get("time_step"))
+        for record in _read_csv_rows(artifact_paths["ranking_weight_sensitivity_csv"])
+    }
 
     if v4_payload is not None:
         catalog_document = _read_json_object(artifact_paths["field_lineage_catalog"])
@@ -3972,7 +4088,7 @@ def _validate_ranking_rebuild_evidence(
             definition.model_dump(mode="json") for definition in v4_payload.field_lineage_catalog
         ]:
             raise ValueError("field lineage catalog artifact does not match ranking report payload")
-        if v4_payload.field_lineage_catalog != field_lineage_definitions():
+        if v4_payload.field_lineage_catalog != field_lineage_definitions(_ranking_field_lineage()):
             raise ValueError("field lineage catalog does not match the supported field definitions")
         expected_coverage_audit = field_lineage_coverage_audit(
             v4_payload.field_lineage_catalog,
@@ -3996,6 +4112,7 @@ def _validate_ranking_rebuild_evidence(
             raise ValueError("field source records do not match ranking report users")
         payload_users_by_id = {user.user_id: user for user in v4_payload.users}
         catalog_by_field = {definition.field_name: definition for definition in v4_payload.field_lineage_catalog}
+        base_trace_field_names = {definition.field_name for definition in field_lineage_definitions()}
         sample_records = _read_json_records(artifact_paths["sample_manifest_json"], "sample manifest")
         sample_records_by_user = _unique_user_rows(sample_records, "sample manifest")
         offline_records_by_user = _unique_user_rows(
@@ -4020,15 +4137,31 @@ def _validate_ranking_rebuild_evidence(
                     source_records_by_user=source_records_by_user,
                     offline_records_by_user=offline_records_by_user,
                     candidate_records_by_key=candidate_records_by_key,
+                    decision_records_by_user=decision_records_by_user,
+                    outcome_records_by_user=outcome_records_by_user,
+                    failure_records_by_user=failure_records_by_user,
+                    ablation_records_by_key=ablation_records_by_key,
+                    sensitivity_time_steps=sensitivity_time_steps,
                 )
+                payload_value = _user_trace_payload_value(v4_payload, payload_user, trace.field_name)
+                if trace.field_name not in base_trace_field_names:
+                    if trace.value_status != field_value_status(payload_value):
+                        raise ValueError(f"field trace value status does not match runtime evidence for {user_id}")
+                    _validate_runtime_trace_evidence(
+                        trace=trace,
+                        payload_value=payload_value,
+                        candidate_records_by_key=candidate_records_by_key,
+                    )
+                    continue
                 _validate_trace_source_value(
                     trace=trace,
                     definition=definition,
-                    payload_value=payload_values[trace.field_name],
+                    payload_value=payload_value,
                     sample_record=sample_records_by_user[user_id],
                     offline_record=offline_records_by_user[user_id],
                     candidate_records_by_key=candidate_records_by_key,
                 )
+                values: object
                 if trace.field_name == "interest_tags":
                     values = source_record.interest_tags
                     source_evidence = source_record.interest_tag_evidence
@@ -4036,13 +4169,13 @@ def _validate_ranking_rebuild_evidence(
                     values = source_record.historical_tags
                     source_evidence = source_record.historical_tag_evidence
                 else:
-                    values = payload_values[trace.field_name]
+                    values = payload_value
                     source_evidence = field_trace_evidence(
                         definition,
                         {**source_record.derived_proxy_inputs, **payload_values},
                         locator,
                     )
-                if values != payload_values[trace.field_name]:
+                if values != payload_value:
                     raise ValueError(f"field source record value does not match ranking report user for {user_id}")
                 expected_status = field_value_status(values)
                 if trace.value_status != expected_status:
@@ -4437,6 +4570,11 @@ def _validate_trace_locator_record(
     source_records_by_user: Mapping[str, FieldSourceRecord],
     offline_records_by_user: Mapping[str, Mapping[str, object]],
     candidate_records_by_key: Mapping[tuple[str, int], Mapping[str, object]],
+    decision_records_by_user: Mapping[str, Mapping[str, object]],
+    outcome_records_by_user: Mapping[str, Mapping[str, object]],
+    failure_records_by_user: Mapping[str, Mapping[str, object]],
+    ablation_records_by_key: Mapping[tuple[str, int], Mapping[str, object]],
+    sensitivity_time_steps: set[int],
 ) -> None:
     if locator.artifact_id == "ranking_runtime_candidates":
         if set(locator.record_key) != {"user_id", "time_step"}:
@@ -4444,6 +4582,49 @@ def _validate_trace_locator_record(
         time_step = _as_int(locator.record_key.get("time_step"))
         if (user_id, time_step) not in candidate_records_by_key:
             raise ValueError(f"field trace locator has no ranking candidate record for {user_id}")
+        return
+    if locator.artifact_id == "runtime_decisions":
+        if set(locator.record_key) != {"user_id", "video_id", "time_step"}:
+            raise ValueError(f"field trace locator has an invalid decision key for {user_id}")
+        record = decision_records_by_user.get(user_id)
+        if record is None or str(record.get("video_id", "")) != str(locator.record_key.get("video_id", "")):
+            raise ValueError(f"field trace locator has no runtime decision record for {user_id}")
+        if _as_int(record.get("time_step")) != _as_int(locator.record_key.get("time_step")):
+            raise ValueError(f"field trace locator has the wrong decision batch for {user_id}")
+        return
+    if locator.artifact_id == "runtime_provider_failures":
+        if set(locator.record_key) != {"user_id", "video_id", "time_step"}:
+            raise ValueError(f"field trace locator has an invalid provider failure key for {user_id}")
+        record = failure_records_by_user.get(user_id)
+        if record is None or str(record.get("video_id", "")) != str(locator.record_key.get("video_id", "")):
+            raise ValueError(f"field trace locator has no provider failure record for {user_id}")
+        if _as_int(record.get("time_step")) != _as_int(locator.record_key.get("time_step")):
+            raise ValueError(f"field trace locator has the wrong provider failure batch for {user_id}")
+        return
+    if locator.artifact_id == "ranking_ablation_diagnostics_csv":
+        if set(locator.record_key) != {"user_id", "time_step"}:
+            raise ValueError(f"field trace locator has an invalid ablation key for {user_id}")
+        key = (user_id, _as_int(locator.record_key.get("time_step")))
+        if key not in ablation_records_by_key:
+            raise ValueError(f"field trace locator has no ranking ablation record for {user_id}")
+        return
+    if locator.artifact_id == "ranking_weight_sensitivity_csv":
+        if set(locator.record_key) != {"user_id", "time_step"}:
+            raise ValueError(f"field trace locator has an invalid sensitivity key for {user_id}")
+        if _as_int(locator.record_key.get("time_step")) not in sensitivity_time_steps:
+            raise ValueError(f"field trace locator has no weight sensitivity batch for {user_id}")
+        return
+    if locator.artifact_id == "ranking_diagnostics":
+        if set(locator.record_key) != {"user_id", "time_step"}:
+            raise ValueError(f"field trace locator has an invalid diagnostic key for {user_id}")
+        if (user_id, _as_int(locator.record_key.get("time_step"))) not in candidate_records_by_key:
+            raise ValueError(f"field trace locator has no diagnostic candidate for {user_id}")
+        return
+    if locator.artifact_id == "ranking_diagnostics_summary":
+        if locator.record_key != {"user_id": user_id}:
+            raise ValueError(f"field trace locator has an invalid diagnostic summary key for {user_id}")
+        if user_id not in sample_records_by_user:
+            raise ValueError(f"field trace locator has no diagnostic summary user for {user_id}")
         return
     if locator.record_key != {"user_id": user_id}:
         raise ValueError(f"field trace locator has an invalid record key for {user_id}")
@@ -4454,6 +4635,10 @@ def _validate_trace_locator_record(
         records = source_records_by_user
     elif locator.artifact_id == "offline_scores":
         records = offline_records_by_user
+    elif locator.artifact_id == "ranking_runtime_outcomes":
+        records = outcome_records_by_user
+    elif locator.artifact_id in {"seed_first_sample_audit", "final_research_users_json"}:
+        records = sample_records_by_user
     else:
         raise ValueError(f"field trace locator uses an unsupported artifact for {user_id}")
     if user_id not in records:
@@ -4520,6 +4705,98 @@ def _candidate_record_index(
             raise ValueError("ranking runtime candidates contain duplicate batch user evidence")
         records_by_key[key] = record
     return records_by_key
+
+
+def _user_time_record_index(
+    records: Sequence[Mapping[str, object]],
+    label: str,
+) -> dict[tuple[str, int], Mapping[str, object]]:
+    records_by_key: dict[tuple[str, int], Mapping[str, object]] = {}
+    for record in records:
+        key = (str(record.get("user_id", "")), _as_int(record.get("time_step")))
+        if not key[0] or key in records_by_key:
+            raise ValueError(f"{label} contain duplicate batch user evidence")
+        records_by_key[key] = record
+    return records_by_key
+
+
+def _user_trace_payload_value(
+    payload: FinalResearchRankingReportPayload,
+    user: RankingUserReportRow,
+    field_name: str,
+) -> object:
+    user_values = user.model_dump(mode="json")
+    if field_name in user_values:
+        return user_values[field_name]
+    if field_name.startswith("ranking_rounds.candidates."):
+        candidate_field = field_name.rsplit(".", 1)[-1]
+        candidate_values: dict[str, object] = {
+            "ranking_position": user.latest_ranking_position,
+            "user_id": user.user_id,
+            "is_seed": user.is_seed,
+            "selected": user.selected_for_exposure,
+            "base_network_relevance": user.base_network_relevance,
+            "engaged_neighbor_count": user.engaged_neighbor_count,
+            "engaged_neighbor_signal": user.engaged_neighbor_signal,
+            "historical_tag_affinity": user.historical_tag_affinity,
+            "recommendation_score": user.recommendation_score,
+        }
+        return candidate_values[candidate_field]
+    if field_name.startswith("ranking_diagnostics."):
+        return payload.ranking_diagnostics[field_name.rsplit(".", 1)[-1]]
+    raise ValueError(f"unsupported user field trace payload value: {field_name}")
+
+
+def _validate_runtime_trace_evidence(
+    *,
+    trace: UserFieldTrace,
+    payload_value: object,
+    candidate_records_by_key: Mapping[tuple[str, int], Mapping[str, object]],
+) -> None:
+    if not trace.evidence and trace.field_name == "ranking_rounds.candidates.user_id":
+        return
+    if not trace.evidence:
+        raise ValueError(f"runtime field trace has no evidence for {trace.user_id} {trace.field_name}")
+    if trace.field_name != "action":
+        return
+    evidence = trace.evidence[0]
+    action = str(payload_value or "")
+    expected_kind = (
+        "next_batch_direct_neighbor_signal"
+        if action in {"like", "comment", "share"}
+        else "no_propagation_action"
+        if action == "ignore"
+        else "not_exposed_no_action"
+    )
+    if evidence.evidence_kind != expected_kind:
+        raise ValueError(f"action propagation evidence kind does not match runtime action for {trace.user_id}")
+    if f"action={action or 'unavailable'}" not in evidence.matched_values:
+        raise ValueError(f"action propagation evidence value does not match runtime action for {trace.user_id}")
+    if action not in {"like", "comment", "share"}:
+        if "affected_direct_neighbor_count=0" not in evidence.matched_values:
+            raise ValueError(f"non-propagating action has affected neighbors for {trace.user_id}")
+        return
+    next_step_value = next(
+        (value for value in evidence.matched_values if value.startswith("next_time_step=")),
+        None,
+    )
+    affected_value = next(
+        (value for value in evidence.matched_values if value.startswith("affected_direct_neighbor_user_ids=")),
+        None,
+    )
+    if next_step_value is None or affected_value is None:
+        raise ValueError(f"engaging action has no next-batch neighbor evidence for {trace.user_id}")
+    next_time_step = _as_int(next_step_value.split("=", 1)[1])
+    try:
+        affected_user_ids = json.loads(affected_value.split("=", 1)[1])
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"engaging action has invalid affected neighbor evidence for {trace.user_id}") from exc
+    if not isinstance(affected_user_ids, list) or not all(isinstance(value, str) for value in affected_user_ids):
+        raise ValueError(f"engaging action has invalid affected neighbor ids for {trace.user_id}")
+    for affected_user_id in affected_user_ids:
+        candidate = candidate_records_by_key.get((affected_user_id, next_time_step))
+        if candidate is None or _as_float(candidate.get("engaged_neighbor_signal")) <= 0.0:
+            raise ValueError(f"action propagation evidence has no positive next-batch signal for {trace.user_id}")
 
 
 def _read_json_records(path: Path, artifact_name: str) -> list[Mapping[str, object]]:

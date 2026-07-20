@@ -9,7 +9,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from .prompt_field_summary import JINJIANG_PROMPT_V2_PROFILE_FIELDS
-from .research_explanations import FieldProvenance, FieldUsageStage
+from .research_explanations import FieldProvenance, FieldUsageStage, LineageEntry
 
 ValueStatus = Literal["present", "empty", "unavailable"]
 PromptInclusionStatus = Literal["included", "empty_omitted", "not_allowlisted", "not_exposed", "not_rendered"]
@@ -220,6 +220,54 @@ _SYNTHETIC_FIELD_LABELS = {
     "latent_monthly_income": "合成月收入标签",
 }
 
+_DECISION_FIELDS = {
+    "action",
+    "engage",
+    "probability",
+    "reason",
+    "confidence",
+    "decision_source",
+}
+_OUTCOME_FIELDS = {
+    "exposure_time_step",
+    "result_status",
+    "provider_status",
+    "selected_for_exposure",
+}
+_SAMPLE_RUNTIME_FIELDS = {"in_base_sample", "is_seed", "is_network_cohort", "sample_role"}
+_REPORT_LINK_FIELDS = {"report_path", "payload_path", "json_path", "manifest_path"}
+_USER_RANKING_FIELDS = {"latest_ranking_time_step", "latest_ranking_position"}
+_DIAGNOSTIC_FIELDS = {
+    "ranking_diagnostics.paired_ablation",
+    "ranking_diagnostics.weight_sensitivity",
+    "ranking_diagnostics.historical_top20_diagnostic",
+    "ranking_diagnostics.summary",
+}
+
+_DISPLAY_NAMES_ZH = {
+    "action": "互动动作",
+    "engage": "是否互动",
+    "probability": "互动倾向",
+    "reason": "决策理由",
+    "confidence": "决策置信度",
+    "decision_source": "决策来源",
+    "provider_status": "Provider 状态",
+    "provider_failure_type": "Provider 失败类型",
+    "result_status": "最终结果状态",
+    "exposure_time_step": "曝光批次",
+    "selected_for_exposure": "是否获得曝光",
+    "latest_ranking_time_step": "对应排序批次",
+    "latest_ranking_position": "对应排序名次",
+    "sample_role": "样本角色",
+    "is_seed": "是否 Seed",
+    "is_network_cohort": "是否 Network Cohort",
+    "in_base_sample": "是否在 Base Sample",
+    "ranking_diagnostics.paired_ablation": "配对排序消融",
+    "ranking_diagnostics.weight_sensitivity": "排序权重敏感性",
+    "ranking_diagnostics.historical_top20_diagnostic": "Historical Top20 诊断",
+    "ranking_diagnostics.summary": "排序诊断摘要",
+}
+
 
 class SourceRecordLocator(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -326,6 +374,7 @@ class FieldLineageTraceSource:
     prompt_inclusion_by_user: Mapping[str, Mapping[str, PromptInclusionStatus]]
     artifact_paths: Mapping[str, str]
     derived_proxy_inputs_by_user: Mapping[str, Mapping[str, int | float]] = dataclass_field(default_factory=dict)
+    report_lineage: Sequence[LineageEntry] = ()
 
 
 class FieldLineageTraceModule:
@@ -339,7 +388,9 @@ class FieldLineageTraceModule:
         if not sample_path:
             raise ValueError("field trace requires the sample_manifest_json artifact path")
 
-        catalog = field_lineage_definitions()
+        base_catalog = field_lineage_definitions()
+        base_field_names = {definition.field_name for definition in base_catalog}
+        catalog = field_lineage_definitions(source.report_lineage)
         definitions_by_name = {definition.field_name: definition for definition in catalog}
         trace_index: dict[str, list[UserFieldTrace]] = {}
         source_records: list[FieldSourceRecord] = []
@@ -477,6 +528,17 @@ class FieldLineageTraceModule:
                     actual_usage_stages=["Ranking", "Report Only"],
                     source_field_name="target_scope_weighted_degree",
                 ),
+                *(
+                    _report_field_trace(
+                        user_id=user_id,
+                        definition=definition,
+                        user=user,
+                        source=source,
+                    )
+                    for definition in catalog
+                    if definition.field_name not in base_field_names
+                    and "user_id" in definition.record_key_fields
+                ),
             ]
 
         return FieldLineageTraceBundle(
@@ -486,8 +548,10 @@ class FieldLineageTraceModule:
         )
 
 
-def field_lineage_definitions() -> list[FieldLineageDefinition]:
-    return [
+def field_lineage_definitions(
+    report_lineage: Sequence[LineageEntry] = (),
+) -> list[FieldLineageDefinition]:
+    definitions = [
         *(
             FieldLineageDefinition(
                 field_name=field_name,
@@ -625,6 +689,242 @@ def field_lineage_definitions() -> list[FieldLineageDefinition]:
             limitations=["只覆盖已采集历史评论关系。", "Target Holdout 不进入该值。"],
         ),
     ]
+    existing = {definition.field_name for definition in definitions}
+    definitions.extend(
+        _report_field_definition(entry)
+        for entry in report_lineage
+        if entry.field_name not in existing
+    )
+    return definitions
+
+
+def _report_field_definition(entry: LineageEntry) -> FieldLineageDefinition:
+    field_name = entry.field_name
+    artifact_id = _report_field_artifact_id(field_name)
+    record_key_fields = _report_field_record_key_fields(field_name)
+    source_fields = _report_field_source_fields(field_name)
+    transformation_method, transformation_description = _report_field_transformation(field_name)
+    display_name = _DISPLAY_NAMES_ZH.get(field_name, field_name.split(".")[-1].replace("_", " "))
+    return FieldLineageDefinition(
+        field_name=field_name,
+        display_name_zh=display_name,
+        meaning=f"报告中 {field_name} 的同源记录级证据。",
+        provenance=entry.provenance,
+        source_artifact_kind=f"persisted {artifact_id} record",
+        record_key_fields=record_key_fields,
+        source_fields=source_fields,
+        transformation_method=transformation_method,
+        transformation_description=transformation_description,
+        declared_usage_stages=list(entry.usage_stages),
+        value_range=_report_field_value_range(field_name),
+        interpretation=_report_field_interpretation(field_name),
+        limitations=_report_field_limitations(field_name),
+    )
+
+
+def _report_field_artifact_id(field_name: str) -> str:
+    if field_name in _DECISION_FIELDS:
+        return "runtime_decisions"
+    if field_name == "provider_failure_type":
+        return "runtime_provider_failures"
+    if field_name in _OUTCOME_FIELDS:
+        return "ranking_runtime_outcomes"
+    if field_name in _USER_RANKING_FIELDS or field_name.startswith("ranking_rounds.candidates."):
+        return "ranking_runtime_candidates"
+    if field_name in _SAMPLE_RUNTIME_FIELDS:
+        return "seed_first_sample_audit"
+    if field_name in _REPORT_LINK_FIELDS:
+        return "final_research_users_json"
+    if field_name.startswith("target_video."):
+        return "target_video_snapshot"
+    if field_name.startswith("run."):
+        return "ranking_runtime_summary"
+    if field_name.startswith("sample_comparison."):
+        return "seed_first_sample_audit"
+    if field_name.startswith("ranking_rounds."):
+        return "ranking_runtime_steps"
+    if field_name == "ranking_diagnostics.paired_ablation":
+        return "ranking_ablation_diagnostics_csv"
+    if field_name == "ranking_diagnostics.weight_sensitivity":
+        return "ranking_weight_sensitivity_csv"
+    if field_name == "ranking_diagnostics.summary":
+        return "ranking_diagnostics_summary"
+    if field_name == "ranking_diagnostics.historical_top20_diagnostic":
+        return "ranking_diagnostics"
+    raise ValueError(f"unsupported report field trace definition: {field_name}")
+
+
+def _report_field_record_key_fields(field_name: str) -> list[str]:
+    if field_name in _DECISION_FIELDS:
+        return ["user_id", "video_id", "time_step"]
+    if field_name == "provider_failure_type":
+        return ["user_id", "video_id", "time_step"]
+    if field_name in _OUTCOME_FIELDS:
+        return ["user_id"]
+    if field_name in _USER_RANKING_FIELDS or field_name.startswith("ranking_rounds.candidates."):
+        return ["user_id", "time_step"]
+    if field_name in _SAMPLE_RUNTIME_FIELDS or field_name in _REPORT_LINK_FIELDS:
+        return ["user_id"]
+    if field_name in _DIAGNOSTIC_FIELDS:
+        return ["user_id", "time_step"] if field_name != "ranking_diagnostics.summary" else ["user_id"]
+    if field_name.startswith("target_video."):
+        return ["video_id"]
+    if field_name.startswith("ranking_rounds."):
+        return ["time_step"]
+    if field_name.startswith(("run.", "sample_comparison.")):
+        return ["sampling_method"]
+    return []
+
+
+def _report_field_source_fields(field_name: str) -> list[str]:
+    if field_name in _DECISION_FIELDS:
+        return ["action", "engage", "probability", "reason", "confidence", "decision_source"]
+    if field_name == "provider_failure_type":
+        return ["failure_type"]
+    if field_name in _OUTCOME_FIELDS:
+        return ["exposure_time_step", "ranking_position", "result_status", "provider_status"]
+    if field_name in _USER_RANKING_FIELDS or field_name.startswith("ranking_rounds.candidates."):
+        return [
+            "ranking_position",
+            "base_network_relevance",
+            "engaged_neighbor_count",
+            "engaged_neighbor_signal",
+            "historical_tag_affinity",
+            "recommendation_score",
+            "selected",
+        ]
+    if field_name in _DIAGNOSTIC_FIELDS:
+        return ["user_id", "time_step", field_name.split(".")[-1]]
+    return [field_name.split(".")[-1]]
+
+
+def _report_field_transformation(field_name: str) -> tuple[str, str]:
+    if field_name == "action":
+        return (
+            "structured_decision_and_direct_neighbor_feedback_v1",
+            "保留同一次结构化 Decision 的 action；like/comment/share 只对下一轮仍 eligible 的直接邻居形成排序信号，ignore 不传播。",
+        )
+    if field_name in _DECISION_FIELDS:
+        return "structured_decision_v1", "从同一次 Recommendation Opportunity 的安全结构化 Decision 原样投影。"
+    if field_name == "provider_failure_type":
+        return "provider_failure_classification_v1", "仅保留稳定失败类型，不保存异常消息或 Provider Payload。"
+    if field_name in _OUTCOME_FIELDS:
+        return "target_delivery_outcome_v1", "从每用户唯一的 persisted ranking outcome 记录投影。"
+    if field_name in _USER_RANKING_FIELDS or field_name.startswith("ranking_rounds.candidates."):
+        return (
+            "global_reranking_candidate_evidence_v1",
+            "使用同一 Batch 的冻结 candidate components 全局排序；相同 score 以 user_id 稳定打破并列。",
+        )
+    if field_name in _DIAGNOSTIC_FIELDS:
+        return "same_run_ranking_diagnostic_v1", "只引用本次 run 基于 persisted candidate evidence 生成的 diagnostics。"
+    if field_name in _SAMPLE_RUNTIME_FIELDS:
+        return "seed_first_sample_membership_v1", "从本次 Seed-First sample audit 的互斥角色与成员记录投影。"
+    if field_name in _REPORT_LINK_FIELDS:
+        return "report_artifact_link_v1", "由本次 manifest 登记的相对 artifact 路径生成。"
+    return "persisted_report_projection_v1", "从本次 run 的 allowlisted persisted artifact 原样或确定性投影。"
+
+
+def _report_field_value_range(field_name: str) -> str:
+    if field_name in {"engage", "selected_for_exposure", "in_base_sample", "is_seed", "is_network_cohort"}:
+        return "true 或 false；未产生 Decision 时可 unavailable。"
+    if field_name in {"probability", "confidence"}:
+        return "0.0 到 1.0；未产生成功 Decision 时 unavailable。"
+    if field_name.endswith(("position", "time_step", "count", "capacity")):
+        return "大于或等于 0 的整数；不适用时 unavailable。"
+    return "由对应 persisted artifact schema 约束。"
+
+
+def _report_field_interpretation(field_name: str) -> str:
+    if field_name == "result_status":
+        return "below_delivery_capacity 表示未曝光；ignore 表示曝光后不互动，两者不可互换。"
+    if field_name in _DECISION_FIELDS or field_name in {"provider_status", "provider_failure_type"}:
+        return "该值只描述本次 Recommendation Opportunity 的结构化决策或 Provider 结果。"
+    if field_name.startswith("ranking_diagnostics."):
+        return "诊断只解释本次 persisted run，不构成真实平台因果或准确率结论。"
+    return "该值按 catalog 声明的阶段解释，不自动成为 LLM Prompt 输入。"
+
+
+def _report_field_limitations(field_name: str) -> list[str]:
+    limitations = ["只引用本次 run 的 allowlisted persisted evidence。"]
+    if field_name.startswith("ranking_diagnostics."):
+        limitations.append("不得复用其他 run 的 rank delta、Top20 或 action 结果。")
+    if field_name == "action":
+        limitations.append("同批 action 不互相影响；只有下一批仍 eligible 的直接邻居可能获得动态信号。")
+    if field_name in _DECISION_FIELDS or field_name == "provider_failure_type":
+        limitations.append("不保存原始 Prompt、Provider request/response 或异常消息。")
+    return limitations
+
+
+def _report_field_trace(
+    *,
+    user_id: str,
+    definition: FieldLineageDefinition,
+    user: Mapping[str, object],
+    source: FieldLineageTraceSource,
+) -> UserFieldTrace:
+    field_name = definition.field_name
+    value = user.get(field_name)
+    value_status = field_value_status(value) if field_name in user else "unavailable"
+    artifact_id = _report_field_artifact_id(field_name)
+    if field_name in _DECISION_FIELDS and value_status != "present":
+        artifact_id = "ranking_runtime_outcomes"
+    if field_name == "provider_failure_type" and value_status != "present":
+        artifact_id = "ranking_runtime_outcomes"
+    relative_path = source.artifact_paths.get(artifact_id)
+    if not relative_path:
+        raise ValueError(f"field trace requires the {artifact_id} artifact path")
+    locator = SourceRecordLocator(
+        artifact_id=artifact_id,
+        relative_path=relative_path,
+        record_key=_report_field_record_key(field_name, user_id, user, artifact_id=artifact_id),
+    )
+    evidence_values = {
+        source_field: user[source_field]
+        for source_field in definition.source_fields
+        if source_field in user
+    }
+    if field_name in user:
+        evidence_values.setdefault(field_name.split(".")[-1], value)
+    if field_name == "provider_failure_type":
+        evidence_values["failure_type"] = value
+    evidence = field_trace_evidence(definition, evidence_values, locator)
+    if field_name == "action":
+        propagation = user.get("action_propagation_evidence")
+        if isinstance(propagation, Mapping):
+            evidence = [FieldEvidenceReference.model_validate(dict(propagation))]
+    actual_usage_stages = list(definition.declared_usage_stages)
+    if field_name == "action" and value not in {"like", "comment", "share"}:
+        actual_usage_stages = ["Report Only"]
+    return UserFieldTrace(
+        user_id=user_id,
+        field_name=field_name,
+        value_status=value_status,
+        source_record_locator=locator,
+        evidence=evidence,
+        actual_usage_stages=actual_usage_stages,
+        prompt_inclusion_status="not_allowlisted",
+        omission_reason="field_not_in_prompt_allowlist",
+    )
+
+
+def _report_field_record_key(
+    field_name: str,
+    user_id: str,
+    user: Mapping[str, object],
+    artifact_id: str | None = None,
+) -> dict[str, str | int]:
+    fields = ["user_id"] if artifact_id == "ranking_runtime_outcomes" else _report_field_record_key_fields(field_name)
+    key: dict[str, str | int] = {}
+    for key_field in fields:
+        if key_field == "user_id":
+            key[key_field] = user_id
+        elif key_field == "time_step":
+            key[key_field] = _integer_value(user.get("latest_ranking_time_step"))
+        elif key_field == "video_id":
+            key[key_field] = str(user.get("target_video_id", ""))
+        else:
+            key[key_field] = str(user.get(key_field, ""))
+    return key
 
 
 def _derived_proxy_trace(
@@ -815,6 +1115,8 @@ def field_trace_evidence(
             evidence_kind=(
                 "synthetic_experiment_contract"
                 if definition.provenance == "Synthetic Experiment Label"
+                else "runtime_record_evidence"
+                if definition.provenance == "Runtime Simulation Result"
                 else "derived_proxy_inputs"
             ),
             record_key=locator.record_key,

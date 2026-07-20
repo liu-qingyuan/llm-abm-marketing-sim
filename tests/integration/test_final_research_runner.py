@@ -1261,6 +1261,14 @@ def test_target_delivery_ranking_runtime_caps_delivery_and_marks_final_below_cap
     assert {
         row["provider_status"] for row in report_payload["users"] if row["result_status"] == "below_delivery_capacity"
     } == {"not_called"}
+    below_user_id = next(row["user_id"] for row in report_payload["users"] if row["result_status"] == "below_delivery_capacity")
+    below_traces = {
+        trace["field_name"]: trace for trace in report_payload["user_field_trace_index"][below_user_id]
+    }
+    assert below_traces["interest_tags"]["prompt_inclusion_status"] == "not_exposed"
+    assert below_traces["result_status"]["source_record_locator"]["artifact_id"] == "ranking_runtime_outcomes"
+    assert below_traces["action"]["evidence"][0]["evidence_kind"] == "not_exposed_no_action"
+    assert below_traces["action"]["source_record_locator"]["artifact_id"] == "ranking_runtime_outcomes"
 
 
 def test_target_delivery_ranking_v4_persists_interest_and_historical_field_traces(tmp_path: Path) -> None:
@@ -1292,34 +1300,32 @@ def test_target_delivery_ranking_v4_persists_interest_and_historical_field_trace
     assert source_document["schema_version"] == "field-source-records-v1"
     assert payload["field_lineage_catalog"] == catalog_document["definitions"]
     assert payload["user_field_trace_index"] == trace_document["users"]
-    traceable_provenance = {
+    expected_catalog_fields = {entry["field_name"] for entry in payload["field_lineage"]}
+    catalog_by_field = {entry["field_name"]: entry for entry in payload["field_lineage_catalog"]}
+    expected_trace_fields = {
+        field_name
+        for field_name, definition in catalog_by_field.items()
+        if "user_id" in definition["record_key_fields"]
+    }
+    assert set(catalog_by_field) == expected_catalog_fields
+    assert {entry["provenance"] for entry in payload["field_lineage_catalog"]} == {
         "Direct Observed Profile Field",
         "Historical Behavioral Evidence",
         "Derived Proxy Metric",
         "Synthetic Experiment Label",
+        "Runtime Simulation Result",
     }
-    report_user_fields = set(payload["users"][0])
-    expected_trace_fields = {
-        entry["field_name"]
-        for entry in payload["field_lineage"]
-        if entry["field_name"] in report_user_fields and entry["provenance"] in traceable_provenance
-    }
-    catalog_by_field = {entry["field_name"]: entry for entry in payload["field_lineage_catalog"]}
-    assert set(catalog_by_field) == expected_trace_fields
-    assert {
-        entry["provenance"] for entry in payload["field_lineage_catalog"]
-    } == traceable_provenance
     assert all(
         {trace["field_name"] for trace in traces} == expected_trace_fields
         for traces in payload["user_field_trace_index"].values()
     )
     coverage_audit = catalog_document["coverage_audit"]
     assert coverage_audit["user_count"] == len(payload["users"])
-    assert coverage_audit["catalog_field_count"] == len(expected_trace_fields)
+    assert coverage_audit["catalog_field_count"] == len(expected_catalog_fields)
     assert coverage_audit["trace_count"] == len(payload["users"]) * len(expected_trace_fields)
     assert sum(coverage_audit["value_status_counts"].values()) == coverage_audit["trace_count"]
-    assert {record["field_name"] for record in coverage_audit["field_coverage"]} == expected_trace_fields
-    assert sum(coverage_audit["provenance_field_counts"].values()) == len(expected_trace_fields)
+    assert {record["field_name"] for record in coverage_audit["field_coverage"]} == expected_catalog_fields
+    assert sum(coverage_audit["provenance_field_counts"].values()) == len(expected_catalog_fields)
 
     u1_traces = {trace["field_name"]: trace for trace in payload["user_field_trace_index"]["u1"]}
     assert u1_traces["interest_tags"]["value_status"] == "present"
@@ -1342,12 +1348,39 @@ def test_target_delivery_ranking_v4_persists_interest_and_historical_field_trace
     assert u1_traces["activity_score"]["evidence"][0]["evidence_kind"] == "derived_proxy_inputs"
     assert u1_traces["latent_hotel_class"]["source_record_locator"]["artifact_id"] == "sample_manifest_json"
     assert u1_traces["latent_hotel_class"]["evidence"][0]["evidence_kind"] == "synthetic_experiment_contract"
+    assert u1_traces["latest_ranking_position"]["source_record_locator"] == {
+        "artifact_id": "ranking_runtime_candidates",
+        "relative_path": "ranking_runtime_candidates.csv",
+        "record_key": {"time_step": 0, "user_id": "u1"},
+    }
+    assert u1_traces["latest_ranking_position"]["prompt_inclusion_status"] == "not_allowlisted"
+    assert u1_traces["action"]["source_record_locator"]["artifact_id"] == "runtime_decisions"
+    assert u1_traces["action"]["source_record_locator"]["record_key"] == {
+        "time_step": 0,
+        "user_id": "u1",
+        "video_id": payload["target_video"]["video_id"],
+    }
+    assert u1_traces["action"]["evidence"][0]["evidence_kind"] == "no_propagation_action"
+    assert "action=ignore" in u1_traces["action"]["evidence"][0]["matched_values"]
+    assert u1_traces["action"]["actual_usage_stages"] == ["Report Only"]
+    assert u1_traces["provider_status"]["source_record_locator"]["artifact_id"] == "ranking_runtime_outcomes"
+    assert u1_traces["ranking_diagnostics.paired_ablation"]["source_record_locator"][
+        "artifact_id"
+    ] == "ranking_ablation_diagnostics_csv"
+    assert u1_traces["ranking_diagnostics.paired_ablation"]["evidence"][0]["matched_values"] == [
+        "user_id=u1",
+        "paired_ablation=True"
+    ]
+    assert u1_traces["ranking_diagnostics.summary"]["source_record_locator"]["artifact_id"] == (
+        "ranking_diagnostics_summary"
+    )
 
     u2_traces = {trace["field_name"]: trace for trace in payload["user_field_trace_index"]["u2"]}
     assert u2_traces["interest_tags"]["value_status"] == "empty"
     assert u2_traces["interest_tags"]["prompt_inclusion_status"] == "empty_omitted"
     assert u2_traces["historical_tags"]["value_status"] == "present"
     assert u2_traces["historical_tags"]["prompt_inclusion_status"] == "not_allowlisted"
+    assert u2_traces["action"]["evidence"][0]["evidence_kind"] == "no_propagation_action"
     source_records = {record["user_id"]: record for record in source_document["records"]}
     assert source_records["u2"]["interest_tags"] == []
     assert source_records["u2"]["historical_tags"] == ["锦江ESG"]
@@ -1394,6 +1427,41 @@ def test_target_delivery_ranking_runtime_persists_live_status_after_adapter_call
     assert documents[3]["live_api_triggered"] is True
     assert "Persisted Seed-First Formal Run" in (run_dir / "report.html").read_text(encoding="utf-8")
     assert rebuild_final_research_report(run_dir) == run_dir / "report.html"
+
+
+def test_target_delivery_trace_records_feedback_and_provider_failure_from_the_same_run(tmp_path: Path) -> None:
+    dataset_dir = _make_target_delivery_fixture(tmp_path)
+    provider_config = ProviderLLMConfig(enabled=True, model="mock-model", require_live_env=False)
+    run_dir = FinalResearchRunner(
+        FinalResearchConfig(dataset_dir=dataset_dir, sample_size=70, provider=provider_config),
+        _TargetDeliveryAdapter(failed_user_id="u79"),
+    ).run_and_write(tmp_path / "ranking-runtime-trace")
+
+    payload = json.loads((run_dir / "final_research_report_payload.json").read_text(encoding="utf-8"))
+    traces_by_user = {
+        user_id: {trace["field_name"]: trace for trace in traces}
+        for user_id, traces in payload["user_field_trace_index"].items()
+    }
+
+    engaged_action = traces_by_user["u80"]["action"]
+    assert engaged_action["value_status"] == "present"
+    assert engaged_action["source_record_locator"]["artifact_id"] == "runtime_decisions"
+    assert engaged_action["evidence"][0]["evidence_kind"] == "next_batch_direct_neighbor_signal"
+    assert "action=like" in engaged_action["evidence"][0]["matched_values"]
+    assert engaged_action["actual_usage_stages"] == ["Ranking", "Report Only"]
+    assert any(
+        value.startswith("affected_direct_neighbor_user_ids=")
+        for value in engaged_action["evidence"][0]["matched_values"]
+    )
+
+    failed = traces_by_user["u79"]
+    assert failed["provider_status"]["source_record_locator"]["artifact_id"] == "ranking_runtime_outcomes"
+    assert failed["provider_failure_type"]["source_record_locator"]["artifact_id"] == (
+        "runtime_provider_failures"
+    )
+    assert failed["provider_failure_type"]["value_status"] == "present"
+    assert failed["action"]["value_status"] == "empty"
+    assert failed["action"]["source_record_locator"]["artifact_id"] == "ranking_runtime_outcomes"
 
 
 def test_probability_runtime_persists_probability_formal_status_after_adapter_call(tmp_path: Path) -> None:

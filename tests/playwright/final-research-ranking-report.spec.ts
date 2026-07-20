@@ -1870,6 +1870,20 @@ test('user drawer expands v4 field traces with keyboard focus restoration', asyn
   await drawer.getByTestId('user-field-trace-latent_hotel_class').click();
   await expect(detail).toContainText('latent_hotel_class（合成酒店偏好类别）');
   await expect(detail).toContainText('synthetic_experiment_contract');
+  await provenanceFilter.selectOption('Runtime Simulation Result');
+  await drawer.getByTestId('user-field-trace-action').click();
+  await expect(detail).toContainText('runtime_decisions');
+  await expect(detail).toContainText('no_propagation_action');
+  await expect(detail).toContainText('not_allowlisted（未列入 Prompt allowlist）');
+  await drawer.getByTestId('user-field-trace-latest_ranking_position').click();
+  await expect(detail).toContainText('ranking_runtime_candidates.csv');
+  const expectedRankingLocator = payload.user_field_trace_index.u2.find(
+    (trace) => trace.field_name === 'latest_ranking_position',
+  )?.source_record_locator.record_key;
+  await expect(detail).toContainText(JSON.stringify(expectedRankingLocator));
+  await drawer.getByTestId('user-field-trace-ranking_diagnostics.paired_ablation').click();
+  await expect(detail).toContainText('ranking_ablation_diagnostics.csv');
+  await expect(detail).toContainText('same_run_ranking_diagnostic_v1');
   await provenanceFilter.selectOption('');
 
   await page.keyboard.press('Escape');
