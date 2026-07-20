@@ -28,6 +28,7 @@ from .final_research_report import (
     FinalResearchReportSource,
     FinalResearchReportWriter,
 )
+from .prompt_field_summary import PromptFieldInclusion, profile_prompt_field_inclusion
 from .ranking_diagnostics import MAIN_RANKING_WEIGHTS, RankingDiagnosticArtifacts, RankingDiagnostics
 from .safe_serialization import safe_data, safe_json, safe_user_data, safe_user_json
 from .schemas import (
@@ -493,6 +494,7 @@ class _RankingRuntimeArtifacts:
     provider_failures: list[dict[str, object]]
     summary: dict[str, object]
     decision_adapter_calls: int
+    prompt_field_inclusion_by_user: dict[str, dict[str, PromptFieldInclusion]]
 
 
 @dataclass(frozen=True)
@@ -532,6 +534,7 @@ class _CommentRecord:
     mentioned_user_ids: tuple[str, ...]
     like_count: int
     comment_level: str
+    content: str
 
 
 @dataclass(frozen=True)
@@ -550,6 +553,8 @@ class _PreparedInputs:
     thresholds: dict[str, float]
     historical_interaction_user_ids: set[str]
     historical_tags_by_user: dict[str, set[str]]
+    interest_tag_evidence_by_user: dict[str, list[dict[str, object]]]
+    historical_tag_evidence_by_user: dict[str, list[dict[str, object]]]
     target_scope_weighted_degree: dict[str, int]
     target_scope_neighbors: dict[str, set[str]]
     source_scope_sample_counts: dict[str, int]
@@ -798,6 +803,11 @@ class _ResearchInputBuilder:
             all_history_degree=all_history_degree,
             thresholds=thresholds,
         )
+        interest_tag_evidence_by_user, historical_tag_evidence_by_user = _field_tag_evidence(
+            users_by_id,
+            historical_videos,
+            historical_comments,
+        )
         if self.model_policy.sampling_method == SEED_FIRST_SAMPLING_METHOD:
             selection = _SeedFirstSampleModule(
                 users_by_id=users_by_id,
@@ -875,6 +885,8 @@ class _ResearchInputBuilder:
             thresholds=thresholds,
             historical_interaction_user_ids=set(history_counts),
             historical_tags_by_user=historical_tags_by_user,
+            interest_tag_evidence_by_user=interest_tag_evidence_by_user,
+            historical_tag_evidence_by_user=historical_tag_evidence_by_user,
             target_scope_weighted_degree=target_scope_degree,
             target_scope_neighbors=target_scope_neighbors,
             source_scope_sample_counts=dict(sorted(Counter(sample_scope_by_user.values()).items())),
@@ -937,6 +949,7 @@ class _ResearchInputBuilder:
                     mentioned_user_ids=tuple(_parse_list(_cell(row, "mentioned_user_ids"))),
                     like_count=_int_cell(row, "like_count"),
                     comment_level=level,
+                    content=_cell(row, "content"),
                 )
             )
         return comments
@@ -1197,6 +1210,8 @@ class FinalResearchRunner:
         elif ranking_runtime is not None:
             artifacts.update(
                 {
+                    "field_lineage_catalog": "field_lineage_catalog.json",
+                    "field_source_records": "field_source_records.json",
                     "seed_first_sample_audit": "seed_first_sample_audit.json",
                     "ranking_ablation_diagnostics_csv": "ranking_ablation_diagnostics.csv",
                     "ranking_diagnostics": "ranking_diagnostics.json",
@@ -1209,6 +1224,7 @@ class FinalResearchRunner:
                     "runtime_actions": "runtime_actions.csv",
                     "runtime_decisions": "runtime_decisions.csv",
                     "runtime_provider_failures": "runtime_provider_failures.csv",
+                    "user_field_trace": "user_field_trace.json",
                 }
             )
         elif prepared.sampling_method == SEED_FIRST_SAMPLING_METHOD:
@@ -1410,6 +1426,16 @@ class FinalResearchRunner:
                     user.user_id: sorted(prepared.historical_tags_by_user.get(user.user_id, set()))
                     for user in sample_users
                 },
+                interest_tag_evidence_by_user={
+                    user.user_id: prepared.interest_tag_evidence_by_user.get(user.user_id, []) for user in sample_users
+                },
+                historical_tag_evidence_by_user={
+                    user.user_id: prepared.historical_tag_evidence_by_user.get(user.user_id, [])
+                    for user in sample_users
+                },
+                prompt_field_inclusion_by_user=(
+                    ranking_runtime.prompt_field_inclusion_by_user if ranking_runtime is not None else {}
+                ),
                 config=report_config,
                 offline_score_summary=score_summary,
                 holdout_diagnostic=diagnostic,
@@ -1462,6 +1488,7 @@ class FinalResearchRunner:
         action_rows: list[dict[str, object]] = []
         provider_failure_rows: list[dict[str, object]] = []
         outcomes_by_user: dict[str, dict[str, object]] = {}
+        prompt_field_inclusion_by_user: dict[str, dict[str, PromptFieldInclusion]] = {}
         step_rows: list[dict[str, object]] = []
         decision_adapter_calls = 0
         schedule_position = 0
@@ -1514,10 +1541,12 @@ class FinalResearchRunner:
                     "result_status": "",
                     "provider_status": "",
                 }
+                profile = _runtime_user_profile(user)
+                prompt_field_inclusion_by_user[user_id] = profile_prompt_field_inclusion(profile)
                 attempt = _attempt_runtime_decision(
                     adapter=self.decision_adapter,
                     post=post,
-                    profile=_runtime_user_profile(user),
+                    profile=profile,
                     peer_context=PeerContext(),
                     platform_context=PlatformContext(
                         time_label=f"batch-{time_step}",
@@ -1637,6 +1666,7 @@ class FinalResearchRunner:
             provider_failures=provider_failure_rows,
             summary=summary,
             decision_adapter_calls=decision_adapter_calls,
+            prompt_field_inclusion_by_user=prompt_field_inclusion_by_user,
         )
 
     def _run_runtime(
@@ -1903,7 +1933,7 @@ def _runtime_user_profile(user: ResearchUser) -> UserProfile:
     return UserProfile.model_validate(
         {
             "user_id": user.user_id,
-            "interest_tags": [],
+            "interest_tags": user.interest_tags,
             "activity_score": user.activity_score,
             "nickname": user.nickname,
             "bio": user.bio,
@@ -2048,6 +2078,87 @@ def _historical_user_signals(
         if video is not None:
             tags[comment.commenter_user_id].update(video.hashtags)
     return dict(counts), dict(likes), dict(tags)
+
+
+def _field_tag_evidence(
+    users_by_id: Mapping[str, ResearchUser],
+    videos: Mapping[str, _VideoRecord],
+    comments: Sequence[_CommentRecord],
+) -> tuple[dict[str, list[dict[str, object]]], dict[str, list[dict[str, object]]]]:
+    interest_evidence: dict[str, list[dict[str, object]]] = defaultdict(list)
+    historical_evidence: dict[str, list[dict[str, object]]] = defaultdict(list)
+    seen_interest: set[tuple[str, str, str]] = set()
+    seen_historical: set[tuple[str, str]] = set()
+
+    for video in videos.values():
+        user = users_by_id.get(video.creator_user_id)
+        if user is None:
+            continue
+        user_tags = set(user.interest_tags)
+        matched_hashtags = sorted(user_tags & set(video.hashtags))
+        if matched_hashtags:
+            key = (user.user_id, "historical_video_hashtags", video.video_id)
+            if key not in seen_interest:
+                seen_interest.add(key)
+                interest_evidence[user.user_id].append(
+                    {
+                        "evidence_kind": "historical_video_hashtags",
+                        "record_key": {"video_id": video.video_id},
+                        "source_fields": ["hashtags"],
+                        "matched_values": matched_hashtags,
+                    }
+                )
+        matched_caption_terms = sorted(tag for tag in user_tags if tag and tag in video.caption)
+        if matched_caption_terms:
+            key = (user.user_id, "historical_text_topic_terms", video.video_id)
+            if key not in seen_interest:
+                seen_interest.add(key)
+                interest_evidence[user.user_id].append(
+                    {
+                        "evidence_kind": "historical_text_topic_terms",
+                        "record_key": {"video_id": video.video_id},
+                        "source_fields": ["caption"],
+                        "matched_values": matched_caption_terms,
+                    }
+                )
+
+    for comment in comments:
+        user = users_by_id.get(comment.commenter_user_id)
+        interaction_video = videos.get(comment.video_id)
+        if user is None:
+            continue
+        matched_comment_terms = sorted(tag for tag in user.interest_tags if tag and tag in comment.content)
+        if matched_comment_terms:
+            key = (user.user_id, "historical_text_topic_terms", comment.comment_id)
+            if key not in seen_interest:
+                seen_interest.add(key)
+                interest_evidence[user.user_id].append(
+                    {
+                        "evidence_kind": "historical_text_topic_terms",
+                        "record_key": {"comment_id": comment.comment_id},
+                        "source_fields": ["content"],
+                        "matched_values": matched_comment_terms,
+                    }
+                )
+        if interaction_video is None or not interaction_video.hashtags:
+            continue
+        history_key = (user.user_id, interaction_video.video_id)
+        if history_key in seen_historical:
+            continue
+        seen_historical.add(history_key)
+        historical_evidence[user.user_id].append(
+            {
+                "evidence_kind": "historical_interaction_video_hashtags",
+                "record_key": {"video_id": interaction_video.video_id},
+                "source_fields": ["hashtags"],
+                "matched_values": sorted(set(interaction_video.hashtags)),
+            }
+        )
+
+    return (
+        {user_id: rows for user_id, rows in sorted(interest_evidence.items())},
+        {user_id: rows for user_id, rows in sorted(historical_evidence.items())},
+    )
 
 
 def _weighted_degrees(

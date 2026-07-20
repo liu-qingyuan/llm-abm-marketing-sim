@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 from .decision import DecisionInput
 from .schemas import LATENT_VALUE_DIMENSIONS, PeerContext, PlatformContext, PostContent, UserProfile
@@ -46,6 +46,8 @@ TRAVEL_PURPOSE_LABELS: dict[str, str] = {
     "leisure": "休闲旅游",
 }
 
+PromptFieldInclusion = Literal["included", "empty_omitted"]
+
 
 def build_prompt_field_summary(decision_input: DecisionInput) -> dict[str, str]:
     """Convert provider-visible decision context into stable Chinese summaries."""
@@ -70,6 +72,31 @@ def summarize_prompt_fields(profile: UserProfile) -> str:
     if preference_summary:
         parts.append(preference_summary)
     return "；".join(parts)
+
+
+def profile_prompt_field_inclusion(profile: UserProfile) -> dict[str, PromptFieldInclusion]:
+    """Return field-level inclusion facts from the same path that builds Prompt v2 summaries."""
+
+    extra = profile.model_extra or {}
+    included = {
+        "interest_tags": bool(_clean_interest_tags(profile.interest_tags)),
+        "activity_score": True,
+        "global_influence_score": _optional_float(extra.get("global_influence_score")) is not None,
+        "local_influence_score": _optional_float(extra.get("local_influence_score")) is not None,
+    }
+    attributes = profile.latent_attributes
+    included.update(
+        {
+            "latent_environmental_consciousness_coef": attributes is not None,
+            **{f"latent_{dimension}_value_weight": attributes is not None for dimension in LATENT_VALUE_DIMENSIONS},
+            "latent_hotel_class": attributes is not None,
+            "latent_travel_purpose": attributes is not None,
+        }
+    )
+    return {
+        field_name: "included" if included[field_name] else "empty_omitted"
+        for field_name in JINJIANG_PROMPT_V2_PROFILE_FIELDS
+    }
 
 
 def summarize_observed_prompt_fields(profile: UserProfile) -> str:

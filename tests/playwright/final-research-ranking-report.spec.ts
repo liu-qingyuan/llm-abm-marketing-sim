@@ -82,6 +82,30 @@ type RankingPayload = {
     provenance: string;
     usage_stages: string[];
   }>;
+  field_lineage_catalog: Array<{
+    field_name: string;
+    display_name_zh: string;
+    provenance: string;
+    source_artifact_kind: string;
+    source_fields: string[];
+    transformation_method: string;
+    transformation_description: string;
+    declared_usage_stages: string[];
+    limitations: string[];
+  }>;
+  user_field_trace_index: Record<string, Array<{
+    user_id: string;
+    field_name: string;
+    value_status: string;
+    source_record_locator: {
+      artifact_id: string;
+      relative_path: string;
+      record_key: Record<string, string | number>;
+    };
+    actual_usage_stages: string[];
+    prompt_inclusion_status: string;
+    omission_reason: string;
+  }>>;
   prompt_contract: {
     allowed_profile_fields: string[];
   };
@@ -197,6 +221,10 @@ else:
     fixture_dir = module._make_processed_fixture(Path(fixture_path), user_count=1010)
     sample_size = 1000
     failed_user_id = "u1"
+user_rows = module._read_csv(fixture_dir / "users.csv")
+user_rows[0]["interest_tags"] = '["锦江ESG"]'
+user_rows[1]["interest_tags"] = '[]'
+module._write_csv(fixture_dir / "users.csv", list(user_rows[0]), user_rows)
 video_rows = module._read_csv(fixture_dir / "videos.csv")
 for row in video_rows:
     if row["video_id"] == module.TARGET_VIDEO_ID:
@@ -1777,6 +1805,54 @@ test('ranking research report exposes complete paired selection identities', asy
   await expect(deltas).toContainText('u60');
   await expect(deltas).toContainText('network-added');
   expect(await deltas.locator('tbody tr').count()).toBeGreaterThan(20);
+});
+
+test('user drawer expands v4 field traces with keyboard focus restoration', async ({ page }, testInfo) => {
+  const { outputDir, payload } = generateRankingReport(testInfo, 'effect');
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto(pathToFileURL(path.join(outputDir, 'report.html')).toString());
+  await page.getByTestId('run-evidence-mode-button').click();
+  await page.getByTestId('user-search').fill('u2');
+  const exactUserId = page.locator('.profile-id').filter({ hasText: /^u2$/ });
+  const userRow = page.getByTestId('user-table').locator('tbody tr').filter({ has: exactUserId });
+  await userRow.click();
+
+  const drawer = page.getByTestId('evidence-drawer');
+  await expect(drawer).toHaveAttribute('data-selection-kind', 'user');
+  const interestTrace = drawer.getByTestId('user-field-trace-interest_tags');
+  await interestTrace.focus();
+  await interestTrace.press('Enter');
+  await expect(interestTrace).toHaveAttribute('aria-expanded', 'true');
+  const detail = drawer.getByTestId('user-field-trace-detail');
+  await expect(detail).toContainText('interest_tags（兴趣标签）');
+  await expect(detail).toContainText('empty（空值）');
+  await expect(detail).toContainText('Historical Behavioral Evidence（历史行为证据）');
+  await expect(detail).toContainText('field_source_records');
+  await expect(detail).toContainText('field_source_records.json');
+  await expect(detail).toContainText('{"user_id":"u2"}');
+  await expect(detail).toContainText('historical_video_hashtags');
+  await expect(detail).toContainText('historical_topic_tags_stable_unique_v1');
+  await expect(detail).toContainText('Declared Usage Stage（声明用途）');
+  await expect(detail).toContainText('Actual Usage Stage（本次实际用途）');
+  await expect(detail).toContainText('empty_omitted（空值省略）');
+  await expect(detail).toContainText('empty_value_omitted_from_prompt');
+  await expect(detail.getByRole('link', { name: '打开来源 artifact' })).toHaveAttribute(
+    'href',
+    'field_source_records.json',
+  );
+
+  const historicalTrace = drawer.getByTestId('user-field-trace-historical_tags');
+  await historicalTrace.click();
+  await expect(detail).toContainText('historical_tags（历史互动标签）');
+  await expect(detail).toContainText('not_allowlisted（未列入 Prompt allowlist）');
+  const expectedHistoryStatus = payload.user_field_trace_index.u2.find(
+    (trace) => trace.field_name === 'historical_tags',
+  )?.value_status;
+  await expect(detail).toContainText(expectedHistoryStatus === 'present' ? 'present（有值）' : 'empty（空值）');
+
+  await page.keyboard.press('Escape');
+  await expect(drawer).toBeHidden();
+  await expect(userRow).toBeFocused();
 });
 
 test('configured formal ranking run preserves payload-derived evidence on desktop', async ({ page }, testInfo) => {

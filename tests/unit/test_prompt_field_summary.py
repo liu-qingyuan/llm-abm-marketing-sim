@@ -1,7 +1,11 @@
 from __future__ import annotations
 
 from llm_abm_sim.decision import DecisionInput
-from llm_abm_sim.prompt_field_summary import build_prompt_field_summary, summarize_prompt_fields
+from llm_abm_sim.prompt_field_summary import (
+    build_prompt_field_summary,
+    profile_prompt_field_inclusion,
+    summarize_prompt_fields,
+)
 from llm_abm_sim.schemas import (
     LatentAttributes,
     LatentProfileLabels,
@@ -87,6 +91,16 @@ def test_prompt_field_summary_omits_empty_optional_fields() -> None:
         "说明：活跃度、全平台影响力、锦江酒店社群内的局部影响力为可观测代理指标；"
         "活跃度：中等（0.50）"
     )
+
+
+def test_profile_prompt_field_inclusion_uses_the_same_interest_tag_cleaning_path() -> None:
+    included = profile_prompt_field_inclusion(
+        UserProfile(user_id="included", interest_tags=[" 绿色旅行 ", "", "绿色旅行"])
+    )
+    omitted = profile_prompt_field_inclusion(UserProfile(user_id="omitted", interest_tags=[]))
+
+    assert included["interest_tags"] == "included"
+    assert omitted["interest_tags"] == "empty_omitted"
 
 
 def test_prompt_field_summary_deduplicates_after_interest_tag_truncation() -> None:

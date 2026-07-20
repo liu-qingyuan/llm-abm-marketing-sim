@@ -15,6 +15,14 @@ from typing import Literal, cast
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from .field_lineage_trace import (
+    FieldLineageDefinition,
+    FieldLineageTraceBundle,
+    FieldLineageTraceModule,
+    FieldLineageTraceSource,
+    PromptInclusionStatus,
+    UserFieldTrace,
+)
 from .prompt_field_summary import JINJIANG_PROMPT_V2_PROFILE_FIELDS
 from .research_explanations import (
     ExplanationContext,
@@ -571,7 +579,7 @@ class RankingDiagnosticSummary(BaseModel):
     diagnostic_decision_adapter_calls: int
 
 
-class RankingReportDownloads(BaseModel):
+class RankingReportDownloadsV3(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     report: str
@@ -582,6 +590,12 @@ class RankingReportDownloads(BaseModel):
     ranking_diagnostics: str
     ranking_ablation_csv: str
     ranking_sensitivity_csv: str
+
+
+class RankingReportDownloads(RankingReportDownloadsV3):
+    field_lineage_catalog: str
+    user_field_trace: str
+    field_source_records: str
 
 
 class RankingUserReportRow(BaseModel):
@@ -659,10 +673,10 @@ class RankingUserReportRow(BaseModel):
         return row
 
 
-class FinalResearchRankingReportPayload(BaseModel):
+class _FinalResearchRankingReportPayloadBase(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    schema_version: Literal["final-research-ranking-report-payload-v3"] = "final-research-ranking-report-payload-v3"
+    schema_version: str
     title: str
     core_objects: tuple[Literal["TargetVideo"], Literal["ResearchUser"], Literal["PlatformRecommendationModel"]]
     target_video: FinalResearchTargetVideo
@@ -674,12 +688,12 @@ class FinalResearchRankingReportPayload(BaseModel):
     ranking_rounds: list[RankingRoundSummary]
     ranking_diagnostics: dict[str, object]
     ranking_diagnostics_summary: RankingDiagnosticSummary
-    downloads: RankingReportDownloads
+    downloads: RankingReportDownloadsV3
     limitations: list[str]
     users: list[RankingUserReportRow]
 
     @model_validator(mode="after")
-    def _validate_field_lineage(self) -> FinalResearchRankingReportPayload:
+    def _validate_field_lineage(self) -> _FinalResearchRankingReportPayloadBase:
         declared = [entry.field_name for entry in self.field_lineage]
         if len(declared) != len(set(declared)):
             raise ValueError("field lineage must declare each field exactly once")
@@ -709,11 +723,46 @@ class FinalResearchRankingReportPayload(BaseModel):
         return self
 
 
+class FinalResearchRankingReportPayloadV3(_FinalResearchRankingReportPayloadBase):
+    schema_version: Literal["final-research-ranking-report-payload-v3"] = "final-research-ranking-report-payload-v3"
+
+
+class FinalResearchRankingReportPayload(_FinalResearchRankingReportPayloadBase):
+    schema_version: Literal["final-research-ranking-report-payload-v4"] = (
+        "final-research-ranking-report-payload-v4"
+    )
+    sample_role_counts: dict[SampleRole, int]
+    field_lineage_catalog: list[FieldLineageDefinition]
+    user_field_trace_index: dict[str, list[UserFieldTrace]]
+    downloads: RankingReportDownloads
+
+    @model_validator(mode="after")
+    def _validate_field_trace(self) -> FinalResearchRankingReportPayload:
+        catalog_names = [definition.field_name for definition in self.field_lineage_catalog]
+        if len(catalog_names) != len(set(catalog_names)):
+            raise ValueError("field lineage catalog must declare each field exactly once")
+        user_ids = [user.user_id for user in self.users]
+        if set(self.user_field_trace_index) != set(user_ids):
+            raise ValueError("user field trace index must cover every report user exactly once")
+        for user_id, traces in self.user_field_trace_index.items():
+            trace_names = [trace.field_name for trace in traces]
+            if len(trace_names) != len(set(trace_names)):
+                raise ValueError(f"user field trace contains duplicate fields for {user_id}")
+            if any(trace.user_id != user_id for trace in traces):
+                raise ValueError(f"user field trace key does not match trace user_id for {user_id}")
+            if not set(trace_names) <= set(catalog_names):
+                raise ValueError(f"user field trace references an unknown catalog field for {user_id}")
+        return self
+
+
 @dataclass(frozen=True)
 class FinalResearchReportSource:
     target_video: Mapping[str, object]
     users: Sequence[Mapping[str, object]]
     historical_tags_by_user: Mapping[str, Sequence[str]]
+    interest_tag_evidence_by_user: Mapping[str, Sequence[Mapping[str, object]]]
+    historical_tag_evidence_by_user: Mapping[str, Sequence[Mapping[str, object]]]
+    prompt_field_inclusion_by_user: Mapping[str, Mapping[str, PromptInclusionStatus]]
     config: Mapping[str, object]
     offline_score_summary: Mapping[str, object]
     holdout_diagnostic: Mapping[str, object]
@@ -743,18 +792,35 @@ class FinalResearchReportWriter:
 
     def write(self, output_dir: str | Path) -> Path:
         output_path = Path(output_dir)
-        payload = self._build_payload()
+        trace_bundle = self._build_field_trace_bundle() if self.source.ranking_runtime_summary is not None else None
+        payload = self._build_payload(trace_bundle)
         user_records = [row.model_dump(mode="json") for row in payload.users]
         user_document = {
             "schema_version": (
-                "final-research-ranking-users-v3"
+                "final-research-ranking-users-v4"
                 if isinstance(payload, FinalResearchRankingReportPayload)
+                else "final-research-ranking-users-v3"
+                if isinstance(payload, FinalResearchRankingReportPayloadV3)
                 else "final-research-users-v1"
             ),
             "links": payload.downloads.model_dump(mode="json"),
             "users": user_records,
         }
 
+        if trace_bundle is not None:
+            artifacts = _required_mapping(self.source.artifact_manifest, "artifacts", "artifact manifest")
+            (output_path / str(artifacts["field_lineage_catalog"])).write_text(
+                safe_json(trace_bundle.catalog_document()) + "\n",
+                encoding="utf-8",
+            )
+            (output_path / str(artifacts["user_field_trace"])).write_text(
+                safe_user_json(trace_bundle.trace_document()) + "\n",
+                encoding="utf-8",
+            )
+            (output_path / str(artifacts["field_source_records"])).write_text(
+                safe_user_json(trace_bundle.source_document()) + "\n",
+                encoding="utf-8",
+            )
         self._write_csv(
             output_path / FINAL_RESEARCH_REPORT_ARTIFACTS["final_research_users_csv"],
             payload.users,
@@ -770,9 +836,14 @@ class FinalResearchReportWriter:
         )
         return report_path
 
-    def _build_payload(self) -> FinalResearchReportPayload | FinalResearchRankingReportPayload:
+    def _build_payload(
+        self,
+        trace_bundle: FieldLineageTraceBundle | None = None,
+    ) -> FinalResearchReportPayload | FinalResearchRankingReportPayload:
         if self.source.ranking_runtime_summary is not None:
-            return _build_ranking_report_payload(self.source)
+            if trace_bundle is None:  # pragma: no cover
+                raise ValueError("ranking report requires field trace evidence")
+            return _build_ranking_report_payload(self.source, trace_bundle)
         rows = self._build_user_rows()
         configured_title = str(self.source.config.get("report_title") or "")
         title = (
@@ -871,6 +942,24 @@ class FinalResearchReportWriter:
             users=rows,
         )
         return _build_explainable_payload(base_payload, self.source.runtime_summary)
+
+    def _build_field_trace_bundle(self) -> FieldLineageTraceBundle:
+        outcomes = _unique_user_rows(self.source.ranking_outcomes, "ranking outcomes")
+        exposed_user_ids = {
+            user_id for user_id, row in outcomes.items() if row.get("result_status") != "below_delivery_capacity"
+        }
+        artifacts = _required_mapping(self.source.artifact_manifest, "artifacts", "artifact manifest")
+        return FieldLineageTraceModule().build(
+            FieldLineageTraceSource(
+                users=self.source.users,
+                historical_tags_by_user=self.source.historical_tags_by_user,
+                interest_tag_evidence_by_user=self.source.interest_tag_evidence_by_user,
+                historical_tag_evidence_by_user=self.source.historical_tag_evidence_by_user,
+                exposed_user_ids=exposed_user_ids,
+                prompt_inclusion_by_user=self.source.prompt_field_inclusion_by_user,
+                artifact_paths={str(key): str(value) for key, value in artifacts.items()},
+            )
+        )
 
     def _build_user_rows(self) -> list[UserReportRow]:
         exposures = {str(row.get("user_id", "")): row for row in self.source.runtime_exposures}
@@ -980,8 +1069,10 @@ class FinalResearchReportWriter:
             writer.writerows(safe_rows)
 
     @staticmethod
-    def render_payload(payload: FinalResearchReportPayload | FinalResearchRankingReportPayload) -> str:
-        if isinstance(payload, FinalResearchRankingReportPayload):
+    def render_payload(
+        payload: FinalResearchReportPayload | FinalResearchRankingReportPayloadV3 | FinalResearchRankingReportPayload,
+    ) -> str:
+        if isinstance(payload, (FinalResearchRankingReportPayloadV3, FinalResearchRankingReportPayload)):
             return _render_ranking_report(payload)
         payload_json = safe_user_json(payload, indent=None).replace("</", "<\\/")
         target = payload.target_video
@@ -1154,7 +1245,10 @@ class FinalResearchReportWriter:
 """
 
 
-def _build_ranking_report_payload(source: FinalResearchReportSource) -> FinalResearchRankingReportPayload:
+def _build_ranking_report_payload(
+    source: FinalResearchReportSource,
+    trace_bundle: FieldLineageTraceBundle,
+) -> FinalResearchRankingReportPayload:
     if source.network_sample_audit is None:
         raise ValueError("ranking report requires network sample audit evidence")
     if source.ranking_runtime_summary is None:
@@ -1439,7 +1533,10 @@ def _build_ranking_report_payload(source: FinalResearchReportSource) -> FinalRes
             final_source_scope_counts=_int_mapping(final_sample.get("source_scope_counts")),
             ordinary_count=ordinary_count,
         ),
+        sample_role_counts=dict(sorted(Counter(row.sample_role for row in rows).items())),
         field_lineage=lineage,
+        field_lineage_catalog=trace_bundle.catalog,
+        user_field_trace_index=trace_bundle.trace_index,
         prompt_contract=RankingPromptContract(
             allowed_profile_fields=allowed_prompt_fields,
             neutralized_fields=[
@@ -1487,6 +1584,9 @@ def _build_ranking_report_payload(source: FinalResearchReportSource) -> FinalRes
             ranking_diagnostics=str(manifest_artifacts["ranking_diagnostics"]),
             ranking_ablation_csv=str(manifest_artifacts["ranking_ablation_diagnostics_csv"]),
             ranking_sensitivity_csv=str(manifest_artifacts["ranking_weight_sensitivity_csv"]),
+            field_lineage_catalog=str(manifest_artifacts["field_lineage_catalog"]),
+            user_field_trace=str(manifest_artifacts["user_field_trace"]),
+            field_source_records=str(manifest_artifacts["field_source_records"]),
         ),
         limitations=[
             "Network Cohort supports propagation identification and is not a representative random sample.",
@@ -1571,7 +1671,6 @@ def _ranking_field_lineage() -> list[FieldLineageEntry]:
         "nickname",
         "bio",
         "signature",
-        "interest_tags",
         "follower_count",
         "following_count",
         "video_count",
@@ -1579,6 +1678,7 @@ def _ranking_field_lineage() -> list[FieldLineageEntry]:
         "ranking_rounds.candidates.user_id",
     }
     historical = {
+        "interest_tags",
         "historical_tags",
         "sample_source_scope",
         "historical_comment_network_weighted_degree",
@@ -1678,7 +1778,9 @@ def _ranking_field_lineage() -> list[FieldLineageEntry]:
     return entries
 
 
-def _render_ranking_report(payload: FinalResearchRankingReportPayload) -> str:
+def _render_ranking_report(
+    payload: FinalResearchRankingReportPayloadV3 | FinalResearchRankingReportPayload,
+) -> str:
     target = payload.target_video
     target_url = escape(target.video_url, quote=True)
     weights = payload.ranking_diagnostics_summary.main_weights
@@ -2074,6 +2176,9 @@ def _ranking_download_label(key: str) -> str:
         "ranking_diagnostics": "Ranking diagnostics（排序诊断）",
         "ranking_ablation_csv": "Ablation CSV（消融表格）",
         "ranking_sensitivity_csv": "Sensitivity CSV（敏感性表格）",
+        "field_lineage_catalog": "Field Lineage Catalog（字段血缘目录）",
+        "user_field_trace": "User Field Trace（用户字段追溯）",
+        "field_source_records": "Field source records（字段来源记录）",
     }
     return labels[key]
 
@@ -2414,6 +2519,20 @@ code { color:var(--blue); }
 .drawer-detail .trace-groups { grid-template-columns:1fr; }
 .drawer-detail .trace-groups article { min-height:0; }
 .drawer-detail .ranking-history table { min-width:720px; }
+.user-field-trace { margin:18px 0; padding-top:16px; border-top:1px solid var(--line); }
+.user-field-trace-list { display:grid; border:1px solid var(--line); }
+.user-field-trace-button { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:3px 12px; min-width:0; min-height:62px; padding:10px 12px; border:0; border-bottom:1px solid var(--line); border-radius:0; text-align:left; cursor:pointer; }
+.user-field-trace-button:last-child { border-bottom:0; }
+.user-field-trace-button strong,.user-field-trace-button span,.user-field-trace-button small { min-width:0; overflow-wrap:anywhere; }
+.user-field-trace-button span { color:var(--ink); text-align:right; }
+.user-field-trace-button small { grid-column:1 / -1; color:var(--muted); }
+.user-field-trace-button:hover,.user-field-trace-button:focus-visible,.user-field-trace-button[aria-expanded="true"] { background:#edf4ff; outline:2px solid var(--green); outline-offset:-2px; }
+.user-field-trace-detail { padding:14px; border:1px solid var(--line); border-top:4px solid var(--green); background:var(--paper); }
+.user-field-trace-detail dl { margin:0; }
+.user-field-trace-detail dl > div { padding:8px 0; border-top:1px solid var(--line); }
+.user-field-trace-detail dt { color:var(--muted); font-size:.72rem; font-weight:800; }
+.user-field-trace-detail dd { margin:2px 0 0; overflow-wrap:anywhere; }
+.field-trace-source-link { display:inline-block; margin-top:12px; font-weight:750; }
 .candidate-contributions { display:grid; gap:8px; margin:14px 0; }
 .candidate-contributions article { padding:10px; border-left:4px solid var(--blue); background:var(--paper); }
 .candidate-contributions strong,.candidate-contributions span { display:block; overflow-wrap:anywhere; }
@@ -2431,6 +2550,7 @@ const payload = JSON.parse(document.getElementById('final-research-ranking-paylo
 const explanationDocument = JSON.parse(document.getElementById('research-explanation-catalog').textContent);
 const explanationCatalog = new Map(explanationDocument.entries.map((entry) => [entry.field_name,entry]));
 const users = payload.users;
+const fieldLineageCatalog = new Map((payload.field_lineage_catalog || []).map((entry) => [entry.field_name,entry]));
 const topLabel = `Top${payload.run.delivery_capacity}`;
 const isSeedFirstRun = payload.run.sampling_method === 'seed_first_research_sample_v1';
 const methodExposureLimit = Math.min(payload.run.sample_size,payload.run.maximum_target_exposures);
@@ -2468,6 +2588,8 @@ const usageLabels = Object.fromEntries(explanationDocument.usage_stages.map((sta
 const actionLabels = {like:'like（点赞）',comment:'comment（评论）',share:'share（分享）',ignore:'ignore（忽略）'};
 const resultStatusLabels = {...actionLabels,provider_failed:'provider_failed（Provider 失败）',below_delivery_capacity:'below_delivery_capacity（未获得投放）'};
 const providerStatusLabels = {not_called:'not_called（未调用）',succeeded:'succeeded（成功）',provider_failed:'provider_failed（Provider 失败）'};
+const valueStatusLabels = {present:'present（有值）',empty:'empty（空值）',unavailable:'unavailable（不可用）'};
+const promptInclusionLabels = {included:'included（已进入 Prompt）',empty_omitted:'empty_omitted（空值省略）',not_allowlisted:'not_allowlisted（未列入 Prompt allowlist）',not_exposed:'not_exposed（未曝光）'};
 const sampleRoleLabels = {seed:'seed（种子用户）',network_cohort:'network_cohort（网络传播识别组）',ordinary:'ordinary（普通用户）'};
 const limitationTranslations = {
   'Network Cohort supports propagation identification and is not a representative random sample.':'Network Cohort（网络传播识别组）用于传播识别，不是代表性随机样本。',
@@ -3348,14 +3470,77 @@ function renderProxyExplanationGuide() {
   return details;
 }
 
+function fieldTraceValue(row, fieldName) {
+  const value = row[fieldName];
+  if (Array.isArray(value)) return value.length ? value.join(', ') : '-';
+  return display(value);
+}
+
+function renderUserFieldTraceDetail(row, trace, definition) {
+  const root = byId('user-field-trace-detail'); root.replaceChildren(); root.hidden = false;
+  root.appendChild(element('h4','',`${definition.field_name}（${definition.display_name_zh}）`));
+  const facts = element('dl');
+  const locator = trace.source_record_locator;
+  const evidence = trace.evidence.map((item) => `${item.evidence_kind}: ${item.matched_values.join(', ')} · ${JSON.stringify(item.record_key)}`).join(' | ') || '-';
+  [
+    ['Value（字段值）',fieldTraceValue(row,definition.field_name)],
+    ['Value status（值状态）',valueStatusLabels[trace.value_status] || trace.value_status],
+    ['Field Provenance（字段来源）',provenanceLabels[definition.provenance] || definition.provenance],
+    ['Source artifact kind（来源 artifact 类型）',definition.source_artifact_kind],
+    ['Artifact id',locator.artifact_id],
+    ['Relative path（仓库内相对路径）',locator.relative_path],
+    ['Record key（记录键）',JSON.stringify(locator.record_key)],
+    ['Source fields（来源字段）',definition.source_fields.join(' · ')],
+    ['Evidence（实际证据）',evidence],
+    ['Transformation method（变换方法）',definition.transformation_method],
+    ['Transformation（形成方式）',definition.transformation_description],
+    ['Declared Usage Stage（声明用途）',definition.declared_usage_stages.map((stage) => usageLabels[stage] || stage).join(' · ')],
+    ['Actual Usage Stage（本次实际用途）',trace.actual_usage_stages.map((stage) => usageLabels[stage] || stage).join(' · ')],
+    ['Prompt inclusion（Prompt 纳入状态）',promptInclusionLabels[trace.prompt_inclusion_status] || trace.prompt_inclusion_status],
+    ['Omission reason（省略原因）',trace.omission_reason || '-'],
+    ['范围与解读',`${definition.value_range} ${definition.interpretation}`],
+    ['限制',definition.limitations.join(' · ')],
+  ].forEach(([label,value]) => { const line = element('div'); line.append(element('dt','',label),element('dd','',value)); facts.appendChild(line); });
+  const sourceLink = element('a','field-trace-source-link','打开来源 artifact'); sourceLink.href = locator.relative_path; sourceLink.setAttribute('download','');
+  root.append(facts,sourceLink);
+}
+
+function renderUserFieldTrace(row) {
+  const traces = payload.user_field_trace_index?.[row.user_id] || [];
+  if (!traces.length) return null;
+  const section = element('section','user-field-trace'); section.dataset.testid = 'user-field-trace';
+  section.appendChild(element('h3','','User Field Trace（用户字段追溯）'));
+  const list = element('div','user-field-trace-list');
+  traces.forEach((trace) => {
+    const definition = fieldLineageCatalog.get(trace.field_name);
+    if (!definition) return;
+    const button = element('button','user-field-trace-button'); button.type = 'button';
+    button.dataset.fieldName = trace.field_name; button.dataset.testid = `user-field-trace-${trace.field_name}`;
+    button.setAttribute('aria-expanded','false'); button.setAttribute('aria-controls','user-field-trace-detail');
+    button.append(
+      element('strong','',`${definition.field_name}（${definition.display_name_zh}）`),
+      element('span','',fieldTraceValue(row,trace.field_name)),
+      element('small','',`${valueStatusLabels[trace.value_status] || trace.value_status} · ${provenanceLabels[definition.provenance] || definition.provenance}`),
+    );
+    button.addEventListener('click',() => {
+      list.querySelectorAll('button').forEach((candidate) => candidate.setAttribute('aria-expanded',String(candidate === button)));
+      renderUserFieldTraceDetail(row,trace,definition);
+    });
+    list.appendChild(button);
+  });
+  const detail = element('div','user-field-trace-detail'); detail.id = 'user-field-trace-detail'; detail.dataset.testid = 'user-field-trace-detail'; detail.hidden = true;
+  section.append(list,detail);
+  return section;
+}
+
 function renderUserDetail(row) {
   const root = byId('user-detail'); root.replaceChildren(); root.appendChild(element('h3','',`${row.nickname || row.user_id} · ${row.user_id}`));
   const groups = element('div','trace-groups');
   const proxyValues = traceGroup('派生代理',proxyFields.map(([fieldName,label]) => [label,fixed(row[fieldName])]));
   proxyValues.dataset.testid = 'proxy-values';
   groups.append(
-    traceGroup('直接观测',[['nickname（昵称）',row.nickname],['bio（简介）',row.bio],['signature（个性签名）',row.signature],['interest_tags（兴趣标签）',row.interest_tags.join(', ')]]),
-    traceGroup('历史行为',[['historical_tags（历史互动标签）',row.historical_tags.join(', ')],['followers（粉丝数）',row.follower_count],['following（关注数）',row.following_count],['video_count（作品数）',row.video_count],['weighted_degree（历史网络加权度）',row.historical_comment_network_weighted_degree]]),
+    traceGroup('直接观测',[['nickname（昵称）',row.nickname],['bio（简介）',row.bio],['signature（个性签名）',row.signature],['followers（粉丝数）',row.follower_count],['following（关注数）',row.following_count],['video_count（作品数）',row.video_count]]),
+    traceGroup('历史行为',[['interest_tags（兴趣标签）',row.interest_tags.join(', ')],['historical_tags（历史互动标签）',row.historical_tags.join(', ')],['weighted_degree（历史网络加权度）',row.historical_comment_network_weighted_degree]]),
     proxyValues,
     traceGroup('合成标签',[['class（实验类别）',row.latent_class],['hotel class（酒店类别）',row.latent_hotel_class],['travel purpose（出行目的）',row.latent_travel_purpose],['age（年龄段）',row.latent_age],['income（月收入区间）',row.latent_monthly_income]]),
     traceGroup('样本与 ranking（排序）',[['role（角色）',sampleRoleLabels[row.sample_role] || row.sample_role],['scope（来源分组）',sourceScopeLabel(row.sample_source_scope)],['seed（种子用户）',row.is_seed],['network cohort（网络传播识别组）',row.is_network_cohort],['batch / rank（批次 / 名次）',`${row.latest_ranking_time_step} / ${row.latest_ranking_position}`],['score（分数）',fixed(row.recommendation_score)]]),
@@ -3369,7 +3554,10 @@ function renderUserDetail(row) {
     const line = element('tr'); [evidence.time_step,evidence.ranking_position,evidence.selected,fixed(evidence.base_network_relevance),`${evidence.engaged_neighbor_count} / ${fixed(evidence.engaged_neighbor_signal)}`,fixed(evidence.historical_tag_affinity),fixed(evidence.recommendation_score)].forEach((value) => line.appendChild(element('td','',display(value)))); body.appendChild(line);
   });
   historyTable.append(head,body); historyWrap.appendChild(historyTable); historyPanel.appendChild(historyWrap);
-  root.append(groups,traceGroup('Field contract（字段合同）',[["Field Provenance（字段来源）","Direct Observed / Derived Proxy / Runtime Simulation Result"],["Field Usage Stage（字段使用阶段）","Sampling / Ranking / LLM Prompt / Report Only"]]),renderProxyExplanationGuide(),historyPanel);
+  const fieldTrace = renderUserFieldTrace(row);
+  root.append(groups,traceGroup('Field contract（字段合同）',[["Field Provenance（字段来源）","Direct Observed / Historical Behavioral Evidence / Derived Proxy / Runtime Simulation Result"],["Field Usage Stage（字段使用阶段）","Sampling / Ranking / LLM Prompt / Report Only"]]));
+  if (fieldTrace) root.appendChild(fieldTrace);
+  root.append(renderProxyExplanationGuide(),historyPanel);
   openDrawer('user',{userId:row.user_id,batch:row.exposure_time_step});
 }
 
@@ -3455,7 +3643,11 @@ def rebuild_final_research_report(run_dir: str | Path) -> Path:
     manifest = _read_json_object(manifest_path)
     payload_document = _read_json_object(payload_path)
     if manifest.get("manifest_version") == FINAL_RESEARCH_RANKING_RUNTIME_VERSION:
-        ranking_payload = FinalResearchRankingReportPayload.model_validate(payload_document)
+        ranking_payload = (
+            FinalResearchRankingReportPayload.model_validate(payload_document)
+            if payload_document.get("schema_version") == "final-research-ranking-report-payload-v4"
+            else FinalResearchRankingReportPayloadV3.model_validate(payload_document)
+        )
         _validate_ranking_rebuild_evidence(run_path, manifest, ranking_payload)
         return _publish_report_files(run_path, ranking_payload)
 
@@ -3680,7 +3872,7 @@ def _build_explainable_payload(
 def _validate_ranking_rebuild_evidence(
     run_path: Path,
     manifest: Mapping[str, object],
-    payload: FinalResearchRankingReportPayload,
+    payload: FinalResearchRankingReportPayloadV3 | FinalResearchRankingReportPayload,
 ) -> None:
     if manifest.get("manifest_version") != FINAL_RESEARCH_RANKING_RUNTIME_VERSION:
         raise ValueError("unsupported Target Delivery Ranking artifact manifest schema")
@@ -3701,6 +3893,16 @@ def _validate_ranking_rebuild_evidence(
         "ranking_diagnostics": "ranking_diagnostics.json",
         "ranking_diagnostics_summary": "ranking_diagnostics_summary.json",
     }
+    v4_payload = payload if isinstance(payload, FinalResearchRankingReportPayload) else None
+    is_v4 = v4_payload is not None
+    if v4_payload is not None:
+        required_artifacts.update(
+            {
+                "field_lineage_catalog": "field_lineage_catalog.json",
+                "field_source_records": "field_source_records.json",
+                "user_field_trace": "user_field_trace.json",
+            }
+        )
     for name, expected_path in required_artifacts.items():
         if artifacts.get(name) != expected_path:
             raise ValueError(f"artifact manifest has invalid {name} path")
@@ -3710,6 +3912,39 @@ def _validate_ranking_rebuild_evidence(
             raise ValueError("artifact manifest names and paths must be strings")
         artifact_paths[name] = _artifact_path(run_path, relative_path, name)
 
+    if v4_payload is not None:
+        catalog_document = _read_json_object(artifact_paths["field_lineage_catalog"])
+        trace_document = _read_json_object(artifact_paths["user_field_trace"])
+        source_document = _read_json_object(artifact_paths["field_source_records"])
+        if catalog_document.get("schema_version") != "field-lineage-catalog-v1":
+            raise ValueError("unsupported field lineage catalog schema")
+        if trace_document.get("schema_version") != "user-field-trace-v1":
+            raise ValueError("unsupported user field trace schema")
+        if source_document.get("schema_version") != "field-source-records-v1":
+            raise ValueError("unsupported field source records schema")
+        if catalog_document.get("definitions") != [
+            definition.model_dump(mode="json") for definition in v4_payload.field_lineage_catalog
+        ]:
+            raise ValueError("field lineage catalog artifact does not match ranking report payload")
+        if trace_document.get("users") != {
+            user_id: [trace.model_dump(mode="json") for trace in traces]
+            for user_id, traces in v4_payload.user_field_trace_index.items()
+        }:
+            raise ValueError("user field trace artifact does not match ranking report payload")
+        source_records = _required_list(source_document, "records", "field source records")
+        source_record_ids = {
+            str(record.get("user_id", "")) for record in source_records if isinstance(record, Mapping)
+        }
+        if source_record_ids != set(v4_payload.user_field_trace_index):
+            raise ValueError("field source records do not match ranking report users")
+        for user_id, traces in v4_payload.user_field_trace_index.items():
+            for trace in traces:
+                locator = trace.source_record_locator
+                if artifacts.get(locator.artifact_id) != locator.relative_path:
+                    raise ValueError(f"field trace locator does not match artifact manifest for {user_id}")
+                if locator.record_key != {"user_id": user_id}:
+                    raise ValueError(f"field trace locator has an invalid record key for {user_id}")
+
     user_ids = [row.user_id for row in payload.users]
     if len(user_ids) != len(set(user_ids)):
         raise ValueError("ranking report payload contains duplicate user_id")
@@ -3718,6 +3953,10 @@ def _validate_ranking_rebuild_evidence(
     actual_scope_counts = dict(sorted(Counter(row.sample_source_scope for row in payload.users).items()))
     if dict(sorted(payload.sample_comparison.final_source_scope_counts.items())) != actual_scope_counts:
         raise ValueError("ranking report final source scope distribution does not match users")
+    if v4_payload is not None and v4_payload.sample_role_counts != dict(
+        sorted(Counter(row.sample_role for row in payload.users).items())
+    ):
+        raise ValueError("ranking report sample role counts do not match users")
 
     audit = _read_json_object(artifact_paths[sample_audit_name])
     if seed_first:
@@ -3914,7 +4153,8 @@ def _validate_ranking_rebuild_evidence(
         raise ValueError("ranking report Prompt contract does not match Prompt Field Summary")
 
     user_document = _read_json_object(artifact_paths["final_research_users_json"])
-    if user_document.get("schema_version") != "final-research-ranking-users-v3":
+    expected_user_schema = "final-research-ranking-users-v4" if is_v4 else "final-research-ranking-users-v3"
+    if user_document.get("schema_version") != expected_user_schema:
         raise ValueError("unsupported ranking user JSON schema")
     if user_document.get("links") != payload.downloads.model_dump(mode="json"):
         raise ValueError("ranking user JSON links do not match report payload")
@@ -3944,6 +4184,14 @@ def _validate_ranking_rebuild_evidence(
         "ranking_ablation_csv": artifacts.get("ranking_ablation_diagnostics_csv"),
         "ranking_sensitivity_csv": artifacts.get("ranking_weight_sensitivity_csv"),
     }
+    if is_v4:
+        expected_downloads.update(
+            {
+                "field_lineage_catalog": artifacts.get("field_lineage_catalog"),
+                "user_field_trace": artifacts.get("user_field_trace"),
+                "field_source_records": artifacts.get("field_source_records"),
+            }
+        )
     for field_name, relative_path in expected_downloads.items():
         if getattr(payload.downloads, field_name) != relative_path:
             raise ValueError(f"ranking report download {field_name} does not match artifact manifest")
@@ -4138,17 +4386,13 @@ def _stage_text(run_path: Path, target_name: str, content: str) -> Path:
 
 def _publish_report_files(
     run_path: Path,
-    payload: FinalResearchReportPayload | FinalResearchRankingReportPayload,
+    payload: FinalResearchReportPayload | FinalResearchRankingReportPayloadV3 | FinalResearchRankingReportPayload,
 ) -> Path:
     payload_path = run_path / FINAL_RESEARCH_REPORT_ARTIFACTS["final_research_report_payload"]
     report_path = run_path / FINAL_RESEARCH_REPORT_ARTIFACTS["final_research_report"]
     payload_text = safe_user_json(payload) + "\n"
     html_text = FinalResearchReportWriter.render_payload(payload)
-    payload_model = (
-        FinalResearchRankingReportPayload
-        if isinstance(payload, FinalResearchRankingReportPayload)
-        else FinalResearchReportPayload
-    )
+    payload_model = type(payload)
     payload_model.model_validate(json.loads(payload_text))
     staged_payload: Path | None = _stage_text(run_path, payload_path.name, payload_text)
     staged_report: Path | None = _stage_text(run_path, report_path.name, html_text)
