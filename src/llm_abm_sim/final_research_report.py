@@ -69,6 +69,7 @@ SamplingStatus = Literal[
     "historical_network_augmented_run",
     "validation_run",
     "persisted_seed_first_formal_run",
+    "persisted_probability_formal_run",
 ]
 SampleRole = Literal["seed", "network_cohort", "ordinary"]
 
@@ -88,6 +89,7 @@ def _sampling_status(value: object) -> SamplingStatus:
         "historical_network_augmented_run",
         "validation_run",
         "persisted_seed_first_formal_run",
+        "persisted_probability_formal_run",
     }:
         raise ValueError(f"unsupported sampling_status: {value!r}")
     return cast(SamplingStatus, value)
@@ -1002,6 +1004,8 @@ class FinalResearchReportWriter:
         run_method_status = (
             "Persisted Seed-First Formal Run（已持久化的 Seed-First 正式运行）"
             if payload.run.sampling_status == "persisted_seed_first_formal_run"
+            else "Persisted Probability Formal Run（已持久化的 Probability 正式运行）"
+            if payload.run.sampling_status == "persisted_probability_formal_run"
             else "Validation Run（验证运行） · Seed-First Research Sample（先选种子研究样本）"
             if payload.run.sampling_method == "seed_first_research_sample_v1"
             else "Historical Network-Augmented Run（历史 Network-Augmented 运行）"

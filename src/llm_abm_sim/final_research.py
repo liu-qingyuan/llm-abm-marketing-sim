@@ -50,14 +50,20 @@ NETWORK_AUGMENTED_SAMPLE_AUDIT_VERSION = "network-augmented-sample-audit-v1"
 SEED_FIRST_SAMPLE_AUDIT_VERSION = "seed-first-sample-audit-v1"
 SEED_FIRST_SAMPLING_METHOD: Literal["seed_first_research_sample_v1"] = "seed_first_research_sample_v1"
 HISTORICAL_SAMPLING_METHOD: Literal["network_augmented_research_sample"] = "network_augmented_research_sample"
-VALIDATION_RUN_STATUS = "validation_run"
-FORMAL_RUN_STATUS = "persisted_seed_first_formal_run"
+VALIDATION_RUN_STATUS: Literal["validation_run"] = "validation_run"
+FORMAL_RUN_STATUS: Literal["persisted_seed_first_formal_run"] = "persisted_seed_first_formal_run"
+PROBABILITY_FORMAL_RUN_STATUS: Literal["persisted_probability_formal_run"] = "persisted_probability_formal_run"
 PRIMARY_SOURCE_SCOPE_QUOTA = 100
 OFFLINE_BASELINE_VERSION = "final-research-offline-v2"
 ResearchSamplingMethod = Literal[
     "source_scope_stratified_sample_v1",
     "network_augmented_research_sample",
     "seed_first_research_sample_v1",
+]
+ResearchSamplingStatus = Literal[
+    "validation_run",
+    "persisted_seed_first_formal_run",
+    "persisted_probability_formal_run",
 ]
 TARGET_DELIVERY_BASE_NETWORK_WEIGHT = MAIN_RANKING_WEIGHTS.base_network
 TARGET_DELIVERY_ENGAGED_NEIGHBOR_WEIGHT = MAIN_RANKING_WEIGHTS.engaged_neighbor
@@ -1092,9 +1098,7 @@ class FinalResearchRunner:
                 ranking_runtime = self._run_target_delivery_runtime(prepared, platform)
             else:
                 probability_runtime = self._run_runtime(prepared, platform)
-        sampling_status = (
-            FORMAL_RUN_STATUS if _adapter_live_api_triggered(self.decision_adapter) else VALIDATION_RUN_STATUS
-        )
+        sampling_status = _sampling_status(prepared.sampling_method, self.decision_adapter)
         if sample_audit:
             sample_audit["sampling_status"] = sampling_status
         holdout_comments = builder.reveal_holdout()
@@ -1592,9 +1596,7 @@ class FinalResearchRunner:
         summary = {
             "runtime_version": TARGET_DELIVERY_RUNTIME_VERSION,
             "sampling_method": prepared.sampling_method,
-            "sampling_status": (
-                FORMAL_RUN_STATUS if _adapter_live_api_triggered(self.decision_adapter) else VALIDATION_RUN_STATUS
-            ),
+            "sampling_status": _sampling_status(prepared.sampling_method, self.decision_adapter),
             "sample_role_counts": dict(
                 sorted(
                     Counter(prepared.users_by_id[user_id].sample_role for user_id in prepared.sample_user_ids).items()
@@ -1959,6 +1961,17 @@ def _adapter_live_api_triggered(adapter: LLMDecisionAdapter) -> bool:
             return False
         current = wrapped
     return False
+
+
+def _sampling_status(
+    sampling_method: ResearchSamplingMethod,
+    adapter: LLMDecisionAdapter,
+) -> ResearchSamplingStatus:
+    if not _adapter_live_api_triggered(adapter):
+        return VALIDATION_RUN_STATUS
+    if sampling_method == SEED_FIRST_SAMPLING_METHOD:
+        return FORMAL_RUN_STATUS
+    return PROBABILITY_FORMAL_RUN_STATUS
 
 
 def _json_cell(payload: object) -> str:

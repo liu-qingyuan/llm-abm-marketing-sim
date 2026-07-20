@@ -1275,6 +1275,40 @@ def test_target_delivery_ranking_runtime_persists_live_status_after_adapter_call
     assert rebuild_final_research_report(run_dir) == run_dir / "report.html"
 
 
+def test_probability_runtime_persists_probability_formal_status_after_adapter_call(tmp_path: Path) -> None:
+    dataset_dir = _make_processed_fixture(tmp_path)
+    provider_config = ProviderLLMConfig(enabled=True, model="mock-model", require_live_env=False)
+    adapter = _TargetDeliveryAdapter(mark_live_api_triggered=True)
+    run_dir = FinalResearchRunner(
+        FinalResearchConfig(
+            dataset_dir=dataset_dir,
+            research_model=FinalResearchModel.PROBABILITY_V1,
+            sample_size=4,
+            provider=provider_config,
+        ),
+        adapter,
+    ).run_and_write(tmp_path / "probability-live-status")
+
+    documents = [
+        json.loads((run_dir / file_name).read_text(encoding="utf-8"))
+        for file_name in (
+            "config_snapshot.json",
+            "holdout_safe_audit.json",
+            "artifact_manifest.json",
+        )
+    ]
+    report_payload = json.loads((run_dir / "final_research_report_payload.json").read_text(encoding="utf-8"))
+    report_html = (run_dir / "report.html").read_text(encoding="utf-8")
+
+    assert adapter.live_api_triggered is True
+    assert all(document["sampling_status"] == "persisted_probability_formal_run" for document in documents)
+    assert report_payload["run"]["sampling_method"] == "source_scope_stratified_sample_v1"
+    assert report_payload["run"]["sampling_status"] == "persisted_probability_formal_run"
+    assert documents[2]["live_api_triggered"] is True
+    assert "Persisted Probability Formal Run" in report_html
+    assert "Persisted Seed-First Formal Run" not in report_html
+
+
 def test_target_delivery_ranking_report_rebuild_is_deterministic(tmp_path: Path) -> None:
     dataset_dir = _make_target_delivery_fixture(tmp_path)
     provider_config = ProviderLLMConfig(enabled=True, model="mock-model", require_live_env=False)
