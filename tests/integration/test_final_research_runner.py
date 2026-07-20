@@ -12,12 +12,13 @@ import pytest
 from pydantic import ValidationError
 
 from llm_abm_sim import FinalResearchConfig, FinalResearchModel, FinalResearchRunner, rebuild_final_research_report
-from llm_abm_sim.decision import EngageDecision, LLMDecisionAdapter, ProviderDecisionError
+from llm_abm_sim.decision import DecisionInput, EngageDecision, LLMDecisionAdapter, ProviderDecisionError
 from llm_abm_sim.final_research_report import (
     FinalResearchRankingReportPayload,
     FinalResearchRankingReportPayloadV3,
     FinalResearchReportWriter,
 )
+from llm_abm_sim.prompting import build_engagement_prompt
 from llm_abm_sim.providers.openai_compatible import OpenAICompatibleDecisionAdapter
 from llm_abm_sim.safe_serialization import artifact_has_forbidden_terms
 from llm_abm_sim.schemas import (
@@ -279,7 +280,7 @@ def _make_processed_fixture(tmp_path: Path, *, user_count: int = 6, dense_target
                 "nickname": f"User {number}",
                 "bio": "Bearer sk-secret" if number == 3 else f"Bio {number}",
                 "signature": f"Signature {number}",
-                "interest_tags": json.dumps(["hotel", f"scope-{number % 2}"], ensure_ascii=False),
+                "interest_tags": "[]",
                 "follower_count": number * 10,
                 "following_count": number,
                 "video_count": number,
@@ -620,6 +621,15 @@ class _TargetDeliveryAdapter(LLMDecisionAdapter):
     ) -> EngageDecision:
         if self.mark_live_api_triggered:
             self.live_api_triggered = True
+        build_engagement_prompt(
+            DecisionInput(
+                post=post,
+                profile=profile,
+                peer_context=peer_context,
+                platform_context=platform_context or PlatformContext(),
+                time_step=time_step,
+            )
+        )
         self.calls.append(
             {
                 "post": post,
@@ -1272,13 +1282,9 @@ def test_target_delivery_ranking_v4_persists_interest_and_historical_field_trace
 
     manifest = json.loads((output / "artifact_manifest.json").read_text(encoding="utf-8"))
     payload = json.loads((output / "final_research_report_payload.json").read_text(encoding="utf-8"))
-    catalog_document = json.loads(
-        (output / manifest["artifacts"]["field_lineage_catalog"]).read_text(encoding="utf-8")
-    )
+    catalog_document = json.loads((output / manifest["artifacts"]["field_lineage_catalog"]).read_text(encoding="utf-8"))
     trace_document = json.loads((output / manifest["artifacts"]["user_field_trace"]).read_text(encoding="utf-8"))
-    source_document = json.loads(
-        (output / manifest["artifacts"]["field_source_records"]).read_text(encoding="utf-8")
-    )
+    source_document = json.loads((output / manifest["artifacts"]["field_source_records"]).read_text(encoding="utf-8"))
 
     assert payload["schema_version"] == "final-research-ranking-report-payload-v4"
     assert catalog_document["schema_version"] == "field-lineage-catalog-v1"
@@ -1426,12 +1432,12 @@ def test_target_delivery_ranking_report_rebuild_is_deterministic(tmp_path: Path)
     } == preserved_artifacts
 
 
-def test_target_delivery_ranking_v3_payload_preserves_legacy_sampling_defaults(tmp_path: Path) -> None:
+def test_target_delivery_ranking_v3_formal_run_rebuild_preserves_legacy_artifact_contract(tmp_path: Path) -> None:
     dataset_dir = _make_target_delivery_fixture(tmp_path)
     provider_config = ProviderLLMConfig(enabled=True, model="mock-model", require_live_env=False)
     run_dir = FinalResearchRunner(
         FinalResearchConfig(dataset_dir=dataset_dir, sample_size=70, provider=provider_config),
-        _TargetDeliveryAdapter(),
+        _TargetDeliveryAdapter(mark_live_api_triggered=True),
     ).run_and_write(tmp_path / "ranking-legacy-v3")
     payload_document = json.loads((run_dir / "final_research_report_payload.json").read_text(encoding="utf-8"))
     payload_document["schema_version"] = "final-research-ranking-report-payload-v3"
@@ -1440,26 +1446,40 @@ def test_target_delivery_ranking_v3_payload_preserves_legacy_sampling_defaults(t
     payload_document.pop("user_field_trace_index")
     for field_name in ("field_lineage_catalog", "user_field_trace", "field_source_records"):
         payload_document["downloads"].pop(field_name)
-    payload_document["run"].pop("sampling_method")
-    payload_document["run"].pop("sampling_status")
-    payload_document["sample_comparison"].pop("ordinary_count")
-    legacy_fields = {
-        "run.sampling_method",
-        "run.sampling_status",
-        "sample_comparison.ordinary_count",
-    }
-    payload_document["field_lineage"] = [
-        entry for entry in payload_document["field_lineage"] if entry["field_name"] not in legacy_fields
-    ]
+    payload_path = run_dir / "final_research_report_payload.json"
+    payload_path.write_text(json.dumps(payload_document, ensure_ascii=False) + "\n", encoding="utf-8")
+    manifest_path = run_dir / "artifact_manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    for artifact_name in ("field_lineage_catalog", "user_field_trace", "field_source_records"):
+        (run_dir / manifest["artifacts"].pop(artifact_name)).unlink()
+    manifest_path.write_text(json.dumps(manifest, ensure_ascii=False) + "\n", encoding="utf-8")
+    users_path = run_dir / "final_research_users.json"
+    users_document = json.loads(users_path.read_text(encoding="utf-8"))
+    users_document["schema_version"] = "final-research-ranking-users-v3"
+    users_document["links"] = payload_document["downloads"]
+    users_path.write_text(json.dumps(users_document, ensure_ascii=False) + "\n", encoding="utf-8")
 
-    payload = FinalResearchRankingReportPayloadV3.model_validate(payload_document)
-    html = FinalResearchReportWriter.render_payload(payload)
+    assert rebuild_final_research_report(run_dir) == run_dir / "report.html"
+    first_payload = payload_path.read_bytes()
+    first_report = (run_dir / "report.html").read_bytes()
+    assert rebuild_final_research_report(run_dir) == run_dir / "report.html"
+    assert payload_path.read_bytes() == first_payload
+    assert (run_dir / "report.html").read_bytes() == first_report
 
-    assert payload.run.sampling_method == "network_augmented_research_sample"
-    assert payload.run.sampling_status == "historical_network_augmented_run"
-    assert payload.sample_comparison.ordinary_count == 0
-    assert legacy_fields <= {entry.field_name for entry in payload.field_lineage}
-    assert "Historical Network-Augmented Run" in html
+    rebuilt_document = json.loads(first_payload)
+    payload = FinalResearchRankingReportPayloadV3.model_validate(rebuilt_document)
+    html = first_report.decode()
+
+    assert payload.run.sampling_method == "seed_first_research_sample_v1"
+    assert payload.run.sampling_status == "persisted_seed_first_formal_run"
+    assert "Persisted Seed-First Formal Run" in html
+    assert rebuilt_document["schema_version"] == "final-research-ranking-report-payload-v3"
+    assert "field_lineage_catalog" not in rebuilt_document
+    assert "user_field_trace_index" not in rebuilt_document
+    assert all(
+        name not in manifest["artifacts"]
+        for name in ("field_lineage_catalog", "user_field_trace", "field_source_records")
+    )
 
 
 def test_target_delivery_ranking_report_escapes_download_paths_in_html(tmp_path: Path) -> None:
@@ -1491,6 +1511,9 @@ def test_target_delivery_ranking_report_escapes_download_paths_in_html(tmp_path:
         "sampling_status_mismatch",
         "diagnostic_boolean_string",
         "csv_unsafe_link",
+        "duplicate_source_record",
+        "source_value_mismatch",
+        "source_evidence_mismatch",
         "trace_unsafe_locator",
         "unsafe_path",
     ],
@@ -1545,6 +1568,17 @@ def test_target_delivery_ranking_report_rebuild_rejects_invalid_evidence_before_
         users = _read_csv(users_path)
         users[0]["report_path"] = "../outside.html"
         _write_csv(users_path, list(users[0]), users)
+    elif corruption in {"duplicate_source_record", "source_value_mismatch", "source_evidence_mismatch"}:
+        source_path = run_dir / "field_source_records.json"
+        source = json.loads(source_path.read_text(encoding="utf-8"))
+        if corruption == "duplicate_source_record":
+            source["records"].append(source["records"][0])
+        elif corruption == "source_value_mismatch":
+            source["records"][0]["interest_tags"] = ["tampered"]
+        else:
+            record = next(item for item in source["records"] if item["historical_tag_evidence"])
+            record["historical_tag_evidence"] = []
+        source_path.write_text(json.dumps(source, ensure_ascii=False) + "\n", encoding="utf-8")
     elif corruption == "trace_unsafe_locator":
         payload = json.loads(payload_path.read_text(encoding="utf-8"))
         payload["user_field_trace_index"]["u1"][0]["source_record_locator"]["relative_path"] = "../outside.json"
@@ -2056,6 +2090,9 @@ def test_final_research_report_dynamic_neighbor_activation_requires_actual_boost
 
 def test_final_research_report_uses_configured_formula_and_interest_tags(tmp_path: Path) -> None:
     dataset_dir = _make_processed_fixture(tmp_path)
+    user_rows = _read_csv(dataset_dir / "users.csv")
+    user_rows[0]["interest_tags"] = json.dumps(["hotel"])
+    _write_csv(dataset_dir / "users.csv", list(user_rows[0]), user_rows)
     output = FinalResearchRunner(
         FinalResearchConfig(
             dataset_dir=dataset_dir,
@@ -2072,7 +2109,7 @@ def test_final_research_report_uses_configured_formula_and_interest_tags(tmp_pat
     report_rows = _read_csv(output / "final_research_users.csv")
     assert "0.65 network + 0.35 historical tag affinity" in report_html
     assert "min(1, base + 0.15 × engaged direct neighbors)" in report_html
-    assert json.loads(report_rows[0]["interest_tags"])[0] == "hotel"
+    assert json.loads(next(row for row in report_rows if row["user_id"] == "u1")["interest_tags"]) == ["hotel"]
 
 
 @pytest.mark.parametrize(

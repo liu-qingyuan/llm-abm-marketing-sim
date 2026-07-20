@@ -4,16 +4,17 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from .research_explanations import FieldProvenance, FieldUsageStage
 
 ValueStatus = Literal["present", "empty", "unavailable"]
-PromptInclusionStatus = Literal["included", "empty_omitted", "not_allowlisted", "not_exposed"]
+PromptInclusionStatus = Literal["included", "empty_omitted", "not_allowlisted", "not_exposed", "not_rendered"]
 OmissionReason = Literal[
     "",
     "empty_value_omitted_from_prompt",
     "field_not_in_prompt_allowlist",
+    "prompt_summary_not_built",
     "user_not_exposed_to_target_video",
     "source_value_unavailable",
 ]
@@ -75,6 +76,12 @@ class FieldSourceRecord(BaseModel):
     historical_tags: list[str]
     interest_tag_evidence: list[FieldEvidenceReference]
     historical_tag_evidence: list[FieldEvidenceReference]
+
+    @model_validator(mode="after")
+    def _validate_evidence_coverage(self) -> FieldSourceRecord:
+        _validate_evidence_coverage("interest_tags", self.interest_tags, self.interest_tag_evidence)
+        _validate_evidence_coverage("historical_tags", self.historical_tags, self.historical_tag_evidence)
+        return self
 
 
 class FieldLineageTraceBundle(BaseModel):
@@ -218,7 +225,11 @@ def _catalog() -> list[FieldLineageDefinition]:
             declared_usage_stages=["LLM Prompt", "Report Only"],
             value_range="去重后的字符串列表，可为空。",
             interpretation="表示可复算的历史主题代理，不是直接观测 profile 字段。",
-            limitations=["空列表不代表用户没有兴趣。", "不得从 historical_tags 静默回填。"],
+            limitations=[
+                "仅表示可复算的历史行为主题，不代表真实心理画像。",
+                "空列表不代表用户没有兴趣。",
+                "不得从 historical_tags 静默回填。",
+            ],
         ),
     ]
 
@@ -236,6 +247,8 @@ def _interest_prompt_status(
         return "included", ""
     if value_status == "unavailable":
         return "empty_omitted", "source_value_unavailable"
+    if value_status == "present":
+        return "not_rendered", "prompt_summary_not_built"
     return "empty_omitted", "empty_value_omitted_from_prompt"
 
 
@@ -247,6 +260,16 @@ def _value_status(value: Sequence[str] | None) -> ValueStatus:
 
 def _evidence(rows: Sequence[Mapping[str, object]]) -> list[FieldEvidenceReference]:
     return [FieldEvidenceReference.model_validate(dict(row)) for row in rows]
+
+
+def _validate_evidence_coverage(
+    field_name: str,
+    values: Sequence[str],
+    evidence: Sequence[FieldEvidenceReference],
+) -> None:
+    matched_values = {value for item in evidence for value in item.matched_values}
+    if matched_values != set(values):
+        raise ValueError(f"{field_name} values must exactly match their historical evidence")
 
 
 def _string_list(value: object) -> list[str]:

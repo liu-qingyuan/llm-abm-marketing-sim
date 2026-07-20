@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+from collections.abc import Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar
+from dataclasses import dataclass, field
 from typing import Any, Literal
 
 from .decision import DecisionInput
@@ -49,10 +53,33 @@ TRAVEL_PURPOSE_LABELS: dict[str, str] = {
 PromptFieldInclusion = Literal["included", "empty_omitted"]
 
 
+@dataclass
+class PromptFieldInclusionCapture:
+    """Collect field inclusion facts emitted by actual Prompt summary builds."""
+
+    by_user: dict[str, dict[str, PromptFieldInclusion]] = field(default_factory=dict)
+
+
+_PROMPT_FIELD_INCLUSION_CAPTURE: ContextVar[PromptFieldInclusionCapture | None] = ContextVar(
+    "prompt_field_inclusion_capture",
+    default=None,
+)
+
+
+@contextmanager
+def capture_prompt_field_inclusion() -> Iterator[PromptFieldInclusionCapture]:
+    capture = PromptFieldInclusionCapture()
+    token = _PROMPT_FIELD_INCLUSION_CAPTURE.set(capture)
+    try:
+        yield capture
+    finally:
+        _PROMPT_FIELD_INCLUSION_CAPTURE.reset(token)
+
+
 def build_prompt_field_summary(decision_input: DecisionInput) -> dict[str, str]:
     """Convert provider-visible decision context into stable Chinese summaries."""
 
-    return {
+    summaries = {
         "post_summary": summarize_post_fields(decision_input.post),
         "marketing_content_summary": summarize_marketing_content_fields(decision_input.post),
         "post_value_summary": summarize_post_value_fields(decision_input.post),
@@ -62,6 +89,10 @@ def build_prompt_field_summary(decision_input: DecisionInput) -> dict[str, str]:
         "peer_influence_summary": summarize_peer_fields(decision_input.peer_context),
         "platform_context_summary": summarize_platform_fields(decision_input.platform_context),
     }
+    capture = _PROMPT_FIELD_INCLUSION_CAPTURE.get()
+    if capture is not None:
+        capture.by_user[decision_input.profile.user_id] = profile_prompt_field_inclusion(decision_input.profile)
+    return summaries
 
 
 def summarize_prompt_fields(profile: UserProfile) -> str:
@@ -111,7 +142,10 @@ def summarize_observed_prompt_fields(profile: UserProfile) -> str:
 
     interest_tags = _clean_interest_tags(profile.interest_tags)
     if interest_tags:
-        parts.append(f"真实 profile 兴趣标签：{'、'.join(interest_tags)}")
+        parts.append(
+            "历史 hashtags 与文本主题派生的兴趣代理："
+            f"{'、'.join(interest_tags)}（仅表示可复算的历史行为主题，不代表真实心理画像）"
+        )
 
     return "；".join(parts)
 

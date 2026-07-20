@@ -96,9 +96,9 @@ Mocked provider validation: [`../references/jinjiang-prompt-v2-mock-validation-2
 | `activity_score` | 活跃度：中等偏高（0.65） | 用户在锦江相关 Douyin 数据中的活跃度综合指标 | 是 |
 | `global_influence_score` | 全平台影响力：较低（0.21） | 基于粉丝量等平台可见信息的影响力代理 | 是 |
 | `local_influence_score` | 锦江酒店社群内的局部影响力：中等（0.48） | 基于锦江评论网络位置和评论获赞的局部影响力代理 | 是 |
-| `interest_tags` | 兴趣标签：绿色消费、酒店、旅行 | 用户真实 profile 中的可观测兴趣标签 | 是，长度受限 |
+| `interest_tags` | 历史 hashtags 与文本主题派生的兴趣代理：绿色消费、酒店、旅行 | 可复算的历史行为主题代理，不是真实心理画像 | 是，长度受限 |
 
-数值应保留，同时给出低/中/高等自然语言等级。等级转换规则应稳定、可测试。兴趣标签属于真实观测 profile，但进入 prompt 前应做长度限制和清洗，只保留少量短标签；空标签时省略该行。
+数值应保留，同时给出低/中/高等自然语言等级。等级转换规则应稳定、可测试。`interest_tags` 属于历史行为证据派生的主题代理；进入 prompt 前应做长度限制和清洗，只保留少量短标签，并明确不代表真实心理画像；空标签时省略该行。
 
 ### 真实观测指标分量标准
 
@@ -224,7 +224,7 @@ User message 应按以下块组织：
 
 - 测试应优先覆盖外部行为：加载数据后不再暴露删除字段、prompt 不包含删除字段、LLM 输出协议可校验、离线默认路径仍可运行。
 - Dataset loader 测试应验证删除字段不会成为 `UserProfile` 的正式合同字段。
-- Prompt builder 测试应验证 prompt 包含情境、营销内容、价值摘要、真实 profile 兴趣标签、三个真实观测指标、环保意识倾向、前三个消费价值、酒店类型、出游目的和同伴影响摘要。
+- Prompt builder 测试应验证 prompt 包含情境、营销内容、价值摘要、历史行为主题兴趣代理及其限制、三个真实观测指标、环保意识倾向、前三个消费价值、酒店类型、出游目的和同伴影响摘要。
 - Prompt builder 测试应验证 prompt 不包含 `brand_attitude`、`like_tendency`、`comment_tendency`、`share_tendency`、`latent_class` 用户类型名称，以及默认不包含性别、年龄、教育、收入。
 - Provider adapter 测试应继续使用 mocked provider，不触发 live API。
 - Rule-based/offline baseline 测试应验证删除 preset 字段后仍能离线运行。

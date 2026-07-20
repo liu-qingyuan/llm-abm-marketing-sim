@@ -20,6 +20,7 @@ from .field_lineage_trace import (
     FieldLineageTraceBundle,
     FieldLineageTraceModule,
     FieldLineageTraceSource,
+    FieldSourceRecord,
     PromptInclusionStatus,
     UserFieldTrace,
 )
@@ -728,9 +729,7 @@ class FinalResearchRankingReportPayloadV3(_FinalResearchRankingReportPayloadBase
 
 
 class FinalResearchRankingReportPayload(_FinalResearchRankingReportPayloadBase):
-    schema_version: Literal["final-research-ranking-report-payload-v4"] = (
-        "final-research-ranking-report-payload-v4"
-    )
+    schema_version: Literal["final-research-ranking-report-payload-v4"] = "final-research-ranking-report-payload-v4"
     sample_role_counts: dict[SampleRole, int]
     field_lineage_catalog: list[FieldLineageDefinition]
     user_field_trace_index: dict[str, list[UserFieldTrace]]
@@ -2589,7 +2588,7 @@ const actionLabels = {like:'like（点赞）',comment:'comment（评论）',shar
 const resultStatusLabels = {...actionLabels,provider_failed:'provider_failed（Provider 失败）',below_delivery_capacity:'below_delivery_capacity（未获得投放）'};
 const providerStatusLabels = {not_called:'not_called（未调用）',succeeded:'succeeded（成功）',provider_failed:'provider_failed（Provider 失败）'};
 const valueStatusLabels = {present:'present（有值）',empty:'empty（空值）',unavailable:'unavailable（不可用）'};
-const promptInclusionLabels = {included:'included（已进入 Prompt）',empty_omitted:'empty_omitted（空值省略）',not_allowlisted:'not_allowlisted（未列入 Prompt allowlist）',not_exposed:'not_exposed（未曝光）'};
+const promptInclusionLabels = {included:'included（已进入 Prompt）',empty_omitted:'empty_omitted（空值省略）',not_allowlisted:'not_allowlisted（未列入 Prompt allowlist）',not_exposed:'not_exposed（未曝光）',not_rendered:'not_rendered（本次未构建 Prompt summary）'};
 const sampleRoleLabels = {seed:'seed（种子用户）',network_cohort:'network_cohort（网络传播识别组）',ordinary:'ordinary（普通用户）'};
 const limitationTranslations = {
   'Network Cohort supports propagation identification and is not a representative random sample.':'Network Cohort（网络传播识别组）用于传播识别，不是代表性随机样本。',
@@ -3931,19 +3930,40 @@ def _validate_ranking_rebuild_evidence(
             for user_id, traces in v4_payload.user_field_trace_index.items()
         }:
             raise ValueError("user field trace artifact does not match ranking report payload")
-        source_records = _required_list(source_document, "records", "field source records")
-        source_record_ids = {
-            str(record.get("user_id", "")) for record in source_records if isinstance(record, Mapping)
-        }
-        if source_record_ids != set(v4_payload.user_field_trace_index):
+        source_records = [
+            FieldSourceRecord.model_validate(record)
+            for record in _required_list(source_document, "records", "field source records")
+        ]
+        source_records_by_user = {record.user_id: record for record in source_records}
+        if len(source_records_by_user) != len(source_records):
+            raise ValueError("field source records contain duplicate user_id")
+        if set(source_records_by_user) != set(v4_payload.user_field_trace_index):
             raise ValueError("field source records do not match ranking report users")
+        payload_users_by_id = {user.user_id: user for user in v4_payload.users}
         for user_id, traces in v4_payload.user_field_trace_index.items():
+            source_record = source_records_by_user[user_id]
+            payload_user = payload_users_by_id[user_id]
             for trace in traces:
                 locator = trace.source_record_locator
                 if artifacts.get(locator.artifact_id) != locator.relative_path:
                     raise ValueError(f"field trace locator does not match artifact manifest for {user_id}")
                 if locator.record_key != {"user_id": user_id}:
                     raise ValueError(f"field trace locator has an invalid record key for {user_id}")
+                if trace.field_name == "interest_tags":
+                    values = source_record.interest_tags
+                    source_evidence = source_record.interest_tag_evidence
+                elif trace.field_name == "historical_tags":
+                    values = source_record.historical_tags
+                    source_evidence = source_record.historical_tag_evidence
+                else:
+                    raise ValueError(f"field trace references an unsupported source field for {user_id}")
+                if values != getattr(payload_user, trace.field_name):
+                    raise ValueError(f"field source record value does not match ranking report user for {user_id}")
+                expected_status = "present" if values else "empty"
+                if trace.value_status != expected_status:
+                    raise ValueError(f"field trace value status does not match source record for {user_id}")
+                if trace.evidence != source_evidence:
+                    raise ValueError(f"field trace evidence does not match source record for {user_id}")
 
     user_ids = [row.user_id for row in payload.users]
     if len(user_ids) != len(set(user_ids)):

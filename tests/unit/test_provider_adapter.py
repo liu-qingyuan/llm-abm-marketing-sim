@@ -98,7 +98,9 @@ def test_prompt_includes_post_preference_peer_influence_and_schema():
     assert "【用户消费偏好】" in user_content
     assert (
         "说明：活跃度、全平台影响力、锦江酒店社群内的局部影响力为可观测代理指标；"
-        "活跃度：中等（0.50）；全平台影响力：高（0.90）；真实 profile 兴趣标签：skincare" in user_content
+        "活跃度：中等（0.50）；全平台影响力：高（0.90）；"
+        "历史 hashtags 与文本主题派生的兴趣代理：skincare（仅表示可复算的历史行为主题，不代表真实心理画像）"
+        in user_content
     )
     assert (
         "环保意识倾向、消费价值、入住酒店类型和入住目的为虚拟实验标签，不代表真实身份或心理画像；"

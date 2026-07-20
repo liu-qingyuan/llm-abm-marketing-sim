@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from llm_abm_sim.field_lineage_trace import FieldLineageTraceModule, FieldLineageTraceSource
 
 
@@ -9,11 +11,13 @@ def test_field_lineage_trace_builds_independent_interest_and_historical_tag_evid
             {"user_id": "u1", "interest_tags": ["绿色酒店", "锦江ESG"]},
             {"user_id": "u2", "interest_tags": []},
             {"user_id": "u3", "interest_tags": ["未曝光兴趣"]},
+            {"user_id": "u4", "interest_tags": ["未构建摘要"]},
         ],
         historical_tags_by_user={
             "u1": ["锦江ESG"],
             "u2": ["乡村振兴"],
             "u3": [],
+            "u4": [],
         },
         interest_tag_evidence_by_user={
             "u1": [
@@ -29,7 +33,23 @@ def test_field_lineage_trace_builds_independent_interest_and_historical_tag_evid
                     "source_fields": ["content"],
                     "matched_values": ["绿色酒店"],
                 },
-            ]
+            ],
+            "u3": [
+                {
+                    "evidence_kind": "historical_text_topic_terms",
+                    "record_key": {"comment_id": "comment-3"},
+                    "source_fields": ["content"],
+                    "matched_values": ["未曝光兴趣"],
+                }
+            ],
+            "u4": [
+                {
+                    "evidence_kind": "historical_text_topic_terms",
+                    "record_key": {"comment_id": "comment-4"},
+                    "source_fields": ["content"],
+                    "matched_values": ["未构建摘要"],
+                }
+            ],
         },
         historical_tag_evidence_by_user={
             "u1": [
@@ -49,7 +69,7 @@ def test_field_lineage_trace_builds_independent_interest_and_historical_tag_evid
                 }
             ],
         },
-        exposed_user_ids={"u1", "u2"},
+        exposed_user_ids={"u1", "u2", "u4"},
         prompt_inclusion_by_user={
             "u1": {"interest_tags": "included"},
             "u2": {"interest_tags": "empty_omitted"},
@@ -70,9 +90,7 @@ def test_field_lineage_trace_builds_independent_interest_and_historical_tag_evid
     assert catalog["historical_tags"].transformation_method == "historical_interaction_video_tags_v1"
 
     traces = {
-        (trace.user_id, trace.field_name): trace
-        for user_traces in bundle.trace_index.values()
-        for trace in user_traces
+        (trace.user_id, trace.field_name): trace for user_traces in bundle.trace_index.values() for trace in user_traces
     }
     u1_interest = traces[("u1", "interest_tags")]
     assert u1_interest.value_status == "present"
@@ -102,6 +120,24 @@ def test_field_lineage_trace_builds_independent_interest_and_historical_tag_evid
     assert u3_interest.prompt_inclusion_status == "not_exposed"
     assert u3_interest.omission_reason == "user_not_exposed_to_target_video"
 
+    u4_interest = traces[("u4", "interest_tags")]
+    assert u4_interest.prompt_inclusion_status == "not_rendered"
+    assert u4_interest.omission_reason == "prompt_summary_not_built"
+
     assert bundle.source_records[1].interest_tags == []
     assert bundle.source_records[1].historical_tags == ["乡村振兴"]
 
+
+def test_field_lineage_trace_rejects_present_tags_without_matching_historical_evidence() -> None:
+    source = FieldLineageTraceSource(
+        users=[{"user_id": "u1", "interest_tags": ["无法追溯"]}],
+        historical_tags_by_user={"u1": []},
+        interest_tag_evidence_by_user={},
+        historical_tag_evidence_by_user={},
+        exposed_user_ids={"u1"},
+        prompt_inclusion_by_user={"u1": {"interest_tags": "included"}},
+        artifact_paths={"field_source_records": "field_source_records.json"},
+    )
+
+    with pytest.raises(ValueError, match="interest_tags values must exactly match"):
+        FieldLineageTraceModule().build(source)

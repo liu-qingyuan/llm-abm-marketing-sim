@@ -225,6 +225,14 @@ user_rows = module._read_csv(fixture_dir / "users.csv")
 user_rows[0]["interest_tags"] = '["锦江ESG"]'
 user_rows[1]["interest_tags"] = '[]'
 module._write_csv(fixture_dir / "users.csv", list(user_rows[0]), user_rows)
+comment_rows = module._read_csv(fixture_dir / "all_comments.csv")
+for row in comment_rows:
+    row["content"] = ""
+for row in comment_rows:
+    if row["commenter_user_id"] == "u1" and row["video_id"] != module.TARGET_VIDEO_ID:
+        row["content"] = "锦江ESG"
+        break
+module._write_csv(fixture_dir / "all_comments.csv", list(comment_rows[0]), comment_rows)
 video_rows = module._read_csv(fixture_dir / "videos.csv")
 for row in video_rows:
     if row["video_id"] == module.TARGET_VIDEO_ID:
@@ -1853,6 +1861,21 @@ test('user drawer expands v4 field traces with keyboard focus restoration', asyn
   await page.keyboard.press('Escape');
   await expect(drawer).toBeHidden();
   await expect(userRow).toBeFocused();
+
+  await page.getByTestId('user-search').fill('u1');
+  const nonEmptyUserId = page.locator('.profile-id').filter({ hasText: /^u1$/ });
+  const nonEmptyUserRow = page.getByTestId('user-table').locator('tbody tr').filter({ has: nonEmptyUserId });
+  await nonEmptyUserRow.click();
+  const nonEmptyInterestTrace = drawer.getByTestId('user-field-trace-interest_tags');
+  await nonEmptyInterestTrace.click();
+  await expect(detail).toContainText('present（有值）');
+  await expect(detail).toContainText('锦江ESG');
+  await expect(detail).toContainText('historical_text_topic_terms');
+  await expect(detail).toContainText('included（已进入 Prompt）');
+
+  await page.keyboard.press('Escape');
+  await expect(drawer).toBeHidden();
+  await expect(nonEmptyUserRow).toBeFocused();
 });
 
 test('configured formal ranking run preserves payload-derived evidence on desktop', async ({ page }, testInfo) => {

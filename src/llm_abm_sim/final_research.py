@@ -28,7 +28,7 @@ from .final_research_report import (
     FinalResearchReportSource,
     FinalResearchReportWriter,
 )
-from .prompt_field_summary import PromptFieldInclusion, profile_prompt_field_inclusion
+from .prompt_field_summary import PromptFieldInclusion, capture_prompt_field_inclusion
 from .ranking_diagnostics import MAIN_RANKING_WEIGHTS, RankingDiagnosticArtifacts, RankingDiagnostics
 from .safe_serialization import safe_data, safe_json, safe_user_data, safe_user_json
 from .schemas import (
@@ -512,6 +512,7 @@ class _BatchRuntimeInput:
 class _RuntimeDecisionAttempt:
     decision: EngageDecision | None
     provider_failure: dict[str, object] | None
+    prompt_field_inclusion: dict[str, PromptFieldInclusion] | None
 
 
 @dataclass(frozen=True)
@@ -1542,7 +1543,6 @@ class FinalResearchRunner:
                     "provider_status": "",
                 }
                 profile = _runtime_user_profile(user)
-                prompt_field_inclusion_by_user[user_id] = profile_prompt_field_inclusion(profile)
                 attempt = _attempt_runtime_decision(
                     adapter=self.decision_adapter,
                     post=post,
@@ -1558,6 +1558,8 @@ class FinalResearchRunner:
                     video_id=prepared.target_video.video_id,
                     provider_metadata=provider_metadata,
                 )
+                if attempt.prompt_field_inclusion is not None:
+                    prompt_field_inclusion_by_user[user_id] = attempt.prompt_field_inclusion
                 if attempt.provider_failure is not None:
                     step_provider_failed += 1
                     outcome_row["result_status"] = "provider_failed"
@@ -1858,27 +1860,33 @@ def _attempt_runtime_decision(
     video_id: str,
     provider_metadata: Mapping[str, object],
 ) -> _RuntimeDecisionAttempt:
-    try:
-        decision = adapter.decide(
-            post,
-            profile,
-            peer_context,
-            platform_context,
-            time_step,
-        )
-    except ProviderDecisionError as exc:
-        return _RuntimeDecisionAttempt(
-            decision=None,
-            provider_failure={
-                "schedule_position": schedule_position,
-                "user_id": profile.user_id,
-                "video_id": video_id,
-                "time_step": time_step,
-                "failure_type": exc.failure_type,
-                "provider_metadata": _json_cell(provider_metadata),
-            },
-        )
-    return _RuntimeDecisionAttempt(decision=decision, provider_failure=None)
+    with capture_prompt_field_inclusion() as prompt_capture:
+        try:
+            decision = adapter.decide(
+                post,
+                profile,
+                peer_context,
+                platform_context,
+                time_step,
+            )
+        except ProviderDecisionError as exc:
+            return _RuntimeDecisionAttempt(
+                decision=None,
+                provider_failure={
+                    "schedule_position": schedule_position,
+                    "user_id": profile.user_id,
+                    "video_id": video_id,
+                    "time_step": time_step,
+                    "failure_type": exc.failure_type,
+                    "provider_metadata": _json_cell(provider_metadata),
+                },
+                prompt_field_inclusion=prompt_capture.by_user.get(profile.user_id),
+            )
+    return _RuntimeDecisionAttempt(
+        decision=decision,
+        provider_failure=None,
+        prompt_field_inclusion=prompt_capture.by_user.get(profile.user_id),
+    )
 
 
 def _runtime_decision_rows(
@@ -2045,7 +2053,7 @@ def _build_research_users(
             nickname=_cell(row, "nickname"),
             bio=_cell(row, "bio"),
             signature=_cell(row, "signature"),
-            interest_tags=_parse_list(_cell(row, "interest_tags")),
+            interest_tags=sorted(set(_parse_list(_cell(row, "interest_tags")))),
             follower_count=_int_cell(row, "follower_count"),
             following_count=_int_cell(row, "following_count"),
             video_count=signals["video_count"],
