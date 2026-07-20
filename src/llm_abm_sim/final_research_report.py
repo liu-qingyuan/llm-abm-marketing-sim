@@ -441,6 +441,8 @@ class RankingReportRun(BaseModel):
     maximum_target_exposures: int
     ranking_formula: str
     engaged_neighbor_formula: str
+    sampling_method: str = "network_augmented_research_sample"
+    sampling_status: str = "historical_network_augmented_run"
 
 
 class RankingSampleComparison(BaseModel):
@@ -454,6 +456,7 @@ class RankingSampleComparison(BaseModel):
     replacement_count: int
     base_source_scope_counts: dict[str, int]
     final_source_scope_counts: dict[str, int]
+    ordinary_count: int = 0
 
 
 class FieldLineageEntry(BaseModel):
@@ -638,10 +641,28 @@ class FinalResearchRankingReportPayload(BaseModel):
         if len(declared) != len(set(declared)):
             raise ValueError("field lineage must declare each field exactly once")
         expected = _ranking_lineage_field_names()
+        missing = expected - set(declared)
+        legacy_compatibility_fields = {
+            "run.sampling_method",
+            "run.sampling_status",
+            "sample_comparison.ordinary_count",
+        }
+        if (
+            self.run.sampling_method == "network_augmented_research_sample"
+            and missing
+            and missing <= legacy_compatibility_fields
+        ):
+            compatibility_entries = {
+                entry.field_name: entry for entry in _ranking_field_lineage() if entry.field_name in missing
+            }
+            self.field_lineage.extend(compatibility_entries[field_name] for field_name in sorted(missing))
+            declared = [entry.field_name for entry in self.field_lineage]
         if set(declared) != expected:
-            missing = sorted(expected - set(declared))
+            missing_fields = sorted(expected - set(declared))
             extra = sorted(set(declared) - expected)
-            raise ValueError(f"field lineage does not match ranking user fields; missing={missing}, extra={extra}")
+            raise ValueError(
+                f"field lineage does not match ranking user fields; missing={missing_fields}, extra={extra}"
+            )
         return self
 
 
@@ -1069,10 +1090,30 @@ def _build_ranking_report_payload(source: FinalResearchReportSource) -> FinalRes
     runtime_summary = source.ranking_runtime_summary
     diagnostic_summary = source.ranking_diagnostics_summary
     manifest_artifacts = _required_mapping(source.artifact_manifest, "artifacts", "artifact manifest")
-    base_sample = _required_mapping(audit, "base_sample", "network sample audit")
-    network_cohort = _required_mapping(audit, "network_cohort", "network sample audit")
-    replacement = _required_mapping(audit, "ordinary_replacement", "network sample audit")
-    final_sample = _required_mapping(audit, "final_sample", "network sample audit")
+    seed_first = audit.get("schema_version") == "seed-first-sample-audit-v1"
+    final_sample = _required_mapping(audit, "final_sample", "sample audit")
+    if seed_first:
+        roles = _required_mapping(audit, "roles", "seed-first sample audit")
+        role_counts = _mapping_counts(roles, "counts", "seed-first sample roles")
+        role_user_ids = _required_mapping(roles, "user_ids", "seed-first sample roles")
+        cohort_user_ids_list = [
+            str(value) for value in _required_list(role_user_ids, "network_cohort", "seed-first roles")
+        ]
+        base_sample: Mapping[str, object] = {"count": 0, "user_ids": [], "source_scope_counts": {}}
+        network_cohort: Mapping[str, object] = {
+            "count": _as_int(role_counts.get("network_cohort")),
+            "user_ids": cohort_user_ids_list,
+            "added_user_ids": cohort_user_ids_list,
+        }
+        replacement: Mapping[str, object] = {"count": 0}
+        seed_count = _as_int(role_counts.get("seed"))
+        ordinary_count = _as_int(role_counts.get("ordinary"))
+    else:
+        base_sample = _required_mapping(audit, "base_sample", "network sample audit")
+        network_cohort = _required_mapping(audit, "network_cohort", "network sample audit")
+        replacement = _required_mapping(audit, "ordinary_replacement", "network sample audit")
+        seed_count = _as_int(audit.get("seed_count"))
+        ordinary_count = _as_int(final_sample.get("count")) - seed_count - _as_int(network_cohort.get("count"))
     runtime_counts = _mapping_counts(runtime_summary, "counts", "ranking runtime summary")
 
     outcomes = _unique_user_rows(source.ranking_outcomes, "ranking outcomes")
@@ -1230,6 +1271,16 @@ def _build_ranking_report_payload(source: FinalResearchReportSource) -> FinalRes
             maximum_target_exposures=_as_int(runtime_summary.get("maximum_target_exposures")),
             ranking_formula=str(runtime_summary.get("ranking_formula", "")),
             engaged_neighbor_formula=str(runtime_summary.get("engaged_neighbor_formula", "")),
+            sampling_method=str(
+                runtime_summary.get("sampling_method")
+                or source.artifact_manifest.get("sampling_method")
+                or "network_augmented_research_sample"
+            ),
+            sampling_status=str(
+                runtime_summary.get("sampling_status")
+                or source.artifact_manifest.get("sampling_status")
+                or "historical_network_augmented_run"
+            ),
         ),
         run_funnel=[
             _typed_funnel_stage(
@@ -1238,14 +1289,27 @@ def _build_ranking_report_payload(source: FinalResearchReportSource) -> FinalRes
                 _as_int(source.offline_score_summary.get("user_count")),
                 "权威 processed variant 中完成 holdout-safe 离线评分的用户。",
             ),
-            _typed_funnel_stage(
-                "base_sample",
-                "Base Sample",
-                _as_int(base_sample.get("count")),
-                "按 source scope 配额、去重与固定随机种子形成。",
+            *(
+                []
+                if seed_first
+                else [
+                    _typed_funnel_stage(
+                        "base_sample",
+                        "Base Sample",
+                        _as_int(base_sample.get("count")),
+                        "按 source scope 配额、去重与固定随机种子形成。",
+                    )
+                ]
             ),
             _typed_funnel_stage(
-                "seeds", "Seeds", _as_int(audit.get("seed_count")), "从 Base Sample 选出的 seed union。"
+                "seeds",
+                "Seeds",
+                seed_count,
+                (
+                    "从全部合格 processed users 形成的 Full-Pool Influence Seed Union。"
+                    if seed_first
+                    else "从 Base Sample 选出的 seed union。"
+                ),
             ),
             _typed_funnel_stage(
                 "network_cohort",
@@ -1255,9 +1319,13 @@ def _build_ranking_report_payload(source: FinalResearchReportSource) -> FinalRes
             ),
             _typed_funnel_stage(
                 "final_sample",
-                "Network-Augmented Research Sample",
+                "Seed-First Research Sample" if seed_first else "Network-Augmented Research Sample",
                 len(rows),
-                "保持总量不变并替换等量普通用户后的最终样本。",
+                (
+                    "seeds 和直接邻居优先进入，再按 Primary Video Source Scope 配额补足普通用户。"
+                    if seed_first
+                    else "保持总量不变并替换等量普通用户后的最终样本。"
+                ),
             ),
             _typed_funnel_stage(
                 "target_exposures",
@@ -1287,12 +1355,13 @@ def _build_ranking_report_payload(source: FinalResearchReportSource) -> FinalRes
         sample_comparison=RankingSampleComparison(
             base_sample_count=_as_int(base_sample.get("count")),
             final_sample_count=_as_int(final_sample.get("count")),
-            seed_count=_as_int(audit.get("seed_count")),
+            seed_count=seed_count,
             network_cohort_count=_as_int(network_cohort.get("count")),
             network_cohort_added_count=len(_required_list(network_cohort, "added_user_ids", "network cohort")),
             replacement_count=_as_int(replacement.get("count")),
             base_source_scope_counts=_int_mapping(base_sample.get("source_scope_counts")),
             final_source_scope_counts=_int_mapping(final_sample.get("source_scope_counts")),
+            ordinary_count=ordinary_count,
         ),
         field_lineage=lineage,
         prompt_contract=RankingPromptContract(
@@ -1598,6 +1667,45 @@ def _render_ranking_report(payload: FinalResearchRankingReportPayload) -> str:
         f'href="{escape(str(relative_path), quote=True)}">{escape(_ranking_download_label(key))}</a>'
         for key, relative_path in downloads.items()
     )
+    seed_first_run = payload.run.sampling_method == "seed_first_research_sample_v1"
+    if seed_first_run and payload.run.sampling_status == "persisted_seed_first_formal_run":
+        run_method_status = "Persisted Seed-First Formal Run（已持久化的 Seed-First 正式运行）"
+        run_evidence_title = "Seed-First 正式运行证据"
+    elif seed_first_run:
+        run_method_status = "Validation Run（验证运行） · Seed-First Research Sample（先选种子研究样本）"
+        run_evidence_title = "Seed-First 离线验证证据"
+    else:
+        run_method_status = (
+            "Historical Network-Augmented Run（历史 Network-Augmented 运行） · Persisted runtime evidence"
+        )
+        run_evidence_title = "历史正式运行证据"
+    run_evidence_boundary = (
+        "以上计数均来自当前 Seed-First run 的 persisted artifacts；Validation Run 不代表已经执行 live provider 正式运行。"
+        if seed_first_run
+        else "以上均来自当前历史 payload 与 persisted artifacts，不使用 Proposed Seed-First 投影改写本次运行。"
+    )
+    sample_heading = (
+        "Seed-First Research Sample（Seed-First 研究样本）"
+        if seed_first_run
+        else "Base Sample（基础样本）与 Final Sample（最终样本）"
+    )
+    processed_user_count = next(stage.count for stage in payload.run_funnel if stage.key == "processed_users")
+    mechanism_seed_count = sample.seed_count if seed_first_run else 20
+    mechanism_neighbor_count = sample.network_cohort_count if seed_first_run else 60
+    mechanism_ordinary_count = sample.ordinary_count if seed_first_run else 920
+    mechanism_sample_count = payload.run.sample_size if seed_first_run else 1000
+    mechanism_exposure_limit = effective_exposure_limit if seed_first_run else 600
+    mechanism_below_capacity = max(0, mechanism_sample_count - mechanism_exposure_limit)
+    mechanism_status = (
+        "ADR 0003 · Accepted · persisted Validation Run"
+        if seed_first_run
+        else "ADR 0003 · Proposed · offline projection"
+    )
+    mechanism_boundary = (
+        "当前 Seed-First Validation Run 的 persisted sample；它不代表已经执行 live provider 正式运行。"
+        if seed_first_run
+        else "Proposed Seed-First Research Sample 的 offline projection，不是旧正式 run 的新结果。"
+    )
     payload_json = safe_user_json(payload, indent=None).replace("</", "<\\/")
     explanation_json = safe_user_json(explanation_document, indent=None).replace("</", "<\\/")
     sample_construction_image = _embedded_report_image("sample-construction.webp")
@@ -1629,19 +1737,19 @@ def _render_ranking_report(payload: FinalResearchRankingReportPayload) -> str:
   <div id="mechanism-mode-panel" role="tabpanel" aria-labelledby="mechanism-mode-tab" data-report-mode-panel="mechanism" data-testid="mechanism-mode-panel">
     <section id="overview" class="sample-opening" data-section-anchor="overview" data-testid="mechanism-sample-opening">
       <div class="sample-opening-copy">
-        <h1>从 36,400 到 1,000</h1>
+        <h1>从 {processed_user_count:,} 到 {mechanism_sample_count:,}</h1>
         <p>先选影响力种子，再纳入历史直接邻居，最后按来源配额补足普通用户。</p>
-        <span class="sample-method-status">ADR 0003 · Proposed · offline projection</span>
+        <span class="sample-method-status">{escape(mechanism_status)}</span>
       </div>
-      <figure id="sample" class="sample-opening-visual" tabindex="-1" data-section-anchor="sample" data-testid="mechanism-sample-detail" aria-label="Proposed Seed-First Research Sample 离线投影">
+      <figure id="sample" class="sample-opening-visual" tabindex="-1" data-section-anchor="sample" data-testid="mechanism-sample-detail" aria-label="Seed-First Research Sample 方法与证据">
         <img data-testid="sample-construction-illustration" src="{sample_construction_image}" width="1672" height="941" alt="从完整合格用户池选择影响力种子、历史直接邻居并补足研究样本的无文字示意图">
-        <div class="sample-projection-label sample-projection-seeds" data-testid="sample-count-seed" aria-label="20 seeds"><strong>20</strong> <span>seeds</span></div>
-        <div class="sample-projection-label sample-projection-neighbors" data-testid="sample-count-neighbor" aria-label="60 Seed Neighbor Cohort"><strong>60</strong> <span>Seed Neighbor Cohort</span></div>
-        <div class="sample-projection-label sample-projection-ordinary" data-testid="sample-count-ordinary" aria-label="920 ordinary users"><strong>920</strong> <span>ordinary users</span></div>
+        <div class="sample-projection-label sample-projection-seeds" data-testid="sample-count-seed" aria-label="{mechanism_seed_count} seeds"><strong>{mechanism_seed_count}</strong> <span>seeds</span></div>
+        <div class="sample-projection-label sample-projection-neighbors" data-testid="sample-count-neighbor" aria-label="{mechanism_neighbor_count} Seed Neighbor Cohort"><strong>{mechanism_neighbor_count}</strong> <span>Seed Neighbor Cohort</span></div>
+        <div class="sample-projection-label sample-projection-ordinary" data-testid="sample-count-ordinary" aria-label="{mechanism_ordinary_count} ordinary users"><strong>{mechanism_ordinary_count}</strong> <span>ordinary users</span></div>
         <button class="sample-hotspot sample-hotspot-seed" type="button" data-mechanism-key="seed" data-testid="sample-hotspot-seed" aria-label="查看影响力种子机制详情" aria-expanded="false" aria-controls="evidence-drawer" title="影响力种子"></button>
         <button class="sample-hotspot sample-hotspot-neighbor" type="button" data-mechanism-key="neighbor" data-testid="sample-hotspot-neighbor" aria-label="查看历史直接邻居机制详情" aria-expanded="false" aria-controls="evidence-drawer" title="历史直接邻居"></button>
         <button class="sample-hotspot sample-hotspot-ordinary" type="button" data-mechanism-key="ordinary" data-testid="sample-hotspot-ordinary" aria-label="查看普通补足用户机制详情" aria-expanded="false" aria-controls="evidence-drawer" title="普通补足用户"></button>
-        <p class="sample-opening-boundary"><strong>Proposed Seed-First Research Sample</strong> 的 offline projection，不是旧正式 run 的新结果。</p>
+        <p class="sample-opening-boundary">{escape(mechanism_boundary)}</p>
       </figure>
     </section>
 
@@ -1735,21 +1843,21 @@ def _render_ranking_report(payload: FinalResearchRankingReportPayload) -> str:
         <div class="mechanism-scene-header">
           <div class="mechanism-copy">
             <span class="eyebrow">DELIVERY CAPACITY / PAIRED RANKING</span>
-            <h2>600 人容量内并列比较两种排序</h2>
+            <h2>{mechanism_exposure_limit:,} 人容量内并列比较两种排序</h2>
           </div>
           <div class="mechanism-copy">
-            <p>1,000 人 Proposed Research Sample 中，30 个 Batch × Top20 使 600 人最多获得 Recommendation Opportunity；400 人保持 <code>below_delivery_capacity</code>：未曝光，不是 <code>ignore</code>。</p>
+            <p>{mechanism_sample_count:,} 人 Research Sample 中，{payload.run.horizon} 个 Batch 与 Top{payload.run.delivery_capacity} 容量使 {mechanism_exposure_limit:,} 人最多获得 Recommendation Opportunity；{mechanism_below_capacity:,} 人保持 <code>below_delivery_capacity</code>：未曝光，不是 <code>ignore</code>。</p>
             <p class="capacity-reader-boundary">Paired Network Ranking Ablation 使用同批冻结 candidate evidence，零额外 Decision Adapter calls，不推进第二条 trajectory，也不预设网络一定改变 Top20。</p>
           </div>
         </div>
         <figure class="mechanism-scene-visual capacity-network-visual" data-testid="capacity-network-scene-visual">
           <img data-testid="capacity-network-impact-illustration" src="{capacity_network_impact_image}" width="1672" height="941" alt="一千人研究样本在六百人最大投放容量边界内，使用同批候选证据并列比较完整排序与无网络排序的无文字示意图">
-          <button class="mechanism-hotspot capacity-hotspot capacity-limit-hotspot" type="button" data-mechanism-key="capacity-limit" data-testid="capacity-limit-hotspot" aria-label="查看 Delivery Capacity 上限详情" aria-expanded="false" aria-controls="evidence-drawer"><strong>600 max Delivery Capacity</strong><span>30 Batch × Top20</span></button>
-          <button class="mechanism-hotspot capacity-hotspot below-capacity-hotspot" type="button" data-mechanism-key="below-capacity" data-testid="below-capacity-hotspot" aria-label="查看 below delivery capacity 详情" aria-expanded="false" aria-controls="evidence-drawer"><strong>400 below_delivery_capacity</strong><span>未曝光，不是 ignore</span></button>
+          <button class="mechanism-hotspot capacity-hotspot capacity-limit-hotspot" type="button" data-mechanism-key="capacity-limit" data-testid="capacity-limit-hotspot" aria-label="查看 Delivery Capacity 上限详情" aria-expanded="false" aria-controls="evidence-drawer"><strong>{mechanism_exposure_limit:,} max Delivery Capacity</strong><span>{payload.run.horizon} Batch × Top{payload.run.delivery_capacity}</span></button>
+          <button class="mechanism-hotspot capacity-hotspot below-capacity-hotspot" type="button" data-mechanism-key="below-capacity" data-testid="below-capacity-hotspot" aria-label="查看 below delivery capacity 详情" aria-expanded="false" aria-controls="evidence-drawer"><strong>{mechanism_below_capacity:,} below_delivery_capacity</strong><span>未曝光，不是 ignore</span></button>
           <button class="mechanism-hotspot capacity-hotspot frozen-evidence-hotspot" type="button" data-mechanism-key="frozen-evidence" data-testid="frozen-evidence-hotspot" aria-label="查看同批冻结 candidate evidence 详情" aria-expanded="false" aria-controls="evidence-drawer"><strong>同批冻结 evidence</strong><span>只做 paired ranking</span></button>
           <button class="mechanism-hotspot capacity-hotspot full-ranking-hotspot" type="button" data-mechanism-key="full-ranking" data-testid="full-ranking-hotspot" aria-label="查看 full ranking 详情" aria-expanded="false" aria-controls="evidence-drawer"><strong>full ranking</strong><span>保留网络信号</span></button>
           <button class="mechanism-hotspot capacity-hotspot no-network-ranking-hotspot" type="button" data-mechanism-key="no-network-ranking" data-testid="no-network-ranking-hotspot" aria-label="查看 no-network ranking 详情" aria-expanded="false" aria-controls="evidence-drawer"><strong>no-network ranking</strong><span>移除网络贡献</span></button>
-          <p class="scene-status capacity-status"><strong>1,000 人 Proposed Sample</strong><br>容量决定谁获得曝光，不决定已曝光用户的 action。</p>
+          <p class="scene-status capacity-status"><strong>{mechanism_sample_count:,} 人 Seed-First Sample</strong><br>容量决定谁获得曝光，不决定已曝光用户的 action。</p>
         </figure>
       </section>
     </details>
@@ -1759,21 +1867,21 @@ def _render_ranking_report(payload: FinalResearchRankingReportPayload) -> str:
   <header id="top" class="run-evidence-intro" data-testid="ranking-hero" data-section-anchor="overview">
     <div class="run-evidence-heading">
       <div>
-        <span class="run-method-status" data-testid="run-evidence-method-status">Persisted runtime evidence（持久化运行证据） · Historical sample method（历史样本方法）</span>
-        <h1>本次正式运行证据</h1>
+        <span class="run-method-status" data-testid="run-evidence-method-status">{escape(run_method_status)}</span>
+        <h1>{escape(run_evidence_title)}</h1>
         <p>{escape(target.caption)}</p>
       </div>
       <a class="target-link" data-testid="target-video-link" href="{target_url}">查看 Target Marketing Video（目标营销视频）</a>
     </div>
     <div class="run-evidence-facts" aria-label="本次运行口径">
       <article><strong>{payload.run.sample_size:,}</strong><span>Research Sample（研究样本）</span></article>
-      <article><strong data-testid="run-evidence-seed-count">{sample_role_counts['seed']:,}</strong><span>seed users（种子用户）</span></article>
-      <article><strong data-testid="run-evidence-network-cohort-count">{sample_role_counts['network_cohort']:,}</strong><span>Network Cohort（网络传播识别组）</span></article>
-      <article><strong data-testid="run-evidence-ordinary-count">{sample_role_counts['ordinary']:,}</strong><span>ordinary users（普通用户）</span></article>
+      <article><strong data-testid="run-evidence-seed-count">{sample_role_counts["seed"]:,}</strong><span>seed users（种子用户）</span></article>
+      <article><strong data-testid="run-evidence-network-cohort-count">{sample_role_counts["network_cohort"]:,}</strong><span>Network Cohort（网络传播识别组）</span></article>
+      <article><strong data-testid="run-evidence-ordinary-count">{sample_role_counts["ordinary"]:,}</strong><span>ordinary users（普通用户）</span></article>
       <article><strong>{payload.run.horizon}</strong><span>Batches（批次）</span></article>
       <article><strong>Top{payload.run.delivery_capacity}</strong><span>Delivery Capacity（投放容量）</span></article>
     </div>
-    <p class="run-evidence-boundary">以上均来自当前 payload 与 persisted artifacts，不使用 Proposed `20 / 60 / 920` 投影改写本次运行。</p>
+    <p class="run-evidence-boundary">{escape(run_evidence_boundary)}</p>
   </header>
 
   <section class="batch-control" aria-label="共享 Batch 时间轴">
@@ -1784,7 +1892,7 @@ def _render_ranking_report(payload: FinalResearchRankingReportPayload) -> str:
   <section class="object-band" data-testid="core-objects-section"><span class="eyebrow">CORE OBJECTS（核心对象）</span><div class="object-flow"><article><strong>TargetVideo（目标视频）</strong><span>唯一目标内容</span></article><i aria-hidden="true">→</i><article><strong>PlatformRecommendationModel（平台推荐模型）</strong><span>逐批全局重排</span></article><i aria-hidden="true">→</i><article><strong>ResearchUser（研究用户）</strong><span>曝光后结构化决策</span></article></div></section>
 
   <section id="run-sample" class="content-band" data-testid="sample-comparison-section" data-section-anchor="sample">
-    <div class="section-heading"><div><span class="eyebrow">SAMPLE（样本）</span><h2>Base Sample（基础样本）与 Final Sample（最终样本）</h2></div><p id="sample-summary"></p></div>
+    <div class="section-heading"><div><span class="eyebrow">SAMPLE（样本）</span><h2>{escape(sample_heading)}</h2></div><p id="sample-summary"></p></div>
     {_render_section_explanation(section_explanations["sample"], "sample-section-explanation")}
     <div id="sample-metrics" class="sample-metrics"></div>
     <div class="table-wrap sample-role-table"><table data-testid="sample-role-table"><thead><tr><th>角色</th><th>人数</th><th>怎么形成</th><th>研究角色</th><th>是否进入最终样本</th></tr></thead><tbody id="sample-role-table-body"></tbody></table></div>
@@ -1845,7 +1953,7 @@ def _render_ranking_report(payload: FinalResearchRankingReportPayload) -> str:
     <span class="eyebrow">NETWORK EFFECT（网络影响）</span><h2>Recommendation Signal Inclusion（推荐信号已纳入）与 Observed Recommendation Signal Effect（推荐信号产生可观测影响）</h2>
     <div class="capacity-layout" data-testid="delivery-capacity-evidence">
       <article><h3>Delivery Capacity（投放容量）</h3><p>{payload.run.horizon} 批 × 每批 {payload.run.delivery_capacity} 人 = {configured_delivery_slots:,} 个配置投放槽位。Batch 0 持久化曝光 {batch_zero_exposures:,} 人，后续批次最多提供 {max(0, payload.run.horizon - 1) * payload.run.delivery_capacity:,} 个槽位，因此运行调度上限为 {runtime_delivery_slots:,} 人。样本 {payload.run.sample_size:,} 人，本次最多曝光 {effective_exposure_limit:,} 人；payload 配置上限为 {payload.run.maximum_target_exposures:,}。</p></article>
-      <article><h3>未曝光与曝光后不互动</h3><p>{result_status_counts['below_delivery_capacity']:,} 个 <code>below_delivery_capacity</code> 用户未曝光，{result_status_counts['ignore']:,} 个 <code>ignore</code> 用户已曝光后选择不互动。这两个状态不能互换。</p></article>
+      <article><h3>未曝光与曝光后不互动</h3><p>{result_status_counts["below_delivery_capacity"]:,} 个 <code>below_delivery_capacity</code> 用户未曝光，{result_status_counts["ignore"]:,} 个 <code>ignore</code> 用户已曝光后选择不互动。这两个状态不能互换。</p></article>
     </div>
     {_render_section_explanation(section_explanations["network"], "network-section-explanation")}
     <div class="network-reading-note"><p><strong>Inclusion（纳入）</strong>只说明网络项进入公式并具有明确权重，不能单独证明投放结果改变。</p><p><strong>Observed Effect（可观测影响）</strong>要求移除网络项后，同批 Top{payload.run.delivery_capacity} membership（前 {payload.run.delivery_capacity} 名成员集合）实际发生变化。</p></div>
@@ -2248,6 +2356,9 @@ const explanationDocument = JSON.parse(document.getElementById('research-explana
 const explanationCatalog = new Map(explanationDocument.entries.map((entry) => [entry.field_name,entry]));
 const users = payload.users;
 const topLabel = `Top${payload.run.delivery_capacity}`;
+const isSeedFirstRun = payload.run.sampling_method === 'seed_first_research_sample_v1';
+const methodExposureLimit = Math.min(payload.run.sample_size,payload.run.maximum_target_exposures);
+const methodBelowCapacity = Math.max(0,payload.run.sample_size - methodExposureLimit);
 const sampleRoleCounts = new Map(); users.forEach((row) => sampleRoleCounts.set(row.sample_role,(sampleRoleCounts.get(row.sample_role) || 0) + 1));
 const resultStatusCounts = new Map(); users.forEach((row) => resultStatusCounts.set(row.result_status,(resultStatusCounts.get(row.result_status) || 0) + 1));
 const proxyFields = [
@@ -2312,21 +2423,21 @@ const mechanismDetails = {
     definition:'从全部合格 processed users 中取 Global Influence Proxy Top10 与 Local Influence Proxy Top10 的去重并集，作为 Seed-First Research Sample 的研究起点。',
     provenance:'Derived Proxy Metric（派生代理指标）',
     usage:'Seed Selection（种子选择） / Sampling（抽样）',
-    limitation:'20 位是 ADR 0003 的 offline projection。它不是旧正式 run 的结果，也不是普通 Global Reranking Top20 胜出者。',
+    limitation:isSeedFirstRun ? `${payload.sample_comparison.seed_count} 位来自当前 persisted sample audit；它们不是普通 Global Reranking Top20 胜出者。` : '20 位是 ADR 0003 的 offline projection。它不是旧正式 run 的结果，也不是普通 Global Reranking Top20 胜出者。',
   },
   neighbor:{
     title:'Seed Neighbor Cohort',
     definition:'Full-Pool Influence Seed Union 在 holdout-safe Comment-Derived User Interaction Graph 中的历史一跳直接邻居。',
     provenance:'Historical Behavioral Evidence（历史行为证据）',
     usage:'Sampling（抽样） / Ranking（排序）',
-    limitation:'60 位是 offline projection。评论、回复与 mention 派生的连接不是好友或关注关系，也不代表总体随机样本。',
+    limitation:isSeedFirstRun ? `${payload.sample_comparison.network_cohort_count} 位来自当前 persisted sample audit。评论、回复与 mention 派生的连接不是好友或关注关系，也不代表总体随机样本。` : '60 位是 offline projection。评论、回复与 mention 派生的连接不是好友或关注关系，也不代表总体随机样本。',
   },
   ordinary:{
     title:'普通补足用户',
-    definition:'种子和直接邻居计入配额后，按 Primary Video Source Scope 使用固定随机规则补足到 1,000 位真实合格用户。',
+    definition:`种子和直接邻居计入配额后，按 Primary Video Source Scope 使用固定随机规则补足到 ${payload.run.sample_size} 位真实合格用户。`,
     provenance:'Historical Behavioral Evidence（历史行为证据）',
     usage:'Sampling（抽样） / Report Only（仅报告展示）',
-    limitation:'920 位是 offline projection，不是合成用户，也不表示总体代表性或某次 runtime 的实际用户结果。',
+    limitation:isSeedFirstRun ? `${payload.sample_comparison.ordinary_count} 位来自当前 persisted sample audit，不是合成用户，也不表示总体代表性。` : '920 位是 offline projection，不是合成用户，也不表示总体代表性或某次 runtime 的实际用户结果。',
   },
   'batch-seeds':{
     title:'Batch 0 seeds 直接曝光',
@@ -2407,14 +2518,14 @@ const mechanismDetails = {
   },
   'capacity-limit':{
     title:'Delivery Capacity 上限',
-    definition:'Proposed 方法使用 30 个 Batch，每批 Top20。最多 600 位用户获得 Target Marketing Video 的 Recommendation Opportunity。',
+    definition:`当前方法使用 ${payload.run.horizon} 个 Batch，每批 Top${payload.run.delivery_capacity}。最多 ${methodExposureLimit} 位用户获得 Target Marketing Video 的 Recommendation Opportunity。`,
     provenance:'Synthetic Experiment Label（合成实验标签）',
     usage:'Ranking（排序） / Report Only（仅报告展示）',
-    limitation:'最多 600 是预声明投放容量，不是互动人数、曝光概率或旧正式 run 的新结果。',
+    limitation:`最多 ${methodExposureLimit} 是配置与样本共同约束的投放容量，不是互动人数或曝光概率。`,
   },
   'below-capacity':{
     title:'below_delivery_capacity',
-    definition:'1,000 人 Proposed Research Sample 中最多 600 人获得 Recommendation Opportunity，其余 400 人没有获得目标视频曝光。',
+    definition:`${payload.run.sample_size} 人 Research Sample 中最多 ${methodExposureLimit} 人获得 Recommendation Opportunity，其余 ${methodBelowCapacity} 人没有获得目标视频曝光。`,
     provenance:'Runtime Simulation Result（仿真运行结果）',
     usage:'Ranking（排序） / Report Only（仅报告展示）',
     limitation:'below_delivery_capacity 不是 ignore。前者未进入容量且未曝光，后者已经曝光后选择不互动。',
@@ -2630,8 +2741,16 @@ function metric(label, value, note) {
 function renderSample() {
   const sample = payload.sample_comparison;
   const ordinaryCount = sampleRoleCounts.get('ordinary') || 0;
-  byId('sample-summary').textContent = `Seed Users（种子用户） ${sample.seed_count} · Network Cohort（网络传播识别组） ${sample.network_cohort_count} · 普通用户替换 ${sample.replacement_count}`;
-  const metrics = [
+  const seedFirst = payload.run.sampling_method === 'seed_first_research_sample_v1';
+  byId('sample-summary').textContent = seedFirst
+    ? `Seed Users（种子用户） ${sample.seed_count} · Seed Neighbor Cohort（直接邻居） ${sample.network_cohort_count} · Ordinary Users（普通用户） ${ordinaryCount}`
+    : `Seed Users（种子用户） ${sample.seed_count} · Network Cohort（网络传播识别组） ${sample.network_cohort_count} · 普通用户替换 ${sample.replacement_count}`;
+  const metrics = seedFirst ? [
+    ['Full-Pool Seeds（全量池种子）',sample.seed_count,'在形成 Research Sample 前选择'],
+    ['Seed Neighbor Cohort（种子邻居）',sample.network_cohort_count,'Historical Set 一跳直接邻居'],
+    ['Ordinary Users（普通用户）',ordinaryCount,'按 Primary Video Source Scope 配额补足'],
+    ['Final Sample（最终样本）',sample.final_sample_count,'本次 Validation Run 样本'],
+  ] : [
     ['Base Sample（基础样本）',sample.base_sample_count,'network augmentation（网络补样）前'],
     ['Final Sample（最终样本）',sample.final_sample_count,'正式 runtime（仿真运行）样本'],
     ['Network Cohort（网络传播识别组）',sample.network_cohort_count,`${sample.network_cohort_added_count} 位新增网络用户`],
@@ -2639,7 +2758,7 @@ function renderSample() {
   ];
   metrics.forEach(([label,value,note]) => byId('sample-metrics').appendChild(metric(label,value,note)));
   const roles = [
-    ['Seed Users（种子用户）',sampleRoleCounts.get('seed') || 0,'从 Base Sample（基础样本）按预声明 seed union（种子并集）固定','Batch 0（第 0 批）固定曝光；后续互动可激活邻居信号','是'],
+    ['Seed Users（种子用户）',sampleRoleCounts.get('seed') || 0,seedFirst ? '从全部合格 processed users 形成 Full-Pool Influence Seed Union' : '从 Base Sample（基础样本）按预声明 seed union（种子并集）固定','Batch 0（第 0 批）固定曝光；后续互动可激活邻居信号','是'],
     ['Network Cohort（网络传播识别组）',sampleRoleCounts.get('network_cohort') || 0,'Seed Users（种子用户）在 Historical Set（历史集合）评论网络中的直接邻居','传播识别组；参与后续全局 ranking（排序）','是'],
     ['Ordinary Users（普通用户）',ordinaryCount,'Final Sample（最终样本）中非种子、非网络传播识别组用户','保持来源样本与对照覆盖；参与后续全局 ranking（排序）','是'],
   ];
@@ -3469,12 +3588,15 @@ def _validate_ranking_rebuild_evidence(
     if manifest.get("manifest_version") != FINAL_RESEARCH_RANKING_RUNTIME_VERSION:
         raise ValueError("unsupported Target Delivery Ranking artifact manifest schema")
     artifacts = _required_mapping(manifest, "artifacts", "artifact manifest")
+    seed_first = payload.run.sampling_method == "seed_first_research_sample_v1"
+    sample_audit_name = "seed_first_sample_audit" if seed_first else "network_augmented_sample_audit"
+    sample_audit_path = "seed_first_sample_audit.json" if seed_first else "network_augmented_sample_audit.json"
     required_artifacts = {
         "final_research_report": "report.html",
         "final_research_report_payload": "final_research_report_payload.json",
         "final_research_users_csv": "final_research_users.csv",
         "final_research_users_json": "final_research_users.json",
-        "network_augmented_sample_audit": "network_augmented_sample_audit.json",
+        sample_audit_name: sample_audit_path,
         "ranking_runtime_candidates": "ranking_runtime_candidates.csv",
         "ranking_runtime_outcomes": "ranking_runtime_outcomes.csv",
         "ranking_runtime_steps": "ranking_runtime_steps.csv",
@@ -3500,17 +3622,34 @@ def _validate_ranking_rebuild_evidence(
     if dict(sorted(payload.sample_comparison.final_source_scope_counts.items())) != actual_scope_counts:
         raise ValueError("ranking report final source scope distribution does not match users")
 
-    audit = _read_json_object(artifact_paths["network_augmented_sample_audit"])
-    if audit.get("schema_version") != "network-augmented-sample-audit-v1":
-        raise ValueError("unsupported network augmented sample audit schema")
-    base_sample = _required_mapping(audit, "base_sample", "network sample audit")
-    final_sample = _required_mapping(audit, "final_sample", "network sample audit")
-    network_cohort = _required_mapping(audit, "network_cohort", "network sample audit")
-    replacement = _required_mapping(audit, "ordinary_replacement", "network sample audit")
+    audit = _read_json_object(artifact_paths[sample_audit_name])
+    if seed_first:
+        if audit.get("schema_version") != "seed-first-sample-audit-v1":
+            raise ValueError("unsupported seed-first sample audit schema")
+        roles = _required_mapping(audit, "roles", "seed-first sample audit")
+        role_counts = _mapping_counts(roles, "counts", "seed-first sample roles")
+        role_user_ids = _required_mapping(roles, "user_ids", "seed-first sample roles")
+        base_sample: Mapping[str, object] = {"count": 0, "user_ids": [], "source_scope_counts": {}}
+        network_cohort: Mapping[str, object] = {
+            "count": _as_int(role_counts.get("network_cohort")),
+            "user_ids": _required_list(role_user_ids, "network_cohort", "seed-first roles"),
+            "added_user_ids": _required_list(role_user_ids, "network_cohort", "seed-first roles"),
+        }
+        replacement: Mapping[str, object] = {"count": 0}
+        seed_ids = [str(value) for value in _required_list(role_user_ids, "seed", "seed-first roles")]
+        ordinary_ids = [str(value) for value in _required_list(role_user_ids, "ordinary", "seed-first roles")]
+    else:
+        if audit.get("schema_version") != "network-augmented-sample-audit-v1":
+            raise ValueError("unsupported network augmented sample audit schema")
+        base_sample = _required_mapping(audit, "base_sample", "network sample audit")
+        network_cohort = _required_mapping(audit, "network_cohort", "network sample audit")
+        replacement = _required_mapping(audit, "ordinary_replacement", "network sample audit")
+        seed_ids = [str(value) for value in _required_list(audit, "seed_user_ids", "network sample audit")]
+        ordinary_ids = []
+    final_sample = _required_mapping(audit, "final_sample", "sample audit")
     base_ids = [str(value) for value in _required_list(base_sample, "user_ids", "base sample")]
     final_ids = [str(value) for value in _required_list(final_sample, "user_ids", "final sample")]
     cohort_ids = [str(value) for value in _required_list(network_cohort, "user_ids", "network cohort")]
-    seed_ids = [str(value) for value in _required_list(audit, "seed_user_ids", "network sample audit")]
     for label, values in (
         ("base sample", base_ids),
         ("final sample", final_ids),
@@ -3524,7 +3663,7 @@ def _validate_ranking_rebuild_evidence(
     comparison_expectations = {
         "base_sample_count": _as_int(base_sample.get("count")),
         "final_sample_count": _as_int(final_sample.get("count")),
-        "seed_count": _as_int(audit.get("seed_count")),
+        "seed_count": len(seed_ids),
         "network_cohort_count": _as_int(network_cohort.get("count")),
         "network_cohort_added_count": len(_required_list(network_cohort, "added_user_ids", "network cohort")),
         "replacement_count": _as_int(replacement.get("count")),
@@ -3533,6 +3672,8 @@ def _validate_ranking_rebuild_evidence(
     for key, expected in comparison_expectations.items():
         if comparison_document[key] != expected:
             raise ValueError(f"ranking report sample comparison {key} does not match audit")
+    if seed_first and payload.sample_comparison.ordinary_count != len(ordinary_ids):
+        raise ValueError("ranking report ordinary_count does not match seed-first sample audit")
     if payload.sample_comparison.base_source_scope_counts != _int_mapping(base_sample.get("source_scope_counts")):
         raise ValueError("ranking report Base Sample source scope counts do not match audit")
     if payload.sample_comparison.final_source_scope_counts != _int_mapping(final_sample.get("source_scope_counts")):

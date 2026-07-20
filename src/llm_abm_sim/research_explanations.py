@@ -836,6 +836,18 @@ _RUN_SPECS = {
         "ranking runtime summary。",
         limitation="公式描述仿真信号，不证明真实社交传播机制。",
     ),
+    "sampling_method": _text(
+        "抽样方法",
+        "标识本次 persisted run（持久化运行）实际使用的 Research Sample（研究样本）构建方法。",
+        "sample audit（样本审计）与 ranking runtime summary（排序仿真摘要）。",
+        limitation="方法标识用于区分历史 Network-Augmented run（网络补样运行）与 Seed-First run（先选种子运行），不表示样本具有总体代表性。",
+    ),
+    "sampling_status": _text(
+        "抽样运行状态",
+        "区分历史运行、离线 Validation Run（验证运行）和显式授权的 Seed-First（先选种子）正式运行。",
+        "artifact manifest（产物清单）与 ranking runtime summary（排序仿真摘要）。",
+        limitation="Validation Run（验证运行）不代表已经执行 live provider（真实模型提供方）正式运行。",
+    ),
 }
 
 _SAMPLE_SPECS = {
@@ -885,6 +897,12 @@ _SAMPLE_SPECS = {
         "最终样本来源构成",
         "Final Sample（最终样本）按 Video Source Scope（视频来源分组）统计的人数。",
         "network sample audit（网络样本审计）。",
+    ),
+    "ordinary_count": _count(
+        "普通用户数",
+        "最终样本中既不是 seed（种子用户）也不是 Seed Neighbor Cohort（种子邻居群组）的真实 processed users（已处理用户）数量。",
+        "sample audit（样本审计）。",
+        calculation="按互斥 sample_role=ordinary（普通样本角色）统计唯一 user_id（用户标识）。",
     ),
 }
 
@@ -1267,9 +1285,7 @@ class ResearchExplanationCatalog(Mapping[str, FieldExplanation]):
         }
 
     @classmethod
-    def _render_chart_explanations(
-        cls, context: Mapping[str, object] | None
-    ) -> dict[str, RenderedChartExplanation]:
+    def _render_chart_explanations(cls, context: Mapping[str, object] | None) -> dict[str, RenderedChartExplanation]:
         return {
             key: RenderedChartExplanation(
                 measurement=cls._format_template(template.measurement, context),

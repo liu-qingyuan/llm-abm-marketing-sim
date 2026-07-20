@@ -63,6 +63,10 @@ type PairedAblationBatch = {
 
 type RankingPayload = {
   users: RankingUser[];
+  run_funnel: Array<{
+    key: string;
+    count: number;
+  }>;
   target_video: {
     video_url: string;
   };
@@ -86,6 +90,8 @@ type RankingPayload = {
     horizon: number;
     delivery_capacity: number;
     maximum_target_exposures: number;
+    sampling_method: string;
+    sampling_status: string;
   };
   ranking_rounds: Array<{
     time_step: number;
@@ -454,14 +460,22 @@ async function assertRankingReport(
   const hero = page.getByTestId('ranking-hero');
   const roleCounts = sampleRoleCounts(payload);
   await expect(hero).toHaveClass('run-evidence-intro');
-  await expect(hero.getByTestId('run-evidence-method-status')).toContainText('Persisted runtime evidence');
+  await expect(hero.getByTestId('run-evidence-method-status')).toContainText(
+    payload.run.sampling_method === 'seed_first_research_sample_v1'
+      ? 'Seed-First Research Sample'
+      : 'Historical Network-Augmented Run',
+  );
   await expect(hero).toContainText('当高端酒店开始');
   await expect(hero).toContainText(payload.run.sample_size.toLocaleString());
   await expect(hero.getByTestId('run-evidence-seed-count')).toHaveText(roleCounts.seed.toLocaleString());
   await expect(hero.getByTestId('run-evidence-network-cohort-count'))
     .toHaveText(roleCounts.network_cohort.toLocaleString());
   await expect(hero.getByTestId('run-evidence-ordinary-count')).toHaveText(roleCounts.ordinary.toLocaleString());
-  await expect(hero).toContainText('不使用 Proposed `20 / 60 / 920` 投影改写本次运行');
+  await expect(hero).toContainText(
+    payload.run.sampling_method === 'seed_first_research_sample_v1'
+      ? 'Validation Run 不代表已经执行 live provider 正式运行'
+      : '不使用 Proposed Seed-First 投影改写本次运行',
+  );
   await expect(hero.locator('.run-evidence-facts article')).toHaveCount(6);
   await expect(page.getByTestId('target-video-link')).toHaveAttribute('href', payload.target_video.video_url);
   const nextSectionTop = await page.getByTestId('core-objects-section').evaluate(
@@ -477,15 +491,24 @@ async function assertRankingReport(
 
   const sampleSection = page.getByTestId('sample-comparison-section');
   await expect(sampleSection).toContainText(`Seed Users（种子用户） ${payload.sample_comparison.seed_count}`);
-  await expect(sampleSection).toContainText(`Network Cohort（网络传播识别组） ${payload.sample_comparison.network_cohort_count}`);
-  await expect(sampleSection).toContainText(`普通用户替换 ${payload.sample_comparison.replacement_count}`);
-  await expect(sampleSection).toContainText(`Base Sample（基础样本）是 network augmentation（网络补样）前按 source scope（来源分组）形成的初始 ${payload.sample_comparison.base_sample_count.toLocaleString()} 人样本`);
+  await expect(sampleSection).toContainText(
+    payload.run.sampling_method === 'seed_first_research_sample_v1'
+      ? `Seed Neighbor Cohort（直接邻居） ${payload.sample_comparison.network_cohort_count}`
+      : `Network Cohort（网络传播识别组） ${payload.sample_comparison.network_cohort_count}`,
+  );
   await expect(sampleSection).toContainText(`Final Sample（最终样本）是真正进入正式 runtime（仿真运行）的 ${payload.sample_comparison.final_sample_count.toLocaleString()} 人样本`);
+  if (payload.run.sampling_method === 'seed_first_research_sample_v1') {
+    await expect(sampleSection).toContainText(`Ordinary Users（普通用户） ${payload.sample_comparison.ordinary_count}`);
+    await expect(sampleSection).toContainText('从全部合格 processed users 形成 Full-Pool Influence Seed Union');
+  } else {
+    await expect(sampleSection).toContainText(`普通用户替换 ${payload.sample_comparison.replacement_count}`);
+    await expect(sampleSection).toContainText(`Base Sample（基础样本）是 network augmentation（网络补样）前按 source scope（来源分组）形成的初始 ${payload.sample_comparison.base_sample_count.toLocaleString()} 人样本`);
+    await expect(sampleSection).toContainText('等量替换普通用户');
+  }
   await expect(sampleSection).toContainText('Historical Set（历史集合）评论网络中的直接邻居');
   await expect(sampleSection).toContainText('真实 processed user（处理后用户）');
   await expect(sampleSection).toContainText('不是合成用户或代表性随机样本');
   await expect(sampleSection).toContainText('固定种子用户');
-  await expect(sampleSection).toContainText('等量替换普通用户');
   await expect(sampleSection).toContainText('最终样本总量不变');
   await expect(sampleSection).toContainText('采集来源分组，不是视频语义类别');
   await expect(page.getByTestId('sample-role-table').locator('tbody tr')).toHaveCount(3);
@@ -823,12 +846,12 @@ test('mechanism shell defaults to explanation and keeps run evidence available o
   }
 
   const mechanismPanel = page.getByTestId('mechanism-mode-panel');
-  await expect(mechanismPanel).toContainText('Proposed Seed-First Research Sample');
-  await expect(mechanismPanel).toContainText('20 seeds');
-  await expect(mechanismPanel).toContainText('60 Seed Neighbor Cohort');
-  await expect(mechanismPanel).toContainText('920 ordinary users');
-  await expect(mechanismPanel).toContainText('offline projection');
-  await expect(mechanismPanel).toContainText('不是旧正式 run 的新结果');
+  const roleCounts = sampleRoleCounts(payload);
+  await expect(mechanismPanel).toContainText('Accepted · persisted Validation Run');
+  await expect(mechanismPanel).toContainText(`${roleCounts.seed} seeds`);
+  await expect(mechanismPanel).toContainText(`${roleCounts.network_cohort} Seed Neighbor Cohort`);
+  await expect(mechanismPanel).toContainText(`${roleCounts.ordinary} ordinary users`);
+  await expect(mechanismPanel).toContainText('不代表已经执行 live provider 正式运行');
   await expect(mechanismPanel).toContainText('Full-Pool Influence Seed Union');
   await expect(mechanismPanel).toContainText('not Global Reranking Top20 winners');
   await expect(mechanismPanel).toContainText('三路信号形成相对排序');
@@ -861,7 +884,6 @@ test('mechanism shell defaults to explanation and keeps run evidence available o
   await expect(page.getByTestId('mechanism-mode-panel')).toBeHidden();
   await expect(page.getByTestId('run-evidence-mode-panel')).toBeVisible();
   const runIntro = page.getByTestId('ranking-hero');
-  const roleCounts = sampleRoleCounts(payload);
   await expect(runIntro).toContainText(payload.users.length.toLocaleString());
   await expect(runIntro.getByTestId('run-evidence-seed-count')).toHaveText(
     roleCounts.seed.toLocaleString(),
@@ -900,7 +922,7 @@ test('mechanism shell defaults to explanation and keeps run evidence available o
 });
 
 test('sample-led opening replaces the generic hero and keeps navigation focus in sync', async ({ page }, testInfo) => {
-  const { outputDir } = generateRankingReport(testInfo);
+  const { outputDir, payload } = generateRankingReport(testInfo);
   const reportUrl = pathToFileURL(path.join(outputDir, 'report.html')).toString();
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto(reportUrl);
@@ -914,7 +936,10 @@ test('sample-led opening replaces the generic hero and keeps navigation focus in
   expect((await topbar.boundingBox())?.height ?? Infinity).toBeLessThanOrEqual(80);
   await expect(page.locator('.mechanism-overview')).toHaveCount(0);
   await expect(opening).toBeVisible();
-  await expect(opening.getByRole('heading', { name: '从 36,400 到 1,000' })).toBeVisible();
+  const processedCount = payload.run_funnel.find((stage) => stage.key === 'processed_users')?.count;
+  await expect(opening.getByRole('heading', {
+    name: `从 ${processedCount?.toLocaleString()} 到 ${payload.run.sample_size.toLocaleString()}`,
+  })).toBeVisible();
   await expect(navigation.getByRole('link', { name: '概览' })).toHaveAttribute('aria-current', 'location');
 
   const [openingBox, visualBox] = await Promise.all([
@@ -987,7 +1012,7 @@ test('sample hotspots share the detail drawer and clear mechanism selection on m
 });
 
 test('sample opening keeps its visual contract on both desktop reference viewports', async ({ page }, testInfo) => {
-  const { outputDir } = generateRankingReport(testInfo);
+  const { outputDir, payload } = generateRankingReport(testInfo);
   const reportUrl = pathToFileURL(path.join(outputDir, 'report.html')).toString();
   const externalRequests: string[] = [];
   page.on('request', (request) => {
@@ -1002,7 +1027,10 @@ test('sample opening keeps its visual contract on both desktop reference viewpor
     await page.setViewportSize(viewport);
     await page.goto(reportUrl);
     const opening = page.getByTestId('mechanism-sample-opening');
-    const headingLines = await opening.getByRole('heading', { name: '从 36,400 到 1,000' }).evaluate((node) => {
+    const processedCount = payload.run_funnel.find((stage) => stage.key === 'processed_users')?.count;
+    const headingLines = await opening.getByRole('heading', {
+      name: `从 ${processedCount?.toLocaleString()} 到 ${payload.run.sample_size.toLocaleString()}`,
+    }).evaluate((node) => {
       const style = getComputedStyle(node);
       return Math.round(node.getBoundingClientRect().height / Number.parseFloat(style.lineHeight));
     });
@@ -1359,7 +1387,7 @@ test('successful actions activate direct neighbors only in the next Global Reran
 
 test('Delivery Capacity compares full and no-network ranking on frozen candidate evidence', async ({ page }, testInfo) => {
   test.slow();
-  const { outputDir } = generateRankingReport(testInfo);
+  const { outputDir, payload } = generateRankingReport(testInfo);
   const reportUrl = pathToFileURL(path.join(outputDir, 'report.html')).toString();
   const externalRequests: string[] = [];
   page.on('request', (request) => {
@@ -1383,10 +1411,12 @@ test('Delivery Capacity compares full and no-network ranking on frozen candidate
     await expect(disclosure).toHaveAttribute('open', '');
 
     const visual = page.getByTestId('capacity-network-scene-visual');
-    await expect(section.getByRole('heading', { name: '600 人容量内并列比较两种排序' })).toBeVisible();
-    await expect(section).toContainText('1,000 人 Proposed Research Sample');
-    await expect(section).toContainText('600 人最多获得 Recommendation Opportunity');
-    await expect(section).toContainText('400 人保持 below_delivery_capacity');
+    const maximumExposures = payload.run.maximum_target_exposures;
+    const belowCapacity = payload.run.sample_size - maximumExposures;
+    await expect(section.getByRole('heading', { name: `${maximumExposures} 人容量内并列比较两种排序` })).toBeVisible();
+    await expect(section).toContainText(`${payload.run.sample_size.toLocaleString()} 人 Research Sample`);
+    await expect(section).toContainText(`${maximumExposures} 人最多获得 Recommendation Opportunity`);
+    await expect(section).toContainText(`${belowCapacity} 人保持 below_delivery_capacity`);
     await expect(section).toContainText('未曝光，不是 ignore');
     await expect(section).toContainText('同批冻结 candidate evidence');
     await expect(section).toContainText('零额外 Decision Adapter calls');
@@ -1405,7 +1435,7 @@ test('Delivery Capacity compares full and no-network ranking on frozen candidate
     const drawer = page.getByTestId('evidence-drawer');
     const detail = page.getByTestId('mechanism-detail');
     const interactions = [
-      ['capacity-limit-hotspot', 'Delivery Capacity 上限', '30 个 Batch', '最多 600'],
+      ['capacity-limit-hotspot', 'Delivery Capacity 上限', '30 个 Batch', `最多 ${maximumExposures}`],
       ['below-capacity-hotspot', 'below_delivery_capacity', '没有获得目标视频曝光', '不是 ignore'],
       ['frozen-evidence-hotspot', '同批冻结 candidate evidence', '不调用 Decision Adapter', '不是第二条完整 trajectory'],
       ['full-ranking-hotspot', 'full ranking', '保留网络信号', '不预设改变 Top20'],
@@ -1573,7 +1603,7 @@ test('network impact expands inside feedback with payload-derived capacity and p
     payload.run.sample_size,
     runtimeCapacity,
   );
-  expect(payload.run.maximum_target_exposures).toBe(configuredCapacity);
+  expect(payload.run.maximum_target_exposures).toBe(runtimeCapacity);
   const belowCapacity = payload.users.filter((user) => user.result_status === 'below_delivery_capacity').length;
   const ignored = payload.users.filter((user) => user.result_status === 'ignore').length;
 

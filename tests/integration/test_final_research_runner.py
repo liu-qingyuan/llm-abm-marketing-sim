@@ -434,6 +434,125 @@ def _make_target_delivery_fixture(tmp_path: Path) -> Path:
     return dataset_dir
 
 
+def _make_seed_first_scope_fallback_fixture(tmp_path: Path) -> Path:
+    dataset_dir = _make_processed_fixture(tmp_path, user_count=30)
+    historical_rows = [
+        {
+            "comment_id": f"scope-a-{number}",
+            "video_id": "history-scope-a",
+            "parent_comment_id": "0",
+            "commenter_user_id": f"u{number}",
+            "mentioned_user_ids": "[]",
+            "like_count": 0,
+            "comment_level": "comment",
+        }
+        for number in range(1, 5)
+    ]
+    historical_rows.append(
+        {
+            "comment_id": "scope-b-tie-u4",
+            "video_id": "history-scope-b",
+            "parent_comment_id": "0",
+            "commenter_user_id": "u4",
+            "mentioned_user_ids": "[]",
+            "like_count": 0,
+            "comment_level": "comment",
+        }
+    )
+    historical_rows.extend(
+        {
+            "comment_id": f"scope-b-{number}",
+            "video_id": "history-scope-b",
+            "parent_comment_id": "0",
+            "commenter_user_id": f"u{number}",
+            "mentioned_user_ids": "[]",
+            "like_count": number * 100,
+            "comment_level": "comment",
+        }
+        for number in range(21, 31)
+    )
+    _write_csv(
+        dataset_dir / "all_comments.csv",
+        [
+            "comment_id",
+            "video_id",
+            "parent_comment_id",
+            "commenter_user_id",
+            "mentioned_user_ids",
+            "like_count",
+            "comment_level",
+        ],
+        [
+            *historical_rows,
+            {
+                "comment_id": "target-holdout",
+                "video_id": TARGET_VIDEO_ID,
+                "parent_comment_id": "0",
+                "commenter_user_id": "u20",
+                "mentioned_user_ids": '["u1", "u2"]',
+                "like_count": 999999,
+                "comment_level": "comment",
+            },
+        ],
+    )
+    return dataset_dir
+
+
+def _make_seed_first_neighbor_capacity_fixture(tmp_path: Path) -> Path:
+    dataset_dir = _make_processed_fixture(tmp_path, user_count=40)
+    _write_csv(
+        dataset_dir / "all_comments.csv",
+        [
+            "comment_id",
+            "video_id",
+            "parent_comment_id",
+            "commenter_user_id",
+            "mentioned_user_ids",
+            "like_count",
+            "comment_level",
+        ],
+        [
+            {
+                "comment_id": "seed-network",
+                "video_id": "history-jinjiang",
+                "parent_comment_id": "0",
+                "commenter_user_id": "u40",
+                "mentioned_user_ids": json.dumps([f"u{number}" for number in range(1, 26)]),
+                "like_count": 1000,
+                "comment_level": "comment",
+            },
+            {
+                "comment_id": "global-local-overlap-38",
+                "video_id": "history-scope-b",
+                "parent_comment_id": "0",
+                "commenter_user_id": "u38",
+                "mentioned_user_ids": "[]",
+                "like_count": 500,
+                "comment_level": "comment",
+            },
+            {
+                "comment_id": "global-local-overlap-39",
+                "video_id": "history-scope-b",
+                "parent_comment_id": "0",
+                "commenter_user_id": "u39",
+                "mentioned_user_ids": "[]",
+                "like_count": 500,
+                "comment_level": "comment",
+            },
+            {
+                "comment_id": "target-holdout",
+                "video_id": TARGET_VIDEO_ID,
+                "parent_comment_id": "0",
+                "commenter_user_id": "u30",
+                "mentioned_user_ids": '["u26"]',
+                "like_count": 999999,
+                "comment_level": "comment",
+            },
+        ],
+    )
+    return dataset_dir
+
+
 class _ScriptedProviderClient:
     def __init__(self) -> None:
         self.calls = 0
@@ -548,7 +667,7 @@ def test_offline_final_research_baseline_is_holdout_safe_and_deterministic(tmp_p
         "final_research_users_json": "final_research_users.json",
         "holdout_diagnostic": "top20_holdout_diagnostic.json",
         "holdout_safe_audit": "holdout_safe_audit.json",
-        "network_augmented_sample_audit": "network_augmented_sample_audit.json",
+        "seed_first_sample_audit": "seed_first_sample_audit.json",
         "offline_score_summary": "offline_score_summary.json",
         "offline_scores": "offline_scores.csv",
         "sample_manifest_csv": "sample_manifest.csv",
@@ -570,9 +689,9 @@ def test_offline_final_research_baseline_is_holdout_safe_and_deterministic(tmp_p
 
     sample_rows = _read_csv(first_output / "sample_manifest.csv")
     assert len(sample_rows) == 4
-    assert [row["user_id"] for row in sample_rows] == ["u3", "u1", "u2", "u4"]
+    assert [row["user_id"] for row in sample_rows] == ["u1", "u2", "u5", "u6"]
     assert [row["is_seed"] for row in sample_rows] == ["true", "true", "true", "true"]
-    assert audit["global_top10_local_top10_seed_union"] == ["u1", "u2", "u3", "u4"]
+    assert audit["global_top10_local_top10_seed_union"] == ["u1", "u2", "u5", "u6"]
     assert all(
         field not in sample_rows[0]
         for field in ("brand_attitude", "like_tendency", "comment_tendency", "share_tendency")
@@ -610,7 +729,6 @@ def test_offline_final_research_baseline_is_holdout_safe_and_deterministic(tmp_p
     assert "User 1" in artifact_text
     assert "Bio 1" in artifact_text
     assert "Signature 1" in artifact_text
-    assert "<redacted>" in artifact_text
     offline_payload = json.loads((first_output / "final_research_report_payload.json").read_text(encoding="utf-8"))
     offline_html = (first_output / "report.html").read_text(encoding="utf-8")
     assert offline_payload["recommendation_model"]["network_weight"] == 0.5
@@ -626,35 +744,39 @@ def test_offline_final_research_baseline_is_holdout_safe_and_deterministic(tmp_p
         assert (first_output / relative_path).read_bytes() == (second_output / relative_path).read_bytes()
 
 
-def test_offline_final_research_builds_network_augmented_sample_and_log_p95_scores(tmp_path: Path) -> None:
+def test_offline_final_research_builds_seed_first_sample_from_full_pool(tmp_path: Path) -> None:
     dataset_dir = _make_network_augmented_fixture(tmp_path)
     adapter = FailingIfCalledAdapter()
     config = FinalResearchConfig(dataset_dir=dataset_dir, sample_size=20, random_seed=20260713)
 
-    first_output = FinalResearchRunner(config, adapter).run_and_write(tmp_path / "network-run-a")
-    second_output = FinalResearchRunner(config, adapter).run_and_write(tmp_path / "network-run-b")
+    first_output = FinalResearchRunner(config, adapter).run_and_write(tmp_path / "seed-first-run-a")
+    second_output = FinalResearchRunner(config, adapter).run_and_write(tmp_path / "seed-first-run-b")
 
     assert adapter.calls == 0
     manifest = json.loads((first_output / "artifact_manifest.json").read_text(encoding="utf-8"))
     assert manifest["manifest_version"] == "final-research-offline-v2"
-    assert manifest["artifacts"]["network_augmented_sample_audit"] == "network_augmented_sample_audit.json"
+    assert manifest["sampling_method"] == "seed_first_research_sample_v1"
+    assert manifest["sampling_status"] == "validation_run"
+    assert manifest["artifacts"]["seed_first_sample_audit"] == "seed_first_sample_audit.json"
+    assert "network_augmented_sample_audit" not in manifest["artifacts"]
 
-    audit = json.loads((first_output / "network_augmented_sample_audit.json").read_text(encoding="utf-8"))
-    assert audit["schema_version"] == "network-augmented-sample-audit-v1"
-    assert audit["base_sample"]["user_ids"] == sorted(f"u{number}" for number in range(1, 21))
-    assert audit["seed_user_ids"] == [f"u{number}" for number in range(11, 21)]
-    assert audit["network_cohort"]["user_ids"] == ["u21", "u22"]
-    assert audit["network_cohort"]["added_user_ids"] == ["u21", "u22"]
-    assert audit["ordinary_replacement"]["count"] == 2
-    assert set(audit["ordinary_replacement"]["removed_user_ids"]) <= {f"u{number}" for number in range(1, 11)}
-    assert audit["base_sample"]["source_scope_counts"] == {"锦江酒店": 9, "锦江都城酒店": 11}
-    assert audit["final_sample"]["source_scope_counts"] == {"锦江酒店": 11, "锦江都城酒店": 9}
+    audit = json.loads((first_output / "seed_first_sample_audit.json").read_text(encoding="utf-8"))
+    assert audit["schema_version"] == "seed-first-sample-audit-v1"
+    assert audit["sampling_method"] == "seed_first_research_sample_v1"
+    assert audit["eligible_pool"]["count"] == 22
+    assert {"u21", "u22"} <= set(audit["seed_selection"]["seed_user_ids"])
+    assert audit["seed_selection"]["selection_stage"] == "eligible_full_pool_before_sampling"
+    assert audit["roles"]["counts"] == {"network_cohort": 0, "ordinary": 8, "seed": 12}
 
     final_user_ids = audit["final_sample"]["user_ids"]
     assert len(final_user_ids) == len(set(final_user_ids)) == 20
-    assert set(audit["seed_user_ids"]) <= set(final_user_ids)
-    assert set(audit["network_cohort"]["user_ids"]) <= set(final_user_ids)
-    assert not set(audit["ordinary_replacement"]["removed_user_ids"]) & set(final_user_ids)
+    role_user_ids = audit["roles"]["user_ids"]
+    assert set(role_user_ids["seed"]) | set(role_user_ids["network_cohort"]) | set(role_user_ids["ordinary"]) == set(
+        final_user_ids
+    )
+    assert not set(role_user_ids["seed"]) & set(role_user_ids["network_cohort"])
+    assert not set(role_user_ids["seed"]) & set(role_user_ids["ordinary"])
+    assert not set(role_user_ids["network_cohort"]) & set(role_user_ids["ordinary"])
     assert {row["user_id"] for row in _read_csv(first_output / "sample_manifest.csv")} == set(final_user_ids)
 
     holdout_audit = json.loads((first_output / "holdout_safe_audit.json").read_text(encoding="utf-8"))
@@ -674,6 +796,48 @@ def test_offline_final_research_builds_network_augmented_sample_and_log_p95_scor
 
     for relative_path in manifest["artifacts"].values():
         assert (first_output / relative_path).read_bytes() == (second_output / relative_path).read_bytes()
+
+
+def test_seed_first_sample_audits_overlap_scope_ties_and_fallback(tmp_path: Path) -> None:
+    dataset_dir = _make_seed_first_scope_fallback_fixture(tmp_path)
+    config = FinalResearchConfig(dataset_dir=dataset_dir, sample_size=20, random_seed=20260713)
+
+    first_output = FinalResearchRunner(config, FailingIfCalledAdapter()).run_and_write(tmp_path / "scope-a")
+    second_output = FinalResearchRunner(config, FailingIfCalledAdapter()).run_and_write(tmp_path / "scope-b")
+    first_audit_path = first_output / "seed_first_sample_audit.json"
+    second_audit_path = second_output / "seed_first_sample_audit.json"
+    audit = json.loads(first_audit_path.read_text(encoding="utf-8"))
+
+    seed_selection = audit["seed_selection"]
+    assert set(seed_selection["global_top10_user_ids"]) == set(seed_selection["local_top10_user_ids"])
+    assert seed_selection["seed_count"] == 10
+    assert audit["scope_selection"]["tied_primary_scope_user_ids"] == ["u4"]
+    assert audit["final_sample"]["primary_scope_by_user"]["u4"] == "锦江都城酒店"
+    assert audit["scope_selection"]["fallback"]["needed_count"] == 6
+    assert len(audit["scope_selection"]["fallback"]["selected_user_ids"]) == 6
+    assert audit["roles"]["counts"] == {"network_cohort": 0, "ordinary": 10, "seed": 10}
+    assert first_audit_path.read_bytes() == second_audit_path.read_bytes()
+
+
+def test_seed_first_sample_caps_neighbors_by_edge_strength_and_user_id(tmp_path: Path) -> None:
+    dataset_dir = _make_seed_first_neighbor_capacity_fixture(tmp_path)
+    output = FinalResearchRunner(
+        FinalResearchConfig(dataset_dir=dataset_dir, sample_size=20, random_seed=20260713),
+        FailingIfCalledAdapter(),
+    ).run_and_write(tmp_path / "neighbor-capacity")
+    audit = json.loads((output / "seed_first_sample_audit.json").read_text(encoding="utf-8"))
+
+    neighbor_selection = audit["neighbor_selection"]
+    assert audit["seed_selection"]["seed_count"] == 17
+    assert neighbor_selection["candidate_count"] == 18
+    assert neighbor_selection["capacity"] == 3
+    assert neighbor_selection["selected_user_ids"] == ["u16", "u17", "u18"]
+    assert neighbor_selection["candidates"][0] == {
+        "seed_edge_weight": 1,
+        "selected": True,
+        "user_id": "u16",
+    }
+    assert audit["roles"]["counts"] == {"network_cohort": 3, "ordinary": 0, "seed": 17}
 
 
 def test_offline_final_research_handles_zero_target_scope_network_without_holdout_leakage(tmp_path: Path) -> None:
@@ -726,7 +890,7 @@ def test_target_delivery_ranking_runtime_reranks_global_top20_after_seed_engagem
         "final_research_users_json": "final_research_users.json",
         "holdout_diagnostic": "top20_holdout_diagnostic.json",
         "holdout_safe_audit": "holdout_safe_audit.json",
-        "network_augmented_sample_audit": "network_augmented_sample_audit.json",
+        "seed_first_sample_audit": "seed_first_sample_audit.json",
         "offline_score_summary": "offline_score_summary.json",
         "offline_scores": "offline_scores.csv",
         "ranking_ablation_diagnostics_csv": "ranking_ablation_diagnostics.csv",
@@ -751,7 +915,7 @@ def test_target_delivery_ranking_runtime_reranks_global_top20_after_seed_engagem
     steps = _read_csv(first_output / "ranking_runtime_steps.csv")
     decisions = _read_csv(first_output / "runtime_decisions.csv")
     failures = _read_csv(first_output / "runtime_provider_failures.csv")
-    audit = json.loads((first_output / "network_augmented_sample_audit.json").read_text(encoding="utf-8"))
+    audit = json.loads((first_output / "seed_first_sample_audit.json").read_text(encoding="utf-8"))
     summary = json.loads((first_output / "ranking_runtime_summary.json").read_text(encoding="utf-8"))
     ranking_diagnostics = json.loads((first_output / "ranking_diagnostics.json").read_text(encoding="utf-8"))
     diagnostic_summary = json.loads((first_output / "ranking_diagnostics_summary.json").read_text(encoding="utf-8"))
@@ -762,11 +926,12 @@ def test_target_delivery_ranking_runtime_reranks_global_top20_after_seed_engagem
     report_payload = json.loads((first_output / "final_research_report_payload.json").read_text(encoding="utf-8"))
     report_html = (first_output / "report.html").read_text(encoding="utf-8")
 
-    assert "u80" in audit["seed_user_ids"]
-    assert "u60" not in audit["base_sample"]["user_ids"]
-    assert "u60" in audit["network_cohort"]["added_user_ids"]
+    assert manifest["sampling_method"] == "seed_first_research_sample_v1"
+    assert manifest["sampling_status"] == "validation_run"
+    assert "u80" in audit["roles"]["user_ids"]["seed"]
+    assert "u60" in audit["roles"]["user_ids"]["network_cohort"]
     batch_zero = [row for row in candidates if row["time_step"] == "0"]
-    assert {row["user_id"] for row in batch_zero} == set(audit["seed_user_ids"])
+    assert {row["user_id"] for row in batch_zero} == set(audit["roles"]["user_ids"]["seed"])
     assert all(row["selected"] == "true" for row in batch_zero)
 
     batch_one = [row for row in candidates if row["time_step"] == "1"]
@@ -855,14 +1020,12 @@ def test_target_delivery_ranking_runtime_reranks_global_top20_after_seed_engagem
     assert len(first_adapter.calls) == summary["counts"]["decision_adapter_calls"]
 
     assert report_payload["schema_version"] == "final-research-ranking-report-payload-v3"
-    assert report_payload["sample_comparison"]["base_sample_count"] == audit["base_sample"]["count"]
+    assert report_payload["run"]["sampling_method"] == "seed_first_research_sample_v1"
+    assert report_payload["run"]["sampling_status"] == "validation_run"
     assert report_payload["sample_comparison"]["final_sample_count"] == audit["final_sample"]["count"]
-    assert report_payload["sample_comparison"]["seed_count"] == audit["seed_count"]
-    assert report_payload["sample_comparison"]["network_cohort_count"] == audit["network_cohort"]["count"]
-    assert report_payload["sample_comparison"]["replacement_count"] == audit["ordinary_replacement"]["count"]
-    assert (
-        report_payload["sample_comparison"]["base_source_scope_counts"] == audit["base_sample"]["source_scope_counts"]
-    )
+    assert report_payload["sample_comparison"]["seed_count"] == audit["roles"]["counts"]["seed"]
+    assert report_payload["sample_comparison"]["network_cohort_count"] == audit["roles"]["counts"]["network_cohort"]
+    assert report_payload["sample_comparison"]["ordinary_count"] == audit["roles"]["counts"]["ordinary"]
     assert (
         report_payload["sample_comparison"]["final_source_scope_counts"] == audit["final_sample"]["source_scope_counts"]
     )
@@ -916,11 +1079,11 @@ def test_target_delivery_ranking_runtime_reranks_global_top20_after_seed_engagem
     assert 'data-testid="neighbor-feedback-illustration"' in report_html
     assert 'data-testid="capacity-network-impact-illustration"' in report_html
     assert report_html.count('src="data:image/webp;base64,') == 6
-    assert "Proposed Seed-First Research Sample" in report_html
-    assert "20 seeds" in report_html
-    assert "60 Seed Neighbor Cohort" in report_html
-    assert "920 ordinary users" in report_html
-    assert "offline projection" in report_html
+    assert "Accepted · persisted Validation Run" in report_html
+    assert f"{audit['roles']['counts']['seed']} seeds" in report_html
+    assert f"{audit['roles']['counts']['network_cohort']} Seed Neighbor Cohort" in report_html
+    assert f"{audit['roles']['counts']['ordinary']} ordinary users" in report_html
+    assert "live provider 正式运行" in report_html
     assert "Full-Pool Influence Seed Union" in report_html
     assert "not Global Reranking Top20 winners" in report_html
     for hotspot in (
@@ -942,7 +1105,8 @@ def test_target_delivery_ranking_runtime_reranks_global_top20_after_seed_engagem
     assert 'data-testid="ranking-hero"' in report_html
     assert 'class="run-evidence-intro"' in report_html
     assert 'data-testid="run-evidence-method-status"' in report_html
-    assert "Persisted runtime evidence" in report_html
+    assert "Validation Run" in report_html
+    assert "Seed-First 离线验证证据" in report_html
     for role in ("seed", "network_cohort", "ordinary"):
         role_count = sum(row["sample_role"] == role for row in report_payload["users"])
         assert f'data-testid="run-evidence-{role.replace("_", "-")}-count"' in report_html
@@ -1085,9 +1249,7 @@ def test_target_delivery_ranking_report_rebuild_is_deterministic(tmp_path: Path)
     direct_report = FinalResearchReportWriter.render_payload(payload).encode()
     assert report_path.read_bytes() == direct_report
     preserved_artifacts = {
-        path.name: path.read_bytes()
-        for path in run_dir.iterdir()
-        if path.is_file() and path != report_path
+        path.name: path.read_bytes() for path in run_dir.iterdir() if path.is_file() and path != report_path
     }
 
     assert rebuild_final_research_report(run_dir) == report_path
@@ -1100,10 +1262,38 @@ def test_target_delivery_ranking_report_rebuild_is_deterministic(tmp_path: Path)
     assert payload_path.read_bytes() == first_payload
     assert report_path.read_bytes() == first_report
     assert {
-        path.name: path.read_bytes()
-        for path in run_dir.iterdir()
-        if path.is_file() and path != report_path
+        path.name: path.read_bytes() for path in run_dir.iterdir() if path.is_file() and path != report_path
     } == preserved_artifacts
+
+
+def test_target_delivery_ranking_v3_payload_preserves_legacy_sampling_defaults(tmp_path: Path) -> None:
+    dataset_dir = _make_target_delivery_fixture(tmp_path)
+    provider_config = ProviderLLMConfig(enabled=True, model="mock-model", require_live_env=False)
+    run_dir = FinalResearchRunner(
+        FinalResearchConfig(dataset_dir=dataset_dir, sample_size=70, provider=provider_config),
+        _TargetDeliveryAdapter(),
+    ).run_and_write(tmp_path / "ranking-legacy-v3")
+    payload_document = json.loads((run_dir / "final_research_report_payload.json").read_text(encoding="utf-8"))
+    payload_document["run"].pop("sampling_method")
+    payload_document["run"].pop("sampling_status")
+    payload_document["sample_comparison"].pop("ordinary_count")
+    legacy_fields = {
+        "run.sampling_method",
+        "run.sampling_status",
+        "sample_comparison.ordinary_count",
+    }
+    payload_document["field_lineage"] = [
+        entry for entry in payload_document["field_lineage"] if entry["field_name"] not in legacy_fields
+    ]
+
+    payload = FinalResearchRankingReportPayload.model_validate(payload_document)
+    html = FinalResearchReportWriter.render_payload(payload)
+
+    assert payload.run.sampling_method == "network_augmented_research_sample"
+    assert payload.run.sampling_status == "historical_network_augmented_run"
+    assert payload.sample_comparison.ordinary_count == 0
+    assert legacy_fields <= {entry.field_name for entry in payload.field_lineage}
+    assert "Historical Network-Augmented Run" in html
 
 
 def test_target_delivery_ranking_report_escapes_download_paths_in_html(tmp_path: Path) -> None:

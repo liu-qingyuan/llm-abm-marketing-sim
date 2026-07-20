@@ -11,7 +11,7 @@ from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -47,6 +47,12 @@ TARGET_VIDEO_ID = "7328592728139353363"
 TARGET_NETWORK_SCOPE = "锦江酒店"
 PROFILE_INDEX_METHOD = "log1p_p95_reference_weighted_v2"
 NETWORK_AUGMENTED_SAMPLE_AUDIT_VERSION = "network-augmented-sample-audit-v1"
+SEED_FIRST_SAMPLE_AUDIT_VERSION = "seed-first-sample-audit-v1"
+SEED_FIRST_SAMPLING_METHOD = "seed_first_research_sample_v1"
+HISTORICAL_SAMPLING_METHOD = "network_augmented_research_sample"
+VALIDATION_RUN_STATUS = "validation_run"
+FORMAL_RUN_STATUS = "persisted_seed_first_formal_run"
+PRIMARY_SOURCE_SCOPE_QUOTA = 100
 OFFLINE_BASELINE_VERSION = "final-research-offline-v2"
 TARGET_DELIVERY_BASE_NETWORK_WEIGHT = MAIN_RANKING_WEIGHTS.base_network
 TARGET_DELIVERY_ENGAGED_NEIGHBOR_WEIGHT = MAIN_RANKING_WEIGHTS.engaged_neighbor
@@ -79,6 +85,7 @@ SAMPLE_CSV_FIELDS = (
     "local_recognition_score",
     "sample_source_scope",
     "is_seed",
+    "sample_role",
     "latent_attribute_spec_id",
     "latent_attribute_method",
     "latent_attribute_seed",
@@ -232,6 +239,7 @@ class FinalResearchModel(str, Enum):
 class _ResearchModelPolicy:
     model: FinalResearchModel
     augment_network_sample: bool
+    sampling_method: str
     network_normalization: str
     network_weight: float
     tag_affinity_weight: float
@@ -242,6 +250,7 @@ class _ResearchModelPolicy:
 _TARGET_DELIVERY_RANKING_POLICY = _ResearchModelPolicy(
     model=FinalResearchModel.TARGET_DELIVERY_RANKING_V2,
     augment_network_sample=True,
+    sampling_method=SEED_FIRST_SAMPLING_METHOD,
     network_normalization="log_p95_weighted_degree",
     network_weight=TARGET_DELIVERY_BASE_NETWORK_WEIGHT,
     tag_affinity_weight=TARGET_DELIVERY_TAG_AFFINITY_WEIGHT,
@@ -349,6 +358,7 @@ def _research_model_policy(config: FinalResearchConfig) -> _ResearchModelPolicy:
         return _ResearchModelPolicy(
             model=FinalResearchModel.PROBABILITY_V1,
             augment_network_sample=False,
+            sampling_method="source_scope_stratified_sample_v1",
             network_normalization="max_weighted_degree",
             network_weight=config.network_weight,
             tag_affinity_weight=config.tag_affinity_weight,
@@ -396,6 +406,7 @@ class ResearchUser(BaseModel):
     latent_attributes: dict[str, str | int | float]
     sample_source_scope: str = ""
     is_seed: bool = False
+    sample_role: Literal["seed", "network_cohort", "ordinary"] = "ordinary"
 
     def sample_row(self) -> dict[str, object]:
         row = self.model_dump(exclude={"latent_attributes"})
@@ -532,6 +543,200 @@ class _PreparedInputs:
     base_source_scope_sample_counts: dict[str, int]
     final_source_scope_sample_counts: dict[str, int]
     target_scope_p95_weighted_degree: float
+    sampling_method: str
+    sample_audit: dict[str, object]
+
+
+@dataclass(frozen=True)
+class _SampleSelection:
+    sampling_method: str
+    seed_user_ids: list[str]
+    neighbor_user_ids: list[str]
+    ordinary_user_ids: list[str]
+    sample_user_ids: list[str]
+    scope_by_user: dict[str, str]
+    source_scope_counts: dict[str, int]
+    audit: dict[str, object]
+
+
+class _SeedFirstSampleModule:
+    """Select a deterministic seed-first sample from holdout-safe inputs."""
+
+    def __init__(
+        self,
+        *,
+        users_by_id: Mapping[str, ResearchUser],
+        videos: Mapping[str, _VideoRecord],
+        comments: Sequence[_CommentRecord],
+        target_scope_neighbors: Mapping[str, set[str]],
+        target_scope_edge_weights: Mapping[tuple[str, str], int],
+        sample_size: int,
+        random_seed: int,
+    ) -> None:
+        self.users_by_id = users_by_id
+        self.videos = videos
+        self.comments = comments
+        self.target_scope_neighbors = target_scope_neighbors
+        self.target_scope_edge_weights = target_scope_edge_weights
+        self.sample_size = sample_size
+        self.random_seed = random_seed
+
+    def build(self) -> _SampleSelection:
+        eligible_user_ids = sorted(self.users_by_id)
+        influence_top_k = min(10, max(1, self.sample_size // 2))
+        global_top = sorted(
+            eligible_user_ids,
+            key=lambda user_id: (-self.users_by_id[user_id].global_influence_score, user_id),
+        )[:influence_top_k]
+        local_top = sorted(
+            eligible_user_ids,
+            key=lambda user_id: (-self.users_by_id[user_id].local_influence_score, user_id),
+        )[:influence_top_k]
+        seed_user_ids = sorted(set(global_top) | set(local_top))
+        seed_set = set(seed_user_ids)
+
+        neighbor_strengths: dict[str, int] = {}
+        for seed_user_id in seed_user_ids:
+            for neighbor_user_id in self.target_scope_neighbors.get(seed_user_id, set()):
+                if neighbor_user_id not in self.users_by_id or neighbor_user_id in seed_set:
+                    continue
+                edge_key = _graph_edge_key(seed_user_id, neighbor_user_id)
+                neighbor_strengths[neighbor_user_id] = neighbor_strengths.get(neighbor_user_id, 0) + int(
+                    self.target_scope_edge_weights.get(edge_key, 0)
+                )
+        ranked_neighbors = sorted(neighbor_strengths, key=lambda user_id: (-neighbor_strengths[user_id], user_id))
+        neighbor_capacity = self.sample_size - len(seed_user_ids)
+        neighbor_user_ids = ranked_neighbors[:neighbor_capacity]
+        neighbor_set = set(neighbor_user_ids)
+
+        scope_order, primary_scope_by_user, tied_primary_scope_user_ids = _primary_source_scopes(
+            videos=self.videos,
+            comments=self.comments,
+            available_user_ids=set(eligible_user_ids),
+        )
+        scope_quotas = _source_scope_quotas(scope_order, self.sample_size)
+        selected_set = seed_set | neighbor_set
+        selected_counts = Counter(primary_scope_by_user.get(user_id, "remaining_users") for user_id in selected_set)
+        ordinary_user_ids: list[str] = []
+        quota_audit: list[dict[str, object]] = []
+        for scope_name in scope_order:
+            quota = scope_quotas.get(scope_name, 0)
+            preselected_count = selected_counts.get(scope_name, 0)
+            remaining_quota = max(0, quota - preselected_count)
+            candidates = sorted(
+                user_id
+                for user_id, primary_scope in primary_scope_by_user.items()
+                if primary_scope == scope_name and user_id not in selected_set
+            )
+            rng = random.Random(_stable_seed(self.random_seed, f"seed-first-scope:{scope_name}"))
+            rng.shuffle(candidates)
+            remaining_sample_slots = self.sample_size - len(selected_set)
+            selected_for_scope = candidates[: min(remaining_quota, remaining_sample_slots)]
+            ordinary_user_ids.extend(selected_for_scope)
+            selected_set.update(selected_for_scope)
+            quota_audit.append(
+                {
+                    "scope": scope_name,
+                    "quota": quota,
+                    "preselected_seed_or_neighbor_count": preselected_count,
+                    "available_ordinary_count": len(candidates),
+                    "ordinary_selected_count": len(selected_for_scope),
+                    "scope_shortfall": max(0, remaining_quota - len(selected_for_scope)),
+                }
+            )
+
+        fallback_needed = self.sample_size - len(selected_set)
+        fallback_candidates = sorted(set(eligible_user_ids) - selected_set)
+        fallback_rng = random.Random(_stable_seed(self.random_seed, "seed-first-scope-fallback"))
+        fallback_rng.shuffle(fallback_candidates)
+        fallback_user_ids = fallback_candidates[:fallback_needed]
+        ordinary_user_ids.extend(fallback_user_ids)
+        selected_set.update(fallback_user_ids)
+        if len(selected_set) != self.sample_size:
+            raise ValueError(
+                f"could not select {self.sample_size} unique seed-first users; selected {len(selected_set)}"
+            )
+
+        sample_user_ids = [*seed_user_ids, *neighbor_user_ids, *ordinary_user_ids]
+        scope_by_user = {user_id: primary_scope_by_user.get(user_id, "remaining_users") for user_id in sample_user_ids}
+        source_scope_counts = dict(sorted(Counter(scope_by_user.values()).items()))
+        role_user_ids = {
+            "seed": sorted(seed_user_ids),
+            "network_cohort": sorted(neighbor_user_ids),
+            "ordinary": sorted(ordinary_user_ids),
+        }
+        role_counts = {role: len(user_ids) for role, user_ids in role_user_ids.items()}
+        audit: dict[str, object] = {
+            "schema_version": SEED_FIRST_SAMPLE_AUDIT_VERSION,
+            "sampling_method": SEED_FIRST_SAMPLING_METHOD,
+            "sampling_status": VALIDATION_RUN_STATUS,
+            "eligible_pool": {
+                "count": len(eligible_user_ids),
+                "user_ids": eligible_user_ids,
+                "target_holdout_used": False,
+            },
+            "seed_selection": {
+                "selection_stage": "eligible_full_pool_before_sampling",
+                "requested_top_k_per_proxy": 10,
+                "effective_top_k_per_proxy": influence_top_k,
+                "global_top10_user_ids": global_top,
+                "local_top10_user_ids": local_top,
+                "seed_user_ids": seed_user_ids,
+                "seed_count": len(seed_user_ids),
+                "deduplicated_union": True,
+                "tie_break": "descending proxy score, then user_id ascending",
+            },
+            "neighbor_selection": {
+                "candidate_count": len(ranked_neighbors),
+                "selected_count": len(neighbor_user_ids),
+                "capacity": neighbor_capacity,
+                "selected_user_ids": neighbor_user_ids,
+                "candidates": [
+                    {
+                        "user_id": user_id,
+                        "seed_edge_weight": neighbor_strengths[user_id],
+                        "selected": user_id in neighbor_set,
+                    }
+                    for user_id in ranked_neighbors
+                ],
+                "historical_set_only": True,
+                "direct_neighbors_only": True,
+                "tie_break": "descending total historical edge weight to seeds, then user_id ascending",
+            },
+            "scope_selection": {
+                "scope_order": scope_order,
+                "per_scope_quota": PRIMARY_SOURCE_SCOPE_QUOTA,
+                "primary_scope_tie_break": "source_challenge_rank ascending, then source name ascending",
+                "tied_primary_scope_user_count": len(tied_primary_scope_user_ids),
+                "tied_primary_scope_user_ids": tied_primary_scope_user_ids,
+                "quota_rows": quota_audit,
+                "fallback": {
+                    "needed_count": fallback_needed,
+                    "selected_user_ids": sorted(fallback_user_ids),
+                    "random_seed": _stable_seed(self.random_seed, "seed-first-scope-fallback"),
+                    "reason": "scope quota shortage or seed/neighbor scope overage",
+                },
+            },
+            "roles": {"counts": role_counts, "user_ids": role_user_ids},
+            "final_sample": {
+                "count": len(sample_user_ids),
+                "unique_user_count": len(set(sample_user_ids)),
+                "user_ids": sorted(sample_user_ids),
+                "source_scope_counts": source_scope_counts,
+                "primary_scope_by_user": dict(sorted(scope_by_user.items())),
+            },
+            "source_dataset_modified": False,
+        }
+        return _SampleSelection(
+            sampling_method=SEED_FIRST_SAMPLING_METHOD,
+            seed_user_ids=seed_user_ids,
+            neighbor_user_ids=neighbor_user_ids,
+            ordinary_user_ids=ordinary_user_ids,
+            sample_user_ids=sample_user_ids,
+            scope_by_user=scope_by_user,
+            source_scope_counts=source_scope_counts,
+            audit=audit,
+        )
 
 
 class _ResearchInputBuilder:
@@ -564,7 +769,10 @@ class _ResearchInputBuilder:
         target_scope_comments = [
             comment for comment in historical_comments if comment.video_id in target_scope_video_ids
         ]
-        target_scope_degree, target_scope_neighbors = _weighted_graph(historical_videos, target_scope_comments)
+        target_scope_degree, target_scope_neighbors, target_scope_edge_weights = _weighted_graph_details(
+            historical_videos,
+            target_scope_comments,
+        )
         history_counts, history_likes, historical_tags_by_user = _historical_user_signals(
             historical_videos,
             historical_comments,
@@ -577,61 +785,59 @@ class _ResearchInputBuilder:
             all_history_degree=all_history_degree,
             thresholds=thresholds,
         )
-        base_sample_user_ids, base_scope_by_user = _sample_users(
-            videos=historical_videos,
-            comments=historical_comments,
-            available_user_ids=set(users_by_id),
-            sample_size=self.config.sample_size,
-            random_seed=self.config.random_seed,
-        )
-        seed_user_ids = _select_seeds(base_sample_user_ids, users_by_id)
-        seed_set = set(seed_user_ids)
-        base_sample_set = set(base_sample_user_ids)
-        network_cohort_user_ids = sorted(
-            {
-                neighbor_user_id
-                for seed_user_id in seed_user_ids
-                for neighbor_user_id in target_scope_neighbors.get(seed_user_id, set())
-                if neighbor_user_id in users_by_id and neighbor_user_id not in seed_set
-            }
-        )
-        network_cohort_set = set(network_cohort_user_ids)
-        network_cohort_added_user_ids = sorted(network_cohort_set - base_sample_set)
-        if not self.model_policy.augment_network_sample:
+        if self.model_policy.sampling_method == SEED_FIRST_SAMPLING_METHOD:
+            selection = _SeedFirstSampleModule(
+                users_by_id=users_by_id,
+                videos=historical_videos,
+                comments=historical_comments,
+                target_scope_neighbors=target_scope_neighbors,
+                target_scope_edge_weights=target_scope_edge_weights,
+                sample_size=self.config.sample_size,
+                random_seed=self.config.random_seed,
+            ).build()
+            sample_user_ids = selection.sample_user_ids
+            base_sample_user_ids: list[str] = []
+            seed_user_ids = selection.seed_user_ids
+            network_cohort_user_ids = selection.neighbor_user_ids
+            network_cohort_added_user_ids = list(network_cohort_user_ids)
             replaced_ordinary_user_ids: list[str] = []
+            final_sample_user_ids = list(sample_user_ids)
+            base_scope_by_user: dict[str, str] = {}
+            final_scope_by_user = dict(selection.scope_by_user)
+            sample_scope_by_user = dict(selection.scope_by_user)
+            sample_audit = selection.audit
+        else:
+            base_sample_user_ids, base_scope_by_user = _sample_users(
+                videos=historical_videos,
+                comments=historical_comments,
+                available_user_ids=set(users_by_id),
+                sample_size=self.config.sample_size,
+                random_seed=self.config.random_seed,
+            )
+            seed_user_ids = _select_seeds(base_sample_user_ids, users_by_id)
+            network_cohort_user_ids = []
+            network_cohort_added_user_ids = []
+            replaced_ordinary_user_ids = []
             final_sample_user_ids = list(base_sample_user_ids)
             final_scope_by_user = dict(base_scope_by_user)
-        else:
-            ordinary_replacement_candidates = sorted(base_sample_set - seed_set - network_cohort_set)
-            if len(ordinary_replacement_candidates) < len(network_cohort_added_user_ids):
-                raise ValueError(
-                    "network cohort cannot fit while preserving all seeds and cohort users: "
-                    f"need {len(network_cohort_added_user_ids)} replacements but only "
-                    f"{len(ordinary_replacement_candidates)} ordinary non-seed users are available"
-                )
-            replacement_rng = random.Random(_stable_seed(self.config.random_seed, "network-cohort-replacement"))
-            replacement_rng.shuffle(ordinary_replacement_candidates)
-            replaced_ordinary_user_ids = sorted(ordinary_replacement_candidates[: len(network_cohort_added_user_ids)])
-            replaced_set = set(replaced_ordinary_user_ids)
-            final_sample_user_ids = [
-                user_id for user_id in base_sample_user_ids if user_id not in replaced_set
-            ] + network_cohort_added_user_ids
-            if len(final_sample_user_ids) != self.config.sample_size or len(set(final_sample_user_ids)) != len(
-                final_sample_user_ids
-            ):
-                raise ValueError("network-augmented sample must contain sample_size unique users")
-            final_scope_by_user = {
-                user_id: scope_name for user_id, scope_name in base_scope_by_user.items() if user_id not in replaced_set
-            }
-            final_scope_by_user.update({user_id: TARGET_NETWORK_SCOPE for user_id in network_cohort_added_user_ids})
-        sample_user_ids = final_sample_user_ids if self.model_policy.augment_network_sample else base_sample_user_ids
-        sample_scope_by_user = final_scope_by_user if self.model_policy.augment_network_sample else base_scope_by_user
-        for user_id in set(base_sample_user_ids) | set(network_cohort_added_user_ids):
+            sample_user_ids = list(base_sample_user_ids)
+            sample_scope_by_user = dict(base_scope_by_user)
+            sample_audit = {}
+        seed_set = set(seed_user_ids)
+        network_cohort_set = set(network_cohort_user_ids)
+        for user_id in sample_user_ids:
             user = users_by_id[user_id]
             users_by_id[user_id] = user.model_copy(
                 update={
-                    "sample_source_scope": final_scope_by_user.get(user_id, base_scope_by_user.get(user_id, "")),
+                    "sample_source_scope": sample_scope_by_user.get(user_id, "remaining_users"),
                     "is_seed": user_id in seed_set,
+                    "sample_role": (
+                        "seed"
+                        if user_id in seed_set
+                        else "network_cohort"
+                        if user_id in network_cohort_set
+                        else "ordinary"
+                    ),
                 }
             )
         target_scope_p95_weighted_degree = round(
@@ -662,6 +868,8 @@ class _ResearchInputBuilder:
             base_source_scope_sample_counts=dict(sorted(Counter(base_scope_by_user.values()).items())),
             final_source_scope_sample_counts=dict(sorted(Counter(final_scope_by_user.values()).items())),
             target_scope_p95_weighted_degree=target_scope_p95_weighted_degree,
+            sampling_method=self.model_policy.sampling_method,
+            sample_audit=sample_audit,
         )
 
     def reveal_holdout(self) -> list[_CommentRecord]:
@@ -864,6 +1072,12 @@ class FinalResearchRunner:
         model_policy = _research_model_policy(self.config)
         builder = _ResearchInputBuilder(self.config, model_policy)
         prepared = builder.prepare()
+        sampling_status = (
+            FORMAL_RUN_STATUS if _adapter_live_api_triggered(self.decision_adapter) else VALIDATION_RUN_STATUS
+        )
+        sample_audit = dict(prepared.sample_audit)
+        if sample_audit:
+            sample_audit["sampling_status"] = sampling_status
         platform = PlatformRecommendationModel(self.config, prepared, model_policy)
         scores = platform.score_all()
         ranked_scores = sorted(scores, key=lambda item: (-item.recommendation_score, item.user_id))
@@ -922,6 +1136,8 @@ class FinalResearchRunner:
             "source_scope_sample_counts": prepared.source_scope_sample_counts,
             "global_top10_local_top10_seed_union": prepared.seed_user_ids,
             "seed_count": len(prepared.seed_user_ids),
+            "sampling_method": prepared.sampling_method,
+            "sampling_status": sampling_status,
             "source_dataset_modified": False,
             "holdout_boundary": (
                 "Target interactions and aggregate engagement counts were excluded from profile projection, "
@@ -970,7 +1186,7 @@ class FinalResearchRunner:
         elif ranking_runtime is not None:
             artifacts.update(
                 {
-                    "network_augmented_sample_audit": "network_augmented_sample_audit.json",
+                    "seed_first_sample_audit": "seed_first_sample_audit.json",
                     "ranking_ablation_diagnostics_csv": "ranking_ablation_diagnostics.csv",
                     "ranking_diagnostics": "ranking_diagnostics.json",
                     "ranking_diagnostics_summary": "ranking_diagnostics_summary.json",
@@ -984,10 +1200,13 @@ class FinalResearchRunner:
                     "runtime_provider_failures": "runtime_provider_failures.csv",
                 }
             )
-        elif model_policy.augment_network_sample:
-            artifacts["network_augmented_sample_audit"] = "network_augmented_sample_audit.json"
+        elif prepared.sampling_method == SEED_FIRST_SAMPLING_METHOD:
+            artifacts["seed_first_sample_audit"] = "seed_first_sample_audit.json"
         sample_users = [prepared.users_by_id[user_id] for user_id in prepared.sample_user_ids]
-        _write_json(output_path / artifacts["config_snapshot"], self.config.snapshot())
+        config_snapshot = self.config.snapshot()
+        config_snapshot["sampling_method"] = prepared.sampling_method
+        config_snapshot["sampling_status"] = sampling_status
+        _write_json(output_path / artifacts["config_snapshot"], config_snapshot)
         _write_json(output_path / artifacts["target_video_snapshot"], prepared.target_video.model_dump(mode="json"))
         _write_json(
             output_path / artifacts["sample_manifest_json"],
@@ -1010,10 +1229,10 @@ class FinalResearchRunner:
             score_summary,
         )
         _write_json(output_path / artifacts["holdout_diagnostic"], diagnostic)
-        if model_policy.augment_network_sample:
+        if prepared.sampling_method == SEED_FIRST_SAMPLING_METHOD:
             _write_json(
-                output_path / artifacts["network_augmented_sample_audit"],
-                _network_augmented_sample_audit(prepared, self.config),
+                output_path / artifacts["seed_first_sample_audit"],
+                sample_audit,
             )
         if probability_runtime is not None:
             _write_csv(
@@ -1124,13 +1343,13 @@ class FinalResearchRunner:
                 else 0
             ),
         }
-        if model_policy.augment_network_sample:
+        if prepared.sampling_method == SEED_FIRST_SAMPLING_METHOD:
+            role_counts = Counter(user.sample_role for user in sample_users)
             manifest_counts.update(
                 {
-                    "base_sample_users": len(prepared.base_sample_user_ids),
+                    "seed_users": role_counts["seed"],
                     "network_cohort_users": len(prepared.network_cohort_user_ids),
-                    "network_cohort_added_users": len(prepared.network_cohort_added_user_ids),
-                    "replaced_ordinary_users": len(prepared.replaced_ordinary_user_ids),
+                    "ordinary_users": role_counts["ordinary"],
                 }
             )
         if ranking_diagnostics is not None:
@@ -1160,6 +1379,9 @@ class FinalResearchRunner:
         )
         artifact_manifest = {
             "manifest_version": runtime_manifest_version,
+            "sampling_method": prepared.sampling_method,
+            "sampling_status": sampling_status,
+            "sample_role_counts": dict(sorted(Counter(user.sample_role for user in sample_users).items())),
             "artifacts": artifacts,
             "counts": manifest_counts,
             "live_api_triggered": _adapter_live_api_triggered(self.decision_adapter),
@@ -1201,11 +1423,7 @@ class FinalResearchRunner:
                 runtime_summary=probability_runtime.summary if probability_runtime is not None else None,
                 runtime_enabled=probability_runtime is not None or ranking_runtime is not None,
                 offline_scores=[score.model_dump(mode="json") for score in scores],
-                network_sample_audit=(
-                    _network_augmented_sample_audit(prepared, self.config)
-                    if model_policy.augment_network_sample
-                    else None
-                ),
+                network_sample_audit=sample_audit or None,
                 ranking_steps=ranking_runtime.steps if ranking_runtime is not None else (),
                 ranking_candidates=ranking_runtime.candidates if ranking_runtime is not None else (),
                 ranking_outcomes=ranking_runtime.outcomes if ranking_runtime is not None else (),
@@ -1366,13 +1584,24 @@ class FinalResearchRunner:
         outcomes = [outcomes_by_user[user_id] for user_id in prepared.sample_user_ids]
         summary = {
             "runtime_version": TARGET_DELIVERY_RUNTIME_VERSION,
+            "sampling_method": prepared.sampling_method,
+            "sampling_status": (
+                FORMAL_RUN_STATUS if _adapter_live_api_triggered(self.decision_adapter) else VALIDATION_RUN_STATUS
+            ),
+            "sample_role_counts": dict(
+                sorted(
+                    Counter(prepared.users_by_id[user_id].sample_role for user_id in prepared.sample_user_ids).items()
+                )
+            ),
             "horizon": self.config.horizon,
             "schedule_method": TARGET_DELIVERY_SCHEDULE_METHOD,
             "seed_step": 0,
             "non_seed_steps": [1, self.config.horizon - 1],
             "user_opportunity_limit": 1,
             "delivery_capacity": TARGET_DELIVERY_CAPACITY,
-            "maximum_target_exposures": TARGET_DELIVERY_CAPACITY * self.config.horizon,
+            "maximum_target_exposures": (
+                len(prepared.seed_user_ids) + TARGET_DELIVERY_CAPACITY * max(0, self.config.horizon - 1)
+            ),
             "ranking_formula": TARGET_DELIVERY_RANKING_FORMULA,
             "engaged_neighbor_formula": TARGET_DELIVERY_ENGAGED_NEIGHBOR_FORMULA,
             "same_batch_feedback": False,
@@ -1805,7 +2034,7 @@ def _weighted_degrees(
     videos: Mapping[str, _VideoRecord],
     comments: Sequence[_CommentRecord],
 ) -> dict[str, int]:
-    degree, _neighbors = _weighted_graph(videos, comments)
+    degree, _neighbors, _edge_weights = _weighted_graph_details(videos, comments)
     return degree
 
 
@@ -1813,9 +2042,18 @@ def _weighted_graph(
     videos: Mapping[str, _VideoRecord],
     comments: Sequence[_CommentRecord],
 ) -> tuple[dict[str, int], dict[str, set[str]]]:
+    degree, neighbors, _edge_weights = _weighted_graph_details(videos, comments)
+    return degree, neighbors
+
+
+def _weighted_graph_details(
+    videos: Mapping[str, _VideoRecord],
+    comments: Sequence[_CommentRecord],
+) -> tuple[dict[str, int], dict[str, set[str]], dict[tuple[str, str], int]]:
     comment_by_id = {comment.comment_id: comment for comment in comments}
     degree: dict[str, int] = defaultdict(int)
     neighbors: dict[str, set[str]] = defaultdict(set)
+    edge_weights: dict[tuple[str, str], int] = defaultdict(int)
 
     def add(source: str, target: str) -> None:
         if not source or not target or source == target:
@@ -1824,6 +2062,7 @@ def _weighted_graph(
         degree[target] += 1
         neighbors[source].add(target)
         neighbors[target].add(source)
+        edge_weights[_graph_edge_key(source, target)] += 1
 
     for comment in comments:
         if comment.comment_level == "comment":
@@ -1834,7 +2073,61 @@ def _weighted_graph(
             add(comment.commenter_user_id, parent.commenter_user_id if parent is not None else "")
         for mentioned_user_id in comment.mentioned_user_ids:
             add(comment.commenter_user_id, mentioned_user_id)
-    return dict(degree), dict(neighbors)
+    return dict(degree), dict(neighbors), dict(edge_weights)
+
+
+def _primary_source_scopes(
+    *,
+    videos: Mapping[str, _VideoRecord],
+    comments: Sequence[_CommentRecord],
+    available_user_ids: set[str],
+) -> tuple[list[str], dict[str, str], list[str]]:
+    rank_by_scope: dict[str, int] = {}
+    for video in videos.values():
+        rank_by_scope[video.source_challenge_name] = min(
+            video.source_challenge_rank,
+            rank_by_scope.get(video.source_challenge_name, video.source_challenge_rank),
+        )
+    scope_order = sorted(rank_by_scope, key=lambda scope: (rank_by_scope[scope], scope))
+    scope_position = {scope: position for position, scope in enumerate(scope_order)}
+    counts_by_user: dict[str, Counter[str]] = defaultdict(Counter)
+    for comment in comments:
+        comment_video = videos.get(comment.video_id)
+        if comment_video is not None and comment.commenter_user_id in available_user_ids:
+            counts_by_user[comment.commenter_user_id][comment_video.source_challenge_name] += 1
+
+    primary_scope_by_user: dict[str, str] = {}
+    tied_user_ids: list[str] = []
+    for user_id in sorted(available_user_ids):
+        scope_counts = counts_by_user.get(user_id)
+        if not scope_counts:
+            primary_scope_by_user[user_id] = "remaining_users"
+            continue
+        maximum_count = max(scope_counts.values())
+        tied_scopes = [scope for scope, count in scope_counts.items() if count == maximum_count]
+        if len(tied_scopes) > 1:
+            tied_user_ids.append(user_id)
+        primary_scope_by_user[user_id] = min(
+            tied_scopes,
+            key=lambda scope: (scope_position.get(scope, len(scope_order)), scope),
+        )
+    return scope_order, primary_scope_by_user, tied_user_ids
+
+
+def _source_scope_quotas(scope_order: Sequence[str], sample_size: int) -> dict[str, int]:
+    remaining = sample_size
+    quotas: dict[str, int] = {}
+    for scope_name in scope_order:
+        quota = min(PRIMARY_SOURCE_SCOPE_QUOTA, remaining)
+        quotas[scope_name] = quota
+        remaining -= quota
+    if remaining > 0:
+        quotas["remaining_users"] = remaining
+    return quotas
+
+
+def _graph_edge_key(source: str, target: str) -> tuple[str, str]:
+    return (source, target) if source <= target else (target, source)
 
 
 def _holdout_safe_thresholds(

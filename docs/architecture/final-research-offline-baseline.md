@@ -2,7 +2,7 @@
 
 Status: Architecture Note
 
-本说明记录锦江 Final Research Report Run 的 Target Delivery Ranking 离线准备 Module。它只负责在真实 processed 数据上建立可复现的 Network-Augmented Research Sample 与推荐 diagnostic，不执行 LLM 决策，也不代表完整的 30 批次运行或网页报告。
+本说明记录锦江 Final Research Report Run 的 Target Delivery Ranking 离线准备 Module。它只负责在真实 processed 数据上建立可复现的 Seed-First Research Sample 与推荐 diagnostic，不执行 LLM 决策，也不代表完整的 30 批次 live provider 正式运行。
 
 ## 公开 Interface
 
@@ -11,19 +11,19 @@ FinalResearchRunner(config: FinalResearchConfig, decision_adapter: LLMDecisionAd
     .run_and_write(output_dir) -> Path
 ```
 
-`FinalResearchRunner` 是公开深 Module。调用方只提供经过校验的配置、现有 `LLMDecisionAdapter` 接缝上的适配器和输出目录；数据读取、Target Holdout、holdout-safe 画像投影、Base Sample、seed 选择、Network Cohort、静态评分和 artifact 写出均由 Module 内部完成。
+`FinalResearchRunner` 是公开深 Module。调用方只提供经过校验的配置、现有 `LLMDecisionAdapter` 接缝上的适配器和输出目录；数据读取、Target Holdout、holdout-safe 画像投影、Seed-First sample selection、静态评分和 artifact 写出均由 Module 内部完成。
 
 离线基线保留 `decision_adapter` 参数以稳定后续 Final Research Interface，但本阶段不得调用它。artifact manifest 会显式记录 `decision_adapter_calls=0` 和 `live_api_triggered=false`。
 
 `FinalResearchConfig.research_model` 显式选择研究语义。默认 `target_delivery_ranking_v2` 产生本说明的离线基线；历史概率模型必须显式使用 `probability_v1`。`provider.enabled` 只控制 Decision Adapter 是否执行，不再隐式切换采样或评分模型。Target Delivery Ranking provider runtime 在后续 Ticket 落地前失败关闭。
 
-## Network-Augmented Research Sample
+## Seed-First Research Sample
 
-离线 v2 先完全复用既有 `source_challenge_name` 配额、去重、固定随机种子和稳定补齐规则形成 Base Sample。global influence top10 与 holdout-safe local influence top10 的 seed union 只从 Base Sample 选择，后续增强不重新选 seed。
+`target_delivery_ranking_v2` 使用 `seed_first_research_sample_v1`。内部 sample Module 先从全部合格 processed users 形成 Global Influence Proxy Top10 与 Local Influence Proxy Top10 的实际去重并集，再纳入这些 seeds 在目标 source scope Historical Set 评论派生图中的直接邻居。邻居超过剩余容量时按与 seeds 的历史互动总边权降序选择，并按 `user_id` 打破并列。
 
-Network Cohort 是这些 seeds 在目标 source scope Historical Set 评论派生图中的唯一直接邻居，排除 seed 本身并限制为 processed 用户。已经位于 Base Sample 的 cohort 用户原位保留；样本外 cohort 用户加入最终样本，并使用独立稳定随机种子移除等量普通 non-seed、non-cohort Base Sample 用户。最终样本必须保持配置的样本数和唯一 `user_id`，无法同时保留全部 seeds 与 cohort 时失败关闭。
+每位用户按 Historical Set 中评论和回复次数最多的 Primary Video Source Scope 归组；并列时按 `source_challenge_rank` 和 scope name 稳定选择。seeds 与 Seed Neighbor Cohort 先占用 scope quota，普通真实用户按 scope 固定随机补足；scope 不足或预选角色造成 overage 时使用独立稳定 fallback。`seed`、`network_cohort` 和 `ordinary` 互斥并覆盖最终样本。
 
-`network_augmented_sample_audit.json` 使用独立 schema，记录 Base Sample、seed union、Network Cohort、实际新增用户、被替换普通用户、最终样本，以及 Base/最终两套 source-scope 分布。Network Cohort 是传播识别设计，不代表总体随机样本。
+`seed_first_sample_audit.json` 使用 `seed-first-sample-audit-v1`，记录 method/status、eligible pool、两个 Top10、去重 seed union、邻居边权与容量、scope assignment/quota/tie/fallback、最终成员和互斥角色。Seed Neighbor Cohort 是传播识别设计，不代表总体随机样本。历史 `network_augmented_sample_audit.json` 只用于旧 run rebuild，不迁移或覆盖。
 
 ## 三个核心对象
 
@@ -59,7 +59,7 @@ Holdout Set = 目标视频的真实评论/回复答案
 
 - 配置和目标视频 snapshot；
 - 最终样本 CSV/JSON manifest；
-- Base Sample、seed、Network Cohort、替换用户和最终样本 audit；
+- full-pool seed、Seed Neighbor Cohort、scope quota/fallback、互斥角色和最终样本 audit；
 - holdout-safe reference 与 seed audit；
 - 全量用户离线分数 CSV 和聚合摘要，包括 target-scope weighted degree 与 base network relevance；
 - Top20 holdout diagnostic；
@@ -67,4 +67,4 @@ Holdout Set = 目标视频的真实评论/回复答案
 
 这些产物不包含 `.env`、凭证、headers、raw provider payload、raw Douyin payload或旧 demo preset 字段。
 
-离线 v2 manifest 使用 `final-research-offline-v2`。显式 `research_model=probability_v1` 的现有概率抽签路径在新的 Target Delivery Ranking runtime 落地前继续保留 `final-research-runtime-v1`、Base Sample 和 max-normalized `base_network_score`；该版本的 `base_network_relevance` 列留空，也不声明 log-P95 audit。旧 run 目录及其报告不被覆盖或重新解释。
+离线 v2 manifest 使用 `final-research-offline-v2`，并显式记录 `sampling_method`、`sampling_status=validation_run` 和 `sample_role_counts`。显式 `research_model=probability_v1` 的历史概率抽签路径继续保留 `final-research-runtime-v1`、原抽样方法和 max-normalized `base_network_score`；该版本的 `base_network_relevance` 列留空，也不声明 log-P95 audit。旧 run 目录及其报告不被覆盖或重新解释。
