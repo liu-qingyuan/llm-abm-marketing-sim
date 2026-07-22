@@ -7,7 +7,8 @@ from pydantic import ValidationError
 
 from llm_abm_sim.decision import DecisionInput, ProviderDecisionError
 from llm_abm_sim.prompting import build_engagement_prompt
-from llm_abm_sim.provider_config import redact_secrets
+from llm_abm_sim.provider_config import RuntimeCredential, redact_secrets
+from llm_abm_sim.providers import openai_compatible
 from llm_abm_sim.providers.openai_compatible import OpenAICompatibleDecisionAdapter, ProviderRunSkipped
 from llm_abm_sim.schemas import (
     FailClosedAction,
@@ -20,6 +21,12 @@ from llm_abm_sim.schemas import (
     ProviderLLMConfig,
     UserProfile,
 )
+
+
+class _UnusedSDKClient:
+    def create_response(self, messages: list[dict[str, str]], model: str):
+        del messages, model
+        raise AssertionError("client construction must not invoke a request")
 
 
 class FakeProviderClient:
@@ -162,6 +169,23 @@ def test_mocked_provider_success_validates_engage_decision():
     assert decision.decision_source == "provider"
     assert decision.provider_metadata is not None
     assert client.calls[0][1] == "mock-model"
+    assert adapter.live_api_triggered is False
+
+
+def test_building_live_sdk_client_does_not_mark_external_request_invocation(monkeypatch):
+    monkeypatch.setattr(openai_compatible, "should_run_live_llm", lambda _codex_home: True)
+    monkeypatch.setattr(openai_compatible.importlib.util, "find_spec", lambda _name: object())
+    monkeypatch.setattr(
+        openai_compatible,
+        "resolve_runtime_credential",
+        lambda **_kwargs: RuntimeCredential(value="test-only", source="test"),
+    )
+    monkeypatch.setattr(openai_compatible, "_OpenAISDKClient", lambda **_kwargs: _UnusedSDKClient())
+    adapter = OpenAICompatibleDecisionAdapter(ProviderLLMConfig(enabled=True, require_live_env=True))
+
+    adapter._build_live_client()
+
+    assert adapter.live_api_triggered is False
 
 
 @pytest.mark.parametrize(

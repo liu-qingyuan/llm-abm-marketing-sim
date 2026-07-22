@@ -59,7 +59,11 @@ class OpenAICompatibleDecisionAdapter(LLMDecisionAdapter):
         self.model = model or "gpt-5.5"
         self.client = client
         self._sleep = sleep
-        self.live_api_triggered = False
+        self.external_request_invocations = 0
+
+    @property
+    def live_api_triggered(self) -> bool:
+        return self.external_request_invocations > 0
 
     @property
     def safe_metadata(self) -> dict[str, Any]:
@@ -88,10 +92,13 @@ class OpenAICompatibleDecisionAdapter(LLMDecisionAdapter):
             prompt_version=self.config.prompt_version,
         )
         messages = build_engagement_prompt(decision_input)
+        uses_live_client = self.client is None
         client = self.client or self._build_live_client()
         last_error: Exception | None = None
         for attempt in range(self.config.max_retries + 1):
             try:
+                if uses_live_client:
+                    self.external_request_invocations += 1
                 raw = client.create_response(messages, cast(str, self.model))
                 decision = _parse_provider_decision(raw)
                 return decision.model_copy(
@@ -129,14 +136,12 @@ class OpenAICompatibleDecisionAdapter(LLMDecisionAdapter):
         wire_api = self.config.wire_api or (
             self.codex_provider_config.wire_api if self.codex_provider_config else "responses"
         )
-        client = _OpenAISDKClient(
+        return _OpenAISDKClient(
             api_key=credential.value,
             base_url=base_url,
             timeout=self.config.timeout_seconds,
             wire_api=wire_api,
         )
-        self.live_api_triggered = True
-        return client
 
     def _handle_failure(self, exc: Exception) -> EngageDecision:
         action = self.config.fail_closed_action

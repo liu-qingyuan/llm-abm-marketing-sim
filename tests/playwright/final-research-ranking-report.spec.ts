@@ -160,6 +160,24 @@ type RankingPayload = {
       };
     };
   };
+  evidence_state: {
+    decision_execution_evidence: {
+      schema_version: string;
+      status: 'persisted';
+      formal_research_evidence: boolean;
+      decision_execution_mode: 'rule_based' | 'mock_provider' | 'live_provider';
+      adapter_chain: string[];
+      decision_source_counts: Record<string, number>;
+      action_counts: Record<'like' | 'comment' | 'share' | 'ignore', number>;
+      terminal_counts: Record<
+        'sample_users' | 'exposed_users' | 'decided_users' | 'provider_failed' | 'below_delivery_capacity',
+        number
+      >;
+      live_api_triggered: boolean;
+      sampling_status: string;
+      degeneracy_flags: Record<'all_decisions_ignore' | 'single_action_only' | 'no_engagement_feedback', boolean>;
+    };
+  };
   downloads: Record<string, string>;
 };
 
@@ -741,6 +759,44 @@ async function assertRankingReport(
   await expect(promptSection).toContainText('recommendation_score（推荐排序分数）');
   await expect(promptSection).toContainText('Target Holdout answers（目标留出答案）');
   await expect(promptSection).toContainText('raw Prompt（原始提示）与 provider payload（服务提供方载荷）保持不可见');
+  const decisionEvidence = payload.evidence_state.decision_execution_evidence;
+  const decisionEvidencePanel = page.getByTestId('decision-execution-evidence');
+  await expect(decisionEvidencePanel).toBeVisible();
+  await expect(decisionEvidencePanel.getByTestId('decision-execution-mode')).toHaveText(
+    decisionEvidence.decision_execution_mode,
+  );
+  await expect(decisionEvidencePanel.getByTestId('decision-live-api-triggered')).toContainText(
+    decisionEvidence.live_api_triggered ? 'true' : 'false',
+  );
+  await expect(decisionEvidencePanel).toContainText('只决定谁获得曝光');
+  await expect(decisionEvidencePanel).toContainText('below_delivery_capacity 从未曝光');
+  for (const [source, count] of Object.entries(decisionEvidence.decision_source_counts)) {
+    await expect(decisionEvidencePanel.getByTestId('decision-source-counts')).toContainText(source);
+    await expect(decisionEvidencePanel.getByTestId('decision-source-counts')).toContainText(count.toLocaleString());
+  }
+  for (const [action, count] of Object.entries(decisionEvidence.action_counts)) {
+    await expect(decisionEvidencePanel.getByTestId('decision-action-counts')).toContainText(action);
+    await expect(decisionEvidencePanel.getByTestId('decision-action-counts')).toContainText(count.toLocaleString());
+  }
+  for (const [terminalFact, count] of Object.entries(decisionEvidence.terminal_counts)) {
+    await expect(decisionEvidencePanel.getByTestId('decision-terminal-counts')).toContainText(terminalFact);
+    await expect(decisionEvidencePanel.getByTestId('decision-terminal-counts')).toContainText(count.toLocaleString());
+  }
+  for (const [flag, enabled] of Object.entries(decisionEvidence.degeneracy_flags)) {
+    await expect(decisionEvidencePanel.getByTestId('decision-degeneracy-flags')).toContainText(
+      `${flag}=${String(enabled)}`,
+    );
+  }
+  for (const downloadName of [
+    'runtime_decisions',
+    'runtime_actions',
+    'runtime_provider_failures',
+    'ranking_runtime_outcomes',
+    'ranking_runtime_summary',
+  ]) {
+    expect(payload.downloads[downloadName]).toBeTruthy();
+    await expect(page.getByTestId(`download-${downloadName.replaceAll('_', '-')}`)).toBeVisible();
+  }
 
   for (const chartId of [
     'sample-composition-chart',
@@ -822,11 +878,13 @@ async function assertRankingReport(
   const tagUser = users.find((user) => user.historical_tags.length > 0) ?? users[0];
   await page.getByTestId('user-search').fill(tagUser.historical_tags[0] ?? tagUser.user_id);
   await expect(page.getByTestId('user-table')).toContainText(tagUser.user_id);
-  await page.getByTestId('user-search').fill('controlled ignore');
-  await expect(page.getByTestId('user-table').locator('tbody tr').first()).toContainText('controlled ignore');
+  await page.getByTestId('user-search').fill('controlled deterministic provider decision');
+  await expect(page.getByTestId('user-table').locator('tbody tr').first()).toContainText(
+    'controlled deterministic provider decision',
+  );
   await expect(page.getByTestId('user-table')).toContainText('remaining_users（其余用户）');
   await page.getByTestId('user-table').locator('tbody tr').first().click();
-  await expect(page.getByTestId('user-detail')).toContainText('mocked_provider（决策来源）');
+  await expect(page.getByTestId('user-detail')).toContainText('provider（决策来源）');
   await evidenceDrawer.getByRole('button', { name: '关闭详情' }).click();
   await page.getByTestId('user-search').fill('');
 
@@ -1838,6 +1896,11 @@ test('ranking candidates users and prompt fields share one right detail drawer',
 
 test('ranking research report is complete and interactive on desktop viewports', async ({ page }, testInfo) => {
   test.slow();
+  const browserErrors: string[] = [];
+  page.on('console', (message) => {
+    if (message.type() === 'error') browserErrors.push(`console:${message.text()}`);
+  });
+  page.on('pageerror', (error) => browserErrors.push(`pageerror:${error.message}`));
   const { outputDir, payload } = generateRankingReport(testInfo);
   for (const viewport of [
     { name: 'laptop', width: 1280, height: 800 },
@@ -1847,6 +1910,7 @@ test('ranking research report is complete and interactive on desktop viewports',
     await assertRankingReport(page, outputDir, payload, viewport.height);
     await page.screenshot({ path: testInfo.outputPath(`ranking-report-${viewport.name}.png`), fullPage: true });
   }
+  expect(browserErrors).toEqual([]);
 });
 
 test('ranking research report exposes complete paired selection identities', async ({ page }, testInfo) => {

@@ -17,6 +17,10 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 from .decision import EngageDecision, LLMDecisionAdapter, ProviderDecisionError
 from .field_lineage_trace import RuntimeFeedbackEvidence, RuntimeFeedbackKind
+from .final_research_decision_evidence import (
+    DecisionExecutionEvidence,
+    _FinalResearchDecisionEvidenceBuilder,
+)
 from .final_research_report import (
     FINAL_RESEARCH_DYNAMIC_NETWORK_FORMULA,
     FINAL_RESEARCH_RANKING_RUNTIME_V3_VERSION,
@@ -1224,19 +1228,50 @@ class FinalResearchRunner:
         scores_by_user = {score.user_id: score for score in scores}
         probability_runtime: _RuntimeArtifacts | None = None
         ranking_runtime: _RankingRuntimeArtifacts | None = None
+        decision_evidence_builder: _FinalResearchDecisionEvidenceBuilder | None = None
+        decision_execution_evidence: DecisionExecutionEvidence | None = None
         if self.config.provider.enabled:
             if model_policy.model is FinalResearchModel.TARGET_DELIVERY_RANKING_V2:
-                ranking_runtime = self._run_target_delivery_runtime(prepared, platform)
+                decision_evidence_builder = _FinalResearchDecisionEvidenceBuilder(self.decision_adapter)
+                adapter_classification = decision_evidence_builder.classification()
+                ranking_runtime = self._run_target_delivery_runtime(
+                    prepared,
+                    platform,
+                    provider_metadata=adapter_classification.provider_metadata,
+                )
+                decision_execution_evidence = decision_evidence_builder.build(
+                    sample_users=len(prepared.sample_user_ids),
+                    decision_rows=ranking_runtime.decisions,
+                    action_rows=ranking_runtime.actions,
+                    outcome_rows=ranking_runtime.outcomes,
+                    provider_failure_rows=ranking_runtime.provider_failures,
+                )
             else:
                 probability_runtime = self._run_runtime(prepared, platform)
-        sampling_status = _sampling_status(prepared.sampling_method, self.decision_adapter)
+        sampling_status: ResearchSamplingStatus = (
+            cast(ResearchSamplingStatus, decision_execution_evidence.sampling_status)
+            if decision_execution_evidence is not None
+            else _sampling_status(prepared.sampling_method, self.decision_adapter)
+        )
         if sample_audit:
             sample_audit["sampling_status"] = sampling_status
         holdout_evidence = builder.reveal_holdout()
         if ranking_runtime is not None:
+            assert decision_execution_evidence is not None
             ranking_runtime = replace(
                 ranking_runtime,
-                summary={**ranking_runtime.summary, "evidence_state": ranking_v5_expand_evidence()},
+                summary={
+                    **ranking_runtime.summary,
+                    "sampling_status": sampling_status,
+                    "provider_metadata": decision_execution_evidence.provider_metadata,
+                    "decision_execution_mode": decision_execution_evidence.decision_execution_mode,
+                    "decision_source_counts": decision_execution_evidence.decision_source_counts,
+                    "action_counts": decision_execution_evidence.action_counts,
+                    "terminal_counts": decision_execution_evidence.terminal_counts.model_dump(mode="json"),
+                    "degeneracy_flags": decision_execution_evidence.degeneracy_flags.model_dump(mode="json"),
+                    "live_api_triggered": decision_execution_evidence.live_api_triggered,
+                    "evidence_state": ranking_v5_expand_evidence(decision_execution_evidence),
+                },
             )
         holdout_comments = holdout_evidence.comments
         holdout_participant_ids = sorted({comment.commenter_user_id for comment in holdout_comments})
@@ -1540,7 +1575,11 @@ class FinalResearchRunner:
             "sample_role_counts": dict(sorted(Counter(user.sample_role for user in sample_users).items())),
             "artifacts": artifacts,
             "counts": manifest_counts,
-            "live_api_triggered": _adapter_live_api_triggered(self.decision_adapter),
+            "live_api_triggered": (
+                decision_execution_evidence.live_api_triggered
+                if decision_execution_evidence is not None
+                else _adapter_live_api_triggered(self.decision_adapter)
+            ),
             "decision_adapter_calls": decision_adapter_calls,
         }
         if ranking_diagnostics is not None:
@@ -1548,7 +1587,17 @@ class FinalResearchRunner:
                 "diagnostic_decision_adapter_calls"
             ]
         if ranking_runtime is not None:
-            artifact_manifest["evidence_state"] = ranking_runtime.summary["evidence_state"]
+            assert decision_execution_evidence is not None
+            artifact_manifest.update(
+                {
+                    "decision_execution_mode": decision_execution_evidence.decision_execution_mode,
+                    "decision_source_counts": decision_execution_evidence.decision_source_counts,
+                    "action_counts": decision_execution_evidence.action_counts,
+                    "terminal_counts": decision_execution_evidence.terminal_counts.model_dump(mode="json"),
+                    "degeneracy_flags": decision_execution_evidence.degeneracy_flags.model_dump(mode="json"),
+                    "evidence_state": ranking_runtime.summary["evidence_state"],
+                }
+            )
         FinalResearchReportWriter(
             FinalResearchReportSource(
                 target_video=prepared.target_video.model_dump(mode="json"),
@@ -1609,13 +1658,14 @@ class FinalResearchRunner:
         self,
         prepared: _PreparedInputs,
         platform: PlatformRecommendationModel,
+        *,
+        provider_metadata: Mapping[str, object],
     ) -> _RankingRuntimeArtifacts:
         post = PostContent(
             post_id=prepared.target_video.video_id,
             text=prepared.target_video.caption,
             topic_tags=list(prepared.target_video.hashtags),
         )
-        provider_metadata = _adapter_safe_metadata(self.decision_adapter, self.config.provider)
         eligible_user_ids = set(prepared.sample_user_ids) - set(prepared.seed_user_ids)
         candidate_rows: list[dict[str, object]] = []
         decision_rows: list[dict[str, object]] = []

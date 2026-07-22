@@ -4,7 +4,9 @@ import csv
 import hashlib
 import json
 import math
+import re
 import shutil
+from collections import Counter
 from pathlib import Path
 from typing import Any, cast
 
@@ -18,15 +20,21 @@ from llm_abm_sim import (
     ResearchUser,
     rebuild_final_research_report,
 )
-from llm_abm_sim.decision import DecisionInput, EngageDecision, LLMDecisionAdapter, ProviderDecisionError
+from llm_abm_sim.decision import (
+    CachedDecisionAdapter,
+    EngageDecision,
+    InMemoryDecisionCache,
+    LLMDecisionAdapter,
+    RuleBasedDecisionAdapter,
+)
 from llm_abm_sim.field_lineage_trace import FieldLineageDefinition, UserFieldTrace, field_lineage_coverage_audit
 from llm_abm_sim.final_research_report import (
     FinalResearchRankingReportPayload,
     FinalResearchRankingReportPayloadV3,
     FinalResearchRankingReportPayloadV5,
     FinalResearchReportWriter,
+    RankingV5ExpandEvidence,
 )
-from llm_abm_sim.prompting import build_engagement_prompt
 from llm_abm_sim.providers.openai_compatible import OpenAICompatibleDecisionAdapter
 from llm_abm_sim.safe_serialization import artifact_has_forbidden_terms
 from llm_abm_sim.schemas import (
@@ -39,6 +47,21 @@ from llm_abm_sim.schemas import (
 )
 
 TARGET_VIDEO_ID = "7328592728139353363"
+V5_DECISION_DOWNLOAD_FIELDS = (
+    "runtime_decisions",
+    "runtime_actions",
+    "runtime_provider_failures",
+    "ranking_runtime_outcomes",
+    "ranking_runtime_summary",
+)
+V5_DECISION_SUMMARY_FIELDS = (
+    "decision_execution_mode",
+    "decision_source_counts",
+    "action_counts",
+    "terminal_counts",
+    "degeneracy_flags",
+    "live_api_triggered",
+)
 LATENT_COLUMNS = [
     "latent_attribute_spec_id",
     "latent_attribute_method",
@@ -623,67 +646,71 @@ class _RecordingAdapter(LLMDecisionAdapter):
         return self.wrapped.decide(post, profile, peer_context, platform_context, time_step)
 
 
-class _TargetDeliveryAdapter(LLMDecisionAdapter):
+_PROMPT_GLOBAL_INFLUENCE = re.compile(r"全平台影响力：[^（]+（([0-9]+(?:\.[0-9]+)?)）")
+
+
+class _TargetDeliveryProviderClient:
     def __init__(
         self,
         *,
         failed_user_id: str | None = None,
-        mark_live_api_triggered: bool = False,
         engage_all: bool = False,
+        engage_seed_user: bool = True,
+        cycle_actions: bool = False,
     ) -> None:
         self.failed_user_id = failed_user_id
-        self.mark_live_api_triggered = mark_live_api_triggered
         self.engage_all = engage_all
-        self.live_api_triggered = False
+        self.engage_seed_user = engage_seed_user
+        self.cycle_actions = cycle_actions
         self.calls: list[dict[str, object]] = []
 
-    def decide(
-        self,
-        post: PostContent,
-        profile: UserProfile,
-        peer_context: PeerContext,
-        platform_context: PlatformContext | None = None,
-        time_step: int = 0,
-    ) -> EngageDecision:
-        if self.mark_live_api_triggered:
-            self.live_api_triggered = True
-        build_engagement_prompt(
-            DecisionInput(
-                post=post,
-                profile=profile,
-                peer_context=peer_context,
-                platform_context=platform_context or PlatformContext(),
-                time_step=time_step,
-            )
-        )
-        self.calls.append(
-            {
-                "post": post,
-                "profile": profile,
-                "peer_context": peer_context,
-                "platform_context": platform_context,
-                "time_step": time_step,
-            }
-        )
-        if profile.user_id == self.failed_user_id:
-            raise ProviderDecisionError(TimeoutError("mocked exhausted provider failure"))
-        if self.engage_all or profile.user_id == "u80":
-            return EngageDecision(
-                engage=True,
-                probability=0.9,
-                reason="controlled seed engagement",
-                confidence=1.0,
-                action="like",
-                decision_source="mocked_provider",
-            )
-        return EngageDecision(
-            engage=False,
-            probability=0.1,
-            reason="controlled ignore",
-            confidence=1.0,
-            action="ignore",
-            decision_source="mocked_provider",
-        )
+    def create_response(self, messages: list[dict[str, str]], model: str) -> dict[str, object]:
+        prompt = messages[-1]["content"]
+        match = _PROMPT_GLOBAL_INFLUENCE.search(prompt)
+        if match is None:
+            raise AssertionError("fixture prompt must contain the observed global influence score")
+        user_id = f"u{round(float(match.group(1)) * 10)}"
+        self.calls.append({"user_id": user_id, "messages": messages, "model": model})
+        if user_id == self.failed_user_id:
+            raise TimeoutError("mocked exhausted provider failure with sk-secret")
+        if self.cycle_actions:
+            action = ("like", "comment", "share", "ignore")[(len(self.calls) - 1) % 4]
+        elif self.engage_all or (self.engage_seed_user and user_id == "u80"):
+            action = "like"
+        else:
+            action = "ignore"
+        return {
+            "engage": action != "ignore",
+            "probability": 0.9 if action != "ignore" else 0.1,
+            "reason": "controlled deterministic provider decision",
+            "confidence": 1.0,
+            "action": action,
+        }
+
+
+def _TargetDeliveryAdapter(
+    *,
+    failed_user_id: str | None = None,
+    engage_all: bool = False,
+    engage_seed_user: bool = True,
+    cycle_actions: bool = False,
+) -> OpenAICompatibleDecisionAdapter:
+    client = _TargetDeliveryProviderClient(
+        failed_user_id=failed_user_id,
+        engage_all=engage_all,
+        engage_seed_user=engage_seed_user,
+        cycle_actions=cycle_actions,
+    )
+    return OpenAICompatibleDecisionAdapter(
+        ProviderLLMConfig(enabled=True, model="mock-model", require_live_env=False),
+        client=client,
+        sleep=lambda _delay: None,
+    )
+
+
+def _target_delivery_client(adapter: OpenAICompatibleDecisionAdapter) -> _TargetDeliveryProviderClient:
+    assert isinstance(adapter.client, _TargetDeliveryProviderClient)
+    return adapter.client
 
 
 def test_offline_final_research_baseline_is_holdout_safe_and_deterministic(tmp_path: Path) -> None:
@@ -925,12 +952,14 @@ def test_target_delivery_ranking_runtime_reranks_global_top20_after_seed_engagem
         provider=provider_config,
     )
 
-    def run(output_dir: Path) -> tuple[Path, _TargetDeliveryAdapter]:
+    def run(output_dir: Path) -> tuple[Path, OpenAICompatibleDecisionAdapter]:
         adapter = _TargetDeliveryAdapter(failed_user_id="u79")
         return FinalResearchRunner(config, adapter).run_and_write(output_dir), adapter
 
     first_output, first_adapter = run(tmp_path / "ranking-runtime-a")
     second_output, second_adapter = run(tmp_path / "ranking-runtime-b")
+    first_adapter_calls = _target_delivery_client(first_adapter).calls
+    second_adapter_calls = _target_delivery_client(second_adapter).calls
 
     manifest = json.loads((first_output / "artifact_manifest.json").read_text(encoding="utf-8"))
     assert manifest["manifest_version"] == "final-research-ranking-runtime-v3"
@@ -1010,9 +1039,9 @@ def test_target_delivery_ranking_runtime_reranks_global_top20_after_seed_engagem
     )
 
     exposed_outcomes = [row for row in outcomes if row["result_status"] != "below_delivery_capacity"]
-    assert len(first_adapter.calls) == len(exposed_outcomes) == manifest["decision_adapter_calls"]
+    assert len(first_adapter_calls) == len(exposed_outcomes) == manifest["decision_adapter_calls"]
     assert len({row["user_id"] for row in exposed_outcomes}) == len(exposed_outcomes)
-    assert len(first_adapter.calls) <= 600
+    assert len(first_adapter_calls) <= 600
     assert failures == [
         {
             "schedule_position": failures[0]["schedule_position"],
@@ -1025,8 +1054,11 @@ def test_target_delivery_ranking_runtime_reranks_global_top20_after_seed_engagem
     ]
     failed_position = int(failures[0]["schedule_position"])
     assert any(int(row["schedule_position"]) > failed_position for row in decisions)
-    assert all(call["peer_context"] == PeerContext() for call in first_adapter.calls)
-    assert all(call["peer_context"] == PeerContext() for call in second_adapter.calls)
+    neutral_peer_summary = "邻居曝光：0；邻居互动：0；互动比例：0.00"
+    assert all(neutral_peer_summary in json.dumps(call["messages"], ensure_ascii=False) for call in first_adapter_calls)
+    assert all(
+        neutral_peer_summary in json.dumps(call["messages"], ensure_ascii=False) for call in second_adapter_calls
+    )
 
     assert summary["runtime_version"] == "final-research-ranking-runtime-v3"
     assert summary["schedule_method"] == "global_stable_reranking_top20"
@@ -1037,7 +1069,7 @@ def test_target_delivery_ranking_runtime_reranks_global_top20_after_seed_engagem
     assert summary["engaged_neighbor_formula"] == "min(1, engaged_neighbor_count / 3)"
     assert summary["maximum_target_exposures"] == 600
     assert "background_impressions" not in summary["counts"]
-    assert summary["counts"]["decision_adapter_calls"] == len(first_adapter.calls)
+    assert summary["counts"]["decision_adapter_calls"] == len(first_adapter_calls)
     assert ranking_diagnostics["schema_version"] == "ranking-diagnostics-v2"
     assert len(ranking_diagnostics["paired_ablation"]["batches"]) == len(steps) == 30
     assert ranking_diagnostics["paired_ablation"]["same_candidate_set_and_frozen_state"] is True
@@ -1072,7 +1104,7 @@ def test_target_delivery_ranking_runtime_reranks_global_top20_after_seed_engagem
         manifest["counts"]["ranking_batches_with_network_top20_effect"]
         == diagnostic_summary["observed_recommendation_signal_effect"]["batches_with_top_selection_change"]
     )
-    assert len(first_adapter.calls) == summary["counts"]["decision_adapter_calls"]
+    assert len(first_adapter_calls) == summary["counts"]["decision_adapter_calls"]
 
     assert report_payload["schema_version"] == "final-research-ranking-report-payload-v5"
     assert report_payload["run"]["sampling_method"] == "seed_first_research_sample_v1"
@@ -1217,16 +1249,7 @@ def test_target_delivery_ranking_runtime_reranks_global_top20_after_seed_engagem
     assert "random_draw" not in runtime_text
     assert "background_content" not in runtime_text
     assert "sk-secret" not in runtime_text
-    prompt_inputs = json.dumps(
-        [
-            {
-                "peer_context": cast(PeerContext, call["peer_context"]).model_dump(mode="json"),
-                "platform_context": cast(PlatformContext, call["platform_context"]).model_dump(mode="json"),
-            }
-            for call in first_adapter.calls
-        ],
-        ensure_ascii=False,
-    )
+    prompt_inputs = json.dumps([call["messages"] for call in first_adapter_calls], ensure_ascii=False)
     for forbidden in (
         "base_network_relevance",
         "engaged_neighbor_count",
@@ -1292,7 +1315,7 @@ def test_target_aggregate_counts_are_post_runtime_diagnostic_only(tmp_path: Path
         "collect_count": 604,
     }
 
-    def run_variant(name: str, counts: dict[str, int]) -> tuple[Path, _TargetDeliveryAdapter]:
+    def run_variant(name: str, counts: dict[str, int]) -> tuple[Path, OpenAICompatibleDecisionAdapter]:
         dataset_dir = _make_processed_fixture(tmp_path / name, user_count=6, dense_target_network=True)
         video_rows = _read_csv(dataset_dir / "videos.csv")
         target_row = next(row for row in video_rows if row["video_id"] == TARGET_VIDEO_ID)
@@ -1383,7 +1406,7 @@ def test_target_aggregate_counts_are_post_runtime_diagnostic_only(tmp_path: Path
         "runtime_actions.csv",
     ):
         assert (first_output / artifact_name).read_bytes() == (second_output / artifact_name).read_bytes()
-    assert first_adapter.calls == second_adapter.calls
+    assert _target_delivery_client(first_adapter).calls == _target_delivery_client(second_adapter).calls
 
 
 def test_target_delivery_ranking_v5_excludes_interest_contract_and_is_validation_only(tmp_path: Path) -> None:
@@ -1413,18 +1436,9 @@ def test_target_delivery_ranking_v5_excludes_interest_contract_and_is_validation
     payload = json.loads((output / "final_research_report_payload.json").read_text(encoding="utf-8"))
     users_document = json.loads((output / "final_research_users.json").read_text(encoding="utf-8"))
     config_snapshot = json.loads((output / "config_snapshot.json").read_text(encoding="utf-8"))
-    expected_evidence_state = {
-        "schema_version": "ranking-v5-expand-evidence-v1",
-        "contract_stage": "validation_expand",
-        "target_aggregate_engagement_reference": {
-            "status": "persisted",
-            "formal_research_evidence": False,
-        },
-        "decision_execution_evidence": {
-            "status": "pending",
-            "formal_research_evidence": False,
-        },
-        "production_deploy_eligible": False,
+    expected_target_evidence = {
+        "status": "persisted",
+        "formal_research_evidence": False,
     }
 
     assert manifest["manifest_version"] == "final-research-ranking-runtime-v3"
@@ -1438,9 +1452,47 @@ def test_target_delivery_ranking_v5_excludes_interest_contract_and_is_validation
     assert manifest["sampling_status"] == summary["sampling_status"] == "validation_run"
     assert payload["run"]["sampling_status"] == "validation_run"
     assert manifest["evidence_state"] == summary["evidence_state"] == payload["evidence_state"]
-    assert payload["evidence_state"] == expected_evidence_state
+    assert payload["evidence_state"]["schema_version"] == "ranking-v5-expand-evidence-v1"
+    assert payload["evidence_state"]["contract_stage"] == "validation_expand"
+    assert payload["evidence_state"]["target_aggregate_engagement_reference"] == expected_target_evidence
+    assert payload["evidence_state"]["production_deploy_eligible"] is False
+    decision_evidence = payload["evidence_state"]["decision_execution_evidence"]
+    assert decision_evidence["schema_version"] == "final-research-decision-execution-evidence-v1"
+    assert decision_evidence["status"] == "persisted"
+    assert decision_evidence["formal_research_evidence"] is False
+    assert decision_evidence["decision_execution_mode"] == "mock_provider"
+    assert decision_evidence["adapter_chain"] == ["openai_compatible"]
+    assert decision_evidence["decision_source_counts"] == {"provider": 6}
+    assert decision_evidence["action_counts"] == {"like": 0, "comment": 0, "share": 0, "ignore": 6}
+    assert decision_evidence["terminal_counts"] == {
+        "sample_users": 6,
+        "exposed_users": 6,
+        "decided_users": 6,
+        "provider_failed": 0,
+        "below_delivery_capacity": 0,
+    }
+    assert decision_evidence["live_api_triggered"] is False
+    assert decision_evidence["sampling_status"] == "validation_run"
+    assert decision_evidence["degeneracy_flags"] == {
+        "all_decisions_ignore": True,
+        "single_action_only": True,
+        "no_engagement_feedback": True,
+    }
+    assert decision_evidence["provider_metadata"]["adapter"] == "openai_compatible"
+    crossed_evidence_state = {
+        **payload["evidence_state"],
+        "target_aggregate_engagement_reference": {
+            "status": "pending",
+            "formal_research_evidence": False,
+        },
+    }
+    with pytest.raises(ValidationError, match="persisted Decision evidence requires persisted target aggregate"):
+        RankingV5ExpandEvidence.model_validate(crossed_evidence_state)
     assert "interest_tags" not in payload["prompt_contract"]["allowed_profile_fields"]
-    assert all(cast(UserProfile, call["profile"]).interest_tags == [] for call in adapter.calls)
+    assert all(
+        "interest_tags" not in json.dumps(call["messages"], ensure_ascii=False)
+        for call in _target_delivery_client(adapter).calls
+    )
     assert any(user["historical_tags"] for user in payload["users"])
 
     v5_user_artifacts = (
@@ -1458,10 +1510,107 @@ def test_target_delivery_ranking_v5_excludes_interest_contract_and_is_validation
         assert "interest_tags" not in (output / artifact_name).read_text(encoding="utf-8"), artifact_name
 
 
+def test_target_delivery_rule_based_evidence_does_not_use_configured_provider_identity(tmp_path: Path) -> None:
+    dataset_dir = _make_processed_fixture(tmp_path, user_count=6, dense_target_network=True)
+    provider_config = ProviderLLMConfig(enabled=True, model="configured-but-unused", require_live_env=False)
+    adapter = CachedDecisionAdapter(RuleBasedDecisionAdapter(), InMemoryDecisionCache())
+
+    output = FinalResearchRunner(
+        FinalResearchConfig(dataset_dir=dataset_dir, sample_size=6, provider=provider_config),
+        adapter,
+    ).run_and_write(tmp_path / "ranking-rule-based-evidence")
+
+    manifest = json.loads((output / "artifact_manifest.json").read_text(encoding="utf-8"))
+    summary = json.loads((output / "ranking_runtime_summary.json").read_text(encoding="utf-8"))
+    payload = json.loads((output / "final_research_report_payload.json").read_text(encoding="utf-8"))
+    evidence = payload["evidence_state"]["decision_execution_evidence"]
+
+    assert evidence["decision_execution_mode"] == "rule_based"
+    assert evidence["adapter_chain"] == ["cached", "rule_based"]
+    assert evidence["decision_source_counts"] == {"rule_based": 6}
+    assert evidence["provider_metadata"] == {"adapter": "rule_based", "prompt_version": "engage-v1"}
+    assert evidence["live_api_triggered"] is False
+    assert evidence["sampling_status"] == "validation_run"
+    assert summary["provider_metadata"] == evidence["provider_metadata"]
+    assert manifest["decision_execution_mode"] == "rule_based"
+    assert manifest["live_api_triggered"] is False
+    assert "configured-but-unused" not in json.dumps(evidence)
+    assert rebuild_final_research_report(output) == output / "report.html"
+
+
+def test_target_delivery_deterministic_provider_covers_all_actions_in_one_run(tmp_path: Path) -> None:
+    dataset_dir = _make_processed_fixture(tmp_path, user_count=30, dense_target_network=True)
+    adapter = _TargetDeliveryAdapter(cycle_actions=True)
+
+    output = FinalResearchRunner(
+        FinalResearchConfig(
+            dataset_dir=dataset_dir,
+            sample_size=30,
+            provider=ProviderLLMConfig(enabled=True, model="mock-model", require_live_env=False),
+        ),
+        adapter,
+    ).run_and_write(tmp_path / "ranking-four-action-contract")
+
+    decisions = _read_csv(output / "runtime_decisions.csv")
+    actions = _read_csv(output / "runtime_actions.csv")
+    summary = json.loads((output / "ranking_runtime_summary.json").read_text(encoding="utf-8"))
+    payload = json.loads((output / "final_research_report_payload.json").read_text(encoding="utf-8"))
+    evidence = payload["evidence_state"]["decision_execution_evidence"]
+    report_html = (output / "report.html").read_text(encoding="utf-8")
+
+    assert len(decisions) == len(actions) == 30
+    assert evidence["decision_execution_mode"] == "mock_provider"
+    assert evidence["decision_source_counts"] == {"provider": 30}
+    assert set(evidence["action_counts"]) == {"like", "comment", "share", "ignore"}
+    assert all(evidence["action_counts"][action] > 0 for action in ("like", "comment", "share", "ignore"))
+    assert evidence["action_counts"] == dict(Counter(row["action"] for row in decisions))
+    assert evidence["degeneracy_flags"] == {
+        "all_decisions_ignore": False,
+        "single_action_only": False,
+        "no_engagement_feedback": False,
+    }
+    assert summary["action_counts"] == evidence["action_counts"]
+    assert {user["result_status"] for user in payload["users"]} == {"like", "comment", "share", "ignore"}
+    assert any(
+        trace["field_name"] == "action" and trace["actual_usage_stages"] == ["Ranking", "Report Only"]
+        for traces in payload["user_field_trace_index"].values()
+        for trace in traces
+    )
+    assert 'data-testid="decision-execution-evidence"' in report_html
+    assert 'data-testid="decision-source-counts"' in report_html
+    assert 'data-testid="decision-action-counts"' in report_html
+    assert 'data-testid="decision-terminal-counts"' in report_html
+    assert 'data-testid="decision-degeneracy-flags"' in report_html
+    assert "只决定谁获得曝光" in report_html
+    assert payload["downloads"]["runtime_decisions"] == "runtime_decisions.csv"
+    assert payload["downloads"]["runtime_actions"] == "runtime_actions.csv"
+    assert payload["downloads"]["runtime_provider_failures"] == "runtime_provider_failures.csv"
+    assert payload["downloads"]["ranking_runtime_outcomes"] == "ranking_runtime_outcomes.csv"
+    assert payload["downloads"]["ranking_runtime_summary"] == "ranking_runtime_summary.json"
+
+
 def test_target_delivery_ranking_runtime_caps_delivery_and_marks_final_below_capacity(tmp_path: Path) -> None:
-    dataset_dir = _make_processed_fixture(tmp_path, user_count=1010)
+    dataset_dir = _make_target_delivery_fixture(tmp_path)
+    user_rows = _read_csv(dataset_dir / "users.csv")
+    template = user_rows[-1]
+    for number in range(81, 1011):
+        user_rows.append(
+            {
+                **template,
+                "user_id": f"u{number}",
+                "nickname": f"User {number}",
+                "bio": f"Bio {number}",
+                "signature": f"Signature {number}",
+                "follower_count": str(number * 10),
+                "following_count": str(number),
+                "video_count": str(number),
+                "global_influence_score": str(number / 10),
+                **{field_name: str(value) for field_name, value in _latent_row(number).items()},
+            }
+        )
+    _write_csv(dataset_dir / "users.csv", list(user_rows[0]), user_rows)
     provider_config = ProviderLLMConfig(enabled=True, model="mock-model", require_live_env=False)
-    adapter = _TargetDeliveryAdapter()
+    adapter = _TargetDeliveryAdapter(engage_seed_user=False)
     output = FinalResearchRunner(
         FinalResearchConfig(
             dataset_dir=dataset_dir,
@@ -1479,11 +1628,24 @@ def test_target_delivery_ranking_runtime_caps_delivery_and_marks_final_below_cap
     report_rows = _read_csv(output / "final_research_users.csv")
     report_users = json.loads((output / "final_research_users.json").read_text(encoding="utf-8"))["users"]
     report_payload = json.loads((output / "final_research_report_payload.json").read_text(encoding="utf-8"))
+    decision_evidence = report_payload["evidence_state"]["decision_execution_evidence"]
 
     assert len(outcomes) == 1000
-    assert len(exposed) == len(adapter.calls) == summary["counts"]["target_exposures"] <= 600
-    assert len(below_capacity) == 1000 - len(exposed)
-    assert below_capacity
+    assert len(exposed) == len(_target_delivery_client(adapter).calls) == summary["counts"]["target_exposures"] == 600
+    assert len(below_capacity) == 400
+    assert decision_evidence["action_counts"] == {"like": 0, "comment": 0, "share": 0, "ignore": 600}
+    assert decision_evidence["terminal_counts"] == {
+        "sample_users": 1000,
+        "exposed_users": 600,
+        "decided_users": 600,
+        "provider_failed": 0,
+        "below_delivery_capacity": 400,
+    }
+    assert decision_evidence["degeneracy_flags"] == {
+        "all_decisions_ignore": True,
+        "single_action_only": True,
+        "no_engagement_feedback": True,
+    }
     assert all(int(row["selected_users"]) <= 20 for row in steps)
     assert all(row["provider_status"] == "not_called" for row in below_capacity)
     assert all(row["exposure_time_step"] == "" for row in below_capacity)
@@ -1504,10 +1666,10 @@ def test_target_delivery_ranking_runtime_caps_delivery_and_marks_final_below_cap
     assert {
         row["provider_status"] for row in report_payload["users"] if row["result_status"] == "below_delivery_capacity"
     } == {"not_called"}
-    below_user_id = next(row["user_id"] for row in report_payload["users"] if row["result_status"] == "below_delivery_capacity")
-    below_traces = {
-        trace["field_name"]: trace for trace in report_payload["user_field_trace_index"][below_user_id]
-    }
+    below_user_id = next(
+        row["user_id"] for row in report_payload["users"] if row["result_status"] == "below_delivery_capacity"
+    )
+    below_traces = {trace["field_name"]: trace for trace in report_payload["user_field_trace_index"][below_user_id]}
     assert "interest_tags" not in below_traces
     assert below_traces["historical_tags"]["prompt_inclusion_status"] == "not_allowlisted"
     assert below_traces["result_status"]["source_record_locator"]["artifact_id"] == "ranking_runtime_outcomes"
@@ -1607,16 +1769,17 @@ def test_target_delivery_ranking_v5_persists_historical_field_traces_without_int
     assert "action=ignore" in u1_traces["action"]["evidence"][0]["matched_values"]
     assert u1_traces["action"]["actual_usage_stages"] == ["Report Only"]
     assert u1_traces["provider_status"]["source_record_locator"]["artifact_id"] == "ranking_runtime_outcomes"
-    assert u1_traces["ranking_diagnostics.paired_ablation"]["source_record_locator"][
-        "artifact_id"
-    ] == "ranking_ablation_diagnostics_csv"
+    assert (
+        u1_traces["ranking_diagnostics.paired_ablation"]["source_record_locator"]["artifact_id"]
+        == "ranking_ablation_diagnostics_csv"
+    )
     assert u1_traces["ranking_diagnostics.paired_ablation"]["source_record_locator"]["record_key"] == {
         "time_step": 0,
         "user_id": "u1",
     }
     assert u1_traces["ranking_diagnostics.paired_ablation"]["evidence"][0]["matched_values"] == [
         "user_id=u1",
-        "paired_ablation=True"
+        "paired_ablation=True",
     ]
     assert u1_traces["ranking_diagnostics.summary"]["source_record_locator"]["artifact_id"] == (
         "ranking_diagnostics_summary"
@@ -1625,9 +1788,7 @@ def test_target_delivery_ranking_v5_persists_historical_field_traces_without_int
         "time_step": 0,
         "variant_id": "main_50_30_20",
     }
-    assert u1_traces["ranking_diagnostics.historical_top20_diagnostic"]["source_record_locator"][
-        "record_key"
-    ] == {
+    assert u1_traces["ranking_diagnostics.historical_top20_diagnostic"]["source_record_locator"]["record_key"] == {
         "schema_version": "ranking-diagnostics-v2",
         "section": "historical_top20_diagnostic",
     }
@@ -1678,10 +1839,10 @@ def test_target_delivery_ranking_v5_persists_historical_field_traces_without_int
     assert "sk-secret" not in persisted_text
 
 
-def test_target_delivery_ranking_v5_remains_validation_when_adapter_sets_live_flag(tmp_path: Path) -> None:
+def test_target_delivery_ranking_v5_keeps_injected_provider_client_in_validation(tmp_path: Path) -> None:
     dataset_dir = _make_target_delivery_fixture(tmp_path)
     provider_config = ProviderLLMConfig(enabled=True, model="mock-model", require_live_env=False)
-    adapter = _TargetDeliveryAdapter(mark_live_api_triggered=True)
+    adapter = _TargetDeliveryAdapter()
     run_dir = FinalResearchRunner(
         FinalResearchConfig(dataset_dir=dataset_dir, sample_size=70, provider=provider_config),
         adapter,
@@ -1699,10 +1860,10 @@ def test_target_delivery_ranking_v5_remains_validation_when_adapter_sets_live_fl
     ]
     report_payload = json.loads((run_dir / "final_research_report_payload.json").read_text(encoding="utf-8"))
 
-    assert adapter.live_api_triggered is True
+    assert adapter.live_api_triggered is False
     assert all(document["sampling_status"] == "validation_run" for document in documents)
     assert report_payload["run"]["sampling_status"] == "validation_run"
-    assert documents[3]["live_api_triggered"] is True
+    assert documents[3]["live_api_triggered"] is False
     assert report_payload["evidence_state"]["production_deploy_eligible"] is False
     assert "Persisted Seed-First Formal Run" not in (run_dir / "report.html").read_text(encoding="utf-8")
     assert rebuild_final_research_report(run_dir) == run_dir / "report.html"
@@ -1735,9 +1896,7 @@ def test_target_delivery_trace_records_feedback_and_provider_failure_from_the_sa
 
     failed = traces_by_user["u79"]
     assert failed["provider_status"]["source_record_locator"]["artifact_id"] == "ranking_runtime_outcomes"
-    assert failed["provider_failure_type"]["source_record_locator"]["artifact_id"] == (
-        "runtime_provider_failures"
-    )
+    assert failed["provider_failure_type"]["source_record_locator"]["artifact_id"] == ("runtime_provider_failures")
     assert failed["provider_failure_type"]["value_status"] == "present"
     assert failed["action"]["value_status"] == "empty"
     assert failed["action"]["source_record_locator"]["artifact_id"] == "ranking_runtime_outcomes"
@@ -1767,9 +1926,7 @@ def test_target_delivery_trace_does_not_claim_ranking_usage_without_affected_nei
     final_time_step = max(
         user["exposure_time_step"] for user in payload["users"] if user["exposure_time_step"] is not None
     )
-    final_batch_user = next(
-        user for user in payload["users"] if user["exposure_time_step"] == final_time_step
-    )
+    final_batch_user = next(user for user in payload["users"] if user["exposure_time_step"] == final_time_step)
     action_trace = next(
         trace
         for trace in payload["user_field_trace_index"][final_batch_user["user_id"]]
@@ -1780,16 +1937,14 @@ def test_target_delivery_trace_does_not_claim_ranking_usage_without_affected_nei
     assert action_trace["evidence"][0]["evidence_kind"] == "no_next_batch_signal"
     assert "affected_direct_neighbor_count=0" in action_trace["evidence"][0]["matched_values"]
     assert "affected_direct_neighbor_user_ids=[]" in action_trace["evidence"][0]["matched_values"]
-    assert not any(
-        value.startswith("next_time_step=") for value in action_trace["evidence"][0]["matched_values"]
-    )
+    assert not any(value.startswith("next_time_step=") for value in action_trace["evidence"][0]["matched_values"])
     assert action_trace["actual_usage_stages"] == ["Report Only"]
 
 
-def test_probability_runtime_persists_probability_formal_status_after_adapter_call(tmp_path: Path) -> None:
+def test_probability_runtime_keeps_injected_provider_client_in_validation(tmp_path: Path) -> None:
     dataset_dir = _make_processed_fixture(tmp_path)
     provider_config = ProviderLLMConfig(enabled=True, model="mock-model", require_live_env=False)
-    adapter = _TargetDeliveryAdapter(mark_live_api_triggered=True)
+    adapter = _TargetDeliveryAdapter()
     run_dir = FinalResearchRunner(
         FinalResearchConfig(
             dataset_dir=dataset_dir,
@@ -1811,12 +1966,12 @@ def test_probability_runtime_persists_probability_formal_status_after_adapter_ca
     report_payload = json.loads((run_dir / "final_research_report_payload.json").read_text(encoding="utf-8"))
     report_html = (run_dir / "report.html").read_text(encoding="utf-8")
 
-    assert adapter.live_api_triggered is True
-    assert all(document["sampling_status"] == "persisted_probability_formal_run" for document in documents)
+    assert adapter.live_api_triggered is False
+    assert all(document["sampling_status"] == "validation_run" for document in documents)
     assert report_payload["run"]["sampling_method"] == "source_scope_stratified_sample_v1"
-    assert report_payload["run"]["sampling_status"] == "persisted_probability_formal_run"
-    assert documents[2]["live_api_triggered"] is True
-    assert "Persisted Probability Formal Run" in report_html
+    assert report_payload["run"]["sampling_status"] == "validation_run"
+    assert documents[2]["live_api_triggered"] is False
+    assert "Persisted Probability Formal Run" not in report_html
     assert "Persisted Seed-First Formal Run" not in report_html
 
 
@@ -1828,7 +1983,7 @@ def test_target_delivery_ranking_report_rebuild_is_deterministic(tmp_path: Path)
         FinalResearchConfig(dataset_dir=dataset_dir, sample_size=70, provider=provider_config),
         adapter,
     ).run_and_write(tmp_path / "ranking-rebuildable")
-    calls_before_rebuild = len(adapter.calls)
+    calls_before_rebuild = len(_target_delivery_client(adapter).calls)
     report_path = run_dir / "report.html"
     payload_path = run_dir / "final_research_report_payload.json"
     payload = FinalResearchRankingReportPayloadV5.model_validate_json(payload_path.read_text(encoding="utf-8"))
@@ -1844,7 +1999,7 @@ def test_target_delivery_ranking_report_rebuild_is_deterministic(tmp_path: Path)
     first_payload = payload_path.read_bytes()
     first_report = report_path.read_bytes()
     assert first_report == direct_report
-    assert len(adapter.calls) == calls_before_rebuild
+    assert len(_target_delivery_client(adapter).calls) == calls_before_rebuild
 
     assert rebuild_final_research_report(run_dir) == report_path
     assert payload_path.read_bytes() == first_payload
@@ -1893,6 +2048,9 @@ def _convert_persisted_v5_run_to_pending_v5(run_dir: Path) -> None:
         path = run_dir / file_name
         document = json.loads(path.read_text(encoding="utf-8"))
         document["evidence_state"] = pending_evidence_state
+        for field_name in V5_DECISION_SUMMARY_FIELDS:
+            if file_name == "ranking_runtime_summary.json" or field_name != "live_api_triggered":
+                document.pop(field_name, None)
         path.write_text(json.dumps(document, ensure_ascii=False) + "\n", encoding="utf-8")
 
     holdout_path = run_dir / "top20_holdout_diagnostic.json"
@@ -1908,11 +2066,16 @@ def _convert_persisted_v5_run_to_pending_v5(run_dir: Path) -> None:
     payload_path = run_dir / "final_research_report_payload.json"
     payload = json.loads(payload_path.read_text(encoding="utf-8"))
     payload["evidence_state"] = pending_evidence_state
-    payload["ranking_diagnostics"]["historical_top20_diagnostic"].pop(
-        "target_aggregate_engagement_reference"
-    )
+    payload["ranking_diagnostics"]["historical_top20_diagnostic"].pop("target_aggregate_engagement_reference")
+    for field_name in V5_DECISION_DOWNLOAD_FIELDS:
+        payload["downloads"].pop(field_name)
     _restore_historical_top20_v1_catalog_definition(payload["field_lineage_catalog"])
     payload_path.write_text(json.dumps(payload, ensure_ascii=False) + "\n", encoding="utf-8")
+
+    users_path = run_dir / "final_research_users.json"
+    users_document = json.loads(users_path.read_text(encoding="utf-8"))
+    users_document["links"] = payload["downloads"]
+    users_path.write_text(json.dumps(users_document, ensure_ascii=False) + "\n", encoding="utf-8")
 
     catalog_path = run_dir / "field_lineage_catalog.json"
     catalog_document = json.loads(catalog_path.read_text(encoding="utf-8"))
@@ -1954,6 +2117,8 @@ def _convert_seed_first_v5_run_to_historical_v4(run_dir: Path) -> dict[str, Any]
     payload = json.loads(payload_path.read_text(encoding="utf-8"))
     payload["schema_version"] = "final-research-ranking-report-payload-v4"
     payload.pop("evidence_state")
+    for field_name in V5_DECISION_DOWNLOAD_FIELDS:
+        payload["downloads"].pop(field_name)
     payload["field_lineage"].append(
         {
             "field_name": "interest_tags",
@@ -1991,7 +2156,9 @@ def _convert_seed_first_v5_run_to_historical_v4(run_dir: Path) -> dict[str, Any]
         ],
     }
     catalog = payload["field_lineage_catalog"]
-    historical_index = next(index for index, definition in enumerate(catalog) if definition["field_name"] == "historical_tags")
+    historical_index = next(
+        index for index, definition in enumerate(catalog) if definition["field_name"] == "historical_tags"
+    )
     catalog[historical_index]["limitations"] = ["没有真实曝光日志。", "不得回填到 interest_tags。"]
     _restore_historical_top20_v1_catalog_definition(catalog)
     catalog.insert(historical_index + 1, interest_definition)
@@ -2038,7 +2205,9 @@ def _convert_seed_first_v5_run_to_historical_v4(run_dir: Path) -> dict[str, Any]
         encoding="utf-8",
     )
     (run_dir / "user_field_trace.json").write_text(
-        json.dumps({"schema_version": "user-field-trace-v1", "users": payload["user_field_trace_index"]}, ensure_ascii=False)
+        json.dumps(
+            {"schema_version": "user-field-trace-v1", "users": payload["user_field_trace_index"]}, ensure_ascii=False
+        )
         + "\n",
         encoding="utf-8",
     )
@@ -2064,6 +2233,7 @@ def _convert_seed_first_v5_run_to_historical_v4(run_dir: Path) -> dict[str, Any]
     users_path = run_dir / "final_research_users.json"
     users_document = json.loads(users_path.read_text(encoding="utf-8"))
     users_document["schema_version"] = "final-research-ranking-users-v4"
+    users_document["links"] = payload["downloads"]
     users_document["users"] = payload["users"]
     users_path.write_text(json.dumps(users_document, ensure_ascii=False) + "\n", encoding="utf-8")
     payload_path.write_text(json.dumps(payload, ensure_ascii=False) + "\n", encoding="utf-8")
@@ -2072,6 +2242,9 @@ def _convert_seed_first_v5_run_to_historical_v4(run_dir: Path) -> dict[str, Any]
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     manifest["manifest_version"] = "final-research-ranking-runtime-v2"
     manifest.pop("evidence_state")
+    for field_name in V5_DECISION_SUMMARY_FIELDS:
+        if field_name != "live_api_triggered":
+            manifest.pop(field_name, None)
     manifest_path.write_text(json.dumps(manifest, ensure_ascii=False) + "\n", encoding="utf-8")
 
     config_path = run_dir / "config_snapshot.json"
@@ -2083,6 +2256,8 @@ def _convert_seed_first_v5_run_to_historical_v4(run_dir: Path) -> dict[str, Any]
     summary["runtime_version"] = "final-research-ranking-runtime-v2"
     summary["provider_metadata"]["prompt_version"] = "jinjiang-green-marketing-prompt-v2"
     summary.pop("evidence_state")
+    for field_name in V5_DECISION_SUMMARY_FIELDS:
+        summary.pop(field_name, None)
     summary_path.write_text(json.dumps(summary, ensure_ascii=False) + "\n", encoding="utf-8")
     diagnostics_path = run_dir / "ranking_diagnostics.json"
     diagnostics = json.loads(diagnostics_path.read_text(encoding="utf-8"))
@@ -2156,9 +2331,7 @@ def test_seed_first_v4_rebuild_rejects_v2_target_aggregate_reference(tmp_path: P
     diagnostics_path.write_text(json.dumps(diagnostics, ensure_ascii=False) + "\n", encoding="utf-8")
     payload_path = run_dir / "final_research_report_payload.json"
     payload = json.loads(payload_path.read_text(encoding="utf-8"))
-    payload["ranking_diagnostics"]["historical_top20_diagnostic"][
-        "target_aggregate_engagement_reference"
-    ] = reference
+    payload["ranking_diagnostics"]["historical_top20_diagnostic"]["target_aggregate_engagement_reference"] = reference
     payload_path.write_text(json.dumps(payload, ensure_ascii=False) + "\n", encoding="utf-8")
 
     with pytest.raises(ValueError, match="ranking-diagnostics-v1 cannot contain target aggregate engagement reference"):
@@ -2189,7 +2362,12 @@ def _convert_seed_first_v5_run_to_historical_v3(run_dir: Path) -> dict[str, Any]
     payload_document.pop("sample_role_counts")
     payload_document.pop("field_lineage_catalog")
     payload_document.pop("user_field_trace_index")
-    for field_name in ("field_lineage_catalog", "user_field_trace", "field_source_records"):
+    for field_name in (
+        "field_lineage_catalog",
+        "user_field_trace",
+        "field_source_records",
+        *V5_DECISION_DOWNLOAD_FIELDS,
+    ):
         payload_document["downloads"].pop(field_name)
 
     users = payload_document["users"]
@@ -2233,8 +2411,14 @@ def _convert_seed_first_v5_run_to_historical_v3(run_dir: Path) -> dict[str, Any]
     manifest["artifacts"]["network_augmented_sample_audit"] = "network_augmented_sample_audit.json"
     for artifact_name in ("field_lineage_catalog", "user_field_trace", "field_source_records"):
         (run_dir / manifest["artifacts"].pop(artifact_name)).unlink()
-    for field_name in ("sampling_method", "sampling_status", "sample_role_counts"):
-        manifest.pop(field_name, None)
+    for field_name in (
+        "sampling_method",
+        "sampling_status",
+        "sample_role_counts",
+        *V5_DECISION_SUMMARY_FIELDS,
+    ):
+        if field_name != "live_api_triggered":
+            manifest.pop(field_name, None)
     manifest_path.write_text(json.dumps(manifest, ensure_ascii=False) + "\n", encoding="utf-8")
 
     historical_audit = {
@@ -2273,6 +2457,8 @@ def _convert_seed_first_v5_run_to_historical_v3(run_dir: Path) -> dict[str, Any]
             document["runtime_version"] = "final-research-ranking-runtime-v2"
             document["provider_metadata"]["prompt_version"] = "jinjiang-green-marketing-prompt-v2"
             document.pop("evidence_state")
+            for field_name in V5_DECISION_SUMMARY_FIELDS:
+                document.pop(field_name, None)
         document_path.write_text(json.dumps(document, ensure_ascii=False) + "\n", encoding="utf-8")
 
     diagnostics_path = run_dir / "ranking_diagnostics.json"
@@ -2304,7 +2490,7 @@ def test_historical_network_augmented_v3_rebuild_preserves_legacy_artifact_contr
     provider_config = ProviderLLMConfig(enabled=True, model="mock-model", require_live_env=False)
     run_dir = FinalResearchRunner(
         FinalResearchConfig(dataset_dir=dataset_dir, sample_size=70, provider=provider_config),
-        _TargetDeliveryAdapter(mark_live_api_triggered=True),
+        _TargetDeliveryAdapter(),
     ).run_and_write(tmp_path / "ranking-legacy-v3")
     manifest = _convert_seed_first_v5_run_to_historical_v3(run_dir)
     payload_path = run_dir / "final_research_report_payload.json"
@@ -2538,7 +2724,7 @@ def test_ranking_rebuild_contract_rejects_unknown_missing_and_crossed_evidence(t
 
 
 @pytest.mark.parametrize("file_name", ["artifact_manifest.json", "ranking_runtime_summary.json"])
-def test_v5_rebuild_rejects_premature_decision_evidence_without_publish(tmp_path: Path, file_name: str) -> None:
+def test_v5_rebuild_rejects_cross_document_decision_evidence_mismatch(tmp_path: Path, file_name: str) -> None:
     dataset_dir = _make_target_delivery_fixture(tmp_path)
     source_run = FinalResearchRunner(
         FinalResearchConfig(
@@ -2552,7 +2738,7 @@ def test_v5_rebuild_rejects_premature_decision_evidence_without_publish(tmp_path
     shutil.copytree(source_run, run_dir)
     evidence_path = run_dir / file_name
     evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
-    evidence["evidence_state"]["decision_execution_evidence"]["status"] = "persisted"
+    evidence["evidence_state"]["decision_execution_evidence"]["decision_source_counts"]["provider"] += 1
     evidence_path.write_text(json.dumps(evidence, ensure_ascii=False) + "\n", encoding="utf-8")
     payload_path = run_dir / "final_research_report_payload.json"
     report_path = run_dir / "report.html"
@@ -2560,6 +2746,57 @@ def test_v5_rebuild_rejects_premature_decision_evidence_without_publish(tmp_path
     persisted_report = report_path.read_bytes()
 
     with pytest.raises(ValueError, match="does not match ranking report v5 validation evidence"):
+        rebuild_final_research_report(run_dir)
+
+    assert payload_path.read_bytes() == persisted_payload
+    assert report_path.read_bytes() == persisted_report
+
+
+@pytest.mark.parametrize(
+    ("artifact_name", "mutate", "expected_error"),
+    [
+        (
+            "runtime_decisions.csv",
+            lambda rows: rows[0].__setitem__("decision_source", "tampered_source"),
+            "decision_source_counts does not match runtime rows",
+        ),
+        (
+            "runtime_actions.csv",
+            lambda rows: rows[0].__setitem__("action", "comment"),
+            "Decision and action row disagree",
+        ),
+        (
+            "ranking_runtime_outcomes.csv",
+            lambda rows: rows[0].__setitem__("result_status", "provider_failed"),
+            "does not match its outcome",
+        ),
+    ],
+)
+def test_v5_rebuild_recomputes_decision_evidence_from_runtime_rows(
+    tmp_path: Path,
+    artifact_name: str,
+    mutate,
+    expected_error: str,
+) -> None:
+    dataset_dir = _make_target_delivery_fixture(tmp_path)
+    run_dir = FinalResearchRunner(
+        FinalResearchConfig(
+            dataset_dir=dataset_dir,
+            sample_size=70,
+            provider=ProviderLLMConfig(enabled=True, model="mock-model", require_live_env=False),
+        ),
+        _TargetDeliveryAdapter(),
+    ).run_and_write(tmp_path / f"ranking-v5-row-evidence-{artifact_name}")
+    artifact_path = run_dir / artifact_name
+    rows = _read_csv(artifact_path)
+    mutate(rows)
+    _write_csv(artifact_path, list(rows[0]), rows)
+    payload_path = run_dir / "final_research_report_payload.json"
+    report_path = run_dir / "report.html"
+    persisted_payload = payload_path.read_bytes()
+    persisted_report = report_path.read_bytes()
+
+    with pytest.raises(ValueError, match=expected_error):
         rebuild_final_research_report(run_dir)
 
     assert payload_path.read_bytes() == persisted_payload
@@ -2845,7 +3082,6 @@ def test_target_delivery_ranking_provider_prompt_excludes_ranking_evidence(tmp_p
     provider_config = ProviderLLMConfig(enabled=True, model="mock-model", require_live_env=False)
     client = _ScriptedProviderClient()
     provider = OpenAICompatibleDecisionAdapter(provider_config, client=client, sleep=lambda _delay: None)
-    adapter = _RecordingAdapter(provider)
 
     FinalResearchRunner(
         FinalResearchConfig(
@@ -2853,12 +3089,12 @@ def test_target_delivery_ranking_provider_prompt_excludes_ranking_evidence(tmp_p
             sample_size=4,
             provider=provider_config,
         ),
-        adapter,
+        provider,
     ).run_and_write(tmp_path / "ranking-prompt-runtime")
 
-    assert adapter.calls
-    assert all(call["peer_context"] == PeerContext() for call in adapter.calls)
+    assert client.requests
     prompt_text = json.dumps(client.requests, ensure_ascii=False)
+    assert "邻居曝光：0；邻居互动：0；互动比例：0.00" in prompt_text
     for forbidden in (
         "base_network_relevance",
         "dynamic_network",
@@ -3378,7 +3614,13 @@ def test_final_research_does_not_convert_unexpected_adapter_errors_to_provider_f
         provider=ProviderLLMConfig(enabled=True, require_live_env=False),
     )
 
-    with pytest.raises(AssertionError, match="adapter programming defect"):
+    expected_error = ValueError if research_model is FinalResearchModel.TARGET_DELIVERY_RANKING_V2 else AssertionError
+    expected_message = (
+        "unsupported Final Research decision adapter"
+        if research_model is FinalResearchModel.TARGET_DELIVERY_RANKING_V2
+        else "adapter programming defect"
+    )
+    with pytest.raises(expected_error, match=expected_message):
         FinalResearchRunner(config, UnexpectedFailureAdapter()).run_and_write(
             tmp_path / f"failed-runtime-{research_model.value}"
         )

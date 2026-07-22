@@ -37,6 +37,10 @@ from .field_lineage_trace import (
     is_decision_trace_field,
     is_user_field_trace_definition,
 )
+from .final_research_decision_evidence import (
+    DecisionExecutionEvidence,
+    _FinalResearchDecisionEvidenceBuilder,
+)
 from .prompt_field_summary import JINJIANG_PROMPT_V2_PROFILE_FIELDS, JINJIANG_PROMPT_V3_PROFILE_FIELDS
 from .research_explanations import (
     ExplanationContext,
@@ -729,6 +733,14 @@ class RankingReportDownloads(RankingReportDownloadsV3):
     field_source_records: str
 
 
+class RankingReportDownloadsV5(RankingReportDownloads):
+    runtime_decisions: str
+    runtime_actions: str
+    runtime_provider_failures: str
+    ranking_runtime_outcomes: str
+    ranking_runtime_summary: str
+
+
 class RankingPendingEvidenceState(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -749,11 +761,21 @@ class RankingV5ExpandEvidence(BaseModel):
     schema_version: Literal["ranking-v5-expand-evidence-v1"]
     contract_stage: Literal["validation_expand"]
     target_aggregate_engagement_reference: RankingPendingEvidenceState | RankingPersistedEvidenceState
-    decision_execution_evidence: RankingPendingEvidenceState
+    decision_execution_evidence: RankingPendingEvidenceState | DecisionExecutionEvidence
     production_deploy_eligible: Literal[False]
 
+    @model_validator(mode="after")
+    def _validate_expand_lineage(self) -> RankingV5ExpandEvidence:
+        if self.target_aggregate_engagement_reference.status == "pending" and isinstance(
+            self.decision_execution_evidence, DecisionExecutionEvidence
+        ):
+            raise ValueError("persisted Decision evidence requires persisted target aggregate evidence")
+        return self
 
-def ranking_v5_expand_evidence() -> dict[str, object]:
+
+def ranking_v5_expand_evidence(
+    decision_execution_evidence: DecisionExecutionEvidence | None = None,
+) -> dict[str, object]:
     return RankingV5ExpandEvidence(
         schema_version="ranking-v5-expand-evidence-v1",
         contract_stage="validation_expand",
@@ -761,7 +783,8 @@ def ranking_v5_expand_evidence() -> dict[str, object]:
             status="persisted",
             formal_research_evidence=False,
         ),
-        decision_execution_evidence=RankingPendingEvidenceState(
+        decision_execution_evidence=decision_execution_evidence
+        or RankingPendingEvidenceState(
             status="pending",
             formal_research_evidence=False,
         ),
@@ -1030,7 +1053,7 @@ class FinalResearchRankingReportPayloadV5(BaseModel):
     ranking_diagnostics: dict[str, object]
     ranking_diagnostics_summary: RankingDiagnosticSummary
     evidence_state: RankingV5ExpandEvidence
-    downloads: RankingReportDownloads
+    downloads: RankingReportDownloads | RankingReportDownloadsV5
     limitations: list[str]
     users: list[RankingUserReportRowV5]
 
@@ -1085,6 +1108,43 @@ class FinalResearchRankingReportPayloadV5(BaseModel):
             )
             if aggregate_reference.record_key.video_id != self.target_video.video_id:
                 raise ValueError("target aggregate engagement reference video_id does not match TargetVideo")
+        decision_evidence = self.evidence_state.decision_execution_evidence
+        if isinstance(decision_evidence, RankingPendingEvidenceState):
+            if self.run.sampling_status != "validation_run":
+                raise ValueError("pending Decision evidence requires validation_run")
+        else:
+            if not isinstance(self.downloads, RankingReportDownloadsV5):
+                raise ValueError("persisted Decision evidence requires v5 runtime downloads")
+            if self.run.sampling_status != decision_evidence.sampling_status:
+                raise ValueError("Decision evidence sampling status does not match report run")
+            decided_users = [user for user in self.users if user.provider_status == "succeeded"]
+            action_counts = Counter(user.action for user in decided_users)
+            source_counts = Counter(user.decision_source for user in decided_users)
+            expected_action_counts = {
+                action: action_counts[action] for action in ("like", "comment", "share", "ignore")
+            }
+            expected_terminal_counts = {
+                "sample_users": len(self.users),
+                "exposed_users": sum(user.result_status != "below_delivery_capacity" for user in self.users),
+                "decided_users": len(decided_users),
+                "provider_failed": sum(user.result_status == "provider_failed" for user in self.users),
+                "below_delivery_capacity": sum(user.result_status == "below_delivery_capacity" for user in self.users),
+            }
+            active_actions = sum(count > 0 for count in expected_action_counts.values())
+            expected_flags = {
+                "all_decisions_ignore": bool(decided_users) and expected_action_counts["ignore"] == len(decided_users),
+                "single_action_only": bool(decided_users) and active_actions == 1,
+                "no_engagement_feedback": sum(expected_action_counts[action] for action in ("like", "comment", "share"))
+                == 0,
+            }
+            if decision_evidence.action_counts != expected_action_counts:
+                raise ValueError("Decision evidence action counts do not match report users")
+            if decision_evidence.decision_source_counts != dict(sorted(source_counts.items())):
+                raise ValueError("Decision evidence source counts do not match report users")
+            if decision_evidence.terminal_counts.model_dump(mode="json") != expected_terminal_counts:
+                raise ValueError("Decision evidence terminal counts do not match report users")
+            if decision_evidence.degeneracy_flags.model_dump(mode="json") != expected_flags:
+                raise ValueError("Decision evidence degeneracy flags do not match report users")
         return self
 
 
@@ -1108,7 +1168,7 @@ class _SeedFirstRankingUsersDocumentV5(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     schema_version: Literal["final-research-ranking-users-v5"]
-    links: RankingReportDownloads
+    links: RankingReportDownloads | RankingReportDownloadsV5
     users: list[RankingUserReportRowV5]
 
 
@@ -1139,6 +1199,7 @@ class _RankingRebuildEvidence:
     diagnostics_summary_schema: object
     config_prompt_schema: object
     runtime_prompt_schema: object
+    payload_decision_execution_mode: object
     sample_audit_artifact: object
     sample_audit_schema: object
     payload_sampling_method: object
@@ -1193,7 +1254,7 @@ _SEED_FIRST_V5_REBUILD_CONTRACT = _RankingRebuildContract(
     sample_audit_artifact="seed_first_sample_audit",
     sample_audit_schema="seed-first-sample-audit-v1",
     sampling_method="seed_first_research_sample_v1",
-    sampling_statuses=("validation_run",),
+    sampling_statuses=("validation_run", "persisted_seed_first_formal_run"),
     persists_sampling_fields=True,
     artifacts=_RANKING_V5_ARTIFACTS,
 )
@@ -1425,9 +1486,7 @@ class FinalResearchReportWriter:
                     "historical_tags": sorted(
                         {str(tag) for tag in self.source.historical_tags_by_user.get(user_id, ())}
                     ),
-                    "historical_comment_network_weighted_degree": _as_int(
-                        score.get("target_scope_weighted_degree")
-                    ),
+                    "historical_comment_network_weighted_degree": _as_int(score.get("target_scope_weighted_degree")),
                     "latest_ranking_time_step": _as_int(latest_candidate.get("time_step")),
                     "base_network_relevance": _as_float(latest_candidate.get("base_network_relevance")),
                     "engaged_neighbor_count": _as_int(latest_candidate.get("engaged_neighbor_count")),
@@ -1605,11 +1664,18 @@ class FinalResearchReportWriter:
 
     @staticmethod
     def render_payload(
-        payload: FinalResearchReportPayload | FinalResearchRankingReportPayloadV3 | FinalResearchRankingReportPayload | FinalResearchRankingReportPayloadV5,
+        payload: FinalResearchReportPayload
+        | FinalResearchRankingReportPayloadV3
+        | FinalResearchRankingReportPayload
+        | FinalResearchRankingReportPayloadV5,
     ) -> str:
         if isinstance(
             payload,
-            (FinalResearchRankingReportPayloadV3, FinalResearchRankingReportPayload, FinalResearchRankingReportPayloadV5),
+            (
+                FinalResearchRankingReportPayloadV3,
+                FinalResearchRankingReportPayload,
+                FinalResearchRankingReportPayloadV5,
+            ),
         ):
             return _render_ranking_report(payload)
         payload_json = safe_user_json(payload, indent=None).replace("</", "<\\/")
@@ -2113,7 +2179,7 @@ def _build_ranking_report_payload(
             diagnostic_decision_adapter_calls=_as_int(diagnostic_summary.get("diagnostic_decision_adapter_calls")),
         ),
         evidence_state=RankingV5ExpandEvidence.model_validate(runtime_summary.get("evidence_state")),
-        downloads=RankingReportDownloads(
+        downloads=RankingReportDownloadsV5(
             report=FINAL_RESEARCH_REPORT_ARTIFACTS["final_research_report"],
             payload=FINAL_RESEARCH_REPORT_ARTIFACTS["final_research_report_payload"],
             csv=FINAL_RESEARCH_REPORT_ARTIFACTS["final_research_users_csv"],
@@ -2125,6 +2191,11 @@ def _build_ranking_report_payload(
             field_lineage_catalog=str(manifest_artifacts["field_lineage_catalog"]),
             user_field_trace=str(manifest_artifacts["user_field_trace"]),
             field_source_records=str(manifest_artifacts["field_source_records"]),
+            runtime_decisions=str(manifest_artifacts["runtime_decisions"]),
+            runtime_actions=str(manifest_artifacts["runtime_actions"]),
+            runtime_provider_failures=str(manifest_artifacts["runtime_provider_failures"]),
+            ranking_runtime_outcomes=str(manifest_artifacts["ranking_runtime_outcomes"]),
+            ranking_runtime_summary=str(manifest_artifacts["ranking_runtime_summary"]),
         ),
         limitations=[
             "Network Cohort supports propagation identification and is not a representative random sample.",
@@ -2208,9 +2279,7 @@ def _ranking_v5_lineage_field_names() -> set[str]:
 
 
 def _ranking_field_lineage() -> list[FieldLineageEntry]:
-    trace_definitions = {
-        definition.field_name: definition for definition in _historical_v4_field_lineage_definitions()
-    }
+    trace_definitions = {definition.field_name: definition for definition in _historical_v4_field_lineage_definitions()}
     direct = {
         *(f"target_video.{field}" for field in FinalResearchTargetVideo.model_fields),
         "ranking_rounds.candidates.user_id",
@@ -2318,8 +2387,67 @@ def _render_target_aggregate_engagement_reference(
     """
 
 
+def _render_decision_execution_evidence(
+    payload: FinalResearchRankingReportPayloadV3
+    | FinalResearchRankingReportPayload
+    | FinalResearchRankingReportPayloadV5,
+) -> str:
+    if not isinstance(payload, FinalResearchRankingReportPayloadV5):
+        return ""
+    evidence = payload.evidence_state.decision_execution_evidence
+    if isinstance(evidence, RankingPendingEvidenceState):
+        return ""
+    source_rows = "".join(
+        f"<tr><th><code>{escape(source)}</code></th><td>{evidence.decision_source_counts[source]:,}</td></tr>"
+        for source in sorted(evidence.decision_source_counts)
+    )
+    action_rows = "".join(
+        f"<tr><th><code>{escape(action)}</code></th><td>{evidence.action_counts[action]:,}</td></tr>"
+        for action in ("like", "comment", "share", "ignore")
+    )
+    terminal_rows = "".join(
+        f"<tr><th><code>{escape(field_name)}</code></th><td>{count:,}</td></tr>"
+        for field_name, count in evidence.terminal_counts.model_dump(mode="json").items()
+    )
+    flag_explanations = {
+        "all_decisions_ignore": "全部成功 Decision 均为 ignore；这是诊断事实，不触发重跑或补造 action。",
+        "single_action_only": "成功 Decision 只出现一种 action；它描述结果集中度，不是 Formal validity 门禁。",
+        "no_engagement_feedback": "没有 like/comment/share 可进入下一批直接邻居反馈；ignore 与 provider_failed 均不传播。",
+    }
+    flag_rows = "".join(
+        "<li>"
+        f"<strong><code>{escape(flag_name)}</code>={str(enabled).lower()}</strong> "
+        f"{escape(flag_explanations[flag_name])}"
+        "</li>"
+        for flag_name, enabled in evidence.degeneracy_flags.model_dump(mode="json").items()
+    )
+    metadata = escape(safe_json(evidence.provider_metadata, indent=None))
+    live_label = "true（已实际发出外部请求）" if evidence.live_api_triggered else "false（本次未触发外部请求）"
+    return f"""
+    <article class="diagnostic-panel decision-execution-panel" data-testid="decision-execution-evidence">
+      <div class="section-heading"><div><h3>Decision Execution Evidence（决策执行证据）</h3><p class="muted">Target Delivery Ranking（目标投放排序）只决定谁获得曝光；以下 action（动作）来自曝光后的同一次 persisted Decision rows（持久化决策行），不从 Provider configuration（服务提供方配置）或展示值推测。</p></div></div>
+      <div class="effect-grid decision-execution-summary">
+        <article><strong data-testid="decision-execution-mode"><code>{escape(evidence.decision_execution_mode)}</code></strong><span>Execution Mode（执行模式）</span></article>
+        <article><strong data-testid="decision-live-api-triggered"><code>{escape(live_label)}</code></strong><span>Live API Trigger（真实 API 触发）</span></article>
+        <article><strong><code>{escape(evidence.sampling_status)}</code></strong><span>Sampling Status（抽样状态）</span></article>
+        <article><strong><code>{escape(" → ".join(evidence.adapter_chain))}</code></strong><span>Registered Adapter Chain（已登记适配器链）</span></article>
+      </div>
+      <div class="diagnostic-layout decision-count-layout">
+        <div class="table-wrap"><table data-testid="decision-source-counts"><thead><tr><th>Decision Source（决策来源）</th><th>Rows（行数）</th></tr></thead><tbody>{source_rows}</tbody></table></div>
+        <div class="table-wrap"><table data-testid="decision-action-counts"><thead><tr><th>Action（动作）</th><th>Rows（行数）</th></tr></thead><tbody>{action_rows}</tbody></table></div>
+        <div class="table-wrap"><table data-testid="decision-terminal-counts"><thead><tr><th>Terminal Fact（终态事实）</th><th>Users（用户数）</th></tr></thead><tbody>{terminal_rows}</tbody></table></div>
+      </div>
+      <ul class="decision-degeneracy-flags" data-testid="decision-degeneracy-flags">{flag_rows}</ul>
+      <p class="muted"><strong>安全 Provider metadata：</strong><code>{metadata}</code></p>
+      <p class="target-aggregate-reference-limit">30 个 Batch、Top{payload.run.delivery_capacity} 与最多 {payload.run.maximum_target_exposures:,} 次 Recommendation Opportunity 解释投放容量；<code>below_delivery_capacity</code> 从未曝光，不计入 exposed 或 action counts。action composition 不用于筛选、更改或美化本次运行。</p>
+    </article>
+    """
+
+
 def _render_ranking_report(
-    payload: FinalResearchRankingReportPayloadV3 | FinalResearchRankingReportPayload | FinalResearchRankingReportPayloadV5,
+    payload: FinalResearchRankingReportPayloadV3
+    | FinalResearchRankingReportPayload
+    | FinalResearchRankingReportPayloadV5,
 ) -> str:
     target = payload.target_video
     target_url = escape(target.video_url, quote=True)
@@ -2330,7 +2458,9 @@ def _render_ranking_report(
     final_reranking_batch = max(1, payload.run.horizon - 1)
     explanation_catalog = ResearchExplanationCatalog.from_lineage(
         payload.field_lineage,
-        allowed_omissions=(frozenset({"interest_tags"}) if isinstance(payload, FinalResearchRankingReportPayloadV5) else frozenset()),
+        allowed_omissions=(
+            frozenset({"interest_tags"}) if isinstance(payload, FinalResearchRankingReportPayloadV5) else frozenset()
+        ),
         include_target_aggregate_reference=(
             isinstance(payload, FinalResearchRankingReportPayloadV5)
             and payload.evidence_state.target_aggregate_engagement_reference.status == "persisted"
@@ -2393,7 +2523,8 @@ def _render_ranking_report(
         for key, relative_path in downloads.items()
     )
     seed_first_run = payload.run.sampling_method == "seed_first_research_sample_v1"
-    if seed_first_run and payload.run.sampling_status == "persisted_seed_first_formal_run":
+    formal_seed_first_run = seed_first_run and payload.run.sampling_status == "persisted_seed_first_formal_run"
+    if formal_seed_first_run:
         run_method_status = "Persisted Seed-First Formal Run（已持久化的 Seed-First 正式运行）"
         run_evidence_title = "Seed-First 正式运行证据"
     elif seed_first_run:
@@ -2405,7 +2536,9 @@ def _render_ranking_report(
         )
         run_evidence_title = "历史正式运行证据"
     run_evidence_boundary = (
-        "以上计数均来自当前 Seed-First run 的 persisted artifacts；Validation Run 不代表已经执行 live provider 正式运行。"
+        "以上计数均来自当前 Seed-First live provider run 的 persisted artifacts；action composition 只作为结果与退化诊断，不用于筛选 Formal Run。"
+        if formal_seed_first_run
+        else "以上计数均来自当前 Seed-First run 的 persisted artifacts；Validation Run 不代表已经执行 live provider 正式运行。"
         if seed_first_run
         else "以上均来自当前历史 payload 与 persisted artifacts，不使用 Proposed Seed-First 投影改写本次运行。"
     )
@@ -2422,12 +2555,16 @@ def _render_ranking_report(
     mechanism_exposure_limit = effective_exposure_limit if seed_first_run else 600
     mechanism_below_capacity = max(0, mechanism_sample_count - mechanism_exposure_limit)
     mechanism_status = (
-        "ADR 0003 · Accepted · persisted Validation Run"
+        "ADR 0003 · Accepted · persisted Formal Run"
+        if formal_seed_first_run
+        else "ADR 0003 · Accepted · persisted Validation Run"
         if seed_first_run
         else "ADR 0003 · Proposed · offline projection"
     )
     mechanism_boundary = (
-        "当前 Seed-First Validation Run 的 persisted sample；它不代表已经执行 live provider 正式运行。"
+        "当前 Seed-First Formal Run 的 persisted sample 与 live Decision evidence；排序和曝光后 action 仍是两个阶段。"
+        if formal_seed_first_run
+        else "当前 Seed-First Validation Run 的 persisted sample；它不代表已经执行 live provider 正式运行。"
         if seed_first_run
         else "Proposed Seed-First Research Sample 的 offline projection，不是旧正式 run 的新结果。"
     )
@@ -2443,6 +2580,7 @@ def _render_ranking_report(
         include_interest_tags=not isinstance(payload, FinalResearchRankingReportPayloadV5)
     )
     target_aggregate_reference = _render_target_aggregate_engagement_reference(payload)
+    decision_execution_panel = _render_decision_execution_evidence(payload)
     return f"""<!doctype html>
 <html lang="zh-CN">
 <head>
@@ -2664,7 +2802,7 @@ def _render_ranking_report(
   </section>
 
   <section class="content-band" data-testid="prompt-contract-section" data-section-anchor="llm-decision">
-    <span class="eyebrow">LLM PROMPT CONTRACT（大模型提示合同）</span><h2>Prompt Isolation（提示证据隔离）</h2>{_render_section_explanation(section_explanations["prompt"], "prompt-section-explanation")}<div class="prompt-reading-note"><p><strong>阶段一：</strong>平台排序决定谁看到视频；<strong>阶段二：</strong>LLM（大模型）决定曝光后的 action（动作）。</p><p>使用 neutral PeerContext（中性同伴上下文）是为了防止评论网络 evidence（证据）同时进入 ranking（排序）和 LLM（大模型）决策，不是数据丢失。页面只展示 allowlisted evidence（允许证据），raw Prompt（原始提示）与 provider payload（服务提供方载荷）保持不可见。</p></div><div id="batch-decision-evidence" class="batch-decision-evidence" data-testid="batch-decision-evidence"></div><div class="prompt-grid"><article><h3>Allowed（允许字段）</h3><ul id="prompt-allowed"></ul></article><article><h3>Neutral（空缺 / 中性字段）</h3><ul id="prompt-neutral"></ul></article><article><h3>Excluded（排除字段）</h3><ul id="prompt-excluded"></ul></article></div>
+    <span class="eyebrow">LLM PROMPT CONTRACT（大模型提示合同）</span><h2>Prompt Isolation（提示证据隔离）</h2>{_render_section_explanation(section_explanations["prompt"], "prompt-section-explanation")}<div class="prompt-reading-note"><p><strong>阶段一：</strong>平台排序决定谁看到视频；<strong>阶段二：</strong>LLM（大模型）决定曝光后的 action（动作）。</p><p>使用 neutral PeerContext（中性同伴上下文）是为了防止评论网络 evidence（证据）同时进入 ranking（排序）和 LLM（大模型）决策，不是数据丢失。页面只展示 allowlisted evidence（允许证据），raw Prompt（原始提示）与 provider payload（服务提供方载荷）保持不可见。</p></div>{decision_execution_panel}<div id="batch-decision-evidence" class="batch-decision-evidence" data-testid="batch-decision-evidence"></div><div class="prompt-grid"><article><h3>Allowed（允许字段）</h3><ul id="prompt-allowed"></ul></article><article><h3>Neutral（空缺 / 中性字段）</h3><ul id="prompt-neutral"></ul></article><article><h3>Excluded（排除字段）</h3><ul id="prompt-excluded"></ul></article></div>
     <div class="chart-grid distributed-chart-grid evidence-subsection">
       <article><h3>Action（动作）与容量状态</h3><div id="action-status-explanation" class="chart-explanation" data-testid="action-status-explanation"></div><div id="action-chart" class="bar-chart" data-testid="action-chart"></div></article>
       <article><h3>Provider failure（Provider 失败）</h3><div id="provider-failure-explanation" class="chart-explanation" data-testid="provider-failure-explanation"></div><div id="provider-failure-chart" class="bar-chart" data-testid="provider-failure-chart"></div></article>
@@ -2730,6 +2868,11 @@ def _ranking_download_label(key: str) -> str:
         "field_lineage_catalog": "Field Lineage Catalog（字段血缘目录）",
         "user_field_trace": "User Field Trace（用户字段追溯）",
         "field_source_records": "Field source records（字段来源记录）",
+        "runtime_decisions": "Runtime Decisions CSV（决策记录）",
+        "runtime_actions": "Runtime Actions CSV（动作记录）",
+        "runtime_provider_failures": "Provider Failures CSV（失败记录）",
+        "ranking_runtime_outcomes": "Runtime Outcomes CSV（终态记录）",
+        "ranking_runtime_summary": "Runtime Summary JSON（运行摘要）",
     }
     return labels[key]
 
@@ -4281,6 +4424,10 @@ def _collect_ranking_rebuild_evidence(
     config_provider = config_provider if isinstance(config_provider, Mapping) else {}
     runtime_provider = runtime_summary.get("provider_metadata")
     runtime_provider = runtime_provider if isinstance(runtime_provider, Mapping) else {}
+    payload_evidence_state = payload_document.get("evidence_state")
+    payload_evidence_state = payload_evidence_state if isinstance(payload_evidence_state, Mapping) else {}
+    payload_decision_evidence = payload_evidence_state.get("decision_execution_evidence")
+    payload_decision_evidence = payload_decision_evidence if isinstance(payload_decision_evidence, Mapping) else {}
 
     return _RankingRebuildEvidence(
         payload_schema=_contract_value(payload_document, "schema_version"),
@@ -4291,6 +4438,7 @@ def _collect_ranking_rebuild_evidence(
         diagnostics_summary_schema=_contract_value(diagnostics_summary, "schema_version"),
         config_prompt_schema=_contract_value(config_provider, "prompt_version"),
         runtime_prompt_schema=_contract_value(runtime_provider, "prompt_version"),
+        payload_decision_execution_mode=_contract_value(payload_decision_evidence, "decision_execution_mode"),
         sample_audit_artifact=sample_audit_artifact,
         sample_audit_schema=_contract_value(audit, "schema_version"),
         payload_sampling_method=_contract_value(payload_run, "sampling_method"),
@@ -4322,7 +4470,6 @@ def _ranking_rebuild_contract_mismatches(
             contract.diagnostics_summary_schema,
         ),
         ("config_prompt_schema", evidence.config_prompt_schema, contract.prompt_schema),
-        ("runtime_prompt_schema", evidence.runtime_prompt_schema, contract.prompt_schema),
         ("sample_audit_artifact", evidence.sample_audit_artifact, contract.sample_audit_artifact),
         ("sample_audit_schema", evidence.sample_audit_schema, contract.sample_audit_schema),
         ("payload_sampling_method", evidence.payload_sampling_method, contract.sampling_method),
@@ -4330,15 +4477,20 @@ def _ranking_rebuild_contract_mismatches(
     for name, actual, expected_token in token_expectations:
         if actual != expected_token:
             mismatches.append(f"{name} expected {expected_token!r}, got {actual!r}")
+    rule_based_v5 = (
+        contract is _SEED_FIRST_V5_REBUILD_CONTRACT and evidence.payload_decision_execution_mode == "rule_based"
+    )
+    if not rule_based_v5 and evidence.runtime_prompt_schema != contract.prompt_schema:
+        mismatches.append(
+            f"runtime_prompt_schema expected {contract.prompt_schema!r}, got {evidence.runtime_prompt_schema!r}"
+        )
 
     if evidence.payload_sampling_status not in contract.sampling_statuses:
         mismatches.append(
             "payload_sampling_status expected one of "
             f"{contract.sampling_statuses!r}, got {evidence.payload_sampling_status!r}"
         )
-    expected_method: object = (
-        contract.sampling_method if contract.persists_sampling_fields else _MISSING_CONTRACT_VALUE
-    )
+    expected_method: object = contract.sampling_method if contract.persists_sampling_fields else _MISSING_CONTRACT_VALUE
     expected_status: object = (
         evidence.payload_sampling_status if contract.persists_sampling_fields else _MISSING_CONTRACT_VALUE
     )
@@ -4646,7 +4798,9 @@ def _build_explainable_payload(
 def _validate_ranking_rebuild_evidence(
     run_path: Path,
     manifest: Mapping[str, object],
-    payload: FinalResearchRankingReportPayloadV3 | FinalResearchRankingReportPayload | FinalResearchRankingReportPayloadV5,
+    payload: FinalResearchRankingReportPayloadV3
+    | FinalResearchRankingReportPayload
+    | FinalResearchRankingReportPayloadV5,
     contract: _RankingRebuildContract,
 ) -> None:
     if manifest.get("manifest_version") != contract.runtime_schema:
@@ -4657,15 +4811,18 @@ def _validate_ranking_rebuild_evidence(
     seed_first = contract in (_SEED_FIRST_V4_REBUILD_CONTRACT, _SEED_FIRST_V5_REBUILD_CONTRACT)
     sample_audit_name = contract.sample_audit_artifact
     traced_payload = (
-        cast(FinalResearchRankingReportPayload | FinalResearchRankingReportPayloadV5, payload)
-        if seed_first
-        else None
+        cast(FinalResearchRankingReportPayload | FinalResearchRankingReportPayloadV5, payload) if seed_first else None
     )
     is_v5 = contract is _SEED_FIRST_V5_REBUILD_CONTRACT
     v5_reference_persisted = (
         is_v5
         and isinstance(payload, FinalResearchRankingReportPayloadV5)
         and payload.evidence_state.target_aggregate_engagement_reference.status == "persisted"
+    )
+    v5_decision_persisted = (
+        is_v5
+        and isinstance(payload, FinalResearchRankingReportPayloadV5)
+        and isinstance(payload.evidence_state.decision_execution_evidence, DecisionExecutionEvidence)
     )
     is_traced = traced_payload is not None
     artifact_paths: dict[str, Path] = {}
@@ -4675,16 +4832,20 @@ def _validate_ranking_rebuild_evidence(
         artifact_paths[name] = _artifact_path(run_path, relative_path, name)
     candidate_records = _read_csv_rows(artifact_paths["ranking_runtime_candidates"])
     candidate_records_by_key = _candidate_record_index(candidate_records)
+    decision_records = _read_csv_rows(artifact_paths["runtime_decisions"])
+    action_records = _read_csv_rows(artifact_paths["runtime_actions"])
     decision_records_by_user = _unique_user_rows(
-        _read_csv_rows(artifact_paths["runtime_decisions"]),
+        decision_records,
         "runtime decisions",
     )
+    outcome_records = _read_csv_rows(artifact_paths["ranking_runtime_outcomes"])
     outcome_records_by_user = _unique_user_rows(
-        _read_csv_rows(artifact_paths["ranking_runtime_outcomes"]),
+        outcome_records,
         "ranking outcomes",
     )
+    failure_records = _read_csv_rows(artifact_paths["runtime_provider_failures"])
     failure_records_by_user = _unique_user_rows(
-        _read_csv_rows(artifact_paths["runtime_provider_failures"]),
+        failure_records,
         "runtime provider failures",
     )
     ablation_records_by_key = _user_time_record_index(
@@ -4745,9 +4906,7 @@ def _validate_ranking_rebuild_evidence(
         base_trace_field_names = {
             definition.field_name
             for definition in (
-                _jinjiang_v5_field_lineage_definitions()
-                if is_v5
-                else _historical_v4_field_lineage_definitions()
+                _jinjiang_v5_field_lineage_definitions() if is_v5 else _historical_v4_field_lineage_definitions()
             )
         }
         sample_records = _read_json_records(artifact_paths["sample_manifest_json"], "sample manifest")
@@ -4912,12 +5071,16 @@ def _validate_ranking_rebuild_evidence(
     if summary.get("runtime_version") != contract.runtime_schema:
         raise ValueError("unsupported Target Delivery Ranking runtime summary schema")
     runtime_provider = _required_mapping(summary, "provider_metadata", "ranking runtime summary")
-    for evidence_name, provider_evidence in (
-        ("config snapshot", config_provider),
-        ("ranking runtime", runtime_provider),
-    ):
-        if provider_evidence.get("prompt_version") != contract.prompt_schema:
-            raise ValueError(f"{evidence_name} Prompt schema does not match {contract.lineage}")
+    if config_provider.get("prompt_version") != contract.prompt_schema:
+        raise ValueError(f"config snapshot Prompt schema does not match {contract.lineage}")
+    rule_based_v5 = (
+        is_v5
+        and isinstance(payload, FinalResearchRankingReportPayloadV5)
+        and isinstance(payload.evidence_state.decision_execution_evidence, DecisionExecutionEvidence)
+        and payload.evidence_state.decision_execution_evidence.decision_execution_mode == "rule_based"
+    )
+    if not rule_based_v5 and runtime_provider.get("prompt_version") != contract.prompt_schema:
+        raise ValueError(f"ranking runtime Prompt schema does not match {contract.lineage}")
     if is_v5:
         if not isinstance(payload, FinalResearchRankingReportPayloadV5):  # pragma: no cover
             raise ValueError("v5 rebuild contract requires a v5 payload")
@@ -4928,6 +5091,35 @@ def _validate_ranking_rebuild_evidence(
         ):
             if evidence_state != payload_evidence_state:
                 raise ValueError(f"{evidence_name} does not match ranking report v5 validation evidence")
+        decision_evidence = payload.evidence_state.decision_execution_evidence
+        if isinstance(decision_evidence, DecisionExecutionEvidence):
+            _FinalResearchDecisionEvidenceBuilder.validate_persisted(
+                decision_evidence,
+                sample_users=len(payload.users),
+                decision_rows=decision_records,
+                action_rows=action_records,
+                outcome_rows=outcome_records,
+                provider_failure_rows=failure_records,
+            )
+            evidence_document = decision_evidence.model_dump(mode="json")
+            shared_fields = (
+                "decision_execution_mode",
+                "decision_source_counts",
+                "action_counts",
+                "terminal_counts",
+                "degeneracy_flags",
+            )
+            for evidence_name, document in (
+                ("artifact manifest", manifest),
+                ("ranking runtime summary", summary),
+            ):
+                for field_name in shared_fields:
+                    if document.get(field_name) != evidence_document[field_name]:
+                        raise ValueError(f"{evidence_name} {field_name} does not match Decision evidence")
+                if document.get("live_api_triggered") != decision_evidence.live_api_triggered:
+                    raise ValueError(f"{evidence_name} live_api_triggered does not match Decision evidence")
+            if runtime_provider != decision_evidence.provider_metadata:
+                raise ValueError("ranking runtime provider metadata does not match Decision evidence")
     expected_sampling_method = payload.run.sampling_method
     expected_sampling_status = payload.run.sampling_status
     for evidence_name, evidence in (
@@ -5124,6 +5316,16 @@ def _validate_ranking_rebuild_evidence(
                 "field_lineage_catalog": artifacts.get("field_lineage_catalog"),
                 "user_field_trace": artifacts.get("user_field_trace"),
                 "field_source_records": artifacts.get("field_source_records"),
+            }
+        )
+    if v5_decision_persisted:
+        expected_downloads.update(
+            {
+                "runtime_decisions": artifacts.get("runtime_decisions"),
+                "runtime_actions": artifacts.get("runtime_actions"),
+                "runtime_provider_failures": artifacts.get("runtime_provider_failures"),
+                "ranking_runtime_outcomes": artifacts.get("ranking_runtime_outcomes"),
+                "ranking_runtime_summary": artifacts.get("ranking_runtime_summary"),
             }
         )
     for field_name, relative_path in expected_downloads.items():
@@ -5591,7 +5793,10 @@ def _stage_text(run_path: Path, target_name: str, content: str) -> Path:
 
 def _publish_report_files(
     run_path: Path,
-    payload: FinalResearchReportPayload | FinalResearchRankingReportPayloadV3 | FinalResearchRankingReportPayload | FinalResearchRankingReportPayloadV5,
+    payload: FinalResearchReportPayload
+    | FinalResearchRankingReportPayloadV3
+    | FinalResearchRankingReportPayload
+    | FinalResearchRankingReportPayloadV5,
 ) -> Path:
     payload_path = run_path / FINAL_RESEARCH_REPORT_ARTIFACTS["final_research_report_payload"]
     report_path = run_path / FINAL_RESEARCH_REPORT_ARTIFACTS["final_research_report"]
