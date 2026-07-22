@@ -1241,6 +1241,151 @@ def test_target_delivery_ranking_runtime_reranks_global_top20_after_seed_engagem
         assert (first_output / relative_path).read_bytes() == (second_output / relative_path).read_bytes()
 
 
+@pytest.mark.parametrize(
+    ("field_name", "invalid_value"),
+    [
+        ("like_count", None),
+        ("comment_count", ""),
+        ("share_count", "-1"),
+        ("collect_count", "1.5"),
+        ("like_count", "not-a-count"),
+    ],
+)
+def test_target_aggregate_reference_rejects_invalid_raw_counts(
+    tmp_path: Path,
+    field_name: str,
+    invalid_value: str | None,
+) -> None:
+    dataset_dir = _make_processed_fixture(tmp_path)
+    video_rows = _read_csv(dataset_dir / "videos.csv")
+    fieldnames = list(video_rows[0])
+    if invalid_value is None:
+        fieldnames.remove(field_name)
+        for row in video_rows:
+            row.pop(field_name)
+    else:
+        target_row = next(row for row in video_rows if row["video_id"] == TARGET_VIDEO_ID)
+        target_row[field_name] = invalid_value
+    _write_csv(dataset_dir / "videos.csv", fieldnames, video_rows)
+
+    with pytest.raises(
+        ValueError,
+        match=rf"videos.csv target {field_name} must be a non-negative integer",
+    ):
+        FinalResearchRunner(
+            FinalResearchConfig(dataset_dir=dataset_dir, sample_size=4),
+            FailingIfCalledAdapter(),
+        ).run_and_write(tmp_path / "invalid-aggregate-count")
+
+
+def test_target_aggregate_counts_are_post_runtime_diagnostic_only(tmp_path: Path) -> None:
+    first_counts = {
+        "like_count": 101,
+        "comment_count": 202,
+        "share_count": 303,
+        "collect_count": 404,
+    }
+    second_counts = {
+        "like_count": 901,
+        "comment_count": 802,
+        "share_count": 703,
+        "collect_count": 604,
+    }
+
+    def run_variant(name: str, counts: dict[str, int]) -> tuple[Path, _TargetDeliveryAdapter]:
+        dataset_dir = _make_processed_fixture(tmp_path / name, user_count=6, dense_target_network=True)
+        video_rows = _read_csv(dataset_dir / "videos.csv")
+        target_row = next(row for row in video_rows if row["video_id"] == TARGET_VIDEO_ID)
+        target_row.update({field_name: str(value) for field_name, value in counts.items()})
+        _write_csv(dataset_dir / "videos.csv", list(video_rows[0]), video_rows)
+        adapter = _TargetDeliveryAdapter()
+        output = FinalResearchRunner(
+            FinalResearchConfig(
+                dataset_dir=dataset_dir,
+                sample_size=6,
+                provider=ProviderLLMConfig(enabled=True, model="mock-model", require_live_env=False),
+            ),
+            adapter,
+        ).run_and_write(tmp_path / f"{name}-run")
+        return output, adapter
+
+    first_output, first_adapter = run_variant("aggregate-a", first_counts)
+    second_output, second_adapter = run_variant("aggregate-b", second_counts)
+
+    def expected_reference(counts: dict[str, int]) -> dict[str, object]:
+        return {
+            "source_artifact": "videos.csv",
+            "record_key": {"video_id": TARGET_VIDEO_ID},
+            **counts,
+            "real_exposure_denominator_available": False,
+            "user_level_attribution_available": False,
+            "action_mutual_exclusivity_known": False,
+            "diagnostic_only": True,
+        }
+
+    first_holdout = json.loads((first_output / "top20_holdout_diagnostic.json").read_text(encoding="utf-8"))
+    second_holdout = json.loads((second_output / "top20_holdout_diagnostic.json").read_text(encoding="utf-8"))
+    first_reference = first_holdout.pop("target_aggregate_engagement_reference")
+    second_reference = second_holdout.pop("target_aggregate_engagement_reference")
+    assert first_reference == expected_reference(first_counts)
+    assert second_reference == expected_reference(second_counts)
+    assert first_holdout == second_holdout
+
+    first_diagnostics = json.loads((first_output / "ranking_diagnostics.json").read_text(encoding="utf-8"))
+    second_diagnostics = json.loads((second_output / "ranking_diagnostics.json").read_text(encoding="utf-8"))
+    assert (
+        first_diagnostics["historical_top20_diagnostic"].pop("target_aggregate_engagement_reference") == first_reference
+    )
+    assert (
+        second_diagnostics["historical_top20_diagnostic"].pop("target_aggregate_engagement_reference")
+        == second_reference
+    )
+    assert first_diagnostics == second_diagnostics
+
+    first_payload = json.loads((first_output / "final_research_report_payload.json").read_text(encoding="utf-8"))
+    second_payload = json.loads((second_output / "final_research_report_payload.json").read_text(encoding="utf-8"))
+    assert (
+        first_payload["ranking_diagnostics"]["historical_top20_diagnostic"].pop("target_aggregate_engagement_reference")
+        == first_reference
+    )
+    assert (
+        second_payload["ranking_diagnostics"]["historical_top20_diagnostic"].pop(
+            "target_aggregate_engagement_reference"
+        )
+        == second_reference
+    )
+    assert first_payload == second_payload
+
+    first_report = (first_output / "report.html").read_text(encoding="utf-8")
+    assert 'data-testid="target-aggregate-engagement-reference"' in first_report
+    assert 'data-testid="target-aggregate-engagement-reference-table"' in first_report
+    assert f"record_key.video_id={TARGET_VIDEO_ID}" in first_report
+    for field_name, value in first_counts.items():
+        assert f"<code>{field_name}</code>" in first_report
+        assert f"<td>{value:,}</td>" in first_report
+    assert "没有真实曝光分母" in first_report
+    assert "不能关联到具体用户" in first_report
+    assert "无法确认四类互动是否互斥" in first_report
+    assert "仅用于诊断背景" in first_report
+    assert 'data-testid="target-aggregate-reference-chart"' not in first_report
+    assert 'data-testid="target-aggregate-benchmark-score"' not in first_report
+    assert 'data-testid="target-aggregate-calibration-conclusion"' not in first_report
+
+    for artifact_name in (
+        "target_video_snapshot.json",
+        "sample_manifest.csv",
+        "sample_manifest.json",
+        "seed_first_sample_audit.json",
+        "offline_scores.csv",
+        "ranking_runtime_candidates.csv",
+        "ranking_runtime_outcomes.csv",
+        "runtime_decisions.csv",
+        "runtime_actions.csv",
+    ):
+        assert (first_output / artifact_name).read_bytes() == (second_output / artifact_name).read_bytes()
+    assert first_adapter.calls == second_adapter.calls
+
+
 def test_target_delivery_ranking_v5_excludes_interest_contract_and_is_validation_only(tmp_path: Path) -> None:
     dataset_dir = _make_processed_fixture(tmp_path, user_count=6, dense_target_network=True)
     user_rows = _read_csv(dataset_dir / "users.csv")
@@ -1272,7 +1417,7 @@ def test_target_delivery_ranking_v5_excludes_interest_contract_and_is_validation
         "schema_version": "ranking-v5-expand-evidence-v1",
         "contract_stage": "validation_expand",
         "target_aggregate_engagement_reference": {
-            "status": "pending",
+            "status": "persisted",
             "formal_research_evidence": False,
         },
         "decision_execution_evidence": {
@@ -1489,6 +1634,24 @@ def test_target_delivery_ranking_v5_persists_historical_field_traces_without_int
     assert u1_traces["ranking_diagnostics.summary"]["source_record_locator"]["record_key"] == {
         "schema_version": "ranking-diagnostics-summary-v2"
     }
+    historical_diagnostic_catalog = catalog_by_field["ranking_diagnostics.historical_top20_diagnostic"]
+    assert historical_diagnostic_catalog["source_fields"] == [
+        "schema_version",
+        "historical_top20_diagnostic",
+        "target_aggregate_engagement_reference",
+        "source_artifact",
+        "record_key.video_id",
+        "like_count",
+        "comment_count",
+        "share_count",
+        "collect_count",
+    ]
+    assert historical_diagnostic_catalog["transformation_method"] == "post_runtime_holdout_diagnostic_forward_v2"
+    assert "top20_holdout_diagnostic.json" in historical_diagnostic_catalog["transformation_description"]
+    assert "videos.csv" in historical_diagnostic_catalog["transformation_description"]
+    assert any("真实曝光分母" in value for value in historical_diagnostic_catalog["limitations"])
+    assert any("用户级归属" in value for value in historical_diagnostic_catalog["limitations"])
+    assert any("互斥" in value for value in historical_diagnostic_catalog["limitations"])
 
     u2_traces = {trace["field_name"]: trace for trace in payload["user_field_trace_index"]["u2"]}
     assert "interest_tags" not in u2_traces
@@ -1691,6 +1854,101 @@ def test_target_delivery_ranking_report_rebuild_is_deterministic(tmp_path: Path)
     } == preserved_artifacts
 
 
+def _restore_historical_top20_v1_catalog_definition(catalog: list[dict[str, Any]]) -> None:
+    historical_diagnostic_definition = next(
+        definition
+        for definition in catalog
+        if definition["field_name"] == "ranking_diagnostics.historical_top20_diagnostic"
+    )
+    historical_diagnostic_definition.update(
+        {
+            "source_fields": ["schema_version", "historical_top20_diagnostic"],
+            "transformation_method": "same_run_ranking_diagnostic_v1",
+            "transformation_description": "只引用本次 run 基于 persisted candidate evidence 生成的 diagnostics。",
+            "value_range": "由对应 persisted artifact schema 约束。",
+            "interpretation": "诊断只解释本次 persisted run，不构成真实平台因果或准确率结论。",
+            "limitations": [
+                "只引用本次 run 的 allowlisted persisted evidence。",
+                "不得复用其他 run 的 rank delta、Top20 或 action 结果。",
+            ],
+        }
+    )
+
+
+def _convert_persisted_v5_run_to_pending_v5(run_dir: Path) -> None:
+    pending_evidence_state = {
+        "schema_version": "ranking-v5-expand-evidence-v1",
+        "contract_stage": "validation_expand",
+        "target_aggregate_engagement_reference": {
+            "status": "pending",
+            "formal_research_evidence": False,
+        },
+        "decision_execution_evidence": {
+            "status": "pending",
+            "formal_research_evidence": False,
+        },
+        "production_deploy_eligible": False,
+    }
+    for file_name in ("artifact_manifest.json", "ranking_runtime_summary.json"):
+        path = run_dir / file_name
+        document = json.loads(path.read_text(encoding="utf-8"))
+        document["evidence_state"] = pending_evidence_state
+        path.write_text(json.dumps(document, ensure_ascii=False) + "\n", encoding="utf-8")
+
+    holdout_path = run_dir / "top20_holdout_diagnostic.json"
+    holdout = json.loads(holdout_path.read_text(encoding="utf-8"))
+    holdout.pop("target_aggregate_engagement_reference")
+    holdout_path.write_text(json.dumps(holdout, ensure_ascii=False) + "\n", encoding="utf-8")
+
+    diagnostics_path = run_dir / "ranking_diagnostics.json"
+    diagnostics = json.loads(diagnostics_path.read_text(encoding="utf-8"))
+    diagnostics["historical_top20_diagnostic"].pop("target_aggregate_engagement_reference")
+    diagnostics_path.write_text(json.dumps(diagnostics, ensure_ascii=False) + "\n", encoding="utf-8")
+
+    payload_path = run_dir / "final_research_report_payload.json"
+    payload = json.loads(payload_path.read_text(encoding="utf-8"))
+    payload["evidence_state"] = pending_evidence_state
+    payload["ranking_diagnostics"]["historical_top20_diagnostic"].pop(
+        "target_aggregate_engagement_reference"
+    )
+    _restore_historical_top20_v1_catalog_definition(payload["field_lineage_catalog"])
+    payload_path.write_text(json.dumps(payload, ensure_ascii=False) + "\n", encoding="utf-8")
+
+    catalog_path = run_dir / "field_lineage_catalog.json"
+    catalog_document = json.loads(catalog_path.read_text(encoding="utf-8"))
+    catalog_document["definitions"] = payload["field_lineage_catalog"]
+    catalog_path.write_text(json.dumps(catalog_document, ensure_ascii=False) + "\n", encoding="utf-8")
+
+
+def test_v5_rebuild_preserves_pending_expand_artifacts(tmp_path: Path) -> None:
+    dataset_dir = _make_target_delivery_fixture(tmp_path)
+    run_dir = FinalResearchRunner(
+        FinalResearchConfig(
+            dataset_dir=dataset_dir,
+            sample_size=70,
+            provider=ProviderLLMConfig(enabled=True, model="mock-model", require_live_env=False),
+        ),
+        _TargetDeliveryAdapter(),
+    ).run_and_write(tmp_path / "ranking-v5-pending-expand")
+    _convert_persisted_v5_run_to_pending_v5(run_dir)
+
+    report_path = rebuild_final_research_report(run_dir)
+    payload_path = run_dir / "final_research_report_payload.json"
+    rebuilt = FinalResearchRankingReportPayloadV5.model_validate_json(payload_path.read_text(encoding="utf-8"))
+    first_payload = payload_path.read_bytes()
+    first_report = report_path.read_bytes()
+
+    assert rebuilt.evidence_state.target_aggregate_engagement_reference.status == "pending"
+    assert "target_aggregate_engagement_reference" not in cast(
+        dict[str, object],
+        rebuilt.ranking_diagnostics["historical_top20_diagnostic"],
+    )
+    assert 'data-testid="target-aggregate-engagement-reference"' not in first_report.decode()
+    assert rebuild_final_research_report(run_dir) == report_path
+    assert payload_path.read_bytes() == first_payload
+    assert report_path.read_bytes() == first_report
+
+
 def _convert_seed_first_v5_run_to_historical_v4(run_dir: Path) -> dict[str, Any]:
     payload_path = run_dir / "final_research_report_payload.json"
     payload = json.loads(payload_path.read_text(encoding="utf-8"))
@@ -1706,6 +1964,10 @@ def _convert_seed_first_v5_run_to_historical_v4(run_dir: Path) -> dict[str, Any]
     payload["prompt_contract"]["allowed_profile_fields"].insert(0, "interest_tags")
     payload["ranking_diagnostics"]["schema_version"] = "ranking-diagnostics-v1"
     payload["ranking_diagnostics"]["summary"]["schema_version"] = "ranking-diagnostics-summary-v1"
+    payload["ranking_diagnostics"]["historical_top20_diagnostic"].pop(
+        "target_aggregate_engagement_reference",
+        None,
+    )
     for user in payload["users"]:
         user["interest_tags"] = []
 
@@ -1731,6 +1993,7 @@ def _convert_seed_first_v5_run_to_historical_v4(run_dir: Path) -> dict[str, Any]
     catalog = payload["field_lineage_catalog"]
     historical_index = next(index for index, definition in enumerate(catalog) if definition["field_name"] == "historical_tags")
     catalog[historical_index]["limitations"] = ["没有真实曝光日志。", "不得回填到 interest_tags。"]
+    _restore_historical_top20_v1_catalog_definition(catalog)
     catalog.insert(historical_index + 1, interest_definition)
 
     for user in payload["users"]:
@@ -1825,7 +2088,12 @@ def _convert_seed_first_v5_run_to_historical_v4(run_dir: Path) -> dict[str, Any]
     diagnostics = json.loads(diagnostics_path.read_text(encoding="utf-8"))
     diagnostics["schema_version"] = "ranking-diagnostics-v1"
     diagnostics["summary"]["schema_version"] = "ranking-diagnostics-summary-v1"
+    diagnostics["historical_top20_diagnostic"].pop("target_aggregate_engagement_reference", None)
     diagnostics_path.write_text(json.dumps(diagnostics, ensure_ascii=False) + "\n", encoding="utf-8")
+    holdout_path = run_dir / "top20_holdout_diagnostic.json"
+    holdout = json.loads(holdout_path.read_text(encoding="utf-8"))
+    holdout.pop("target_aggregate_engagement_reference", None)
+    holdout_path.write_text(json.dumps(holdout, ensure_ascii=False) + "\n", encoding="utf-8")
     diagnostics_summary_path = run_dir / "ranking_diagnostics_summary.json"
     diagnostics_summary = json.loads(diagnostics_summary_path.read_text(encoding="utf-8"))
     diagnostics_summary["schema_version"] = "ranking-diagnostics-summary-v1"
@@ -1851,7 +2119,50 @@ def test_seed_first_v4_rebuild_preserves_historical_interest_contract(tmp_path: 
     assert rebuilt.schema_version == "final-research-ranking-report-payload-v4"
     assert all(user.interest_tags == [] for user in rebuilt.users)
     assert "interest_tags" in {definition.field_name for definition in rebuilt.field_lineage_catalog}
-    assert "interest_tags" in (run_dir / "report.html").read_text(encoding="utf-8")
+    historical_diagnostic = cast(
+        dict[str, object],
+        rebuilt.ranking_diagnostics["historical_top20_diagnostic"],
+    )
+    assert "target_aggregate_engagement_reference" not in historical_diagnostic
+    assert "target_aggregate_engagement_reference" not in json.loads(
+        (run_dir / "top20_holdout_diagnostic.json").read_text(encoding="utf-8")
+    )
+    report_html = (run_dir / "report.html").read_text(encoding="utf-8")
+    assert "interest_tags" in report_html
+    assert 'data-testid="target-aggregate-engagement-reference"' not in report_html
+
+
+def test_seed_first_v4_rebuild_rejects_v2_target_aggregate_reference(tmp_path: Path) -> None:
+    dataset_dir = _make_target_delivery_fixture(tmp_path)
+    run_dir = FinalResearchRunner(
+        FinalResearchConfig(
+            dataset_dir=dataset_dir,
+            sample_size=70,
+            provider=ProviderLLMConfig(enabled=True, model="mock-model", require_live_env=False),
+        ),
+        _TargetDeliveryAdapter(),
+    ).run_and_write(tmp_path / "ranking-v4-crossed-holdout-reference")
+    reference = json.loads((run_dir / "top20_holdout_diagnostic.json").read_text(encoding="utf-8"))[
+        "target_aggregate_engagement_reference"
+    ]
+    _convert_seed_first_v5_run_to_historical_v4(run_dir)
+    holdout_path = run_dir / "top20_holdout_diagnostic.json"
+    holdout = json.loads(holdout_path.read_text(encoding="utf-8"))
+    holdout["target_aggregate_engagement_reference"] = reference
+    holdout_path.write_text(json.dumps(holdout, ensure_ascii=False) + "\n", encoding="utf-8")
+    diagnostics_path = run_dir / "ranking_diagnostics.json"
+    diagnostics = json.loads(diagnostics_path.read_text(encoding="utf-8"))
+    diagnostics["historical_top20_diagnostic"]["target_aggregate_engagement_reference"] = reference
+    diagnostics_path.write_text(json.dumps(diagnostics, ensure_ascii=False) + "\n", encoding="utf-8")
+    payload_path = run_dir / "final_research_report_payload.json"
+    payload = json.loads(payload_path.read_text(encoding="utf-8"))
+    payload["ranking_diagnostics"]["historical_top20_diagnostic"][
+        "target_aggregate_engagement_reference"
+    ] = reference
+    payload_path.write_text(json.dumps(payload, ensure_ascii=False) + "\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="ranking-diagnostics-v1 cannot contain target aggregate engagement reference"):
+        rebuild_final_research_report(run_dir)
 
 
 def _convert_seed_first_v5_run_to_historical_v3(run_dir: Path) -> dict[str, Any]:
@@ -1859,6 +2170,10 @@ def _convert_seed_first_v5_run_to_historical_v3(run_dir: Path) -> dict[str, Any]
     payload_document = json.loads(payload_path.read_text(encoding="utf-8"))
     payload_document["schema_version"] = "final-research-ranking-report-payload-v3"
     payload_document.pop("evidence_state")
+    payload_document["ranking_diagnostics"]["historical_top20_diagnostic"].pop(
+        "target_aggregate_engagement_reference",
+        None,
+    )
     payload_document["field_lineage"].append(
         {
             "field_name": "interest_tags",
@@ -1964,7 +2279,12 @@ def _convert_seed_first_v5_run_to_historical_v3(run_dir: Path) -> dict[str, Any]
     diagnostics = json.loads(diagnostics_path.read_text(encoding="utf-8"))
     diagnostics["schema_version"] = "ranking-diagnostics-v1"
     diagnostics["summary"]["schema_version"] = "ranking-diagnostics-summary-v1"
+    diagnostics["historical_top20_diagnostic"].pop("target_aggregate_engagement_reference", None)
     diagnostics_path.write_text(json.dumps(diagnostics, ensure_ascii=False) + "\n", encoding="utf-8")
+    holdout_path = run_dir / "top20_holdout_diagnostic.json"
+    holdout = json.loads(holdout_path.read_text(encoding="utf-8"))
+    holdout.pop("target_aggregate_engagement_reference", None)
+    holdout_path.write_text(json.dumps(holdout, ensure_ascii=False) + "\n", encoding="utf-8")
     diagnostics_summary_path = run_dir / "ranking_diagnostics_summary.json"
     diagnostics_summary = json.loads(diagnostics_summary_path.read_text(encoding="utf-8"))
     diagnostics_summary["schema_version"] = "ranking-diagnostics-summary-v1"
@@ -2013,6 +2333,15 @@ def test_historical_network_augmented_v3_rebuild_preserves_legacy_artifact_contr
     assert "field_lineage_catalog" not in rebuilt_document
     assert "user_field_trace_index" not in rebuilt_document
     assert "network_augmented_sample_audit" in manifest["artifacts"]
+    historical_diagnostic = cast(
+        dict[str, object],
+        payload.ranking_diagnostics["historical_top20_diagnostic"],
+    )
+    assert "target_aggregate_engagement_reference" not in historical_diagnostic
+    assert "target_aggregate_engagement_reference" not in json.loads(
+        (run_dir / "top20_holdout_diagnostic.json").read_text(encoding="utf-8")
+    )
+    assert 'data-testid="target-aggregate-engagement-reference"' not in html
     assert all(
         name not in manifest["artifacts"]
         for name in ("seed_first_sample_audit", "field_lineage_catalog", "user_field_trace", "field_source_records")
@@ -2209,7 +2538,7 @@ def test_ranking_rebuild_contract_rejects_unknown_missing_and_crossed_evidence(t
 
 
 @pytest.mark.parametrize("file_name", ["artifact_manifest.json", "ranking_runtime_summary.json"])
-def test_v5_rebuild_rejects_tampered_pending_evidence_without_publish(tmp_path: Path, file_name: str) -> None:
+def test_v5_rebuild_rejects_premature_decision_evidence_without_publish(tmp_path: Path, file_name: str) -> None:
     dataset_dir = _make_target_delivery_fixture(tmp_path)
     source_run = FinalResearchRunner(
         FinalResearchConfig(
@@ -2230,7 +2559,7 @@ def test_v5_rebuild_rejects_tampered_pending_evidence_without_publish(tmp_path: 
     persisted_payload = payload_path.read_bytes()
     persisted_report = report_path.read_bytes()
 
-    with pytest.raises(ValueError, match="does not contain pending v5 validation evidence"):
+    with pytest.raises(ValueError, match="does not match ranking report v5 validation evidence"):
         rebuild_final_research_report(run_dir)
 
     assert payload_path.read_bytes() == persisted_payload
@@ -2295,6 +2624,87 @@ def test_v5_rebuild_rejects_incomplete_nested_payload_evidence_without_publish(t
 
         assert payload_path.read_bytes() == persisted_payload
         assert report_path.read_bytes() == persisted_report
+
+
+def test_v5_rebuild_rejects_coerced_target_aggregate_reference_values(tmp_path: Path) -> None:
+    dataset_dir = _make_target_delivery_fixture(tmp_path)
+    source_run = FinalResearchRunner(
+        FinalResearchConfig(
+            dataset_dir=dataset_dir,
+            sample_size=70,
+            provider=ProviderLLMConfig(enabled=True, model="mock-model", require_live_env=False),
+        ),
+        _TargetDeliveryAdapter(),
+    ).run_and_write(tmp_path / "ranking-v5-strict-reference-source")
+
+    for case_number, (field_name, invalid_value, expected_error) in enumerate(
+        (
+            ("like_count", "1.0", "like_count"),
+            ("comment_count", 2.0, "comment_count"),
+            ("real_exposure_denominator_available", 0, "real_exposure_denominator_available"),
+            ("diagnostic_only", 1, "diagnostic_only"),
+            ("real_exposure_denominator_available", True, "diagnostic-only and non-comparable"),
+            ("diagnostic_only", False, "diagnostic-only and non-comparable"),
+        )
+    ):
+        run_dir = tmp_path / f"ranking-v5-strict-reference-{case_number}"
+        shutil.copytree(source_run, run_dir)
+        for file_name, path_parts in (
+            ("top20_holdout_diagnostic.json", ("target_aggregate_engagement_reference",)),
+            (
+                "ranking_diagnostics.json",
+                ("historical_top20_diagnostic", "target_aggregate_engagement_reference"),
+            ),
+            (
+                "final_research_report_payload.json",
+                ("ranking_diagnostics", "historical_top20_diagnostic", "target_aggregate_engagement_reference"),
+            ),
+        ):
+            path = run_dir / file_name
+            document = json.loads(path.read_text(encoding="utf-8"))
+            reference = document
+            for part in path_parts:
+                reference = reference[part]
+            reference[field_name] = invalid_value
+            path.write_text(json.dumps(document, ensure_ascii=False) + "\n", encoding="utf-8")
+        payload_path = run_dir / "final_research_report_payload.json"
+        report_path = run_dir / "report.html"
+        persisted_payload = payload_path.read_bytes()
+        persisted_report = report_path.read_bytes()
+
+        with pytest.raises(ValidationError, match=expected_error):
+            rebuild_final_research_report(run_dir)
+
+        assert payload_path.read_bytes() == persisted_payload
+        assert report_path.read_bytes() == persisted_report
+
+
+def test_v5_rebuild_rejects_target_aggregate_reference_that_differs_from_source_artifact(tmp_path: Path) -> None:
+    dataset_dir = _make_target_delivery_fixture(tmp_path)
+    source_run = FinalResearchRunner(
+        FinalResearchConfig(
+            dataset_dir=dataset_dir,
+            sample_size=70,
+            provider=ProviderLLMConfig(enabled=True, model="mock-model", require_live_env=False),
+        ),
+        _TargetDeliveryAdapter(),
+    ).run_and_write(tmp_path / "ranking-v5-holdout-reference-source")
+    run_dir = tmp_path / "ranking-v5-holdout-reference-tampered"
+    shutil.copytree(source_run, run_dir)
+    holdout_path = run_dir / "top20_holdout_diagnostic.json"
+    holdout = json.loads(holdout_path.read_text(encoding="utf-8"))
+    holdout["target_aggregate_engagement_reference"]["like_count"] += 1
+    holdout_path.write_text(json.dumps(holdout, ensure_ascii=False) + "\n", encoding="utf-8")
+    payload_path = run_dir / "final_research_report_payload.json"
+    report_path = run_dir / "report.html"
+    persisted_payload = payload_path.read_bytes()
+    persisted_report = report_path.read_bytes()
+
+    with pytest.raises(ValueError, match="target aggregate engagement reference.*source artifact"):
+        rebuild_final_research_report(run_dir)
+
+    assert payload_path.read_bytes() == persisted_payload
+    assert report_path.read_bytes() == persisted_report
 
 
 def test_target_delivery_ranking_report_escapes_download_paths_in_html(tmp_path: Path) -> None:

@@ -338,6 +338,40 @@ class _ReportFieldSpec:
     record_key_defaults: tuple[tuple[str, str | int], ...] = ()
 
 
+def _v5_historical_top20_report_field_spec() -> _ReportFieldSpec:
+    return _ReportFieldSpec(
+        "ranking_diagnostics",
+        ("schema_version", "section"),
+        (
+            "schema_version",
+            "historical_top20_diagnostic",
+            "target_aggregate_engagement_reference",
+            "source_artifact",
+            "record_key.video_id",
+            "like_count",
+            "comment_count",
+            "share_count",
+            "collect_count",
+        ),
+        "post_runtime_holdout_diagnostic_forward_v2",
+        (
+            "在 optional runtime 完成后，从 top20_holdout_diagnostic.json 原样转发目标 videos.csv 记录的"
+            "四个 aggregate counts 与不可比较限制。"
+        ),
+        "包含历史 Top20 对照与一条目标视频原始聚合互动参考的结构化诊断对象。",
+        "原始聚合计数只提供目标视频背景事实，不评价模拟 action，也不构成 benchmark。",
+        (
+            "没有真实曝光分母，不能计算真实互动率。",
+            "没有用户级归属，不能把 aggregate counts 还原成 per-user action。",
+            "不知道 like、comment、share 与 collect 是否互斥，只能作为 diagnostic-only raw reference。",
+        ),
+        (
+            ("schema_version", "ranking-diagnostics-v2"),
+            ("section", "historical_top20_diagnostic"),
+        ),
+    )
+
+
 class SourceRecordLocator(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -824,7 +858,7 @@ def _historical_v4_field_lineage_definitions(
     return definitions
 
 
-def _jinjiang_v5_field_lineage_definitions(
+def _jinjiang_v5_pending_field_lineage_definitions(
     report_lineage: Sequence[LineageEntry] = (),
 ) -> list[FieldLineageDefinition]:
     definitions: list[FieldLineageDefinition] = []
@@ -834,6 +868,27 @@ def _jinjiang_v5_field_lineage_definitions(
         if definition.field_name == "historical_tags":
             definition = definition.model_copy(
                 update={"limitations": ["没有真实曝光日志。", "不得回填为通用用户兴趣画像。"]}
+            )
+        definitions.append(definition)
+    return definitions
+
+
+def _jinjiang_v5_field_lineage_definitions(
+    report_lineage: Sequence[LineageEntry] = (),
+) -> list[FieldLineageDefinition]:
+    definitions: list[FieldLineageDefinition] = []
+    for definition in _jinjiang_v5_pending_field_lineage_definitions(report_lineage):
+        if definition.field_name == "ranking_diagnostics.historical_top20_diagnostic":
+            spec = _v5_historical_top20_report_field_spec()
+            definition = definition.model_copy(
+                update={
+                    "source_fields": list(spec.source_fields),
+                    "transformation_method": spec.transformation_method,
+                    "transformation_description": spec.transformation_description,
+                    "value_range": spec.value_range,
+                    "interpretation": spec.interpretation,
+                    "limitations": list(spec.limitations),
+                }
             )
         definitions.append(definition)
     return definitions
@@ -1011,7 +1066,7 @@ def _report_field_spec(field_name: str) -> _ReportFieldSpec:
             ("schema_version", "section"),
             ("schema_version", "historical_top20_diagnostic"),
             (
-                ("schema_version", "ranking-diagnostics-v2"),
+                ("schema_version", "ranking-diagnostics-v1"),
                 ("section", "historical_top20_diagnostic"),
             ),
         ),
@@ -1078,10 +1133,13 @@ def _report_field_trace(
     relative_path = source.artifact_paths.get(artifact_id)
     if not relative_path:
         raise ValueError(f"field trace requires the {artifact_id} artifact path")
+    record_key = _report_field_record_key(field_name, user_id, user, artifact_id=artifact_id)
+    if definition.transformation_method == "post_runtime_holdout_diagnostic_forward_v2":
+        record_key["schema_version"] = "ranking-diagnostics-v2"
     locator = SourceRecordLocator(
         artifact_id=artifact_id,
         relative_path=relative_path,
-        record_key=_report_field_record_key(field_name, user_id, user, artifact_id=artifact_id),
+        record_key=record_key,
     )
     evidence_values = {
         source_field: user[source_field]

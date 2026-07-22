@@ -30,6 +30,7 @@ from .field_lineage_trace import (
     UserFieldTrace,
     _historical_v4_field_lineage_definitions,
     _jinjiang_v5_field_lineage_definitions,
+    _jinjiang_v5_pending_field_lineage_definitions,
     field_lineage_coverage_audit,
     field_trace_evidence,
     field_value_status,
@@ -308,6 +309,38 @@ class HoldoutSignalCoverage(BaseModel):
     rows: list[HoldoutSignalRow]
 
 
+class _TargetAggregateEngagementRecordKey(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    video_id: str = Field(min_length=1)
+
+
+class _TargetAggregateEngagementReference(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    source_artifact: Literal["videos.csv"]
+    record_key: _TargetAggregateEngagementRecordKey
+    like_count: int = Field(ge=0, strict=True)
+    comment_count: int = Field(ge=0, strict=True)
+    share_count: int = Field(ge=0, strict=True)
+    collect_count: int = Field(ge=0, strict=True)
+    real_exposure_denominator_available: bool = Field(strict=True)
+    user_level_attribution_available: bool = Field(strict=True)
+    action_mutual_exclusivity_known: bool = Field(strict=True)
+    diagnostic_only: bool = Field(strict=True)
+
+    @model_validator(mode="after")
+    def _validate_diagnostic_flags(self) -> _TargetAggregateEngagementReference:
+        if (
+            self.real_exposure_denominator_available
+            or self.user_level_attribution_available
+            or self.action_mutual_exclusivity_known
+            or not self.diagnostic_only
+        ):
+            raise ValueError("target aggregate engagement reference must remain diagnostic-only and non-comparable")
+        return self
+
+
 class HoldoutDiagnostic(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -318,6 +351,7 @@ class HoldoutDiagnostic(BaseModel):
     intersection_count: int
     intersection_user_ids: list[str]
     observed_participant_signal_coverage: HoldoutSignalCoverage
+    target_aggregate_engagement_reference: _TargetAggregateEngagementReference | None = None
     diagnostic_only: bool
     unobserved_pair_semantics: str
     production_accuracy_claim: bool
@@ -702,23 +736,35 @@ class RankingPendingEvidenceState(BaseModel):
     formal_research_evidence: Literal[False]
 
 
+class RankingPersistedEvidenceState(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    status: Literal["persisted"]
+    formal_research_evidence: Literal[False]
+
+
 class RankingV5ExpandEvidence(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     schema_version: Literal["ranking-v5-expand-evidence-v1"]
     contract_stage: Literal["validation_expand"]
-    target_aggregate_engagement_reference: RankingPendingEvidenceState
+    target_aggregate_engagement_reference: RankingPendingEvidenceState | RankingPersistedEvidenceState
     decision_execution_evidence: RankingPendingEvidenceState
     production_deploy_eligible: Literal[False]
 
 
 def ranking_v5_expand_evidence() -> dict[str, object]:
-    pending = RankingPendingEvidenceState(status="pending", formal_research_evidence=False)
     return RankingV5ExpandEvidence(
         schema_version="ranking-v5-expand-evidence-v1",
         contract_stage="validation_expand",
-        target_aggregate_engagement_reference=pending,
-        decision_execution_evidence=pending,
+        target_aggregate_engagement_reference=RankingPersistedEvidenceState(
+            status="persisted",
+            formal_research_evidence=False,
+        ),
+        decision_execution_evidence=RankingPendingEvidenceState(
+            status="pending",
+            formal_research_evidence=False,
+        ),
         production_deploy_eligible=False,
     ).model_dump(mode="json")
 
@@ -1026,6 +1072,19 @@ class FinalResearchRankingReportPayloadV5(BaseModel):
                 raise ValueError(f"user field trace key does not match trace user_id for {user_id}")
             if set(trace_names) != trace_field_names:
                 raise ValueError(f"user field trace does not cover every user-keyed catalog field for {user_id}")
+        historical_diagnostic = self.ranking_diagnostics.get("historical_top20_diagnostic")
+        if not isinstance(historical_diagnostic, Mapping):
+            raise ValueError("ranking diagnostics must contain historical_top20_diagnostic")
+        reference_key = "target_aggregate_engagement_reference"
+        if self.evidence_state.target_aggregate_engagement_reference.status == "pending":
+            if reference_key in historical_diagnostic:
+                raise ValueError("pending target aggregate engagement evidence cannot contain a reference")
+        else:
+            aggregate_reference = _TargetAggregateEngagementReference.model_validate(
+                historical_diagnostic.get(reference_key)
+            )
+            if aggregate_reference.record_key.video_id != self.target_video.video_id:
+                raise ValueError("target aggregate engagement reference video_id does not match TargetVideo")
         return self
 
 
@@ -2230,6 +2289,35 @@ def _ranking_v5_field_lineage() -> list[FieldLineageEntry]:
     return [entry for entry in _ranking_field_lineage() if entry.field_name != "interest_tags"]
 
 
+def _render_target_aggregate_engagement_reference(
+    payload: FinalResearchRankingReportPayloadV3
+    | FinalResearchRankingReportPayload
+    | FinalResearchRankingReportPayloadV5,
+) -> str:
+    if (
+        not isinstance(payload, FinalResearchRankingReportPayloadV5)
+        or payload.evidence_state.target_aggregate_engagement_reference.status == "pending"
+    ):
+        return ""
+    historical_diagnostic = payload.ranking_diagnostics.get("historical_top20_diagnostic")
+    if not isinstance(historical_diagnostic, Mapping):  # pragma: no cover - payload validation owns this branch.
+        raise ValueError("ranking diagnostics must contain historical_top20_diagnostic")
+    reference = _TargetAggregateEngagementReference.model_validate(
+        historical_diagnostic.get("target_aggregate_engagement_reference")
+    )
+    count_rows = "".join(
+        f"<tr><th><code>{field_name}</code></th><td>{getattr(reference, field_name):,}</td></tr>"
+        for field_name in ("like_count", "comment_count", "share_count", "collect_count")
+    )
+    return f"""
+    <article class="diagnostic-panel target-aggregate-reference-panel" data-testid="target-aggregate-engagement-reference">
+      <div class="section-heading"><div><h3>Target Aggregate Engagement Reference（目标聚合互动原始参考）</h3><p class="muted">来自 <code>{escape(reference.source_artifact)}</code>、<code>record_key.video_id={escape(reference.record_key.video_id)}</code>；原始值仅用于诊断背景，不参与 Sampling（抽样）、Ranking（排序）、Prompt（提示）或 Decision（决策）。</p></div></div>
+      <div class="table-wrap target-aggregate-reference-table"><table data-testid="target-aggregate-engagement-reference-table"><thead><tr><th>Raw field（原始字段）</th><th>Raw count（原始计数）</th></tr></thead><tbody>{count_rows}</tbody></table></div>
+      <p class="target-aggregate-reference-limit"><strong>不可比较限制：</strong>没有真实曝光分母；不能关联到具体用户；无法确认四类互动是否互斥。该 reference（参考）不构成 action benchmark（动作基准），不用于 calibration（校准）、真实性评分、action quality gate（动作质量门禁）或发布判断；<code>diagnostic_only=true</code>。</p>
+    </article>
+    """
+
+
 def _render_ranking_report(
     payload: FinalResearchRankingReportPayloadV3 | FinalResearchRankingReportPayload | FinalResearchRankingReportPayloadV5,
 ) -> str:
@@ -2243,6 +2331,10 @@ def _render_ranking_report(
     explanation_catalog = ResearchExplanationCatalog.from_lineage(
         payload.field_lineage,
         allowed_omissions=(frozenset({"interest_tags"}) if isinstance(payload, FinalResearchRankingReportPayloadV5) else frozenset()),
+        include_target_aggregate_reference=(
+            isinstance(payload, FinalResearchRankingReportPayloadV5)
+            and payload.evidence_state.target_aggregate_engagement_reference.status == "persisted"
+        ),
     )
     sample = payload.sample_comparison
     total_exposures = sum(round_evidence.target_exposures for round_evidence in payload.ranking_rounds)
@@ -2350,6 +2442,7 @@ def _render_ranking_report(
     ranking_report_js = _ranking_report_javascript(
         include_interest_tags=not isinstance(payload, FinalResearchRankingReportPayloadV5)
     )
+    target_aggregate_reference = _render_target_aggregate_engagement_reference(payload)
     return f"""<!doctype html>
 <html lang="zh-CN">
 <head>
@@ -2595,7 +2688,7 @@ def _render_ranking_report(
     <div class="network-reading-note"><p><strong>Inclusion（纳入）</strong>只说明网络项进入公式并具有明确权重，不能单独证明投放结果改变。</p><p><strong>Observed Effect（可观测影响）</strong>要求移除网络项后，同批 Top{payload.run.delivery_capacity} membership（前 {payload.run.delivery_capacity} 名成员集合）实际发生变化。</p></div>
     <p id="network-effect-reading" class="observed-effect-reading"></p>
     <div id="network-effect-summary" class="effect-grid"></div>
-    <div class="diagnostic-layout"><article id="paired-ablation" class="diagnostic-panel" data-testid="paired-ablation-section"><div class="section-heading"><div><h3>Paired ranking（配对排序） · shadow diagnostic（影子诊断）</h3><p class="muted">同批冻结 persisted candidate evidence（持久化候选证据）并运行 shadow no-network（无网络影子排序），零额外 Decision Adapter calls（决策适配器调用）；它不是第二条完整 trajectory（轨迹），也不是因果实验。</p></div></div><div id="ablation-summary" class="ablation-summary" data-testid="ablation-summary"></div><div class="table-wrap rank-delta-table"><table data-testid="ablation-rank-deltas"><thead><tr><th>User（用户）</th><th>Full rank（完整排序名次）</th><th>No-network rank（无网络排序名次）</th><th>Rank delta（名次变化）</th><th>Selection effect（入选影响）</th></tr></thead><tbody id="ablation-rank-delta-body"></tbody></table></div></article><article class="diagnostic-panel" data-testid="sensitivity-section"><h3>Ranking Weight Sensitivity（排序权重敏感性）</h3><p id="sensitivity-reading-note" class="muted"></p><div id="sensitivity-variants" class="sensitivity-variants"></div></article></div>
+    <div class="diagnostic-layout">{target_aggregate_reference}<article id="paired-ablation" class="diagnostic-panel" data-testid="paired-ablation-section"><div class="section-heading"><div><h3>Paired ranking（配对排序） · shadow diagnostic（影子诊断）</h3><p class="muted">同批冻结 persisted candidate evidence（持久化候选证据）并运行 shadow no-network（无网络影子排序），零额外 Decision Adapter calls（决策适配器调用）；它不是第二条完整 trajectory（轨迹），也不是因果实验。</p></div></div><div id="ablation-summary" class="ablation-summary" data-testid="ablation-summary"></div><div class="table-wrap rank-delta-table"><table data-testid="ablation-rank-deltas"><thead><tr><th>User（用户）</th><th>Full rank（完整排序名次）</th><th>No-network rank（无网络排序名次）</th><th>Rank delta（名次变化）</th><th>Selection effect（入选影响）</th></tr></thead><tbody id="ablation-rank-delta-body"></tbody></table></div></article><article class="diagnostic-panel" data-testid="sensitivity-section"><h3>Ranking Weight Sensitivity（排序权重敏感性）</h3><p id="sensitivity-reading-note" class="muted"></p><div id="sensitivity-variants" class="sensitivity-variants"></div></article></div>
       </div>
     </details>
     <div class="chart-grid distributed-chart-grid evidence-subsection">
@@ -2897,6 +2990,11 @@ code { color:var(--blue); }
 .capacity-layout p,.observed-effect-reading { margin-bottom:0; color:var(--muted); }
 .observed-effect-reading { margin:0 0 18px; padding:12px 14px; background:var(--paper); font-weight:750; }
 .diagnostic-layout { display:grid; grid-template-columns:minmax(0,1.4fr) minmax(300px,.6fr); gap:16px; }
+.target-aggregate-reference-panel { grid-column:1 / -1; }
+.target-aggregate-reference-panel .section-heading { margin-bottom:12px; }
+.target-aggregate-reference-table { max-width:620px; }
+.target-aggregate-reference-table th { width:70%; }
+.target-aggregate-reference-limit { margin:12px 0 0; color:var(--muted); }
 .rank-delta-table { max-height:310px; }
 .rank-delta-table tbody tr,.interactive-evidence { cursor:pointer; }
 .rank-delta-table tbody tr:hover,.rank-delta-table tbody tr:focus,.interactive-evidence:hover,.interactive-evidence:focus { background:#f3f7fd; outline:2px solid var(--blue); outline-offset:-2px; }
@@ -4564,6 +4662,11 @@ def _validate_ranking_rebuild_evidence(
         else None
     )
     is_v5 = contract is _SEED_FIRST_V5_REBUILD_CONTRACT
+    v5_reference_persisted = (
+        is_v5
+        and isinstance(payload, FinalResearchRankingReportPayloadV5)
+        and payload.evidence_state.target_aggregate_engagement_reference.status == "persisted"
+    )
     is_traced = traced_payload is not None
     artifact_paths: dict[str, Path] = {}
     for name, relative_path in artifacts.items():
@@ -4609,6 +4712,8 @@ def _validate_ranking_rebuild_evidence(
             raise ValueError("field lineage catalog artifact does not match ranking report payload")
         expected_definitions = (
             _jinjiang_v5_field_lineage_definitions(_ranking_v5_field_lineage())
+            if v5_reference_persisted
+            else _jinjiang_v5_pending_field_lineage_definitions(_ranking_v5_field_lineage())
             if is_v5
             else _historical_v4_field_lineage_definitions(_ranking_field_lineage())
         )
@@ -4816,14 +4921,13 @@ def _validate_ranking_rebuild_evidence(
     if is_v5:
         if not isinstance(payload, FinalResearchRankingReportPayloadV5):  # pragma: no cover
             raise ValueError("v5 rebuild contract requires a v5 payload")
-        expected_evidence_state = ranking_v5_expand_evidence()
+        payload_evidence_state = payload.evidence_state.model_dump(mode="json")
         for evidence_name, evidence_state in (
             ("artifact manifest", manifest.get("evidence_state")),
             ("ranking runtime summary", summary.get("evidence_state")),
-            ("ranking report payload", payload.evidence_state.model_dump(mode="json")),
         ):
-            if evidence_state != expected_evidence_state:
-                raise ValueError(f"{evidence_name} does not contain pending v5 validation evidence")
+            if evidence_state != payload_evidence_state:
+                raise ValueError(f"{evidence_name} does not match ranking report v5 validation evidence")
     expected_sampling_method = payload.run.sampling_method
     expected_sampling_status = payload.run.sampling_status
     for evidence_name, evidence in (
@@ -4911,6 +5015,33 @@ def _validate_ranking_rebuild_evidence(
         raise ValueError("unsupported ranking diagnostics schema")
     if full_diagnostics != payload.ranking_diagnostics:
         raise ValueError("ranking diagnostics artifact does not match report payload")
+    holdout_diagnostic = _read_json_object(artifact_paths["holdout_diagnostic"])
+    historical_diagnostic = _required_mapping(
+        full_diagnostics,
+        "historical_top20_diagnostic",
+        "ranking diagnostics",
+    )
+    if v5_reference_persisted:
+        source_reference = _TargetAggregateEngagementReference.model_validate(
+            holdout_diagnostic.get("target_aggregate_engagement_reference")
+        )
+        forwarded_reference = _TargetAggregateEngagementReference.model_validate(
+            historical_diagnostic.get("target_aggregate_engagement_reference")
+        )
+        if source_reference != forwarded_reference:
+            raise ValueError("target aggregate engagement reference does not match source artifact")
+        if source_reference.record_key.video_id != payload.target_video.video_id:
+            raise ValueError("target aggregate engagement reference source artifact does not match TargetVideo")
+    elif is_v5 and (
+        "target_aggregate_engagement_reference" in holdout_diagnostic
+        or "target_aggregate_engagement_reference" in historical_diagnostic
+    ):
+        raise ValueError("pending target aggregate engagement evidence cannot contain a reference")
+    elif (
+        "target_aggregate_engagement_reference" in holdout_diagnostic
+        or "target_aggregate_engagement_reference" in historical_diagnostic
+    ):
+        raise ValueError("ranking-diagnostics-v1 cannot contain target aggregate engagement reference")
     diagnostics = _read_json_object(artifact_paths["ranking_diagnostics_summary"])
     if diagnostics.get("schema_version") != contract.diagnostics_summary_schema:
         raise ValueError("unsupported ranking diagnostics summary schema")

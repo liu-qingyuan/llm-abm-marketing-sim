@@ -268,6 +268,13 @@ def _as_bool(value: Any) -> bool:
 
 
 def _historical_top20_diagnostic(source: Mapping[str, Any]) -> dict[str, Any]:
+    aggregate_reference = source.get("target_aggregate_engagement_reference")
+    if not isinstance(aggregate_reference, Mapping):
+        raise ValueError("holdout diagnostic is missing target_aggregate_engagement_reference")
+    forwarded_reference = {
+        key: dict(value) if key == "record_key" and isinstance(value, Mapping) else value
+        for key, value in aggregate_reference.items()
+    }
     return {
         "observed_holdout_participant_count": int(source.get("observed_holdout_participant_count", 0)),
         "observed_holdout_participant_ids": list(source.get("observed_holdout_participant_ids", [])),
@@ -276,6 +283,7 @@ def _historical_top20_diagnostic(source: Mapping[str, Any]) -> dict[str, Any]:
         "intersection_count": int(source.get("intersection_count", 0)),
         "intersection_user_ids": list(source.get("intersection_user_ids", [])),
         "observed_participant_signal_coverage": dict(source.get("observed_participant_signal_coverage", {})),
+        "target_aggregate_engagement_reference": forwarded_reference,
         "positive_sample_sparsity_limit": True,
         "real_exposure_denominator_available": False,
         "holdout_revealed_after_ranking": True,

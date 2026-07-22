@@ -28,7 +28,10 @@ def test_research_explanation_catalog_covers_every_lineage_field() -> None:
 
 
 def test_research_explanation_catalog_describes_structured_field_shapes() -> None:
-    catalog = ResearchExplanationCatalog.from_lineage(_ranking_field_lineage())
+    catalog = ResearchExplanationCatalog.from_lineage(
+        _ranking_field_lineage(),
+        include_target_aggregate_reference=True,
+    )
 
     for field_name in (
         "sample_comparison.base_source_scope_counts",
@@ -38,6 +41,17 @@ def test_research_explanation_catalog_describes_structured_field_shapes() -> Non
         assert catalog[field_name].interpretation.startswith("不适用")
     assert catalog["ranking_rounds.selected_user_ids"].value_range == "0 个或多个 user_id（用户标识）组成的列表。"
     assert catalog["ranking_rounds.selected_user_ids"].interpretation.startswith("不适用")
+    historical_diagnostic = catalog["ranking_diagnostics.historical_top20_diagnostic"]
+    assert "top20_holdout_diagnostic.json" in historical_diagnostic.source
+    assert "原始聚合互动参考" in historical_diagnostic.meaning
+    assert "真实曝光分母" in historical_diagnostic.limitation
+    assert "用户级归属" in historical_diagnostic.limitation
+    assert "互斥" in historical_diagnostic.limitation
+
+    historical_catalog = ResearchExplanationCatalog.from_lineage(_ranking_field_lineage())
+    historical = historical_catalog["ranking_diagnostics.historical_top20_diagnostic"]
+    assert "原始聚合互动参考" not in historical.meaning
+    assert "top20_holdout_diagnostic.json" not in historical.source
 
 
 def test_research_explanation_catalog_owns_concept_and_chart_templates() -> None:
@@ -67,6 +81,8 @@ def test_research_explanation_catalog_owns_concept_and_chart_templates() -> None
         "purpose",
         "result",
     }
+
+
 def test_research_explanation_catalog_pairs_required_english_tokens_with_chinese() -> None:
     catalog = ResearchExplanationCatalog.from_lineage(_ranking_field_lineage())
 

@@ -1,6 +1,25 @@
 from llm_abm_sim.ranking_diagnostics import RankingDiagnostics
 
 
+def _holdout_diagnostic(**overrides: object) -> dict[str, object]:
+    diagnostic: dict[str, object] = {
+        "target_aggregate_engagement_reference": {
+            "source_artifact": "videos.csv",
+            "record_key": {"video_id": "target-video"},
+            "like_count": 11,
+            "comment_count": 12,
+            "share_count": 13,
+            "collect_count": 14,
+            "real_exposure_denominator_available": False,
+            "user_level_attribution_available": False,
+            "action_mutual_exclusivity_known": False,
+            "diagnostic_only": True,
+        }
+    }
+    diagnostic.update(overrides)
+    return diagnostic
+
+
 def test_paired_ablation_compares_full_and_no_network_on_frozen_candidates() -> None:
     diagnostics = RankingDiagnostics(delivery_capacity=2).build(
         candidate_rows=[
@@ -32,7 +51,7 @@ def test_paired_ablation_compares_full_and_no_network_on_frozen_candidates() -> 
                 "historical_tag_affinity": 0.3,
             },
         ],
-        holdout_diagnostic={},
+        holdout_diagnostic=_holdout_diagnostic(),
     )
 
     batch = diagnostics.payload["paired_ablation"]["batches"][0]
@@ -80,20 +99,20 @@ def test_sensitivity_uses_only_predeclared_weights_and_reports_research_limits()
                 "historical_tag_affinity": 0.3,
             },
         ],
-        holdout_diagnostic={
-            "observed_holdout_participant_count": 2,
-            "observed_holdout_participant_ids": ["u-network", "u-tag-b"],
-            "model_recommended_user_count": 2,
-            "model_recommended_user_ids": ["u-network", "u-tag-a"],
-            "intersection_count": 1,
-            "intersection_user_ids": ["u-network"],
-            "observed_participant_signal_coverage": {
+        holdout_diagnostic=_holdout_diagnostic(
+            observed_holdout_participant_count=2,
+            observed_holdout_participant_ids=["u-network", "u-tag-b"],
+            model_recommended_user_count=2,
+            model_recommended_user_ids=["u-network", "u-tag-a"],
+            intersection_count=1,
+            intersection_user_ids=["u-network"],
+            observed_participant_signal_coverage={
                 "with_non_target_history": 2,
                 "with_network_connection": 1,
                 "with_historical_tag_affinity": 1,
                 "rows": [],
             },
-        },
+        ),
     )
 
     sensitivity = diagnostics.payload["weight_sensitivity"]
@@ -144,7 +163,7 @@ def test_signal_inclusion_reports_zero_observed_effect_when_top_selection_is_unc
                 "historical_tag_affinity": 1.0,
             },
         ],
-        holdout_diagnostic={},
+        holdout_diagnostic=_holdout_diagnostic(),
     )
 
     assert diagnostics.summary["recommendation_signal_inclusion"]["network_signals_in_formula"] is True
@@ -178,7 +197,7 @@ def test_full_diagnostic_preserves_persisted_main_ranking_when_components_tie() 
                 "recommendation_score": 0.250000000001,
             },
         ],
-        holdout_diagnostic={},
+        holdout_diagnostic=_holdout_diagnostic(),
     )
 
     assert diagnostics.payload["paired_ablation"]["batches"][0]["full_top_user_ids"] == ["u-z-higher"]

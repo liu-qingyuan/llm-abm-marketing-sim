@@ -68,6 +68,7 @@ type RankingPayload = {
     count: number;
   }>;
   target_video: {
+    video_id: string;
     video_url: string;
   };
   sample_comparison: {
@@ -143,6 +144,20 @@ type RankingPayload = {
     };
     weight_sensitivity: {
       variants: SensitivityVariant[];
+    };
+    historical_top20_diagnostic: {
+      target_aggregate_engagement_reference: {
+        source_artifact: 'videos.csv';
+        record_key: { video_id: string };
+        like_count: number;
+        comment_count: number;
+        share_count: number;
+        collect_count: number;
+        real_exposure_denominator_available: false;
+        user_level_attribution_available: false;
+        action_mutual_exclusivity_known: false;
+        diagnostic_only: true;
+      };
     };
   };
   downloads: Record<string, string>;
@@ -690,6 +705,30 @@ async function assertRankingReport(
   await expect(sensitivitySection).toContainText('结果解读');
   await expect(page.getByTestId('sensitivity-section')).not.toContainText('parameter optimization');
   await expect(page.getByTestId('sensitivity-section')).not.toContainText('production accuracy');
+
+  const networkImpactDetails = page.getByTestId('network-impact-details');
+  await networkImpactDetails.locator('summary').click();
+  const aggregateReference = payload.ranking_diagnostics.historical_top20_diagnostic
+    .target_aggregate_engagement_reference;
+  const aggregatePanel = page.getByTestId('target-aggregate-engagement-reference');
+  await expect(aggregatePanel).toBeVisible();
+  await expect(aggregatePanel).toContainText(aggregateReference.source_artifact);
+  await expect(aggregatePanel).toContainText(`record_key.video_id=${aggregateReference.record_key.video_id}`);
+  expect(aggregateReference.record_key.video_id).toBe(payload.target_video.video_id);
+  for (const fieldName of ['like_count', 'comment_count', 'share_count', 'collect_count'] as const) {
+    await expect(aggregatePanel).toContainText(fieldName);
+    await expect(aggregatePanel).toContainText(aggregateReference[fieldName].toLocaleString());
+  }
+  await expect(aggregatePanel).toContainText('没有真实曝光分母');
+  await expect(aggregatePanel).toContainText('不能关联到具体用户');
+  await expect(aggregatePanel).toContainText('无法确认四类互动是否互斥');
+  await expect(aggregatePanel).toContainText('不构成 action benchmark（动作基准）');
+  await expect(aggregatePanel).toContainText('不用于 calibration（校准）');
+  await expect(aggregatePanel.getByTestId('target-aggregate-reference-chart')).toHaveCount(0);
+  await expect(aggregatePanel.getByTestId('target-aggregate-benchmark-score')).toHaveCount(0);
+  await expect(aggregatePanel.getByTestId('target-aggregate-calibration-conclusion')).toHaveCount(0);
+  expect(Object.keys(payload.downloads).some((key) => key.includes('aggregate'))).toBeFalsy();
+  await networkImpactDetails.locator('summary').click();
 
   const promptSection = page.getByTestId('prompt-contract-section');
   await expect(promptSection).toContainText('平台排序决定谁看到视频');

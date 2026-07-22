@@ -1029,6 +1029,23 @@ _CANDIDATE_SPECS = {
     "recommendation_score": _USER_FIELD_SPECS["recommendation_score"],
 }
 
+_HISTORICAL_TOP20_DIAGNOSTIC_V1_SPEC = _text(
+    "历史 Top20 诊断",
+    "Holdout-safe ranking 与历史目标互动证据的稀疏对照。",
+    "ranking_diagnostics.json。",
+    limitation="缺少真实曝光分母，不构成生产推荐准确率。",
+)
+_HISTORICAL_TOP20_DIAGNOSTIC_V2_SPEC = _text(
+    "历史 Top20 诊断",
+    "Holdout-safe ranking 与历史目标互动证据的稀疏对照，并包含目标视频原始聚合互动参考。",
+    "top20_holdout_diagnostic.json（Top20 留出诊断文件）的同源 evidence（证据），由 ranking_diagnostics.json（排序诊断文件）原样转发。",
+    limitation=(
+        "原始计数缺少真实曝光分母与用户级归属，也不知道四类互动是否互斥；"
+        "只用于诊断背景，不构成 action benchmark（动作基准）、校准结论或生产推荐准确率。"
+    ),
+)
+
+
 _DIAGNOSTIC_SPECS = {
     "paired_ablation": _text(
         "成对排序消融",
@@ -1042,12 +1059,7 @@ _DIAGNOSTIC_SPECS = {
         "ranking_diagnostics.json。",
         limitation="只检查预声明的三组方案，不是参数优化或生产准确率评估。",
     ),
-    "historical_top20_diagnostic": _text(
-        "历史 Top20 诊断",
-        "Holdout-safe ranking 与历史目标互动证据的稀疏对照。",
-        "ranking_diagnostics.json。",
-        limitation="缺少真实曝光分母，不构成生产推荐准确率。",
-    ),
+    "historical_top20_diagnostic": _HISTORICAL_TOP20_DIAGNOSTIC_V1_SPEC,
     "summary": _text(
         "排序诊断摘要",
         "Recommendation Signal Inclusion 与 Observed Effect 等同源汇总。",
@@ -1228,6 +1240,7 @@ class ResearchExplanationCatalog(Mapping[str, FieldExplanation]):
         lineage: Sequence[LineageEntry],
         *,
         allowed_omissions: frozenset[str] = frozenset(),
+        include_target_aggregate_reference: bool = False,
     ) -> ResearchExplanationCatalog:
         declared = [entry.field_name for entry in lineage]
         duplicates = sorted({field_name for field_name in declared if declared.count(field_name) > 1})
@@ -1243,7 +1256,12 @@ class ResearchExplanationCatalog(Mapping[str, FieldExplanation]):
 
         explanations: dict[str, FieldExplanation] = {}
         for entry in lineage:
-            spec = _FIELD_SPECS[entry.field_name]
+            spec = (
+                _HISTORICAL_TOP20_DIAGNOSTIC_V2_SPEC
+                if include_target_aggregate_reference
+                and entry.field_name == "ranking_diagnostics.historical_top20_diagnostic"
+                else _FIELD_SPECS[entry.field_name]
+            )
             provenance_label, provenance_definition = _PROVENANCE[entry.provenance]
             usage = "；".join(f"{_USAGE_STAGE[stage][0]}：{_USAGE_STAGE[stage][1]}" for stage in entry.usage_stages)
             explanations[entry.field_name] = FieldExplanation(

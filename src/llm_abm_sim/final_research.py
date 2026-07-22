@@ -8,7 +8,7 @@ import math
 import random
 from collections import Counter, defaultdict
 from collections.abc import Iterable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import Enum
 from pathlib import Path
 from typing import Any, Literal, cast
@@ -540,6 +540,48 @@ class _CommentRecord:
 
 
 @dataclass(frozen=True)
+class _TargetAggregateEngagementRecordKey:
+    video_id: str
+
+    def as_dict(self) -> dict[str, str]:
+        return {"video_id": self.video_id}
+
+
+@dataclass(frozen=True)
+class _TargetAggregateEngagementReference:
+    source_artifact: Literal["videos.csv"]
+    record_key: _TargetAggregateEngagementRecordKey
+    like_count: int
+    comment_count: int
+    share_count: int
+    collect_count: int
+    real_exposure_denominator_available: Literal[False]
+    user_level_attribution_available: Literal[False]
+    action_mutual_exclusivity_known: Literal[False]
+    diagnostic_only: Literal[True]
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "source_artifact": self.source_artifact,
+            "record_key": self.record_key.as_dict(),
+            "like_count": self.like_count,
+            "comment_count": self.comment_count,
+            "share_count": self.share_count,
+            "collect_count": self.collect_count,
+            "real_exposure_denominator_available": self.real_exposure_denominator_available,
+            "user_level_attribution_available": self.user_level_attribution_available,
+            "action_mutual_exclusivity_known": self.action_mutual_exclusivity_known,
+            "diagnostic_only": self.diagnostic_only,
+        }
+
+
+@dataclass(frozen=True)
+class _TargetHoldoutEvidence:
+    comments: tuple[_CommentRecord, ...]
+    target_aggregate_engagement_reference: _TargetAggregateEngagementReference
+
+
+@dataclass(frozen=True)
 class _PreparedInputs:
     target_video: TargetVideo
     users_by_id: dict[str, ResearchUser]
@@ -915,10 +957,34 @@ class _ResearchInputBuilder:
             sample_audit=sample_audit,
         )
 
-    def reveal_holdout(self) -> list[_CommentRecord]:
-        """Load target interaction answers only after static scoring is complete."""
+    def reveal_holdout(self) -> _TargetHoldoutEvidence:
+        """Load target answers and aggregate reference only after optional runtime completes."""
 
-        return self._load_comments(holdout=True)
+        target_rows = [
+            row
+            for row in _read_csv_rows(self.config.dataset_dir / "videos.csv")
+            if _cell(row, "video_id") == self.config.target_video_id
+        ]
+        if len(target_rows) != 1:
+            raise ValueError(
+                f"videos.csv must contain exactly one target video_id at holdout reveal: {self.config.target_video_id}"
+            )
+        target_row = target_rows[0]
+        return _TargetHoldoutEvidence(
+            comments=tuple(self._load_comments(holdout=True)),
+            target_aggregate_engagement_reference=_TargetAggregateEngagementReference(
+                source_artifact="videos.csv",
+                record_key=_TargetAggregateEngagementRecordKey(video_id=self.config.target_video_id),
+                like_count=_aggregate_count_cell(target_row, "like_count"),
+                comment_count=_aggregate_count_cell(target_row, "comment_count"),
+                share_count=_aggregate_count_cell(target_row, "share_count"),
+                collect_count=_aggregate_count_cell(target_row, "collect_count"),
+                real_exposure_denominator_available=False,
+                user_level_attribution_available=False,
+                action_mutual_exclusivity_known=False,
+                diagnostic_only=True,
+            ),
+        )
 
     def _load_videos(self) -> dict[str, _VideoRecord]:
         videos: dict[str, _VideoRecord] = {}
@@ -1166,9 +1232,20 @@ class FinalResearchRunner:
         sampling_status = _sampling_status(prepared.sampling_method, self.decision_adapter)
         if sample_audit:
             sample_audit["sampling_status"] = sampling_status
-        holdout_comments = builder.reveal_holdout()
+        holdout_evidence = builder.reveal_holdout()
+        if ranking_runtime is not None:
+            ranking_runtime = replace(
+                ranking_runtime,
+                summary={**ranking_runtime.summary, "evidence_state": ranking_v5_expand_evidence()},
+            )
+        holdout_comments = holdout_evidence.comments
         holdout_participant_ids = sorted({comment.commenter_user_id for comment in holdout_comments})
-        diagnostic = _holdout_diagnostic(holdout_participant_ids, top_scores, scores_by_user)
+        diagnostic = _holdout_diagnostic(
+            holdout_participant_ids,
+            top_scores,
+            scores_by_user,
+            holdout_evidence.target_aggregate_engagement_reference,
+        )
         ranking_diagnostics: RankingDiagnosticArtifacts | None = None
         if ranking_runtime is not None:
             ranking_diagnostics = RankingDiagnostics(
@@ -1728,7 +1805,6 @@ class FinalResearchRunner:
             "same_batch_feedback": False,
             "decision_adapter_calls": decision_adapter_calls,
             "provider_metadata": provider_metadata,
-            "evidence_state": ranking_v5_expand_evidence(),
             "counts": {
                 "sample_users": len(prepared.sample_user_ids),
                 "seed_users": len(prepared.seed_user_ids),
@@ -2380,6 +2456,7 @@ def _holdout_diagnostic(
     holdout_participant_ids: Sequence[str],
     top_scores: Sequence[OfflineRecommendationScore],
     scores_by_user: Mapping[str, OfflineRecommendationScore],
+    target_aggregate_engagement_reference: _TargetAggregateEngagementReference,
 ) -> dict[str, object]:
     observed = list(holdout_participant_ids[:20])
     recommended = [score.user_id for score in top_scores]
@@ -2400,6 +2477,7 @@ def _holdout_diagnostic(
         "model_recommended_user_ids": recommended,
         "intersection_count": len(observed_set & set(recommended)),
         "intersection_user_ids": sorted(observed_set & set(recommended)),
+        "target_aggregate_engagement_reference": target_aggregate_engagement_reference.as_dict(),
         "observed_participant_signal_coverage": {
             "with_non_target_history": sum(bool(row["has_non_target_history"]) for row in participant_signals),
             "with_network_connection": sum(bool(row["has_network_connection"]) for row in participant_signals),
@@ -2563,6 +2641,13 @@ def _parse_list(value: str) -> list[str]:
 def _cell(row: Mapping[str, Any], field_name: str) -> str:
     value = row.get(field_name, "")
     return str(value or "").strip()
+
+
+def _aggregate_count_cell(row: Mapping[str, Any], field_name: str) -> int:
+    value = _cell(row, field_name)
+    if field_name not in row or not value or not value.isascii() or not value.isdigit():
+        raise ValueError(f"videos.csv target {field_name} must be a non-negative integer")
+    return int(value)
 
 
 def _int_cell(row: Mapping[str, Any], field_name: str) -> int:

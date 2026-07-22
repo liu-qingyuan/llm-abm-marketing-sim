@@ -38,9 +38,12 @@ FinalResearchRunner(config: FinalResearchConfig, decision_adapter: LLMDecisionAd
 ```text
 Historical Set = 全部非目标视频及其评论/回复
 Holdout Set = 目标视频的真实评论/回复答案
+Aggregate Reference = 目标 videos.csv 记录的四个 raw engagement counts
 ```
 
-实现从 Historical Set 重新构建评论派生用户图、评论数、回复数、评论获赞和 P95 reference。目标视频的互动行与视频级聚合热度不进入画像投影、用户抽样、seed 选择或推荐评分，只在评分完成后用于 Top20 diagnostic。
+实现从 Historical Set 重新构建评论派生用户图、评论数、回复数、评论获赞和 P95 reference。目标视频的互动行与视频级聚合热度不进入画像投影、用户抽样、seed 选择、推荐评分、Prompt 或 DecisionInput。`_ResearchInputBuilder.reveal_holdout()` 只在静态评分和 optional runtime 完成后一次返回 comments 与 typed aggregate reference，并把后者写入唯一 source artifact `top20_holdout_diagnostic.json`。
+
+Aggregate Reference 只保留 `videos.csv`、目标 `video_id`、`like_count/comment_count/share_count/collect_count` 和不可比较标记。项目没有真实曝光分母、用户级归属或 action 互斥证据，因此不计算真实互动率，不把 `collect_count` 扩展为仿真 action，也不以该 reference 评价或校准模拟结果。
 
 未观测到用户与目标视频互动，只表示数据中没有发现该组合的互动记录；不能解释为用户获得真实曝光后选择 `ignore`。
 
@@ -62,7 +65,7 @@ Holdout Set = 目标视频的真实评论/回复答案
 - full-pool seed、Seed Neighbor Cohort、scope quota/fallback、互斥角色和最终样本 audit；
 - holdout-safe reference 与 seed audit；
 - 全量用户离线分数 CSV 和聚合摘要，包括 target-scope weighted degree 与 base network relevance；
-- Top20 holdout diagnostic；
+- Top20 holdout diagnostic，包含唯一的目标视频 raw aggregate reference；
 - artifact manifest。
 
 这些产物不包含 `.env`、凭证、headers、raw provider payload、raw Douyin payload或旧 demo preset 字段。
