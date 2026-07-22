@@ -21,7 +21,7 @@ test.describe('deployed Seed-First report', () => {
 
     await page.getByTestId('run-evidence-mode-button').click();
     await expect(page.getByTestId('run-evidence-method-status')).toContainText('Seed-First Research Sample');
-    await expect(page.getByTestId('run-evidence-method-status')).toContainText('Validation Run');
+    await expect(page.getByTestId('run-evidence-method-status')).toContainText('Persisted Seed-First Formal Run');
 
     const hasHorizontalOverflow = await page.evaluate(
       () => document.documentElement.scrollWidth > window.innerWidth + 1,

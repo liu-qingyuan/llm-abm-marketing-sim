@@ -15,11 +15,28 @@ FinalResearchRunner(config: FinalResearchConfig, decision_adapter: LLMDecisionAd
 |---|---|---|---|---|---|
 | Historical Network-Augmented v3 | `payload-v3` / `users-v3` | `final-research-ranking-runtime-v2` | `ranking-diagnostics-v1` | Prompt v2 | 历史只读 |
 | Seed-First Validation v4 | `payload-v4` / `users-v4` | `final-research-ranking-runtime-v2` | `ranking-diagnostics-v1` | Prompt v2 | 历史 Validation |
-| Jinjiang v5 expand | `payload-v5` / `users-v5` | `final-research-ranking-runtime-v3` | `ranking-diagnostics-v2` | Prompt v3 | Validation / human-authorized Formal evidence；不可 production deploy |
+| Jinjiang v5 | `payload-v5` / `users-v5` | `final-research-ranking-runtime-v3` | `ranking-diagnostics-v2` | Prompt v3 | Validation expand 或 human-authorized Formal release |
 
-v5 同时持久化 `ranking-v5-expand-evidence-v1`。#77 完成后的 fresh writer 使用 aggregate 与 Decision 双 `persisted` 状态；`decision_execution_evidence` 使用 `final-research-decision-execution-evidence-v1`，集中记录实际 Adapter chain、`rule_based | mock_provider | live_provider`、row-derived source/action/终态计数、安全 Provider metadata、真实 request invocation、sampling status 和退化标记。只有 `live_provider` 且实际发出外部请求时，Decision evidence 才标记为 Formal 并使用 `persisted_seed_first_formal_run`；rule-based、缓存命中和 injected deterministic/mock client 均保持 `validation_run`。`production_deploy_eligible=false` 继续固定，#78 才能收口正式发布合同。
+v5 同时持久化 aggregate 与 Decision evidence。rule-based、缓存命中和 injected deterministic/mock client 使用 `ranking-v5-expand-evidence-v1`、`validation_run` 和 `production_deploy_eligible=false`。只有 `live_provider` 且本次 run 实际发出外部 request 时，writer 才生成 `ranking-v5-formal-evidence-v1`、`persisted_seed_first_formal_run` 和 `production_deploy_eligible=true`。两条路径都使用 `final-research-decision-execution-evidence-v1`，集中记录实际 Adapter chain、row-derived source/action/终态计数、安全 Provider metadata、真实 request invocation 和退化标记。
 
-reader 继续只读兼容三种 v5 expand lineage：#75 的 aggregate/Decision 双 `pending`、#76 的 aggregate `persisted` + Decision `pending`，以及 #77 的双 `persisted`；未声明的 aggregate `pending` + Decision `persisted` 组合失败关闭。`pending` Decision 阶段不要求新 runtime 下载链接或执行证据；双 `persisted` 阶段必须从同 run 的 Decision/action/outcome/failure rows 复算并交叉验证，Provider metadata 也必须通过既有 allowlist 与脱敏自校验。当前 v1 production validator 继续明确拒绝 v5。
+reader 继续只读兼容三种历史 v5 expand lineage：#75 的 aggregate/Decision 双 `pending`、#76 的 aggregate `persisted` + Decision `pending`，以及 #77 的双 `persisted`；同时接受新的 formal lineage。未声明的 aggregate `pending` + Decision `persisted` 和非 live Decision 塞入 formal envelope 等交叉组合都失败关闭。历史 Formal Decision + expand envelope 仍可只读重建，但不能通过 v2 release gate。任何 persisted Decision 阶段都必须从同 run 的 Decision/action/outcome/failure rows 复算并交叉验证，Provider metadata 也必须通过既有 allowlist 与脱敏自校验。
+
+## Formal release contract 与 deploy gate
+
+`validate_release(...)` 保持唯一 release-validation Interface。它按 `schema_version` 精确分流：历史 `abm-report-release-contract-v1` 仍可用于本地验证既有 v4 Validation evidence；`abm-report-release-contract-v2` 固定 `release_purpose=formal_research`，只接受完整 v5 Formal tuple。v2 会先执行只读 ranking reader，再交叉核对 sampling、Prompt、Decision source/action/终态计数、退化标记、raw holdout reference、manifest/download coverage，并要求 source directory 只包含目录和 regular file、全部文件恰好由 manifest 声明，且每个 artifact 连同 `artifact_manifest.json` 都有匹配 SHA-256。校验过程不会重建或改写报告。
+
+production deploy Interface 为：
+
+```bash
+scripts/deploy_abm_report.sh \
+  --contract configs/deployments/<authorized-formal-contract>.json \
+  --source-dir runs/<authorized-formal-run> \
+  --release-id <release-id>
+```
+
+`--contract` 必须是仓库内安全、非 symlink 的 regular file。deploy 先复制随机本地 snapshot，保留原始 source identity 检查，但对 snapshot 执行完整 v2 validation；之后的 local hash 和 tar upload 只读取同一个只读 snapshot，避免 validation 与上传之间的 source mutation。任何 snapshot 校验失败都会在第一次 `ssh`、上传、容器或远程配置动作前拒绝 v1、Validation、rule-based、mock-provider、source mismatch、hash/path/symlink 或 schema crossing。通过本地 gate 后，既有 candidate health check、宿主检查、原子 `current` 切换、public acceptance 和失败恢复上一 release 的流程保持不变。
+
+Ralph-ready implementation、`ready-for-agent` label 和本地 synthetic persisted Formal fixture 都不构成 live 或 production 授权。后续 human-gated operational Ticket 必须分别记录 Provider、模型、预算上限、独立输出目录和 canonical deployment 授权；本地 fixture 只验证合同与 deploy guard，不得描述为真实 live run。
 
 `provider.enabled=false` 时仍只执行离线评分和 Holdout Diagnostic，不调用 Decision Adapter。`provider.enabled=true` 时配置必须使用 `horizon=30`、`fail_closed_action=raise` 和 `jinjiang-green-marketing-prompt-v3`。具体 runtime 由 `research_model` 显式选择：
 

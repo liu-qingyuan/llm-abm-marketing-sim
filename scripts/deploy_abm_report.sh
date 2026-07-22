@@ -3,7 +3,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
-RELEASE_CONTRACT="${REPO_ROOT}/configs/deployments/jinjiang-seed-first-validation-20260720.json"
+RELEASE_CONTRACT=""
 
 DEPLOY_HOST="${ABM_DEPLOY_HOST:-q1ngyuan.top}"
 DOMAIN="${ABM_DEPLOY_DOMAIN:-abm.q1ngyuan.top}"
@@ -14,9 +14,10 @@ IMAGE="${ABM_DEPLOY_IMAGE:-nginx:1.27-alpine}"
 PYTHON="${ABM_DEPLOY_PYTHON:-python3}"
 SOURCE_DIR=""
 RELEASE_ID=""
+LOCAL_SNAPSHOT_DIR=""
 
 usage() {
-  printf 'Usage: %s --source-dir <approved-run-directory> --release-id <release-id>\n' "$0" >&2
+  printf 'Usage: %s --contract <formal-release-contract> --source-dir <approved-run-directory> --release-id <release-id>\n' "$0" >&2
 }
 
 fail() {
@@ -26,6 +27,11 @@ fail() {
 
 while (( $# > 0 )); do
   case "$1" in
+    --contract)
+      (( $# >= 2 )) || { usage; fail "--contract requires a value"; }
+      RELEASE_CONTRACT="$2"
+      shift 2
+      ;;
     --source-dir)
       (( $# >= 2 )) || { usage; fail "--source-dir requires a value"; }
       SOURCE_DIR="$2"
@@ -47,9 +53,9 @@ while (( $# > 0 )); do
   esac
 done
 
-if [[ -z "${SOURCE_DIR}" || -z "${RELEASE_ID}" ]]; then
+if [[ -z "${RELEASE_CONTRACT}" || -z "${SOURCE_DIR}" || -z "${RELEASE_ID}" ]]; then
   usage
-  fail "--source-dir and --release-id are both required"
+  fail "--contract, --source-dir, and --release-id are all required"
 fi
 
 [[ "${DOMAIN}" =~ ^[A-Za-z0-9.-]+$ ]] || fail "invalid domain: ${DOMAIN}"
@@ -59,11 +65,33 @@ fi
 [[ "${CONTAINER_NAME}" =~ ^[A-Za-z0-9_.-]+$ ]] || fail "invalid container name: ${CONTAINER_NAME}"
 [[ "${IMAGE}" =~ ^[A-Za-z0-9._/:@-]+$ ]] || fail "invalid image reference: ${IMAGE}"
 [[ "${RELEASE_ID}" =~ ^[A-Za-z0-9_.-]+$ ]] || fail "invalid release id: ${RELEASE_ID}"
+CANONICAL_SOURCE_DIR="$(cd -- "${SOURCE_DIR}" 2>/dev/null && pwd -P)" || fail "source directory does not exist"
+cleanup_local_snapshot() {
+  local snapshot_dir="${LOCAL_SNAPSHOT_DIR}"
+  [[ -n "${snapshot_dir}" && -d "${snapshot_dir}" ]] || return 0
+  if command -v chflags >/dev/null 2>&1; then
+    chflags -R nouchg,noschg "${snapshot_dir}" 2>/dev/null || true
+  fi
+  chmod -R u+w "${snapshot_dir}" 2>/dev/null || true
+  if ! rm -r -- "${snapshot_dir}"; then
+    printf 'deploy error: cannot remove local release snapshot %s\n' "${snapshot_dir}" >&2
+    return 1
+  fi
+  LOCAL_SNAPSHOT_DIR=""
+}
+LOCAL_SNAPSHOT_DIR="$(mktemp -d "${TMPDIR:-/tmp}/abm-report-deploy.XXXXXX")"
+trap cleanup_local_snapshot EXIT
+COPYFILE_DISABLE=1 cp -R "${CANONICAL_SOURCE_DIR}/." "${LOCAL_SNAPSHOT_DIR}/"
 
 "${PYTHON}" "${SCRIPT_DIR}/validate_abm_report_release.py" \
   --repo-root "${REPO_ROOT}" \
   --contract "${RELEASE_CONTRACT}" \
-  --source-dir "${SOURCE_DIR}"
+  --source-dir "${SOURCE_DIR}" \
+  --snapshot-dir "${LOCAL_SNAPSHOT_DIR}" \
+  --require-formal-production
+SOURCE_DIR="${LOCAL_SNAPSHOT_DIR}"
+find "${SOURCE_DIR}" -type d -exec chmod a-w {} +
+find "${SOURCE_DIR}" -type f -exec chmod a-w {} +
 
 LOCAL_REPORT_SHA="$(shasum -a 256 "${SOURCE_DIR}/report.html" | awk '{print $1}')"
 LOCAL_MANIFEST_SHA="$(shasum -a 256 "${SOURCE_DIR}/artifact_manifest.json" | awk '{print $1}')"
@@ -112,6 +140,7 @@ remote_release="$1"
 [[ -d "${remote_release}" ]] && rm -r -- "${remote_release}"
 CLEAN_PARTIAL
   fi
+  cleanup_local_snapshot || true
   exit "${status}"
 }
 trap cleanup_partial_upload EXIT
@@ -119,7 +148,7 @@ trap cleanup_partial_upload EXIT
 COPYFILE_DISABLE=1 tar --no-xattrs -C "${SOURCE_DIR}" -czf - . \
   | ssh "${DEPLOY_HOST}" "tar -xzf - -C '${REMOTE_RELEASE}'"
 upload_complete=1
-trap - EXIT
+trap cleanup_local_snapshot EXIT
 
 ssh "${DEPLOY_HOST}" bash -s -- \
   "${REMOTE_ROOT}" \
@@ -418,6 +447,9 @@ rollback_on_failure() {
     printf 'Public acceptance failed; restoring previous release %s\n' "${PREVIOUS_RELEASE:-<none>}" >&2
     rollback_remote || printf 'deploy error: automatic rollback failed\n' >&2
   fi
+  if ! cleanup_local_snapshot && (( status == 0 )); then
+    status=1
+  fi
   exit "${status}"
 }
 trap rollback_on_failure EXIT
@@ -478,6 +510,7 @@ ABM_DEPLOY_PUBLIC_URL="https://${DOMAIN}" \
   npx playwright test tests/playwright/deployed-abm-report.spec.ts
 
 cleanup_public_artifacts
+cleanup_local_snapshot
 trap - EXIT
 printf 'Deployment complete\n'
 printf 'Report: https://%s/\n' "${DOMAIN}"

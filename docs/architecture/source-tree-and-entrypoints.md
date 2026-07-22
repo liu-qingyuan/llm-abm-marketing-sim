@@ -13,6 +13,7 @@ llm-abm-marketing-sim/
 ├── README.md                         # 安装、命令、Obsidian 对齐摘要
 ├── configs/                          # 示例配置、fixture、live smoke、Web 模板
 │   ├── default.yaml
+│   ├── deployments/                  # release contract；不保存秘密或 raw payload
 │   ├── fixtures/
 │   ├── live/
 │   └── templates/
@@ -35,6 +36,9 @@ llm-abm-marketing-sim/
 ├── package.json                      # Playwright 依赖/脚本
 ├── playwright.config.ts              # 浏览器冒烟配置
 ├── pyproject.toml                    # Python 包、依赖、ruff、mypy、pytest marker
+├── scripts/
+│   ├── validate_abm_report_release.py # v1/v2 persisted release evidence validator
+│   └── deploy_abm_report.sh           # formal-only production deploy Interface
 ├── src/
 │   └── llm_abm_sim/                  # 核心包
 └── tests/                            # 分层测试
@@ -142,6 +146,22 @@ output_dir = FinalResearchRunner(config, decision_adapter).run_and_write("runs/f
 ```
 
 该路径保留现有 `LLMDecisionAdapter` 接缝。离线基线不调用适配器；显式启用 provider 后才运行 30 批次，并由 live gate 决定是否允许真实 API。
+
+- Release validation 与 formal-only production deploy：
+
+```bash
+python scripts/validate_abm_report_release.py \
+  --repo-root . \
+  --contract configs/deployments/<release-contract>.json \
+  --source-dir runs/<persisted-run>
+
+scripts/deploy_abm_report.sh \
+  --contract configs/deployments/<authorized-formal-contract>.json \
+  --source-dir runs/<authorized-formal-run> \
+  --release-id <release-id>
+```
+
+`validate_release(...)` 是唯一 release-validation Interface。deploy 只接受 v2 Formal contract，并在任何 SSH/上传前失败关闭；代码实现或本地验证不构成 live/production 授权。
 
 - Browser smoke：
 

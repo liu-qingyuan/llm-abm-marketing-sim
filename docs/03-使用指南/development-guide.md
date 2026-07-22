@@ -63,6 +63,33 @@ python -m llm_abm_sim.run --config configs/fixtures/realistic_marketing_dataset.
 
 该样例使用可提交的真实感社交网络数据：有向加权边、关系/触点元数据、社群、种子用户、平台上下文、时间设置和营销内容。替换为本地私密数据时，请把清洗后的文件放在被忽略的 `data/raw/` 或 `data/processed/`，并在本地配置中更新 `dataset.edge_list_path` / `dataset.profile_path`。不要提交原始导出、handle、email、token、cookie、API key 或 secret-bearing headers。
 
+## Final Research release validation 与部署
+
+本地 release evidence 验证使用唯一入口：
+
+```bash
+. .venv/bin/activate
+python scripts/validate_abm_report_release.py \
+  --repo-root . \
+  --contract configs/deployments/<release-contract>.json \
+  --source-dir runs/<persisted-run>
+```
+
+该命令支持历史 `abm-report-release-contract-v1` 的本地证据验证，以及新的 `abm-report-release-contract-v2` Formal 验证。v2 contract 必须位于仓库内且不经过 symlink，固定 `release_purpose=formal_research`，并记录完整 v5 schema tuple、Decision/终态/退化 evidence、raw holdout reference 和 manifest 全文件 SHA-256。source directory 不允许绝对/父级 artifact path、symlink、FIFO/socket/device 等非 regular entry、未声明文件、缺失下载或 hash 不一致。
+
+production deploy 只能显式提供 v2 Formal contract：
+
+```bash
+scripts/deploy_abm_report.sh \
+  --contract configs/deployments/<authorized-formal-contract>.json \
+  --source-dir runs/<authorized-formal-run> \
+  --release-id <release-id>
+```
+
+部署脚本先复制随机本地 snapshot，在任何 `ssh`、上传或远程配置前对该 snapshot 完成 formal-only validation；后续 hash 与 tar upload 继续读取同一只读 snapshot，原 source 的并发变化不会进入上传。v1、`validation_run`、rule-based、mock-provider、`live_api_triggered=false` 或 source/contract 不匹配都不会进入远程阶段。通过 preflight 后仍沿用 candidate health check、宿主检查、原子 `current` 切换和失败回退。
+
+实现代码、离线 runner candidate、synthetic persisted Formal fixture 和 `ready-for-agent` 状态均不授权真实 Provider 或 production deployment。后续 operational Ticket 必须单独记录 Provider、模型、预算上限、独立输出目录和 canonical deployment 授权。不要用 fake Adapter 写出 live 事实，也不要把测试 fixture 描述为真实研究运行。
+
 ## 质量门禁
 
 常规完整检查：

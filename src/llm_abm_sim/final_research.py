@@ -32,7 +32,7 @@ from .final_research_report import (
     FINAL_RESEARCH_USER_OPPORTUNITY_LIMIT,
     FinalResearchReportSource,
     FinalResearchReportWriter,
-    ranking_v5_expand_evidence,
+    ranking_v5_release_evidence,
 )
 from .prompt_field_summary import PromptFieldInclusion, capture_prompt_field_inclusion
 from .ranking_diagnostics import MAIN_RANKING_WEIGHTS, RankingDiagnosticArtifacts, RankingDiagnostics
@@ -1270,7 +1270,7 @@ class FinalResearchRunner:
                     "terminal_counts": decision_execution_evidence.terminal_counts.model_dump(mode="json"),
                     "degeneracy_flags": decision_execution_evidence.degeneracy_flags.model_dump(mode="json"),
                     "live_api_triggered": decision_execution_evidence.live_api_triggered,
-                    "evidence_state": ranking_v5_expand_evidence(decision_execution_evidence),
+                    "evidence_state": ranking_v5_release_evidence(decision_execution_evidence),
                 },
             )
         holdout_comments = holdout_evidence.comments

@@ -5,6 +5,7 @@ import json
 import os
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -105,6 +106,15 @@ def _make_release(tmp_path: Path) -> tuple[Path, Path]:
     return source, contract
 
 
+def _make_repo_release() -> tuple[tempfile.TemporaryDirectory[str], Path, Path]:
+    temporary = tempfile.TemporaryDirectory(prefix="issue-78-release-", dir=REPO_ROOT / "tmp")
+    source, contract = _make_release(Path(temporary.name))
+    contract_document = json.loads(contract.read_text(encoding="utf-8"))
+    contract_document["source_directory"] = source.relative_to(REPO_ROOT).as_posix()
+    _write_json(contract, contract_document)
+    return temporary, source, contract
+
+
 def _validate(tmp_path: Path, source: Path, contract: Path) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         [
@@ -176,6 +186,31 @@ def test_release_validator_rejects_a_different_run_directory(tmp_path: Path):
     assert "source directory mismatch" in completed.stderr
 
 
+def test_release_validator_accepts_external_v1_contract_for_historical_validation(tmp_path: Path):
+    repo_root = tmp_path / "repo"
+    source, contract = _make_release(repo_root)
+    external_contract = tmp_path / "historical-v1-contract.json"
+    contract.replace(external_contract)
+
+    completed = _validate(repo_root, source, external_contract)
+
+    assert completed.returncode == 0, completed.stderr
+    assert "abm-report-release-contract-v1" in completed.stdout
+
+
+def test_release_validator_rejects_source_ancestor_symlink(tmp_path: Path):
+    source, contract = _make_release(tmp_path)
+    real_runs = tmp_path / "real-runs"
+    source.parent.replace(real_runs)
+    os.symlink(real_runs, tmp_path / "runs")
+    symlinked_source = tmp_path / "runs" / "approved"
+
+    completed = _validate(tmp_path, symlinked_source, contract)
+
+    assert completed.returncode == 1
+    assert "source directory must not contain symlink components" in completed.stderr
+
+
 def test_release_validator_rejects_symlinked_artifacts(tmp_path: Path):
     source, contract = _make_release(tmp_path)
     catalog = source / "field_lineage_catalog.json"
@@ -188,7 +223,7 @@ def test_release_validator_rejects_symlinked_artifacts(tmp_path: Path):
     assert "source directory contains symlink" in completed.stderr
 
 
-def test_deploy_interface_requires_explicit_source_and_release(tmp_path: Path):
+def test_deploy_interface_requires_explicit_contract_source_and_release(tmp_path: Path):
     deploy_script = REPO_ROOT / "scripts" / "deploy_abm_report.sh"
     env = os.environ.copy()
     env["ABM_REPORT_SOURCE_DIR"] = str(tmp_path / "missing")
@@ -196,8 +231,187 @@ def test_deploy_interface_requires_explicit_source_and_release(tmp_path: Path):
     completed = subprocess.run([str(deploy_script)], text=True, capture_output=True, env=env)
 
     assert completed.returncode != 0
+    assert "--contract" in completed.stderr
     assert "--source-dir" in completed.stderr
     assert "--release-id" in completed.stderr
+
+
+def test_deploy_rejects_v1_contract_before_any_remote_action(tmp_path: Path):
+    deploy_script = REPO_ROOT / "scripts" / "deploy_abm_report.sh"
+    temporary, source, contract = _make_repo_release()
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    ssh_marker = tmp_path / "ssh-invoked"
+    ssh = bin_dir / "ssh"
+    ssh.write_text(
+        '#!/usr/bin/env bash\nprintf invoked > "${FAKE_SSH_MARKER}"\nexit 0\n',
+        encoding="utf-8",
+    )
+    ssh.chmod(0o755)
+    env = os.environ.copy()
+    env.update(
+        {
+            "PATH": f"{bin_dir}:{env['PATH']}",
+            "ABM_DEPLOY_PYTHON": sys.executable,
+            "FAKE_SSH_MARKER": str(ssh_marker),
+        }
+    )
+
+    completed = subprocess.run(
+        [
+            str(deploy_script),
+            "--contract",
+            str(contract),
+            "--source-dir",
+            str(source),
+            "--release-id",
+            "v1-must-not-deploy",
+        ],
+        text=True,
+        capture_output=True,
+        env=env,
+        cwd=REPO_ROOT,
+    )
+
+    try:
+        assert completed.returncode != 0
+        assert "formal production deployment requires abm-report-release-contract-v2" in completed.stderr
+        assert not ssh_marker.exists()
+    finally:
+        temporary.cleanup()
+
+
+def test_deploy_stops_on_validator_failure_before_any_remote_action(tmp_path: Path):
+    deploy_script = REPO_ROOT / "scripts" / "deploy_abm_report.sh"
+    source = tmp_path / "candidate"
+    source.mkdir()
+    (source / "report.html").write_text("candidate", encoding="utf-8")
+    (source / "artifact_manifest.json").write_text("{}", encoding="utf-8")
+    contract = tmp_path / "formal-contract.json"
+    contract.write_text("{}", encoding="utf-8")
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    validator_log = tmp_path / "validator-args"
+    ssh_marker = tmp_path / "ssh-invoked"
+    snapshot_root = tmp_path / "snapshots"
+    snapshot_root.mkdir()
+    python = bin_dir / "python"
+    python.write_text(
+        '#!/usr/bin/env bash\nprintf \'%s\\n\' "$*" > "${FAKE_VALIDATOR_LOG}"\nexit 19\n',
+        encoding="utf-8",
+    )
+    python.chmod(0o755)
+    ssh = bin_dir / "ssh"
+    ssh.write_text(
+        '#!/usr/bin/env bash\nprintf invoked > "${FAKE_SSH_MARKER}"\nexit 0\n',
+        encoding="utf-8",
+    )
+    ssh.chmod(0o755)
+    env = os.environ.copy()
+    env.update(
+        {
+            "PATH": f"{bin_dir}:{env['PATH']}",
+            "ABM_DEPLOY_PYTHON": str(python),
+            "FAKE_VALIDATOR_LOG": str(validator_log),
+            "FAKE_SSH_MARKER": str(ssh_marker),
+            "TMPDIR": str(snapshot_root),
+        }
+    )
+
+    completed = subprocess.run(
+        [
+            str(deploy_script),
+            "--contract",
+            str(contract),
+            "--source-dir",
+            str(source),
+            "--release-id",
+            "rejected-candidate",
+        ],
+        text=True,
+        capture_output=True,
+        env=env,
+        cwd=REPO_ROOT,
+    )
+
+    assert completed.returncode == 19
+    validator_args = validator_log.read_text(encoding="utf-8")
+    assert f"--contract {contract}" in validator_args
+    assert "--require-formal-production" in validator_args
+    assert not ssh_marker.exists()
+    assert list(snapshot_root.iterdir()) == []
+
+
+def test_deploy_rejects_symlink_contract_before_any_remote_action(tmp_path: Path):
+    deploy_script = REPO_ROOT / "scripts" / "deploy_abm_report.sh"
+    temporary, source, contract = _make_repo_release()
+    symlink_contract = Path(temporary.name) / "symlink-contract.json"
+    os.symlink(contract, symlink_contract)
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    ssh_marker = tmp_path / "ssh-invoked"
+    ssh = bin_dir / "ssh"
+    ssh.write_text(
+        '#!/usr/bin/env bash\nprintf invoked > "${FAKE_SSH_MARKER}"\nexit 0\n',
+        encoding="utf-8",
+    )
+    ssh.chmod(0o755)
+    env = os.environ.copy()
+    env.update(
+        {
+            "PATH": f"{bin_dir}:{env['PATH']}",
+            "ABM_DEPLOY_PYTHON": sys.executable,
+            "FAKE_SSH_MARKER": str(ssh_marker),
+        }
+    )
+
+    completed = subprocess.run(
+        [
+            str(deploy_script),
+            "--contract",
+            str(symlink_contract),
+            "--source-dir",
+            str(source),
+            "--release-id",
+            "symlink-must-not-deploy",
+        ],
+        text=True,
+        capture_output=True,
+        env=env,
+        cwd=REPO_ROOT,
+    )
+
+    try:
+        assert completed.returncode != 0
+        assert "release contract must not contain symlink components" in completed.stderr
+        assert not ssh_marker.exists()
+    finally:
+        temporary.cleanup()
+
+
+def test_deploy_preserves_candidate_checks_atomic_switch_and_transaction_rollback_order():
+    deploy_script = REPO_ROOT / "scripts" / "deploy_abm_report.sh"
+    script = deploy_script.read_text(encoding="utf-8")
+    remote_transaction = script.split("<<'REMOTE_DEPLOY'", maxsplit=1)[1].split("REMOTE_DEPLOY", maxsplit=1)[0]
+
+    candidate_started = remote_transaction.index("docker run -d")
+    candidate_name_bound = remote_transaction.index('--name "${candidate_name}"', candidate_started)
+    candidate_healthy = remote_transaction.index('wait_healthy "${candidate_name}"', candidate_started)
+    candidate_report_checked = remote_transaction.index(
+        'docker exec "${candidate_name}" test -f /usr/share/nginx/html/report.html',
+        candidate_healthy,
+    )
+    current_switched = remote_transaction.index('atomic_current "${remote_release}"', candidate_report_checked)
+    host_guard = remote_transaction.index('grep -Fq "${managed_marker}" "${site_available}"')
+    host_config_checked = remote_transaction.index("nginx -t", current_switched)
+    rollback_started = remote_transaction.index("rollback() {")
+    rollback_previous = remote_transaction.index('atomic_current "${previous_release}"', rollback_started)
+
+    assert host_guard < candidate_started < candidate_name_bound < candidate_healthy < candidate_report_checked
+    assert candidate_report_checked < current_switched
+    assert current_switched < host_config_checked
+    assert rollback_started < rollback_previous
+    assert "trap finish EXIT" in remote_transaction
 
 
 def test_deploy_rolls_back_when_public_acceptance_fails(tmp_path: Path):
@@ -206,14 +420,31 @@ def test_deploy_rolls_back_when_public_acceptance_fails(tmp_path: Path):
     source.mkdir()
     (source / "report.html").write_text("approved", encoding="utf-8")
     (source / "artifact_manifest.json").write_text("{}", encoding="utf-8")
+    contract = tmp_path / "formal-contract.json"
+    contract.write_text("{}", encoding="utf-8")
 
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     ssh_count = tmp_path / "ssh-count"
     ssh_log = tmp_path / "ssh-log"
+    upload_archive = tmp_path / "uploaded-release.tar.gz"
+    snapshot_root = tmp_path / "snapshots"
+    snapshot_root.mkdir()
     shims = {
-        "python": "#!/usr/bin/env bash\nexit 0\n",
-        "tar": "#!/usr/bin/env bash\nexit 0\n",
+        "python": """#!/usr/bin/env bash
+set -euo pipefail
+source_dir=""
+while (( $# > 0 )); do
+  if [[ "$1" == "--source-dir" ]]; then
+    source_dir="$2"
+    shift 2
+  else
+    shift
+  fi
+done
+printf 'tampered after validation' > "${source_dir}/report.html"
+exit 0
+""",
         "curl": "#!/usr/bin/env bash\nexit 22\n",
         "sleep": "#!/usr/bin/env bash\nexit 0\n",
         "ssh": """#!/usr/bin/env bash
@@ -223,7 +454,11 @@ count=0
 count=$((count + 1))
 printf '%s' "${count}" > "${FAKE_SSH_COUNT}"
 printf '%s %s\n' "${count}" "$*" >> "${FAKE_SSH_LOG}"
-while IFS= read -r _line; do :; done
+if [[ "${count}" == "3" ]]; then
+  cat > "${FAKE_UPLOAD_ARCHIVE}"
+else
+  while IFS= read -r _line; do :; done
+fi
 if [[ "${count}" == "1" ]]; then
   printf '%s\n' '/tmp/abm-report/releases/previous'
 fi
@@ -245,6 +480,8 @@ exit 0
             "ABM_DEPLOY_REMOTE_ROOT": "/tmp/abm-report",
             "FAKE_SSH_COUNT": str(ssh_count),
             "FAKE_SSH_LOG": str(ssh_log),
+            "FAKE_UPLOAD_ARCHIVE": str(upload_archive),
+            "TMPDIR": str(snapshot_root),
         }
     )
 
@@ -252,6 +489,8 @@ exit 0
         [
             "bash",
             str(deploy_script),
+            "--contract",
+            str(contract),
             "--source-dir",
             str(source),
             "--release-id",
@@ -267,3 +506,12 @@ exit 0
     assert "Public acceptance failed; restoring previous release" in completed.stderr
     assert ssh_count.read_text(encoding="utf-8") == "5"
     assert "/tmp/abm-report/releases/previous" in ssh_log.read_text(encoding="utf-8").splitlines()[-1]
+    uploaded_report = subprocess.run(
+        ["tar", "-xOzf", str(upload_archive), "./report.html"],
+        check=True,
+        text=True,
+        capture_output=True,
+    )
+    assert uploaded_report.stdout == "approved"
+    assert (source / "report.html").read_text(encoding="utf-8") == "tampered after validation"
+    assert list(snapshot_root.iterdir()) == []

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import cast
+
 import pytest
 from pydantic import ValidationError
 
@@ -10,7 +12,11 @@ from llm_abm_sim.decision import (
     LLMDecisionAdapter,
     RuleBasedDecisionAdapter,
 )
-from llm_abm_sim.final_research_decision_evidence import _FinalResearchDecisionEvidenceBuilder
+from llm_abm_sim.final_research_decision_evidence import (
+    DecisionExecutionEvidence,
+    _FinalResearchDecisionEvidenceBuilder,
+)
+from llm_abm_sim.final_research_report import RankingV5ExpandEvidence, ranking_v5_release_evidence
 from llm_abm_sim.providers.openai_compatible import OpenAICompatibleDecisionAdapter
 from llm_abm_sim.schemas import PeerContext, PlatformContext, PostContent, ProviderLLMConfig, UserProfile
 
@@ -127,6 +133,52 @@ def _action_row(user_id: str, action: str) -> dict[str, object]:
         "time_step": 0,
         "action": action,
     }
+
+
+def test_ranking_v5_release_evidence_promotes_only_actual_live_execution():
+    validation_evidence = _FinalResearchDecisionEvidenceBuilder(RuleBasedDecisionAdapter()).build(
+        sample_users=0,
+        decision_rows=[],
+        action_rows=[],
+        outcome_rows=[],
+        provider_failure_rows=[],
+    )
+    validation_state = ranking_v5_release_evidence(validation_evidence)
+
+    assert validation_state["schema_version"] == "ranking-v5-expand-evidence-v1"
+    assert validation_state["contract_stage"] == "validation_expand"
+    assert validation_state["production_deploy_eligible"] is False
+
+    formal_evidence = DecisionExecutionEvidence.model_validate(
+        {
+            **validation_evidence.model_dump(mode="json"),
+            "formal_research_evidence": True,
+            "decision_execution_mode": "live_provider",
+            "adapter_chain": ["openai_compatible"],
+            "provider_metadata": {
+                "adapter": "openai_compatible",
+                "model": "authorized-model",
+                "prompt_version": "jinjiang-green-marketing-prompt-v3",
+            },
+            "live_api_triggered": True,
+            "sampling_status": "persisted_seed_first_formal_run",
+        }
+    )
+
+    historical_expand_state = {
+        **validation_state,
+        "decision_execution_evidence": formal_evidence.model_dump(mode="json"),
+    }
+    assert RankingV5ExpandEvidence.model_validate(historical_expand_state).production_deploy_eligible is False
+
+    formal_state = ranking_v5_release_evidence(formal_evidence)
+
+    assert formal_state["schema_version"] == "ranking-v5-formal-evidence-v1"
+    assert formal_state["contract_stage"] == "formal_release"
+    formal_target_evidence = cast(dict[str, object], formal_state["target_aggregate_engagement_reference"])
+    assert formal_target_evidence["status"] == "persisted"
+    assert formal_state["decision_execution_evidence"] == formal_evidence.model_dump(mode="json")
+    assert formal_state["production_deploy_eligible"] is True
 
 
 def test_decision_evidence_builds_counts_from_canonical_runtime_rows():

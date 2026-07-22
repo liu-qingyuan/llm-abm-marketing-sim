@@ -773,16 +773,44 @@ class RankingV5ExpandEvidence(BaseModel):
         return self
 
 
-def ranking_v5_expand_evidence(
+class RankingV5FormalEvidence(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal["ranking-v5-formal-evidence-v1"]
+    contract_stage: Literal["formal_release"]
+    target_aggregate_engagement_reference: RankingPersistedEvidenceState
+    decision_execution_evidence: DecisionExecutionEvidence
+    production_deploy_eligible: Literal[True]
+
+    @model_validator(mode="after")
+    def _validate_formal_lineage(self) -> RankingV5FormalEvidence:
+        if not self.decision_execution_evidence.formal_research_evidence:
+            raise ValueError("formal release evidence requires actual live provider execution")
+        return self
+
+
+RankingV5Evidence = RankingV5ExpandEvidence | RankingV5FormalEvidence
+
+
+def ranking_v5_release_evidence(
     decision_execution_evidence: DecisionExecutionEvidence | None = None,
 ) -> dict[str, object]:
+    target_evidence = RankingPersistedEvidenceState(
+        status="persisted",
+        formal_research_evidence=False,
+    )
+    if decision_execution_evidence is not None and decision_execution_evidence.formal_research_evidence:
+        return RankingV5FormalEvidence(
+            schema_version="ranking-v5-formal-evidence-v1",
+            contract_stage="formal_release",
+            target_aggregate_engagement_reference=target_evidence,
+            decision_execution_evidence=decision_execution_evidence,
+            production_deploy_eligible=True,
+        ).model_dump(mode="json")
     return RankingV5ExpandEvidence(
         schema_version="ranking-v5-expand-evidence-v1",
         contract_stage="validation_expand",
-        target_aggregate_engagement_reference=RankingPersistedEvidenceState(
-            status="persisted",
-            formal_research_evidence=False,
-        ),
+        target_aggregate_engagement_reference=target_evidence,
         decision_execution_evidence=decision_execution_evidence
         or RankingPendingEvidenceState(
             status="pending",
@@ -790,6 +818,12 @@ def ranking_v5_expand_evidence(
         ),
         production_deploy_eligible=False,
     ).model_dump(mode="json")
+
+
+def _ranking_v5_evidence(value: object) -> RankingV5Evidence:
+    if isinstance(value, Mapping) and value.get("schema_version") == "ranking-v5-formal-evidence-v1":
+        return RankingV5FormalEvidence.model_validate(value)
+    return RankingV5ExpandEvidence.model_validate(value)
 
 
 class RankingUserReportRow(BaseModel):
@@ -1052,7 +1086,7 @@ class FinalResearchRankingReportPayloadV5(BaseModel):
     ranking_rounds: list[RankingRoundSummary]
     ranking_diagnostics: dict[str, object]
     ranking_diagnostics_summary: RankingDiagnosticSummary
-    evidence_state: RankingV5ExpandEvidence
+    evidence_state: RankingV5Evidence
     downloads: RankingReportDownloads | RankingReportDownloadsV5
     limitations: list[str]
     users: list[RankingUserReportRowV5]
@@ -1211,6 +1245,15 @@ class _RankingRebuildEvidence:
     audit_sampling_method: object
     audit_sampling_status: object
     artifacts: Mapping[str, str] | None
+
+
+@dataclass(frozen=True)
+class _ValidatedRankingReport:
+    manifest: dict[str, object]
+    payload: (
+        FinalResearchRankingReportPayloadV3 | FinalResearchRankingReportPayload | FinalResearchRankingReportPayloadV5
+    )
+    contract: _RankingRebuildContract
 
 
 _HISTORICAL_V3_REBUILD_CONTRACT = _RankingRebuildContract(
@@ -2178,7 +2221,7 @@ def _build_ranking_report_payload(
             batches_with_top_selection_change=_as_int(effect.get("batches_with_top_selection_change")),
             diagnostic_decision_adapter_calls=_as_int(diagnostic_summary.get("diagnostic_decision_adapter_calls")),
         ),
-        evidence_state=RankingV5ExpandEvidence.model_validate(runtime_summary.get("evidence_state")),
+        evidence_state=_ranking_v5_evidence(runtime_summary.get("evidence_state")),
         downloads=RankingReportDownloadsV5(
             report=FINAL_RESEARCH_REPORT_ARTIFACTS["final_research_report"],
             payload=FINAL_RESEARCH_REPORT_ARTIFACTS["final_research_report_payload"],
@@ -4548,6 +4591,42 @@ def _dispatch_ranking_rebuild_contract(
     raise ValueError(f"Target Delivery Ranking rebuild contract mismatch: {contract.lineage}; " + "; ".join(mismatches))
 
 
+def _validate_ranking_documents(
+    run_path: Path,
+    manifest: dict[str, object],
+    payload_document: dict[str, object],
+) -> _ValidatedRankingReport:
+    contract = _dispatch_ranking_rebuild_contract(run_path, manifest, payload_document)
+    payload: (
+        FinalResearchRankingReportPayloadV3 | FinalResearchRankingReportPayload | FinalResearchRankingReportPayloadV5
+    )
+    if contract is _HISTORICAL_V3_REBUILD_CONTRACT:
+        payload = FinalResearchRankingReportPayloadV3.model_validate(payload_document)
+    elif contract is _SEED_FIRST_V4_REBUILD_CONTRACT:
+        payload = FinalResearchRankingReportPayload.model_validate(payload_document)
+    else:
+        payload = FinalResearchRankingReportPayloadV5.model_validate(payload_document)
+    _validate_ranking_rebuild_evidence(run_path, manifest, payload, contract)
+    return _ValidatedRankingReport(manifest=manifest, payload=payload, contract=contract)
+
+
+def _validate_persisted_ranking_report(run_dir: str | Path) -> _ValidatedRankingReport:
+    """Read and cross-check a persisted ranking report without publishing files."""
+    run_path = Path(run_dir)
+    if not run_path.is_dir():
+        raise FileNotFoundError(f"Final Research run directory does not exist: {run_path}")
+    manifest_path = run_path / "artifact_manifest.json"
+    payload_path = run_path / FINAL_RESEARCH_REPORT_ARTIFACTS["final_research_report_payload"]
+    for required_path in (manifest_path, payload_path):
+        if not required_path.is_file():
+            raise FileNotFoundError(f"Final Research validation requires {required_path.name}")
+    manifest = _read_json_object(manifest_path)
+    payload_document = _read_json_object(payload_path)
+    if not _is_ranking_rebuild_candidate(manifest, payload_document):
+        raise ValueError("persisted report is not a Target Delivery Ranking candidate")
+    return _validate_ranking_documents(run_path, manifest, payload_document)
+
+
 def rebuild_final_research_report(run_dir: str | Path) -> Path:
     """Validate an existing safe run and atomically rebuild its explainable report."""
 
@@ -4563,19 +4642,8 @@ def rebuild_final_research_report(run_dir: str | Path) -> Path:
     manifest = _read_json_object(manifest_path)
     payload_document = _read_json_object(payload_path)
     if _is_ranking_rebuild_candidate(manifest, payload_document):
-        contract = _dispatch_ranking_rebuild_contract(run_path, manifest, payload_document)
-        if contract is _HISTORICAL_V3_REBUILD_CONTRACT:
-            ranking_payload: (
-                FinalResearchRankingReportPayloadV3
-                | FinalResearchRankingReportPayload
-                | FinalResearchRankingReportPayloadV5
-            ) = FinalResearchRankingReportPayloadV3.model_validate(payload_document)
-        elif contract is _SEED_FIRST_V4_REBUILD_CONTRACT:
-            ranking_payload = FinalResearchRankingReportPayload.model_validate(payload_document)
-        else:
-            ranking_payload = FinalResearchRankingReportPayloadV5.model_validate(payload_document)
-        _validate_ranking_rebuild_evidence(run_path, manifest, ranking_payload, contract)
-        return _publish_report_files(run_path, ranking_payload)
+        validated = _validate_ranking_documents(run_path, manifest, payload_document)
+        return _publish_report_files(run_path, validated.payload)
 
     summary_path = run_path / "runtime_summary.json"
     if not summary_path.is_file():

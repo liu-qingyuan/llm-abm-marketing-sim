@@ -4,8 +4,11 @@ import csv
 import hashlib
 import json
 import math
+import os
 import re
 import shutil
+import subprocess
+import sys
 from collections import Counter
 from pathlib import Path
 from typing import Any, cast
@@ -34,6 +37,7 @@ from llm_abm_sim.final_research_report import (
     FinalResearchRankingReportPayloadV5,
     FinalResearchReportWriter,
     RankingV5ExpandEvidence,
+    _validate_persisted_ranking_report,
 )
 from llm_abm_sim.providers.openai_compatible import OpenAICompatibleDecisionAdapter
 from llm_abm_sim.safe_serialization import artifact_has_forbidden_terms
@@ -114,6 +118,11 @@ def _read_csv(path: Path) -> list[dict[str, str]]:
 
 def _sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _write_json(path: Path, value: object) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(value, ensure_ascii=False, sort_keys=True), encoding="utf-8")
 
 
 def _latent_row(user_number: int) -> dict[str, object]:
@@ -1508,6 +1517,362 @@ def test_target_delivery_ranking_v5_excludes_interest_contract_and_is_validation
     )
     for artifact_name in v5_user_artifacts:
         assert "interest_tags" not in (output / artifact_name).read_text(encoding="utf-8"), artifact_name
+
+    persisted_report = (output / "report.html").read_bytes()
+    persisted_payload = (output / "final_research_report_payload.json").read_bytes()
+    validated = _validate_persisted_ranking_report(output)
+
+    assert isinstance(validated.payload, FinalResearchRankingReportPayloadV5)
+    assert validated.manifest["manifest_version"] == "final-research-ranking-runtime-v3"
+    assert (output / "report.html").read_bytes() == persisted_report
+    assert (output / "final_research_report_payload.json").read_bytes() == persisted_payload
+
+
+def _promote_to_synthetic_formal_release(run_dir: Path) -> None:
+    payload_path = run_dir / "final_research_report_payload.json"
+    payload = json.loads(payload_path.read_text(encoding="utf-8"))
+    decision_evidence = payload["evidence_state"]["decision_execution_evidence"]
+    decision_evidence.update(
+        {
+            "formal_research_evidence": True,
+            "decision_execution_mode": "live_provider",
+            "live_api_triggered": True,
+            "sampling_status": "persisted_seed_first_formal_run",
+        }
+    )
+    formal_state = {
+        "schema_version": "ranking-v5-formal-evidence-v1",
+        "contract_stage": "formal_release",
+        "target_aggregate_engagement_reference": {
+            "status": "persisted",
+            "formal_research_evidence": False,
+        },
+        "decision_execution_evidence": decision_evidence,
+        "production_deploy_eligible": True,
+    }
+    payload["run"]["sampling_status"] = "persisted_seed_first_formal_run"
+    payload["evidence_state"] = formal_state
+    _write_json(payload_path, payload)
+
+    for file_name in ("artifact_manifest.json", "ranking_runtime_summary.json"):
+        path = run_dir / file_name
+        document = json.loads(path.read_text(encoding="utf-8"))
+        document.update(
+            {
+                "sampling_status": "persisted_seed_first_formal_run",
+                "decision_execution_mode": "live_provider",
+                "live_api_triggered": True,
+                "evidence_state": formal_state,
+            }
+        )
+        _write_json(path, document)
+
+    audit_path = run_dir / "seed_first_sample_audit.json"
+    audit = json.loads(audit_path.read_text(encoding="utf-8"))
+    audit["sampling_status"] = "persisted_seed_first_formal_run"
+    _write_json(audit_path, audit)
+    rebuild_final_research_report(run_dir)
+
+
+def _validate_release(
+    repo_root: Path,
+    run_dir: Path,
+    contract_path: Path,
+    *,
+    snapshot_dir: Path | None = None,
+) -> subprocess.CompletedProcess[str]:
+    validator = Path(__file__).resolve().parents[2] / "scripts" / "validate_abm_report_release.py"
+    command = [
+        sys.executable,
+        str(validator),
+        "--repo-root",
+        str(repo_root),
+        "--contract",
+        str(contract_path),
+        "--source-dir",
+        str(run_dir),
+    ]
+    if snapshot_dir is not None:
+        command.extend(["--snapshot-dir", str(snapshot_dir)])
+    return subprocess.run(
+        command,
+        text=True,
+        capture_output=True,
+    )
+
+
+def _write_v2_release_contract(repo_root: Path, run_dir: Path) -> Path:
+    manifest = json.loads((run_dir / "artifact_manifest.json").read_text(encoding="utf-8"))
+    payload = json.loads((run_dir / "final_research_report_payload.json").read_text(encoding="utf-8"))
+    users = json.loads((run_dir / "final_research_users.json").read_text(encoding="utf-8"))
+    diagnostics = json.loads((run_dir / "ranking_diagnostics.json").read_text(encoding="utf-8"))
+    diagnostics_summary = json.loads((run_dir / "ranking_diagnostics_summary.json").read_text(encoding="utf-8"))
+    runtime_summary = json.loads((run_dir / "ranking_runtime_summary.json").read_text(encoding="utf-8"))
+    config = json.loads((run_dir / "config_snapshot.json").read_text(encoding="utf-8"))
+    evidence_state = payload["evidence_state"]
+    decision_evidence = evidence_state["decision_execution_evidence"]
+    aggregate_reference = diagnostics["historical_top20_diagnostic"]["target_aggregate_engagement_reference"]
+    artifact_paths = [*manifest["artifacts"].values(), "artifact_manifest.json"]
+    contract = {
+        "schema_version": "abm-report-release-contract-v2",
+        "release_purpose": "formal_research",
+        "source_directory": run_dir.relative_to(repo_root).as_posix(),
+        "payload_schema_version": payload["schema_version"],
+        "users_schema_version": users["schema_version"],
+        "manifest_version": manifest["manifest_version"],
+        "diagnostics_schema_version": diagnostics["schema_version"],
+        "diagnostics_summary_schema_version": diagnostics_summary["schema_version"],
+        "prompt_version": config["provider"]["prompt_version"],
+        "evidence_schema_version": evidence_state["schema_version"],
+        "decision_execution_evidence_schema_version": decision_evidence["schema_version"],
+        "sampling_method": payload["run"]["sampling_method"],
+        "sampling_status": payload["run"]["sampling_status"],
+        "decision_execution_mode": decision_evidence["decision_execution_mode"],
+        "live_api_triggered": decision_evidence["live_api_triggered"],
+        "formal_research_evidence": decision_evidence["formal_research_evidence"],
+        "production_deploy_eligible": evidence_state["production_deploy_eligible"],
+        "sample_role_counts": payload["sample_role_counts"],
+        "decision_source_counts": decision_evidence["decision_source_counts"],
+        "action_counts": decision_evidence["action_counts"],
+        "terminal_counts": decision_evidence["terminal_counts"],
+        "degeneracy_flags": decision_evidence["degeneracy_flags"],
+        "target_aggregate_engagement_reference": aggregate_reference,
+        "artifact_sha256": {path: _sha256(run_dir / path) for path in artifact_paths},
+    }
+    contract_path = repo_root / "configs" / "deployments" / "synthetic-formal-fixture.json"
+    _write_json(contract_path, contract)
+    assert runtime_summary["evidence_state"] == evidence_state
+    return contract_path
+
+
+def _make_synthetic_formal_release(tmp_path: Path) -> tuple[Path, Path]:
+    dataset_dir = _make_processed_fixture(tmp_path, user_count=6, dense_target_network=True)
+    output = FinalResearchRunner(
+        FinalResearchConfig(
+            dataset_dir=dataset_dir,
+            sample_size=6,
+            provider=ProviderLLMConfig(enabled=True, model="mock-model", require_live_env=False),
+        ),
+        _TargetDeliveryAdapter(),
+    ).run_and_write(tmp_path / "runs" / "synthetic-formal-fixture")
+    _promote_to_synthetic_formal_release(output)
+    return output, _write_v2_release_contract(tmp_path, output)
+
+
+def test_release_v2_snapshot_binds_validation_to_uploaded_bytes(tmp_path: Path) -> None:
+    output, contract = _make_synthetic_formal_release(tmp_path)
+    snapshot = tmp_path / "deploy-snapshot"
+    shutil.copytree(output, snapshot)
+    (output / "report.html").write_text("source changed after snapshot", encoding="utf-8")
+
+    validated = _validate_release(tmp_path, output, contract, snapshot_dir=snapshot)
+
+    assert validated.returncode == 0, validated.stderr
+    (snapshot / "report.html").write_text("snapshot tampered", encoding="utf-8")
+
+    rejected = _validate_release(tmp_path, output, contract, snapshot_dir=snapshot)
+
+    assert rejected.returncode == 1
+    assert "SHA-256 for report.html mismatch" in rejected.stderr
+
+
+def test_release_v2_accepts_synthetic_persisted_formal_fixture_without_rewriting(tmp_path: Path) -> None:
+    output, contract = _make_synthetic_formal_release(tmp_path)
+    report_before = (output / "report.html").read_bytes()
+    payload_before = (output / "final_research_report_payload.json").read_bytes()
+
+    validated = _validate_release(tmp_path, output, contract)
+
+    assert validated.returncode == 0, validated.stderr
+    assert "abm-report-release-contract-v2" in validated.stdout
+    assert "formal_research" in validated.stdout
+    assert "persisted_seed_first_formal_run" in validated.stdout
+    assert "live_provider" in validated.stdout
+    contract_document = json.loads(contract.read_text(encoding="utf-8"))
+    assert contract_document["action_counts"] == {"like": 0, "comment": 0, "share": 0, "ignore": 6}
+    assert contract_document["degeneracy_flags"] == {
+        "all_decisions_ignore": True,
+        "single_action_only": True,
+        "no_engagement_feedback": True,
+    }
+    assert (output / "report.html").read_bytes() == report_before
+    assert (output / "final_research_report_payload.json").read_bytes() == payload_before
+
+
+@pytest.mark.parametrize("adapter_kind", ["mock_provider", "rule_based"])
+def test_release_v2_rejects_runner_generated_validation_candidates(tmp_path: Path, adapter_kind: str) -> None:
+    dataset_dir = _make_processed_fixture(tmp_path, user_count=6, dense_target_network=True)
+    adapter: LLMDecisionAdapter = (
+        _TargetDeliveryAdapter() if adapter_kind == "mock_provider" else RuleBasedDecisionAdapter()
+    )
+    output = FinalResearchRunner(
+        FinalResearchConfig(
+            dataset_dir=dataset_dir,
+            sample_size=6,
+            provider=ProviderLLMConfig(enabled=True, model="configured-model", require_live_env=False),
+        ),
+        adapter,
+    ).run_and_write(tmp_path / "runs" / adapter_kind)
+    contract = _write_v2_release_contract(tmp_path, output)
+
+    rejected = _validate_release(tmp_path, output, contract)
+
+    assert rejected.returncode == 1
+    assert "invalid v2 release contract" in rejected.stderr
+    assert json.loads((output / "artifact_manifest.json").read_text(encoding="utf-8"))["live_api_triggered"] is False
+
+
+@pytest.mark.parametrize(
+    ("corruption", "expected_error"),
+    [
+        ("purpose", "release_purpose"),
+        ("source_directory", "source directory mismatch"),
+        ("payload_schema", "payload_schema_version"),
+        ("execution_mode", "decision_execution_mode"),
+        ("live_fact", "live_api_triggered"),
+        ("action_count", "decided_users must equal sum(action_counts)"),
+        ("aggregate_reference", "target_aggregate_engagement_reference mismatch"),
+        ("missing_hash", "must cover the exact manifest artifacts"),
+        ("extra_field", "extra_forbidden"),
+    ],
+)
+def test_release_v2_rejects_crossed_contract_evidence(
+    tmp_path: Path,
+    corruption: str,
+    expected_error: str,
+) -> None:
+    output, contract_path = _make_synthetic_formal_release(tmp_path)
+    contract = json.loads(contract_path.read_text(encoding="utf-8"))
+    if corruption == "purpose":
+        contract["release_purpose"] = "validation"
+    elif corruption == "source_directory":
+        contract["source_directory"] = "runs/a-different-formal-run"
+    elif corruption == "payload_schema":
+        contract["payload_schema_version"] = "final-research-ranking-report-payload-v4"
+    elif corruption == "execution_mode":
+        contract["decision_execution_mode"] = "rule_based"
+    elif corruption == "live_fact":
+        contract["live_api_triggered"] = False
+    elif corruption == "action_count":
+        contract["action_counts"]["like"] += 1
+    elif corruption == "aggregate_reference":
+        contract["target_aggregate_engagement_reference"]["like_count"] += 1
+    elif corruption == "missing_hash":
+        contract["artifact_sha256"].pop("runtime_actions.csv")
+    elif corruption == "extra_field":
+        contract["authorization_claim"] = "not part of the contract"
+    else:  # pragma: no cover
+        raise AssertionError(corruption)
+    _write_json(contract_path, contract)
+
+    rejected = _validate_release(tmp_path, output, contract_path)
+
+    assert rejected.returncode == 1
+    assert expected_error in rejected.stderr
+
+
+@pytest.mark.parametrize(
+    ("corruption", "expected_error"),
+    [
+        ("decision_row", "Decision and action row disagree"),
+        ("holdout_source", "target aggregate engagement reference does not match source artifact"),
+        ("missing_manifest_artifact", "artifact_set does not match exact contract"),
+        ("parent_manifest_path", "artifact_set does not match exact contract"),
+        ("absolute_manifest_path", "artifact_set does not match exact contract"),
+    ],
+)
+def test_release_v2_rejects_cross_artifact_corruption_even_with_current_hashes(
+    tmp_path: Path,
+    corruption: str,
+    expected_error: str,
+) -> None:
+    output, contract = _make_synthetic_formal_release(tmp_path)
+    if corruption == "decision_row":
+        path = output / "runtime_decisions.csv"
+        rows = _read_csv(path)
+        rows[0]["action"] = "like"
+        _write_csv(path, list(rows[0]), rows)
+    elif corruption == "holdout_source":
+        path = output / "top20_holdout_diagnostic.json"
+        document = json.loads(path.read_text(encoding="utf-8"))
+        document["target_aggregate_engagement_reference"]["like_count"] += 1
+        _write_json(path, document)
+    else:
+        path = output / "artifact_manifest.json"
+        document = json.loads(path.read_text(encoding="utf-8"))
+        if corruption == "missing_manifest_artifact":
+            document["artifacts"].pop("runtime_actions")
+        elif corruption == "parent_manifest_path":
+            document["artifacts"]["runtime_actions"] = "../runtime_actions.csv"
+        elif corruption == "absolute_manifest_path":
+            document["artifacts"]["runtime_actions"] = str((output / "runtime_actions.csv").resolve())
+        _write_json(path, document)
+    if corruption in {"decision_row", "holdout_source"}:
+        contract = _write_v2_release_contract(tmp_path, output)
+    else:
+        contract_document = json.loads(contract.read_text(encoding="utf-8"))
+        contract_document["artifact_sha256"]["artifact_manifest.json"] = _sha256(output / "artifact_manifest.json")
+        _write_json(contract, contract_document)
+
+    rejected = _validate_release(tmp_path, output, contract)
+
+    assert rejected.returncode == 1
+    assert expected_error in rejected.stderr
+
+
+def test_release_v2_rejects_contract_parent_symlink(tmp_path: Path) -> None:
+    output, contract = _make_synthetic_formal_release(tmp_path)
+    real_configs = tmp_path / "real-configs"
+    (tmp_path / "configs").replace(real_configs)
+    os.symlink(real_configs, tmp_path / "configs")
+    symlinked_contract = tmp_path / "configs" / "deployments" / contract.name
+
+    rejected = _validate_release(tmp_path, output, symlinked_contract)
+
+    assert rejected.returncode == 1
+    assert "release contract must not contain symlink components" in rejected.stderr
+
+
+def test_release_v2_rejects_non_regular_snapshot_entries(tmp_path: Path) -> None:
+    output, contract = _make_synthetic_formal_release(tmp_path)
+    snapshot = tmp_path / "deploy-snapshot"
+    shutil.copytree(output, snapshot)
+    os.mkfifo(snapshot / "unapproved.pipe")
+
+    rejected = _validate_release(tmp_path, output, contract, snapshot_dir=snapshot)
+
+    assert rejected.returncode == 1
+    assert "release directory contains non-regular entry: unapproved.pipe" in rejected.stderr
+
+
+def test_release_v2_rejects_unmanifested_upload_files(tmp_path: Path) -> None:
+    output, contract = _make_synthetic_formal_release(tmp_path)
+    (output / "unapproved-debug-dump.json").write_text("{}", encoding="utf-8")
+
+    rejected = _validate_release(tmp_path, output, contract)
+
+    assert rejected.returncode == 1
+    assert "source directory contains files outside the v2 artifact manifest" in rejected.stderr
+
+
+def test_release_v2_rejects_tampered_or_symlinked_artifacts(tmp_path: Path) -> None:
+    output, contract = _make_synthetic_formal_release(tmp_path)
+    (output / "report.html").write_text("tampered", encoding="utf-8")
+
+    tampered = _validate_release(tmp_path, output, contract)
+
+    assert tampered.returncode == 1
+    assert "SHA-256 for report.html mismatch" in tampered.stderr
+
+    output, contract = _make_synthetic_formal_release(tmp_path / "symlink-case")
+    catalog = output / "field_lineage_catalog.json"
+    catalog.unlink()
+    os.symlink(output / "user_field_trace.json", catalog)
+
+    symlinked = _validate_release(tmp_path / "symlink-case", output, contract)
+
+    assert symlinked.returncode == 1
+    assert "source directory contains symlink" in symlinked.stderr
 
 
 def test_target_delivery_rule_based_evidence_does_not_use_configured_provider_identity(tmp_path: Path) -> None:
