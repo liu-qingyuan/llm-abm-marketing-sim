@@ -682,7 +682,7 @@ class FieldLineageTraceModule:
         )
 
 
-def field_lineage_definitions(
+def _historical_v4_field_lineage_definitions(
     report_lineage: Sequence[LineageEntry] = (),
 ) -> list[FieldLineageDefinition]:
     definitions = [
@@ -830,6 +830,10 @@ def field_lineage_definitions(
         if entry.field_name not in existing
     )
     return definitions
+
+
+# Preserve the existing writer name while historical readers bind to the versioned function.
+field_lineage_definitions = _historical_v4_field_lineage_definitions
 
 
 def is_user_field_trace_definition(definition: FieldLineageDefinition) -> bool:

@@ -12,6 +12,7 @@ from dataclasses import field as dataclass_field
 from html import escape
 from importlib.resources import files
 from pathlib import Path
+from types import MappingProxyType
 from typing import Literal, cast
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -26,8 +27,8 @@ from .field_lineage_trace import (
     RuntimeFeedbackEvidence,
     SourceRecordLocator,
     UserFieldTrace,
+    _historical_v4_field_lineage_definitions,
     field_lineage_coverage_audit,
-    field_lineage_definitions,
     field_trace_evidence,
     field_value_status,
     is_decision_trace_field,
@@ -56,6 +57,65 @@ FINAL_RESEARCH_SEED_STEP = 0
 FINAL_RESEARCH_USER_OPPORTUNITY_LIMIT = 1
 FINAL_RESEARCH_SCORE_USAGE = "single exposure probability, never user ordering"
 FINAL_RESEARCH_DYNAMIC_NETWORK_FORMULA = "min(1.0, base_network_score + neighbor_boost * engaged_direct_neighbor_count)"
+
+_RANKING_PAYLOAD_V3_SCHEMA = "final-research-ranking-report-payload-v3"
+_RANKING_PAYLOAD_V4_SCHEMA = "final-research-ranking-report-payload-v4"
+_RANKING_USERS_V3_SCHEMA = "final-research-ranking-users-v3"
+_RANKING_USERS_V4_SCHEMA = "final-research-ranking-users-v4"
+_RANKING_DIAGNOSTICS_V1_SCHEMA = "ranking-diagnostics-v1"
+_RANKING_DIAGNOSTICS_SUMMARY_V1_SCHEMA = "ranking-diagnostics-summary-v1"
+_HISTORICAL_JINJIANG_PROMPT_V2 = "jinjiang-green-marketing-prompt-v2"
+
+
+class _MissingContractValue:
+    def __repr__(self) -> str:
+        return "<missing>"
+
+
+_MISSING_CONTRACT_VALUE = _MissingContractValue()
+
+_RANKING_COMMON_ARTIFACTS: Mapping[str, str] = MappingProxyType(
+    {
+        "config_snapshot": "config_snapshot.json",
+        "final_research_report": "report.html",
+        "final_research_report_payload": "final_research_report_payload.json",
+        "final_research_users_csv": "final_research_users.csv",
+        "final_research_users_json": "final_research_users.json",
+        "holdout_diagnostic": "top20_holdout_diagnostic.json",
+        "holdout_safe_audit": "holdout_safe_audit.json",
+        "offline_score_summary": "offline_score_summary.json",
+        "offline_scores": "offline_scores.csv",
+        "ranking_ablation_diagnostics_csv": "ranking_ablation_diagnostics.csv",
+        "ranking_diagnostics": "ranking_diagnostics.json",
+        "ranking_diagnostics_summary": "ranking_diagnostics_summary.json",
+        "ranking_runtime_candidates": "ranking_runtime_candidates.csv",
+        "ranking_runtime_outcomes": "ranking_runtime_outcomes.csv",
+        "ranking_runtime_steps": "ranking_runtime_steps.csv",
+        "ranking_runtime_summary": "ranking_runtime_summary.json",
+        "ranking_weight_sensitivity_csv": "ranking_weight_sensitivity.csv",
+        "runtime_actions": "runtime_actions.csv",
+        "runtime_decisions": "runtime_decisions.csv",
+        "runtime_provider_failures": "runtime_provider_failures.csv",
+        "sample_manifest_csv": "sample_manifest.csv",
+        "sample_manifest_json": "sample_manifest.json",
+        "target_video_snapshot": "target_video_snapshot.json",
+    }
+)
+_RANKING_V3_ARTIFACTS: Mapping[str, str] = MappingProxyType(
+    {
+        **_RANKING_COMMON_ARTIFACTS,
+        "network_augmented_sample_audit": "network_augmented_sample_audit.json",
+    }
+)
+_RANKING_V4_ARTIFACTS: Mapping[str, str] = MappingProxyType(
+    {
+        **_RANKING_COMMON_ARTIFACTS,
+        "field_lineage_catalog": "field_lineage_catalog.json",
+        "field_source_records": "field_source_records.json",
+        "seed_first_sample_audit": "seed_first_sample_audit.json",
+        "user_field_trace": "user_field_trace.json",
+    }
+)
 
 ResultStatus = Literal[
     "like",
@@ -90,6 +150,11 @@ SamplingStatus = Literal[
     "persisted_probability_formal_run",
 ]
 SampleRole = Literal["seed", "network_cohort", "ordinary"]
+ReportUsersSchema = Literal[
+    "final-research-users-v1",
+    "final-research-ranking-users-v3",
+    "final-research-ranking-users-v4",
+]
 
 
 def _sampling_method(value: object) -> SamplingMethod:
@@ -111,6 +176,16 @@ def _sampling_status(value: object) -> SamplingStatus:
     }:
         raise ValueError(f"unsupported sampling_status: {value!r}")
     return cast(SamplingStatus, value)
+
+
+def _report_users_schema(payload_schema: object) -> ReportUsersSchema:
+    if payload_schema == _RANKING_PAYLOAD_V3_SCHEMA:
+        return cast(ReportUsersSchema, _RANKING_USERS_V3_SCHEMA)
+    if payload_schema == _RANKING_PAYLOAD_V4_SCHEMA:
+        return cast(ReportUsersSchema, _RANKING_USERS_V4_SCHEMA)
+    if payload_schema in {"final-research-report-payload-v1", "final-research-report-payload-v2"}:
+        return "final-research-users-v1"
+    raise ValueError(f"unsupported report payload schema for users writer: {payload_schema!r}")
 
 
 def _sample_role(value: object) -> SampleRole:
@@ -609,9 +684,9 @@ class RankingReportDownloads(RankingReportDownloadsV3):
 
 
 class RankingUserReportRow(BaseModel):
-    """Explicit user-level allowlist for Target Delivery Ranking reports."""
+    """Frozen user allowlist for historical v3 and Seed-First v4 readers/writers."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", frozen=True)
 
     user_id: str
     nickname: str = ""
@@ -683,7 +758,7 @@ class RankingUserReportRow(BaseModel):
         return row
 
 
-class _FinalResearchRankingReportPayloadBase(BaseModel):
+class _FrozenRankingReportPayloadV3V4Base(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     schema_version: str
@@ -703,7 +778,7 @@ class _FinalResearchRankingReportPayloadBase(BaseModel):
     users: list[RankingUserReportRow]
 
     @model_validator(mode="after")
-    def _validate_field_lineage(self) -> _FinalResearchRankingReportPayloadBase:
+    def _validate_field_lineage(self) -> _FrozenRankingReportPayloadV3V4Base:
         declared = [entry.field_name for entry in self.field_lineage]
         if len(declared) != len(set(declared)):
             raise ValueError("field lineage must declare each field exactly once")
@@ -733,11 +808,11 @@ class _FinalResearchRankingReportPayloadBase(BaseModel):
         return self
 
 
-class FinalResearchRankingReportPayloadV3(_FinalResearchRankingReportPayloadBase):
+class FinalResearchRankingReportPayloadV3(_FrozenRankingReportPayloadV3V4Base):
     schema_version: Literal["final-research-ranking-report-payload-v3"] = "final-research-ranking-report-payload-v3"
 
 
-class FinalResearchRankingReportPayload(_FinalResearchRankingReportPayloadBase):
+class FinalResearchRankingReportPayload(_FrozenRankingReportPayloadV3V4Base):
     schema_version: Literal["final-research-ranking-report-payload-v4"] = "final-research-ranking-report-payload-v4"
     sample_role_counts: dict[SampleRole, int]
     field_lineage_catalog: list[FieldLineageDefinition]
@@ -775,6 +850,94 @@ class FinalResearchRankingReportPayload(_FinalResearchRankingReportPayloadBase):
             if set(trace_names) != trace_field_names:
                 raise ValueError(f"user field trace does not cover every user-keyed catalog field for {user_id}")
         return self
+
+
+class _HistoricalRankingUsersDocumentV3(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal["final-research-ranking-users-v3"]
+    links: RankingReportDownloadsV3
+    users: list[RankingUserReportRow]
+
+
+class _SeedFirstRankingUsersDocumentV4(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal["final-research-ranking-users-v4"]
+    links: RankingReportDownloads
+    users: list[RankingUserReportRow]
+
+
+@dataclass(frozen=True)
+class _RankingRebuildContract:
+    lineage: str
+    payload_schema: str
+    users_schema: str
+    runtime_schema: str
+    diagnostics_schema: str
+    diagnostics_summary_schema: str
+    prompt_schema: str
+    sample_audit_artifact: str
+    sample_audit_schema: str
+    sampling_method: SamplingMethod
+    sampling_statuses: tuple[SamplingStatus, ...]
+    persists_sampling_fields: bool
+    artifacts: Mapping[str, str]
+
+
+@dataclass(frozen=True)
+class _RankingRebuildEvidence:
+    payload_schema: object
+    users_schema: object
+    manifest_runtime_schema: object
+    summary_runtime_schema: object
+    diagnostics_schema: object
+    diagnostics_summary_schema: object
+    config_prompt_schema: object
+    runtime_prompt_schema: object
+    sample_audit_artifact: object
+    sample_audit_schema: object
+    payload_sampling_method: object
+    payload_sampling_status: object
+    manifest_sampling_method: object
+    manifest_sampling_status: object
+    summary_sampling_method: object
+    summary_sampling_status: object
+    audit_sampling_method: object
+    audit_sampling_status: object
+    artifacts: Mapping[str, str] | None
+
+
+_HISTORICAL_V3_REBUILD_CONTRACT = _RankingRebuildContract(
+    lineage="Historical Network-Augmented v3",
+    payload_schema=_RANKING_PAYLOAD_V3_SCHEMA,
+    users_schema=_RANKING_USERS_V3_SCHEMA,
+    runtime_schema=FINAL_RESEARCH_RANKING_RUNTIME_VERSION,
+    diagnostics_schema=_RANKING_DIAGNOSTICS_V1_SCHEMA,
+    diagnostics_summary_schema=_RANKING_DIAGNOSTICS_SUMMARY_V1_SCHEMA,
+    prompt_schema=_HISTORICAL_JINJIANG_PROMPT_V2,
+    sample_audit_artifact="network_augmented_sample_audit",
+    sample_audit_schema="network-augmented-sample-audit-v1",
+    sampling_method="network_augmented_research_sample",
+    sampling_statuses=("historical_network_augmented_run",),
+    persists_sampling_fields=False,
+    artifacts=_RANKING_V3_ARTIFACTS,
+)
+_SEED_FIRST_V4_REBUILD_CONTRACT = _RankingRebuildContract(
+    lineage="Seed-First v4",
+    payload_schema=_RANKING_PAYLOAD_V4_SCHEMA,
+    users_schema=_RANKING_USERS_V4_SCHEMA,
+    runtime_schema=FINAL_RESEARCH_RANKING_RUNTIME_VERSION,
+    diagnostics_schema=_RANKING_DIAGNOSTICS_V1_SCHEMA,
+    diagnostics_summary_schema=_RANKING_DIAGNOSTICS_SUMMARY_V1_SCHEMA,
+    prompt_schema=_HISTORICAL_JINJIANG_PROMPT_V2,
+    sample_audit_artifact="seed_first_sample_audit",
+    sample_audit_schema="seed-first-sample-audit-v1",
+    sampling_method="seed_first_research_sample_v1",
+    sampling_statuses=("validation_run", "persisted_seed_first_formal_run"),
+    persists_sampling_fields=True,
+    artifacts=_RANKING_V4_ARTIFACTS,
+)
 
 
 @dataclass(frozen=True)
@@ -819,14 +982,9 @@ class FinalResearchReportWriter:
         trace_bundle = self._build_field_trace_bundle() if self.source.ranking_runtime_summary is not None else None
         payload = self._build_payload(trace_bundle)
         user_records = [row.model_dump(mode="json") for row in payload.users]
+        users_schema_version = _report_users_schema(payload.schema_version)
         user_document = {
-            "schema_version": (
-                "final-research-ranking-users-v4"
-                if isinstance(payload, FinalResearchRankingReportPayload)
-                else "final-research-ranking-users-v3"
-                if isinstance(payload, FinalResearchRankingReportPayloadV3)
-                else "final-research-users-v1"
-            ),
+            "schema_version": users_schema_version,
             "links": payload.downloads.model_dump(mode="json"),
             "users": user_records,
         }
@@ -1785,7 +1943,7 @@ def _ranking_lineage_field_names() -> set[str]:
 
 def _ranking_field_lineage() -> list[FieldLineageEntry]:
     trace_definitions = {
-        definition.field_name: definition for definition in field_lineage_definitions()
+        definition.field_name: definition for definition in _historical_v4_field_lineage_definitions()
     }
     direct = {
         *(f"target_video.{field}" for field in FinalResearchTargetVideo.model_fields),
@@ -3737,6 +3895,175 @@ def _build_trends_from_users(rows: Sequence[UserReportRow], horizon: int) -> lis
     return trends
 
 
+def _is_ranking_rebuild_candidate(
+    manifest: Mapping[str, object],
+    payload_document: Mapping[str, object],
+) -> bool:
+    manifest_version = manifest.get("manifest_version")
+    payload_schema = payload_document.get("schema_version")
+    artifacts = manifest.get("artifacts")
+    return (
+        (isinstance(manifest_version, str) and manifest_version.startswith("final-research-ranking-runtime-"))
+        or (isinstance(payload_schema, str) and payload_schema.startswith("final-research-ranking-report-payload-"))
+        or (isinstance(artifacts, Mapping) and "ranking_runtime_summary" in artifacts)
+    )
+
+
+def _read_optional_json_object(path: Path) -> dict[str, object]:
+    return _read_json_object(path) if path.is_file() else {}
+
+
+def _contract_value(document: Mapping[str, object], field_name: str) -> object:
+    return document[field_name] if field_name in document else _MISSING_CONTRACT_VALUE
+
+
+def _collect_ranking_rebuild_evidence(
+    run_path: Path,
+    manifest: Mapping[str, object],
+    payload_document: Mapping[str, object],
+) -> _RankingRebuildEvidence:
+    artifacts_value = manifest.get("artifacts")
+    artifacts = (
+        {str(name): str(relative_path) for name, relative_path in artifacts_value.items()}
+        if isinstance(artifacts_value, Mapping)
+        and all(
+            isinstance(name, str) and isinstance(relative_path, str) for name, relative_path in artifacts_value.items()
+        )
+        else None
+    )
+    artifact_names = set(artifacts or {})
+    audit_artifacts = sorted(artifact_names & {"network_augmented_sample_audit", "seed_first_sample_audit"})
+    if len(audit_artifacts) == 1:
+        sample_audit_artifact: object = audit_artifacts[0]
+        audit_file_name = (
+            "network_augmented_sample_audit.json"
+            if audit_artifacts[0] == "network_augmented_sample_audit"
+            else "seed_first_sample_audit.json"
+        )
+        audit = _read_optional_json_object(run_path / audit_file_name)
+    else:
+        sample_audit_artifact = "<missing>" if not audit_artifacts else f"<multiple:{','.join(audit_artifacts)}>"
+        audit = {}
+
+    users_document = _read_optional_json_object(run_path / "final_research_users.json")
+    config_snapshot = _read_optional_json_object(run_path / "config_snapshot.json")
+    runtime_summary = _read_optional_json_object(run_path / "ranking_runtime_summary.json")
+    diagnostics = _read_optional_json_object(run_path / "ranking_diagnostics.json")
+    diagnostics_summary = _read_optional_json_object(run_path / "ranking_diagnostics_summary.json")
+    payload_run = payload_document.get("run")
+    payload_run = payload_run if isinstance(payload_run, Mapping) else {}
+    config_provider = config_snapshot.get("provider")
+    config_provider = config_provider if isinstance(config_provider, Mapping) else {}
+    runtime_provider = runtime_summary.get("provider_metadata")
+    runtime_provider = runtime_provider if isinstance(runtime_provider, Mapping) else {}
+
+    return _RankingRebuildEvidence(
+        payload_schema=_contract_value(payload_document, "schema_version"),
+        users_schema=_contract_value(users_document, "schema_version"),
+        manifest_runtime_schema=_contract_value(manifest, "manifest_version"),
+        summary_runtime_schema=_contract_value(runtime_summary, "runtime_version"),
+        diagnostics_schema=_contract_value(diagnostics, "schema_version"),
+        diagnostics_summary_schema=_contract_value(diagnostics_summary, "schema_version"),
+        config_prompt_schema=_contract_value(config_provider, "prompt_version"),
+        runtime_prompt_schema=_contract_value(runtime_provider, "prompt_version"),
+        sample_audit_artifact=sample_audit_artifact,
+        sample_audit_schema=_contract_value(audit, "schema_version"),
+        payload_sampling_method=_contract_value(payload_run, "sampling_method"),
+        payload_sampling_status=_contract_value(payload_run, "sampling_status"),
+        manifest_sampling_method=_contract_value(manifest, "sampling_method"),
+        manifest_sampling_status=_contract_value(manifest, "sampling_status"),
+        summary_sampling_method=_contract_value(runtime_summary, "sampling_method"),
+        summary_sampling_status=_contract_value(runtime_summary, "sampling_status"),
+        audit_sampling_method=_contract_value(audit, "sampling_method"),
+        audit_sampling_status=_contract_value(audit, "sampling_status"),
+        artifacts=artifacts,
+    )
+
+
+def _ranking_rebuild_contract_mismatches(
+    contract: _RankingRebuildContract,
+    evidence: _RankingRebuildEvidence,
+) -> list[str]:
+    mismatches: list[str] = []
+    token_expectations = (
+        ("payload_schema", evidence.payload_schema, contract.payload_schema),
+        ("users_schema", evidence.users_schema, contract.users_schema),
+        ("manifest_runtime_schema", evidence.manifest_runtime_schema, contract.runtime_schema),
+        ("summary_runtime_schema", evidence.summary_runtime_schema, contract.runtime_schema),
+        ("diagnostics_schema", evidence.diagnostics_schema, contract.diagnostics_schema),
+        (
+            "diagnostics_summary_schema",
+            evidence.diagnostics_summary_schema,
+            contract.diagnostics_summary_schema,
+        ),
+        ("config_prompt_schema", evidence.config_prompt_schema, contract.prompt_schema),
+        ("runtime_prompt_schema", evidence.runtime_prompt_schema, contract.prompt_schema),
+        ("sample_audit_artifact", evidence.sample_audit_artifact, contract.sample_audit_artifact),
+        ("sample_audit_schema", evidence.sample_audit_schema, contract.sample_audit_schema),
+        ("payload_sampling_method", evidence.payload_sampling_method, contract.sampling_method),
+    )
+    for name, actual, expected_token in token_expectations:
+        if actual != expected_token:
+            mismatches.append(f"{name} expected {expected_token!r}, got {actual!r}")
+
+    if evidence.payload_sampling_status not in contract.sampling_statuses:
+        mismatches.append(
+            "payload_sampling_status expected one of "
+            f"{contract.sampling_statuses!r}, got {evidence.payload_sampling_status!r}"
+        )
+    expected_method: object = (
+        contract.sampling_method if contract.persists_sampling_fields else _MISSING_CONTRACT_VALUE
+    )
+    expected_status: object = (
+        evidence.payload_sampling_status if contract.persists_sampling_fields else _MISSING_CONTRACT_VALUE
+    )
+    for name, actual, expected_sampling_value in (
+        ("manifest_sampling_method", evidence.manifest_sampling_method, expected_method),
+        ("summary_sampling_method", evidence.summary_sampling_method, expected_method),
+        ("audit_sampling_method", evidence.audit_sampling_method, expected_method),
+        ("manifest_sampling_status", evidence.manifest_sampling_status, expected_status),
+        ("summary_sampling_status", evidence.summary_sampling_status, expected_status),
+        ("audit_sampling_status", evidence.audit_sampling_status, expected_status),
+    ):
+        if actual != expected_sampling_value:
+            mismatches.append(f"{name} expected {expected_sampling_value!r}, got {actual!r}")
+
+    if evidence.artifacts is None:
+        mismatches.append("artifact_set expected an object with string names and paths")
+    elif dict(evidence.artifacts) != dict(contract.artifacts):
+        actual_names = set(evidence.artifacts)
+        expected_names = set(contract.artifacts)
+        missing = sorted(expected_names - actual_names)
+        extra = sorted(actual_names - expected_names)
+        wrong_paths = sorted(
+            name for name in actual_names & expected_names if evidence.artifacts[name] != contract.artifacts[name]
+        )
+        mismatches.append(
+            f"artifact_set does not match exact contract (missing={missing}, extra={extra}, wrong_paths={wrong_paths})"
+        )
+    return mismatches
+
+
+def _dispatch_ranking_rebuild_contract(
+    run_path: Path,
+    manifest: Mapping[str, object],
+    payload_document: Mapping[str, object],
+) -> _RankingRebuildContract:
+    evidence = _collect_ranking_rebuild_evidence(run_path, manifest, payload_document)
+    v3_mismatches = _ranking_rebuild_contract_mismatches(_HISTORICAL_V3_REBUILD_CONTRACT, evidence)
+    v4_mismatches = _ranking_rebuild_contract_mismatches(_SEED_FIRST_V4_REBUILD_CONTRACT, evidence)
+    if not v3_mismatches:
+        return _HISTORICAL_V3_REBUILD_CONTRACT
+    if not v4_mismatches:
+        return _SEED_FIRST_V4_REBUILD_CONTRACT
+    contract, mismatches = (
+        (_HISTORICAL_V3_REBUILD_CONTRACT, v3_mismatches)
+        if len(v3_mismatches) < len(v4_mismatches)
+        else (_SEED_FIRST_V4_REBUILD_CONTRACT, v4_mismatches)
+    )
+    raise ValueError(f"Target Delivery Ranking rebuild contract mismatch: {contract.lineage}; " + "; ".join(mismatches))
+
+
 def rebuild_final_research_report(run_dir: str | Path) -> Path:
     """Validate an existing safe run and atomically rebuild its explainable report."""
 
@@ -3751,13 +4078,15 @@ def rebuild_final_research_report(run_dir: str | Path) -> Path:
 
     manifest = _read_json_object(manifest_path)
     payload_document = _read_json_object(payload_path)
-    if manifest.get("manifest_version") == FINAL_RESEARCH_RANKING_RUNTIME_VERSION:
-        ranking_payload = (
-            FinalResearchRankingReportPayload.model_validate(payload_document)
-            if payload_document.get("schema_version") == "final-research-ranking-report-payload-v4"
-            else FinalResearchRankingReportPayloadV3.model_validate(payload_document)
-        )
-        _validate_ranking_rebuild_evidence(run_path, manifest, ranking_payload)
+    if _is_ranking_rebuild_candidate(manifest, payload_document):
+        contract = _dispatch_ranking_rebuild_contract(run_path, manifest, payload_document)
+        if contract is _HISTORICAL_V3_REBUILD_CONTRACT:
+            ranking_payload: FinalResearchRankingReportPayloadV3 | FinalResearchRankingReportPayload = (
+                FinalResearchRankingReportPayloadV3.model_validate(payload_document)
+            )
+        else:
+            ranking_payload = FinalResearchRankingReportPayload.model_validate(payload_document)
+        _validate_ranking_rebuild_evidence(run_path, manifest, ranking_payload, contract)
         return _publish_report_files(run_path, ranking_payload)
 
     summary_path = run_path / "runtime_summary.json"
@@ -3982,39 +4311,17 @@ def _validate_ranking_rebuild_evidence(
     run_path: Path,
     manifest: Mapping[str, object],
     payload: FinalResearchRankingReportPayloadV3 | FinalResearchRankingReportPayload,
+    contract: _RankingRebuildContract,
 ) -> None:
-    if manifest.get("manifest_version") != FINAL_RESEARCH_RANKING_RUNTIME_VERSION:
+    if manifest.get("manifest_version") != contract.runtime_schema:
         raise ValueError("unsupported Target Delivery Ranking artifact manifest schema")
     artifacts = _required_mapping(manifest, "artifacts", "artifact manifest")
-    seed_first = payload.run.sampling_method == "seed_first_research_sample_v1"
-    sample_audit_name = "seed_first_sample_audit" if seed_first else "network_augmented_sample_audit"
-    sample_audit_path = "seed_first_sample_audit.json" if seed_first else "network_augmented_sample_audit.json"
-    required_artifacts = {
-        "final_research_report": "report.html",
-        "final_research_report_payload": "final_research_report_payload.json",
-        "final_research_users_csv": "final_research_users.csv",
-        "final_research_users_json": "final_research_users.json",
-        sample_audit_name: sample_audit_path,
-        "ranking_runtime_candidates": "ranking_runtime_candidates.csv",
-        "ranking_runtime_outcomes": "ranking_runtime_outcomes.csv",
-        "ranking_runtime_steps": "ranking_runtime_steps.csv",
-        "ranking_runtime_summary": "ranking_runtime_summary.json",
-        "ranking_diagnostics": "ranking_diagnostics.json",
-        "ranking_diagnostics_summary": "ranking_diagnostics_summary.json",
-    }
-    v4_payload = payload if isinstance(payload, FinalResearchRankingReportPayload) else None
+    if dict(artifacts) != dict(contract.artifacts):  # pragma: no cover - rejected by contract dispatch
+        raise ValueError("artifact manifest does not match the selected ranking rebuild contract")
+    seed_first = contract is _SEED_FIRST_V4_REBUILD_CONTRACT
+    sample_audit_name = contract.sample_audit_artifact
+    v4_payload = cast(FinalResearchRankingReportPayload, payload) if seed_first else None
     is_v4 = v4_payload is not None
-    if v4_payload is not None:
-        required_artifacts.update(
-            {
-                "field_lineage_catalog": "field_lineage_catalog.json",
-                "field_source_records": "field_source_records.json",
-                "user_field_trace": "user_field_trace.json",
-            }
-        )
-    for name, expected_path in required_artifacts.items():
-        if artifacts.get(name) != expected_path:
-            raise ValueError(f"artifact manifest has invalid {name} path")
     artifact_paths: dict[str, Path] = {}
     for name, relative_path in artifacts.items():
         if not isinstance(name, str) or not isinstance(relative_path, str):
@@ -4057,7 +4364,7 @@ def _validate_ranking_rebuild_evidence(
             definition.model_dump(mode="json") for definition in v4_payload.field_lineage_catalog
         ]:
             raise ValueError("field lineage catalog artifact does not match ranking report payload")
-        if v4_payload.field_lineage_catalog != field_lineage_definitions(_ranking_field_lineage()):
+        if v4_payload.field_lineage_catalog != _historical_v4_field_lineage_definitions(_ranking_field_lineage()):
             raise ValueError("field lineage catalog does not match the supported field definitions")
         expected_coverage_audit = field_lineage_coverage_audit(
             v4_payload.field_lineage_catalog,
@@ -4081,7 +4388,7 @@ def _validate_ranking_rebuild_evidence(
             raise ValueError("field source records do not match ranking report users")
         payload_users_by_id = {user.user_id: user for user in v4_payload.users}
         catalog_by_field = {definition.field_name: definition for definition in v4_payload.field_lineage_catalog}
-        base_trace_field_names = {definition.field_name for definition in field_lineage_definitions()}
+        base_trace_field_names = {definition.field_name for definition in _historical_v4_field_lineage_definitions()}
         sample_records = _read_json_records(artifact_paths["sample_manifest_json"], "sample manifest")
         sample_records_by_user = _unique_user_rows(sample_records, "sample manifest")
         offline_records_by_user = _unique_user_rows(
@@ -4174,9 +4481,9 @@ def _validate_ranking_rebuild_evidence(
         raise ValueError("ranking report sample role counts do not match users")
 
     audit = _read_json_object(artifact_paths[sample_audit_name])
+    if audit.get("schema_version") != contract.sample_audit_schema:
+        raise ValueError(f"unsupported {contract.lineage} sample audit schema")
     if seed_first:
-        if audit.get("schema_version") != "seed-first-sample-audit-v1":
-            raise ValueError("unsupported seed-first sample audit schema")
         roles = _required_mapping(audit, "roles", "seed-first sample audit")
         role_counts = _mapping_counts(roles, "counts", "seed-first sample roles")
         role_user_ids = _required_mapping(roles, "user_ids", "seed-first sample roles")
@@ -4190,8 +4497,6 @@ def _validate_ranking_rebuild_evidence(
         seed_ids = [str(value) for value in _required_list(role_user_ids, "seed", "seed-first roles")]
         ordinary_ids = [str(value) for value in _required_list(role_user_ids, "ordinary", "seed-first roles")]
     else:
-        if audit.get("schema_version") != "network-augmented-sample-audit-v1":
-            raise ValueError("unsupported network augmented sample audit schema")
         base_sample = _required_mapping(audit, "base_sample", "network sample audit")
         network_cohort = _required_mapping(audit, "network_cohort", "network sample audit")
         replacement = _required_mapping(audit, "ordinary_replacement", "network sample audit")
@@ -4236,9 +4541,18 @@ def _validate_ranking_rebuild_evidence(
     if {row.user_id for row in payload.users if row.is_network_cohort} != set(cohort_ids):
         raise ValueError("ranking report Network Cohort membership does not match audit")
 
+    config_snapshot = _read_json_object(artifact_paths["config_snapshot"])
+    config_provider = _required_mapping(config_snapshot, "provider", "config snapshot")
     summary = _read_json_object(artifact_paths["ranking_runtime_summary"])
-    if summary.get("runtime_version") != FINAL_RESEARCH_RANKING_RUNTIME_VERSION:
+    if summary.get("runtime_version") != contract.runtime_schema:
         raise ValueError("unsupported Target Delivery Ranking runtime summary schema")
+    runtime_provider = _required_mapping(summary, "provider_metadata", "ranking runtime summary")
+    for evidence_name, provider_evidence in (
+        ("config snapshot", config_provider),
+        ("ranking runtime", runtime_provider),
+    ):
+        if provider_evidence.get("prompt_version") != contract.prompt_schema:
+            raise ValueError(f"{evidence_name} Prompt schema does not match {contract.lineage}")
     expected_sampling_method = payload.run.sampling_method
     expected_sampling_status = payload.run.sampling_status
     for evidence_name, evidence in (
@@ -4322,11 +4636,13 @@ def _validate_ranking_rebuild_evidence(
         raise ValueError("ranking report round summaries do not match runtime artifacts")
 
     full_diagnostics = _read_json_object(artifact_paths["ranking_diagnostics"])
-    if full_diagnostics.get("schema_version") != "ranking-diagnostics-v1":
+    if full_diagnostics.get("schema_version") != contract.diagnostics_schema:
         raise ValueError("unsupported ranking diagnostics schema")
     if full_diagnostics != payload.ranking_diagnostics:
         raise ValueError("ranking diagnostics artifact does not match report payload")
     diagnostics = _read_json_object(artifact_paths["ranking_diagnostics_summary"])
+    if diagnostics.get("schema_version") != contract.diagnostics_summary_schema:
+        raise ValueError("unsupported ranking diagnostics summary schema")
     if full_diagnostics.get("summary") != diagnostics:
         raise ValueError("ranking diagnostics artifacts do not share the same summary")
     inclusion = _required_mapping(diagnostics, "recommendation_signal_inclusion", "ranking diagnostics summary")
@@ -4359,12 +4675,16 @@ def _validate_ranking_rebuild_evidence(
         raise ValueError("ranking report Prompt contract does not match Prompt Field Summary")
 
     user_document = _read_json_object(artifact_paths["final_research_users_json"])
-    expected_user_schema = "final-research-ranking-users-v4" if is_v4 else "final-research-ranking-users-v3"
-    if user_document.get("schema_version") != expected_user_schema:
-        raise ValueError("unsupported ranking user JSON schema")
-    if user_document.get("links") != payload.downloads.model_dump(mode="json"):
+    persisted_users: _HistoricalRankingUsersDocumentV3 | _SeedFirstRankingUsersDocumentV4
+    if contract is _HISTORICAL_V3_REBUILD_CONTRACT:
+        persisted_users = _HistoricalRankingUsersDocumentV3.model_validate(user_document)
+    else:
+        persisted_users = _SeedFirstRankingUsersDocumentV4.model_validate(user_document)
+    if persisted_users.links.model_dump(mode="json") != payload.downloads.model_dump(mode="json"):
         raise ValueError("ranking user JSON links do not match report payload")
-    if user_document.get("users") != [row.model_dump(mode="json") for row in payload.users]:
+    if [row.model_dump(mode="json") for row in persisted_users.users] != [
+        row.model_dump(mode="json") for row in payload.users
+    ]:
         raise ValueError("ranking user JSON does not match report payload users")
     csv_rows = _read_csv_rows(artifact_paths["final_research_users_csv"])
     if [row.get("user_id") for row in csv_rows] != user_ids:

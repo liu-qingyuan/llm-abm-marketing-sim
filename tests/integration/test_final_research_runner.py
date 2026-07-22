@@ -1588,6 +1588,8 @@ def test_target_delivery_ranking_report_rebuild_is_deterministic(tmp_path: Path)
     report_path = run_dir / "report.html"
     payload_path = run_dir / "final_research_report_payload.json"
     payload = FinalResearchRankingReportPayload.model_validate_json(payload_path.read_text(encoding="utf-8"))
+    users_document = json.loads((run_dir / "final_research_users.json").read_text(encoding="utf-8"))
+    assert users_document["schema_version"] == "final-research-ranking-users-v4"
     direct_report = FinalResearchReportWriter.render_payload(payload).encode()
     assert report_path.read_bytes() == direct_report
     preserved_artifacts = {
@@ -1608,32 +1610,110 @@ def test_target_delivery_ranking_report_rebuild_is_deterministic(tmp_path: Path)
     } == preserved_artifacts
 
 
-def test_target_delivery_ranking_v3_formal_run_rebuild_preserves_legacy_artifact_contract(tmp_path: Path) -> None:
+def _convert_seed_first_v4_run_to_historical_v3(run_dir: Path) -> dict[str, Any]:
+    payload_path = run_dir / "final_research_report_payload.json"
+    payload_document = json.loads(payload_path.read_text(encoding="utf-8"))
+    payload_document["schema_version"] = "final-research-ranking-report-payload-v3"
+    payload_document["run"]["sampling_method"] = "network_augmented_research_sample"
+    payload_document["run"]["sampling_status"] = "historical_network_augmented_run"
+    payload_document.pop("sample_role_counts")
+    payload_document.pop("field_lineage_catalog")
+    payload_document.pop("user_field_trace_index")
+    for field_name in ("field_lineage_catalog", "user_field_trace", "field_source_records"):
+        payload_document["downloads"].pop(field_name)
+
+    users = payload_document["users"]
+    cohort_user = next(user for user in users if not user["is_seed"])
+    cohort_user_id = cohort_user["user_id"]
+    replaced_base_user_id = "historical-base-user-replaced"
+    scope_counts: dict[str, int] = {}
+    seed_user_ids: list[str] = []
+    for user in users:
+        user["in_base_sample"] = user["user_id"] != cohort_user_id
+        user["is_network_cohort"] = user["user_id"] == cohort_user_id
+        user["sample_role"] = (
+            "seed" if user["is_seed"] else "network_cohort" if user["is_network_cohort"] else "ordinary"
+        )
+        scope = user["sample_source_scope"]
+        scope_counts[scope] = scope_counts.get(scope, 0) + 1
+        if user["is_seed"]:
+            seed_user_ids.append(user["user_id"])
+    user_ids = [user["user_id"] for user in users]
+    base_user_ids = [user_id for user_id in user_ids if user_id != cohort_user_id] + [replaced_base_user_id]
+    payload_document["sample_comparison"] = {
+        "base_sample_count": len(base_user_ids),
+        "final_sample_count": len(user_ids),
+        "seed_count": len(seed_user_ids),
+        "network_cohort_count": 1,
+        "network_cohort_added_count": 1,
+        "replacement_count": 1,
+        "base_source_scope_counts": dict(sorted(scope_counts.items())),
+        "final_source_scope_counts": dict(sorted(scope_counts.items())),
+        "ordinary_count": 0,
+    }
+    payload_path.write_text(json.dumps(payload_document, ensure_ascii=False) + "\n", encoding="utf-8")
+
+    manifest_path = run_dir / "artifact_manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    seed_audit_path = run_dir / manifest["artifacts"].pop("seed_first_sample_audit")
+    seed_audit_path.unlink()
+    manifest["artifacts"]["network_augmented_sample_audit"] = "network_augmented_sample_audit.json"
+    for artifact_name in ("field_lineage_catalog", "user_field_trace", "field_source_records"):
+        (run_dir / manifest["artifacts"].pop(artifact_name)).unlink()
+    for field_name in ("sampling_method", "sampling_status", "sample_role_counts"):
+        manifest.pop(field_name, None)
+    manifest_path.write_text(json.dumps(manifest, ensure_ascii=False) + "\n", encoding="utf-8")
+
+    historical_audit = {
+        "schema_version": "network-augmented-sample-audit-v1",
+        "base_sample": {
+            "count": len(base_user_ids),
+            "user_ids": base_user_ids,
+            "source_scope_counts": dict(sorted(scope_counts.items())),
+        },
+        "seed_count": len(seed_user_ids),
+        "seed_user_ids": seed_user_ids,
+        "network_cohort": {
+            "count": 1,
+            "user_ids": [cohort_user_id],
+            "added_user_ids": [cohort_user_id],
+        },
+        "ordinary_replacement": {"count": 1},
+        "final_sample": {
+            "count": len(user_ids),
+            "user_ids": user_ids,
+            "source_scope_counts": dict(sorted(scope_counts.items())),
+        },
+    }
+    (run_dir / "network_augmented_sample_audit.json").write_text(
+        json.dumps(historical_audit, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
+    for file_name in ("config_snapshot.json", "holdout_safe_audit.json", "ranking_runtime_summary.json"):
+        document_path = run_dir / file_name
+        document = json.loads(document_path.read_text(encoding="utf-8"))
+        document.pop("sampling_method", None)
+        document.pop("sampling_status", None)
+        document_path.write_text(json.dumps(document, ensure_ascii=False) + "\n", encoding="utf-8")
+
+    users_path = run_dir / "final_research_users.json"
+    users_document = json.loads(users_path.read_text(encoding="utf-8"))
+    users_document["schema_version"] = "final-research-ranking-users-v3"
+    users_document["links"] = payload_document["downloads"]
+    users_document["users"] = payload_document["users"]
+    users_path.write_text(json.dumps(users_document, ensure_ascii=False) + "\n", encoding="utf-8")
+    return manifest
+
+
+def test_historical_network_augmented_v3_rebuild_preserves_legacy_artifact_contract(tmp_path: Path) -> None:
     dataset_dir = _make_target_delivery_fixture(tmp_path)
     provider_config = ProviderLLMConfig(enabled=True, model="mock-model", require_live_env=False)
     run_dir = FinalResearchRunner(
         FinalResearchConfig(dataset_dir=dataset_dir, sample_size=70, provider=provider_config),
         _TargetDeliveryAdapter(mark_live_api_triggered=True),
     ).run_and_write(tmp_path / "ranking-legacy-v3")
-    payload_document = json.loads((run_dir / "final_research_report_payload.json").read_text(encoding="utf-8"))
-    payload_document["schema_version"] = "final-research-ranking-report-payload-v3"
-    payload_document.pop("sample_role_counts")
-    payload_document.pop("field_lineage_catalog")
-    payload_document.pop("user_field_trace_index")
-    for field_name in ("field_lineage_catalog", "user_field_trace", "field_source_records"):
-        payload_document["downloads"].pop(field_name)
+    manifest = _convert_seed_first_v4_run_to_historical_v3(run_dir)
     payload_path = run_dir / "final_research_report_payload.json"
-    payload_path.write_text(json.dumps(payload_document, ensure_ascii=False) + "\n", encoding="utf-8")
-    manifest_path = run_dir / "artifact_manifest.json"
-    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    for artifact_name in ("field_lineage_catalog", "user_field_trace", "field_source_records"):
-        (run_dir / manifest["artifacts"].pop(artifact_name)).unlink()
-    manifest_path.write_text(json.dumps(manifest, ensure_ascii=False) + "\n", encoding="utf-8")
-    users_path = run_dir / "final_research_users.json"
-    users_document = json.loads(users_path.read_text(encoding="utf-8"))
-    users_document["schema_version"] = "final-research-ranking-users-v3"
-    users_document["links"] = payload_document["downloads"]
-    users_path.write_text(json.dumps(users_document, ensure_ascii=False) + "\n", encoding="utf-8")
 
     assert rebuild_final_research_report(run_dir) == run_dir / "report.html"
     first_payload = payload_path.read_bytes()
@@ -1646,16 +1726,188 @@ def test_target_delivery_ranking_v3_formal_run_rebuild_preserves_legacy_artifact
     payload = FinalResearchRankingReportPayloadV3.model_validate(rebuilt_document)
     html = first_report.decode()
 
-    assert payload.run.sampling_method == "seed_first_research_sample_v1"
-    assert payload.run.sampling_status == "persisted_seed_first_formal_run"
-    assert "Persisted Seed-First Formal Run" in html
+    assert payload.run.sampling_method == "network_augmented_research_sample"
+    assert payload.run.sampling_status == "historical_network_augmented_run"
+    assert payload.sample_comparison.network_cohort_count == 1
+    assert payload.sample_comparison.network_cohort_added_count == 1
+    assert payload.sample_comparison.replacement_count == 1
+    cohort_user = next(user for user in payload.users if user.is_network_cohort)
+    assert cohort_user.sample_role == "network_cohort"
+    assert cohort_user.in_base_sample is False
+    assert "Historical Network-Augmented Run" in html
     assert rebuilt_document["schema_version"] == "final-research-ranking-report-payload-v3"
     assert "field_lineage_catalog" not in rebuilt_document
     assert "user_field_trace_index" not in rebuilt_document
+    assert "network_augmented_sample_audit" in manifest["artifacts"]
     assert all(
         name not in manifest["artifacts"]
-        for name in ("field_lineage_catalog", "user_field_trace", "field_source_records")
+        for name in ("seed_first_sample_audit", "field_lineage_catalog", "user_field_trace", "field_source_records")
     )
+
+
+def test_historical_v3_rebuild_rejects_explicit_null_sampling_fields(tmp_path: Path) -> None:
+    dataset_dir = _make_target_delivery_fixture(tmp_path)
+    provider_config = ProviderLLMConfig(enabled=True, model="mock-model", require_live_env=False)
+    source_run = FinalResearchRunner(
+        FinalResearchConfig(dataset_dir=dataset_dir, sample_size=70, provider=provider_config),
+        _TargetDeliveryAdapter(),
+    ).run_and_write(tmp_path / "historical-v3-source")
+    _convert_seed_first_v4_run_to_historical_v3(source_run)
+    matrix = (
+        ("artifact_manifest.json", "sampling_method", "manifest_sampling_method"),
+        ("artifact_manifest.json", "sampling_status", "manifest_sampling_status"),
+        ("ranking_runtime_summary.json", "sampling_method", "summary_sampling_method"),
+        ("ranking_runtime_summary.json", "sampling_status", "summary_sampling_status"),
+        ("network_augmented_sample_audit.json", "sampling_method", "audit_sampling_method"),
+        ("network_augmented_sample_audit.json", "sampling_status", "audit_sampling_status"),
+    )
+
+    for file_name, field_name, expected_component in matrix:
+        run_dir = tmp_path / f"historical-v3-null-{file_name}-{field_name}"
+        shutil.copytree(source_run, run_dir)
+        document_path = run_dir / file_name
+        document = json.loads(document_path.read_text(encoding="utf-8"))
+        document[field_name] = None
+        document_path.write_text(json.dumps(document, ensure_ascii=False) + "\n", encoding="utf-8")
+        payload_path = run_dir / "final_research_report_payload.json"
+        report_path = run_dir / "report.html"
+        persisted_payload = payload_path.read_bytes()
+        persisted_report = report_path.read_bytes()
+
+        with pytest.raises(
+            ValueError,
+            match=rf"Target Delivery Ranking rebuild contract mismatch: .*{expected_component}",
+        ):
+            rebuild_final_research_report(run_dir)
+
+        assert payload_path.read_bytes() == persisted_payload, (file_name, field_name)
+        assert report_path.read_bytes() == persisted_report, (file_name, field_name)
+
+
+def _corrupt_ranking_rebuild_contract(run_dir: Path, corruption: str) -> None:
+    def read_document(file_name: str) -> dict[str, Any]:
+        return json.loads((run_dir / file_name).read_text(encoding="utf-8"))
+
+    def write_document(file_name: str, document: dict[str, Any]) -> None:
+        (run_dir / file_name).write_text(json.dumps(document, ensure_ascii=False) + "\n", encoding="utf-8")
+
+    if corruption == "payload_schema":
+        document = read_document("final_research_report_payload.json")
+        document["schema_version"] = "final-research-ranking-report-payload-v3"
+        write_document("final_research_report_payload.json", document)
+    elif corruption == "users_schema":
+        document = read_document("final_research_users.json")
+        document["schema_version"] = "final-research-ranking-users-v3"
+        write_document("final_research_users.json", document)
+    elif corruption == "missing_users_schema":
+        (run_dir / "final_research_users.json").unlink()
+    elif corruption == "manifest_runtime_schema":
+        document = read_document("artifact_manifest.json")
+        document["manifest_version"] = "final-research-ranking-runtime-v999"
+        write_document("artifact_manifest.json", document)
+    elif corruption == "summary_runtime_schema":
+        document = read_document("ranking_runtime_summary.json")
+        document["runtime_version"] = "final-research-ranking-runtime-v999"
+        write_document("ranking_runtime_summary.json", document)
+    elif corruption == "diagnostics_schema":
+        document = read_document("ranking_diagnostics.json")
+        document["schema_version"] = "ranking-diagnostics-v999"
+        write_document("ranking_diagnostics.json", document)
+    elif corruption == "diagnostics_summary_schema":
+        document = read_document("ranking_diagnostics_summary.json")
+        document["schema_version"] = "ranking-diagnostics-summary-v999"
+        write_document("ranking_diagnostics_summary.json", document)
+    elif corruption == "config_prompt_schema":
+        document = read_document("config_snapshot.json")
+        document["provider"]["prompt_version"] = "jinjiang-green-marketing-prompt-v999"
+        write_document("config_snapshot.json", document)
+    elif corruption == "runtime_prompt_schema":
+        document = read_document("ranking_runtime_summary.json")
+        document["provider_metadata"]["prompt_version"] = "jinjiang-green-marketing-prompt-v999"
+        write_document("ranking_runtime_summary.json", document)
+    elif corruption == "sample_audit_schema":
+        document = read_document("seed_first_sample_audit.json")
+        document["schema_version"] = "network-augmented-sample-audit-v1"
+        write_document("seed_first_sample_audit.json", document)
+    elif corruption == "missing_sample_audit":
+        (run_dir / "seed_first_sample_audit.json").unlink()
+    elif corruption == "crossed_sample_audit_artifact":
+        document = read_document("artifact_manifest.json")
+        document["artifacts"].pop("seed_first_sample_audit")
+        document["artifacts"]["network_augmented_sample_audit"] = "network_augmented_sample_audit.json"
+        write_document("artifact_manifest.json", document)
+    elif corruption in {"sampling_method", "sampling_status"}:
+        crossed_value = (
+            "network_augmented_research_sample"
+            if corruption == "sampling_method"
+            else "historical_network_augmented_run"
+        )
+        payload = read_document("final_research_report_payload.json")
+        manifest = read_document("artifact_manifest.json")
+        summary = read_document("ranking_runtime_summary.json")
+        audit = read_document("seed_first_sample_audit.json")
+        payload["run"][corruption] = crossed_value
+        for document in (manifest, summary, audit):
+            document[corruption] = crossed_value
+        write_document("final_research_report_payload.json", payload)
+        write_document("artifact_manifest.json", manifest)
+        write_document("ranking_runtime_summary.json", summary)
+        write_document("seed_first_sample_audit.json", audit)
+    elif corruption == "extra_artifact":
+        document = read_document("artifact_manifest.json")
+        document["artifacts"]["unexpected"] = "report.html"
+        write_document("artifact_manifest.json", document)
+    elif corruption == "wrong_artifact_path":
+        document = read_document("artifact_manifest.json")
+        document["artifacts"]["final_research_users_csv"] = "users-v999.csv"
+        write_document("artifact_manifest.json", document)
+    else:  # pragma: no cover - test matrix owns the values
+        raise AssertionError(f"unknown contract corruption: {corruption}")
+
+
+def test_ranking_rebuild_contract_rejects_unknown_missing_and_crossed_evidence(tmp_path: Path) -> None:
+    dataset_dir = _make_target_delivery_fixture(tmp_path)
+    provider_config = ProviderLLMConfig(enabled=True, model="mock-model", require_live_env=False)
+    source_run = FinalResearchRunner(
+        FinalResearchConfig(dataset_dir=dataset_dir, sample_size=70, provider=provider_config),
+        _TargetDeliveryAdapter(),
+    ).run_and_write(tmp_path / "ranking-contract-source")
+    matrix = {
+        "payload_schema": "payload_schema",
+        "users_schema": "users_schema",
+        "missing_users_schema": "users_schema",
+        "manifest_runtime_schema": "manifest_runtime_schema",
+        "summary_runtime_schema": "summary_runtime_schema",
+        "diagnostics_schema": "diagnostics_schema",
+        "diagnostics_summary_schema": "diagnostics_summary_schema",
+        "config_prompt_schema": "config_prompt_schema",
+        "runtime_prompt_schema": "runtime_prompt_schema",
+        "sample_audit_schema": "sample_audit_schema",
+        "missing_sample_audit": "sample_audit_schema",
+        "crossed_sample_audit_artifact": "sample_audit_artifact",
+        "sampling_method": "payload_sampling_method",
+        "sampling_status": "payload_sampling_status",
+        "extra_artifact": "artifact_set",
+        "wrong_artifact_path": "artifact_set",
+    }
+
+    for corruption, expected_component in matrix.items():
+        run_dir = tmp_path / f"ranking-contract-{corruption}"
+        shutil.copytree(source_run, run_dir)
+        _corrupt_ranking_rebuild_contract(run_dir, corruption)
+        payload_path = run_dir / "final_research_report_payload.json"
+        report_path = run_dir / "report.html"
+        persisted_payload = payload_path.read_bytes()
+        persisted_report = report_path.read_bytes()
+
+        with pytest.raises(
+            ValueError,
+            match=rf"Target Delivery Ranking rebuild contract mismatch: .*{expected_component}",
+        ):
+            rebuild_final_research_report(run_dir)
+
+        assert payload_path.read_bytes() == persisted_payload, corruption
+        assert report_path.read_bytes() == persisted_report, corruption
 
 
 def test_target_delivery_ranking_report_escapes_download_paths_in_html(tmp_path: Path) -> None:
@@ -1680,7 +1932,6 @@ def test_target_delivery_ranking_report_escapes_download_paths_in_html(tmp_path:
     "corruption",
     [
         "missing_required",
-        "unsupported_schema",
         "duplicate_payload_user",
         "duplicate_runtime_user",
         "count_mismatch",
@@ -1714,10 +1965,6 @@ def test_target_delivery_ranking_report_rebuild_rejects_invalid_evidence_before_
 
     if corruption == "missing_required":
         (run_dir / "ranking_runtime_summary.json").unlink()
-    elif corruption == "unsupported_schema":
-        payload = json.loads(payload_path.read_text(encoding="utf-8"))
-        payload["schema_version"] = "final-research-ranking-report-payload-v999"
-        payload_path.write_text(json.dumps(payload, ensure_ascii=False) + "\n", encoding="utf-8")
     elif corruption == "duplicate_payload_user":
         payload = json.loads(payload_path.read_text(encoding="utf-8"))
         payload["users"][1]["user_id"] = payload["users"][0]["user_id"]
