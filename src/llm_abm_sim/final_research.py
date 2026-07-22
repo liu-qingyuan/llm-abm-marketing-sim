@@ -19,7 +19,7 @@ from .decision import EngageDecision, LLMDecisionAdapter, ProviderDecisionError
 from .field_lineage_trace import RuntimeFeedbackEvidence, RuntimeFeedbackKind
 from .final_research_report import (
     FINAL_RESEARCH_DYNAMIC_NETWORK_FORMULA,
-    FINAL_RESEARCH_RANKING_RUNTIME_VERSION,
+    FINAL_RESEARCH_RANKING_RUNTIME_V3_VERSION,
     FINAL_RESEARCH_REPORT_ARTIFACTS,
     FINAL_RESEARCH_RUNTIME_VERSION,
     FINAL_RESEARCH_SCHEDULE_METHOD,
@@ -28,6 +28,7 @@ from .final_research_report import (
     FINAL_RESEARCH_USER_OPPORTUNITY_LIMIT,
     FinalResearchReportSource,
     FinalResearchReportWriter,
+    ranking_v5_expand_evidence,
 )
 from .prompt_field_summary import PromptFieldInclusion, capture_prompt_field_inclusion
 from .ranking_diagnostics import MAIN_RANKING_WEIGHTS, RankingDiagnosticArtifacts, RankingDiagnostics
@@ -72,7 +73,7 @@ TARGET_DELIVERY_BASE_NETWORK_WEIGHT = MAIN_RANKING_WEIGHTS.base_network
 TARGET_DELIVERY_ENGAGED_NEIGHBOR_WEIGHT = MAIN_RANKING_WEIGHTS.engaged_neighbor
 TARGET_DELIVERY_TAG_AFFINITY_WEIGHT = MAIN_RANKING_WEIGHTS.tag_affinity
 TARGET_DELIVERY_CAPACITY = 20
-TARGET_DELIVERY_RUNTIME_VERSION = FINAL_RESEARCH_RANKING_RUNTIME_VERSION
+TARGET_DELIVERY_RUNTIME_VERSION = FINAL_RESEARCH_RANKING_RUNTIME_V3_VERSION
 TARGET_DELIVERY_SCHEDULE_METHOD = "global_stable_reranking_top20"
 TARGET_DELIVERY_RANKING_FORMULA = (
     "0.50 * base_network_relevance + 0.30 * engaged_neighbor_signal + 0.20 * historical_tag_affinity"
@@ -85,7 +86,6 @@ SAMPLE_CSV_FIELDS = (
     "nickname",
     "bio",
     "signature",
-    "interest_tags",
     "follower_count",
     "following_count",
     "video_count",
@@ -311,8 +311,8 @@ class FinalResearchConfig(BaseModel):
                 raise ValueError("enabled final research provider must use fail_closed_action=raise")
             if self.horizon != 30:
                 raise ValueError("enabled final research runtime requires horizon=30")
-            if self.provider.prompt_version != "jinjiang-green-marketing-prompt-v2":
-                raise ValueError("enabled final research runtime requires jinjiang-green-marketing-prompt-v2")
+            if self.provider.prompt_version != "jinjiang-green-marketing-prompt-v3":
+                raise ValueError("enabled final research runtime requires jinjiang-green-marketing-prompt-v3")
 
         dataset_dir = self.dataset_dir.expanduser()
         if not dataset_dir.is_dir():
@@ -407,7 +407,6 @@ class ResearchUser(BaseModel):
     nickname: str = ""
     bio: str = ""
     signature: str = ""
-    interest_tags: list[str] = Field(default_factory=list)
     follower_count: int = 0
     following_count: int = 0
     video_count: int = 0
@@ -427,7 +426,6 @@ class ResearchUser(BaseModel):
     def sample_row(self) -> dict[str, object]:
         row = self.model_dump(exclude={"latent_attributes"})
         row["is_seed"] = _csv_bool(self.is_seed)
-        row["interest_tags"] = _json_cell(self.interest_tags)
         row.update(self.latent_attributes)
         return {field: row.get(field, "") for field in SAMPLE_CSV_FIELDS}
 
@@ -557,7 +555,6 @@ class _PreparedInputs:
     thresholds: dict[str, float]
     historical_interaction_user_ids: set[str]
     historical_tags_by_user: dict[str, set[str]]
-    interest_tag_evidence_by_user: dict[str, list[dict[str, object]]]
     historical_tag_evidence_by_user: dict[str, list[dict[str, object]]]
     derived_proxy_inputs_by_user: dict[str, dict[str, int | float]]
     target_scope_weighted_degree: dict[str, int]
@@ -808,7 +805,7 @@ class _ResearchInputBuilder:
             all_history_degree=all_history_degree,
             thresholds=thresholds,
         )
-        interest_tag_evidence_by_user, historical_tag_evidence_by_user = _field_tag_evidence(
+        historical_tag_evidence_by_user = _field_tag_evidence(
             users_by_id,
             historical_videos,
             historical_comments,
@@ -890,7 +887,6 @@ class _ResearchInputBuilder:
             thresholds=thresholds,
             historical_interaction_user_ids=set(history_counts),
             historical_tags_by_user=historical_tags_by_user,
-            interest_tag_evidence_by_user=interest_tag_evidence_by_user,
             historical_tag_evidence_by_user=historical_tag_evidence_by_user,
             derived_proxy_inputs_by_user={
                 user_id: {
@@ -1474,6 +1470,8 @@ class FinalResearchRunner:
             artifact_manifest["diagnostic_decision_adapter_calls"] = ranking_diagnostics.summary[
                 "diagnostic_decision_adapter_calls"
             ]
+        if ranking_runtime is not None:
+            artifact_manifest["evidence_state"] = ranking_runtime.summary["evidence_state"]
         FinalResearchReportWriter(
             FinalResearchReportSource(
                 target_video=prepared.target_video.model_dump(mode="json"),
@@ -1481,9 +1479,6 @@ class FinalResearchRunner:
                 historical_tags_by_user={
                     user.user_id: sorted(prepared.historical_tags_by_user.get(user.user_id, set()))
                     for user in sample_users
-                },
-                interest_tag_evidence_by_user={
-                    user.user_id: prepared.interest_tag_evidence_by_user.get(user.user_id, []) for user in sample_users
                 },
                 historical_tag_evidence_by_user={
                     user.user_id: prepared.historical_tag_evidence_by_user.get(user.user_id, [])
@@ -1733,6 +1728,7 @@ class FinalResearchRunner:
             "same_batch_feedback": False,
             "decision_adapter_calls": decision_adapter_calls,
             "provider_metadata": provider_metadata,
+            "evidence_state": ranking_v5_expand_evidence(),
             "counts": {
                 "sample_users": len(prepared.sample_user_ids),
                 "seed_users": len(prepared.seed_user_ids),
@@ -2028,7 +2024,6 @@ def _runtime_user_profile(user: ResearchUser) -> UserProfile:
     return UserProfile.model_validate(
         {
             "user_id": user.user_id,
-            "interest_tags": user.interest_tags,
             "activity_score": user.activity_score,
             "nickname": user.nickname,
             "bio": user.bio,
@@ -2092,10 +2087,10 @@ def _sampling_status(
     sampling_method: ResearchSamplingMethod,
     adapter: LLMDecisionAdapter,
 ) -> ResearchSamplingStatus:
+    if sampling_method == SEED_FIRST_SAMPLING_METHOD:
+        return VALIDATION_RUN_STATUS
     if not _adapter_live_api_triggered(adapter):
         return VALIDATION_RUN_STATUS
-    if sampling_method == SEED_FIRST_SAMPLING_METHOD:
-        return FORMAL_RUN_STATUS
     return PROBABILITY_FORMAL_RUN_STATUS
 
 
@@ -2140,7 +2135,6 @@ def _build_research_users(
             nickname=_cell(row, "nickname"),
             bio=_cell(row, "bio"),
             signature=_cell(row, "signature"),
-            interest_tags=sorted(set(_parse_list(_cell(row, "interest_tags")))),
             follower_count=_int_cell(row, "follower_count"),
             following_count=_int_cell(row, "following_count"),
             video_count=signals["video_count"],
@@ -2179,63 +2173,13 @@ def _field_tag_evidence(
     users_by_id: Mapping[str, ResearchUser],
     videos: Mapping[str, _VideoRecord],
     comments: Sequence[_CommentRecord],
-) -> tuple[dict[str, list[dict[str, object]]], dict[str, list[dict[str, object]]]]:
-    interest_evidence: dict[str, list[dict[str, object]]] = defaultdict(list)
+) -> dict[str, list[dict[str, object]]]:
     historical_evidence: dict[str, list[dict[str, object]]] = defaultdict(list)
-    seen_interest: set[tuple[str, str, str]] = set()
     seen_historical: set[tuple[str, str]] = set()
-
-    for video in videos.values():
-        user = users_by_id.get(video.creator_user_id)
-        if user is None:
-            continue
-        user_tags = set(user.interest_tags)
-        matched_hashtags = sorted(user_tags & set(video.hashtags))
-        if matched_hashtags:
-            key = (user.user_id, "historical_video_hashtags", video.video_id)
-            if key not in seen_interest:
-                seen_interest.add(key)
-                interest_evidence[user.user_id].append(
-                    {
-                        "evidence_kind": "historical_video_hashtags",
-                        "record_key": {"video_id": video.video_id},
-                        "source_fields": ["hashtags"],
-                        "matched_values": matched_hashtags,
-                    }
-                )
-        matched_caption_terms = sorted(tag for tag in user_tags if tag and tag in video.caption)
-        if matched_caption_terms:
-            key = (user.user_id, "historical_text_topic_terms", video.video_id)
-            if key not in seen_interest:
-                seen_interest.add(key)
-                interest_evidence[user.user_id].append(
-                    {
-                        "evidence_kind": "historical_text_topic_terms",
-                        "record_key": {"video_id": video.video_id},
-                        "source_fields": ["caption"],
-                        "matched_values": matched_caption_terms,
-                    }
-                )
-
     for comment in comments:
         user = users_by_id.get(comment.commenter_user_id)
         interaction_video = videos.get(comment.video_id)
-        if user is None:
-            continue
-        matched_comment_terms = sorted(tag for tag in user.interest_tags if tag and tag in comment.content)
-        if matched_comment_terms:
-            key = (user.user_id, "historical_text_topic_terms", comment.comment_id)
-            if key not in seen_interest:
-                seen_interest.add(key)
-                interest_evidence[user.user_id].append(
-                    {
-                        "evidence_kind": "historical_text_topic_terms",
-                        "record_key": {"comment_id": comment.comment_id},
-                        "source_fields": ["content"],
-                        "matched_values": matched_comment_terms,
-                    }
-                )
-        if interaction_video is None or not interaction_video.hashtags:
+        if user is None or interaction_video is None or not interaction_video.hashtags:
             continue
         history_key = (user.user_id, interaction_video.video_id)
         if history_key in seen_historical:
@@ -2249,11 +2193,7 @@ def _field_tag_evidence(
                 "matched_values": sorted(set(interaction_video.hashtags)),
             }
         )
-
-    return (
-        {user_id: rows for user_id, rows in sorted(interest_evidence.items())},
-        {user_id: rows for user_id, rows in sorted(historical_evidence.items())},
-    )
+    return {user_id: rows for user_id, rows in sorted(historical_evidence.items())}
 
 
 def _weighted_degrees(

@@ -23,18 +23,20 @@ from .field_lineage_trace import (
     FieldLineageTraceModule,
     FieldLineageTraceSource,
     FieldSourceRecord,
+    HistoricalFieldSourceRecordV4,
     PromptInclusionStatus,
     RuntimeFeedbackEvidence,
     SourceRecordLocator,
     UserFieldTrace,
     _historical_v4_field_lineage_definitions,
+    _jinjiang_v5_field_lineage_definitions,
     field_lineage_coverage_audit,
     field_trace_evidence,
     field_value_status,
     is_decision_trace_field,
     is_user_field_trace_definition,
 )
-from .prompt_field_summary import JINJIANG_PROMPT_V2_PROFILE_FIELDS
+from .prompt_field_summary import JINJIANG_PROMPT_V2_PROFILE_FIELDS, JINJIANG_PROMPT_V3_PROFILE_FIELDS
 from .research_explanations import (
     ExplanationContext,
     FieldProvenance,
@@ -52,6 +54,7 @@ FINAL_RESEARCH_REPORT_ARTIFACTS = {
 }
 FINAL_RESEARCH_RUNTIME_VERSION = "final-research-runtime-v1"
 FINAL_RESEARCH_RANKING_RUNTIME_VERSION = "final-research-ranking-runtime-v2"
+FINAL_RESEARCH_RANKING_RUNTIME_V3_VERSION = "final-research-ranking-runtime-v3"
 FINAL_RESEARCH_SCHEDULE_METHOD = "stable_shuffle_round_robin_batches"
 FINAL_RESEARCH_SEED_STEP = 0
 FINAL_RESEARCH_USER_OPPORTUNITY_LIMIT = 1
@@ -60,11 +63,16 @@ FINAL_RESEARCH_DYNAMIC_NETWORK_FORMULA = "min(1.0, base_network_score + neighbor
 
 _RANKING_PAYLOAD_V3_SCHEMA = "final-research-ranking-report-payload-v3"
 _RANKING_PAYLOAD_V4_SCHEMA = "final-research-ranking-report-payload-v4"
+_RANKING_PAYLOAD_V5_SCHEMA = "final-research-ranking-report-payload-v5"
 _RANKING_USERS_V3_SCHEMA = "final-research-ranking-users-v3"
 _RANKING_USERS_V4_SCHEMA = "final-research-ranking-users-v4"
+_RANKING_USERS_V5_SCHEMA = "final-research-ranking-users-v5"
 _RANKING_DIAGNOSTICS_V1_SCHEMA = "ranking-diagnostics-v1"
 _RANKING_DIAGNOSTICS_SUMMARY_V1_SCHEMA = "ranking-diagnostics-summary-v1"
+_RANKING_DIAGNOSTICS_V2_SCHEMA = "ranking-diagnostics-v2"
+_RANKING_DIAGNOSTICS_SUMMARY_V2_SCHEMA = "ranking-diagnostics-summary-v2"
 _HISTORICAL_JINJIANG_PROMPT_V2 = "jinjiang-green-marketing-prompt-v2"
+_JINJIANG_PROMPT_V3 = "jinjiang-green-marketing-prompt-v3"
 
 
 class _MissingContractValue:
@@ -116,6 +124,7 @@ _RANKING_V4_ARTIFACTS: Mapping[str, str] = MappingProxyType(
         "user_field_trace": "user_field_trace.json",
     }
 )
+_RANKING_V5_ARTIFACTS: Mapping[str, str] = MappingProxyType(dict(_RANKING_V4_ARTIFACTS))
 
 ResultStatus = Literal[
     "like",
@@ -154,6 +163,7 @@ ReportUsersSchema = Literal[
     "final-research-users-v1",
     "final-research-ranking-users-v3",
     "final-research-ranking-users-v4",
+    "final-research-ranking-users-v5",
 ]
 
 
@@ -183,6 +193,8 @@ def _report_users_schema(payload_schema: object) -> ReportUsersSchema:
         return cast(ReportUsersSchema, _RANKING_USERS_V3_SCHEMA)
     if payload_schema == _RANKING_PAYLOAD_V4_SCHEMA:
         return cast(ReportUsersSchema, _RANKING_USERS_V4_SCHEMA)
+    if payload_schema == _RANKING_PAYLOAD_V5_SCHEMA:
+        return cast(ReportUsersSchema, _RANKING_USERS_V5_SCHEMA)
     if payload_schema in {"final-research-report-payload-v1", "final-research-report-payload-v2"}:
         return "final-research-users-v1"
     raise ValueError(f"unsupported report payload schema for users writer: {payload_schema!r}")
@@ -683,6 +695,34 @@ class RankingReportDownloads(RankingReportDownloadsV3):
     field_source_records: str
 
 
+class RankingPendingEvidenceState(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    status: Literal["pending"]
+    formal_research_evidence: Literal[False]
+
+
+class RankingV5ExpandEvidence(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal["ranking-v5-expand-evidence-v1"]
+    contract_stage: Literal["validation_expand"]
+    target_aggregate_engagement_reference: RankingPendingEvidenceState
+    decision_execution_evidence: RankingPendingEvidenceState
+    production_deploy_eligible: Literal[False]
+
+
+def ranking_v5_expand_evidence() -> dict[str, object]:
+    pending = RankingPendingEvidenceState(status="pending", formal_research_evidence=False)
+    return RankingV5ExpandEvidence(
+        schema_version="ranking-v5-expand-evidence-v1",
+        contract_stage="validation_expand",
+        target_aggregate_engagement_reference=pending,
+        decision_execution_evidence=pending,
+        production_deploy_eligible=False,
+    ).model_dump(mode="json")
+
+
 class RankingUserReportRow(BaseModel):
     """Frozen user allowlist for historical v3 and Seed-First v4 readers/writers."""
 
@@ -754,6 +794,79 @@ class RankingUserReportRow(BaseModel):
     def csv_row(self) -> dict[str, object]:
         row = self.model_dump(mode="json")
         row["interest_tags"] = json.dumps(row["interest_tags"], ensure_ascii=False, separators=(",", ":"))
+        row["historical_tags"] = json.dumps(row["historical_tags"], ensure_ascii=False, separators=(",", ":"))
+        return row
+
+
+class RankingUserReportRowV5(BaseModel):
+    """Jinjiang v5 user allowlist without the revoked interest field."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    user_id: str
+    nickname: str = ""
+    bio: str = ""
+    signature: str = ""
+    historical_tags: list[str] = Field(default_factory=list)
+    follower_count: int = 0
+    following_count: int = 0
+    video_count: int = 0
+    activity_score: float = 0.0
+    activity_video_score: float = 0.0
+    activity_comment_score: float = 0.0
+    activity_reply_score: float = 0.0
+    global_influence_score: float = 0.0
+    local_influence_score: float = 0.0
+    local_network_score: float = 0.0
+    local_recognition_score: float = 0.0
+    latent_attribute_spec_id: str
+    latent_attribute_method: str
+    latent_attribute_seed: int
+    latent_class: str
+    latent_environmental_consciousness_coef: float
+    latent_epistemic_value_weight: float
+    latent_environmental_value_weight: float
+    latent_functional_value_weight: float
+    latent_health_value_weight: float
+    latent_emotional_value_weight: float
+    latent_social_value_weight: float
+    latent_hotel_class: str
+    latent_travel_purpose: str
+    latent_gender: str
+    latent_age: str
+    latent_education: str
+    latent_monthly_income: str
+    sample_source_scope: str
+    in_base_sample: bool
+    is_seed: bool
+    is_network_cohort: bool
+    sample_role: SampleRole
+    historical_comment_network_weighted_degree: int
+    latest_ranking_time_step: int
+    latest_ranking_position: int
+    selected_for_exposure: bool
+    base_network_relevance: float
+    engaged_neighbor_count: int
+    engaged_neighbor_signal: float
+    historical_tag_affinity: float
+    recommendation_score: float
+    exposure_time_step: int | None
+    result_status: RankingResultStatus
+    provider_status: Literal["not_called", "succeeded", "provider_failed"]
+    action: ReportAction = ""
+    engage: bool | None = None
+    probability: float | None = None
+    reason: str = ""
+    confidence: float | None = None
+    decision_source: str = ""
+    provider_failure_type: str = ""
+    report_path: str = FINAL_RESEARCH_REPORT_ARTIFACTS["final_research_report"]
+    payload_path: str = FINAL_RESEARCH_REPORT_ARTIFACTS["final_research_report_payload"]
+    json_path: str = FINAL_RESEARCH_REPORT_ARTIFACTS["final_research_users_json"]
+    manifest_path: str = "artifact_manifest.json"
+
+    def csv_row(self) -> dict[str, object]:
+        row = self.model_dump(mode="json")
         row["historical_tags"] = json.dumps(row["historical_tags"], ensure_ascii=False, separators=(",", ":"))
         return row
 
@@ -852,6 +965,70 @@ class FinalResearchRankingReportPayload(_FrozenRankingReportPayloadV3V4Base):
         return self
 
 
+class FinalResearchRankingReportPayloadV5(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal["final-research-ranking-report-payload-v5"] = "final-research-ranking-report-payload-v5"
+    title: str
+    core_objects: tuple[Literal["TargetVideo"], Literal["ResearchUser"], Literal["PlatformRecommendationModel"]]
+    target_video: FinalResearchTargetVideo
+    run: RankingReportRun
+    run_funnel: list[FinalResearchFunnelStage]
+    sample_comparison: RankingSampleComparison
+    sample_role_counts: dict[SampleRole, int]
+    field_lineage: list[FieldLineageEntry]
+    field_lineage_catalog: list[FieldLineageDefinition]
+    user_field_trace_index: dict[str, list[UserFieldTrace]]
+    prompt_contract: RankingPromptContract
+    ranking_rounds: list[RankingRoundSummary]
+    ranking_diagnostics: dict[str, object]
+    ranking_diagnostics_summary: RankingDiagnosticSummary
+    evidence_state: RankingV5ExpandEvidence
+    downloads: RankingReportDownloads
+    limitations: list[str]
+    users: list[RankingUserReportRowV5]
+
+    @model_validator(mode="after")
+    def _validate_field_contract(self) -> FinalResearchRankingReportPayloadV5:
+        declared = [entry.field_name for entry in self.field_lineage]
+        if len(declared) != len(set(declared)):
+            raise ValueError("field lineage must declare each field exactly once")
+        expected = _ranking_v5_lineage_field_names()
+        if set(declared) != expected:
+            missing = sorted(expected - set(declared))
+            extra = sorted(set(declared) - expected)
+            raise ValueError(f"field lineage does not match ranking v5 fields; missing={missing}, extra={extra}")
+        catalog_names = [definition.field_name for definition in self.field_lineage_catalog]
+        if len(catalog_names) != len(set(catalog_names)):
+            raise ValueError("field lineage catalog must declare each field exactly once")
+        lineage_by_name = {entry.field_name: entry for entry in self.field_lineage}
+        if set(catalog_names) != set(lineage_by_name):
+            raise ValueError("field lineage catalog must cover every report field exactly once")
+        for definition in self.field_lineage_catalog:
+            lineage = lineage_by_name[definition.field_name]
+            if definition.provenance != lineage.provenance:
+                raise ValueError(f"field lineage catalog provenance mismatch for {definition.field_name}")
+            if definition.declared_usage_stages != lineage.usage_stages:
+                raise ValueError(f"field lineage catalog usage stages mismatch for {definition.field_name}")
+        user_ids = [user.user_id for user in self.users]
+        if set(self.user_field_trace_index) != set(user_ids):
+            raise ValueError("user field trace index must cover every report user exactly once")
+        trace_field_names = {
+            definition.field_name
+            for definition in self.field_lineage_catalog
+            if is_user_field_trace_definition(definition)
+        }
+        for user_id, traces in self.user_field_trace_index.items():
+            trace_names = [trace.field_name for trace in traces]
+            if len(trace_names) != len(set(trace_names)):
+                raise ValueError(f"user field trace contains duplicate fields for {user_id}")
+            if any(trace.user_id != user_id for trace in traces):
+                raise ValueError(f"user field trace key does not match trace user_id for {user_id}")
+            if set(trace_names) != trace_field_names:
+                raise ValueError(f"user field trace does not cover every user-keyed catalog field for {user_id}")
+        return self
+
+
 class _HistoricalRankingUsersDocumentV3(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -866,6 +1043,14 @@ class _SeedFirstRankingUsersDocumentV4(BaseModel):
     schema_version: Literal["final-research-ranking-users-v4"]
     links: RankingReportDownloads
     users: list[RankingUserReportRow]
+
+
+class _SeedFirstRankingUsersDocumentV5(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal["final-research-ranking-users-v5"]
+    links: RankingReportDownloads
+    users: list[RankingUserReportRowV5]
 
 
 @dataclass(frozen=True)
@@ -938,6 +1123,21 @@ _SEED_FIRST_V4_REBUILD_CONTRACT = _RankingRebuildContract(
     persists_sampling_fields=True,
     artifacts=_RANKING_V4_ARTIFACTS,
 )
+_SEED_FIRST_V5_REBUILD_CONTRACT = _RankingRebuildContract(
+    lineage="Seed-First v5 validation",
+    payload_schema=_RANKING_PAYLOAD_V5_SCHEMA,
+    users_schema=_RANKING_USERS_V5_SCHEMA,
+    runtime_schema=FINAL_RESEARCH_RANKING_RUNTIME_V3_VERSION,
+    diagnostics_schema=_RANKING_DIAGNOSTICS_V2_SCHEMA,
+    diagnostics_summary_schema=_RANKING_DIAGNOSTICS_SUMMARY_V2_SCHEMA,
+    prompt_schema=_JINJIANG_PROMPT_V3,
+    sample_audit_artifact="seed_first_sample_audit",
+    sample_audit_schema="seed-first-sample-audit-v1",
+    sampling_method="seed_first_research_sample_v1",
+    sampling_statuses=("validation_run",),
+    persists_sampling_fields=True,
+    artifacts=_RANKING_V5_ARTIFACTS,
+)
 
 
 @dataclass(frozen=True)
@@ -945,7 +1145,6 @@ class FinalResearchReportSource:
     target_video: Mapping[str, object]
     users: Sequence[Mapping[str, object]]
     historical_tags_by_user: Mapping[str, Sequence[str]]
-    interest_tag_evidence_by_user: Mapping[str, Sequence[Mapping[str, object]]]
     historical_tag_evidence_by_user: Mapping[str, Sequence[Mapping[str, object]]]
     prompt_field_inclusion_by_user: Mapping[str, Mapping[str, PromptInclusionStatus]]
     config: Mapping[str, object]
@@ -1021,7 +1220,7 @@ class FinalResearchReportWriter:
     def _build_payload(
         self,
         trace_bundle: FieldLineageTraceBundle | None = None,
-    ) -> FinalResearchReportPayload | FinalResearchRankingReportPayload:
+    ) -> FinalResearchReportPayload | FinalResearchRankingReportPayloadV5:
         if self.source.ranking_runtime_summary is not None:
             if trace_bundle is None:  # pragma: no cover
                 raise ValueError("ranking report requires field trace evidence")
@@ -1227,13 +1426,12 @@ class FinalResearchReportWriter:
             FieldLineageTraceSource(
                 users=trace_users,
                 historical_tags_by_user=self.source.historical_tags_by_user,
-                interest_tag_evidence_by_user=self.source.interest_tag_evidence_by_user,
                 historical_tag_evidence_by_user=self.source.historical_tag_evidence_by_user,
                 exposed_user_ids=exposed_user_ids,
                 prompt_inclusion_by_user=self.source.prompt_field_inclusion_by_user,
                 artifact_paths={str(key): str(value) for key, value in artifacts.items()},
                 derived_proxy_inputs_by_user=self.source.derived_proxy_inputs_by_user,
-                report_lineage=_ranking_field_lineage(),
+                report_lineage=_ranking_v5_field_lineage(),
             )
         )
 
@@ -1329,13 +1527,15 @@ class FinalResearchReportWriter:
     def _write_csv(
         self,
         path: Path,
-        rows: Sequence[UserReportRow] | Sequence[RankingUserReportRow],
+        rows: Sequence[UserReportRow] | Sequence[RankingUserReportRow] | Sequence[RankingUserReportRowV5],
     ) -> None:
         safe_rows = safe_user_data([row.csv_row() for row in rows])
         if not isinstance(safe_rows, list):  # pragma: no cover
             raise TypeError("safe user rows must remain a list")
         fieldnames = (
-            list(RankingUserReportRow.model_fields)
+            list(RankingUserReportRowV5.model_fields)
+            if rows and isinstance(rows[0], RankingUserReportRowV5)
+            else list(RankingUserReportRow.model_fields)
             if rows and isinstance(rows[0], RankingUserReportRow)
             else list(UserReportRow.model_fields)
         )
@@ -1346,9 +1546,12 @@ class FinalResearchReportWriter:
 
     @staticmethod
     def render_payload(
-        payload: FinalResearchReportPayload | FinalResearchRankingReportPayloadV3 | FinalResearchRankingReportPayload,
+        payload: FinalResearchReportPayload | FinalResearchRankingReportPayloadV3 | FinalResearchRankingReportPayload | FinalResearchRankingReportPayloadV5,
     ) -> str:
-        if isinstance(payload, (FinalResearchRankingReportPayloadV3, FinalResearchRankingReportPayload)):
+        if isinstance(
+            payload,
+            (FinalResearchRankingReportPayloadV3, FinalResearchRankingReportPayload, FinalResearchRankingReportPayloadV5),
+        ):
             return _render_ranking_report(payload)
         payload_json = safe_user_json(payload, indent=None).replace("</", "<\\/")
         target = payload.target_video
@@ -1524,7 +1727,7 @@ class FinalResearchReportWriter:
 def _build_ranking_report_payload(
     source: FinalResearchReportSource,
     trace_bundle: FieldLineageTraceBundle,
-) -> FinalResearchRankingReportPayload:
+) -> FinalResearchRankingReportPayloadV5:
     if source.network_sample_audit is None:
         raise ValueError("ranking report requires network sample audit evidence")
     if source.ranking_runtime_summary is None:
@@ -1583,7 +1786,7 @@ def _build_ranking_report_payload(
 
     base_user_ids = {str(value) for value in _required_list(base_sample, "user_ids", "base sample")}
     cohort_user_ids = {str(value) for value in _required_list(network_cohort, "user_ids", "network cohort")}
-    rows: list[RankingUserReportRow] = []
+    rows: list[RankingUserReportRowV5] = []
     for raw_user in source.users:
         safe_user = safe_user_data(dict(raw_user))
         if not isinstance(safe_user, dict):  # pragma: no cover
@@ -1615,12 +1818,11 @@ def _build_ranking_report_payload(
         is_network_cohort = user_id in cohort_user_ids
         sample_role: SampleRole = "seed" if is_seed else "network_cohort" if is_network_cohort else "ordinary"
         rows.append(
-            RankingUserReportRow(
+            RankingUserReportRowV5(
                 user_id=user_id,
                 nickname=str(safe_user.get("nickname", "")),
                 bio=str(safe_user.get("bio", "")),
                 signature=str(safe_user.get("signature", "")),
-                interest_tags=_string_list(safe_user.get("interest_tags")),
                 historical_tags=sorted({str(tag) for tag in source.historical_tags_by_user.get(user_id, ())}),
                 follower_count=_as_int(safe_user.get("follower_count")),
                 following_count=_as_int(safe_user.get("following_count")),
@@ -1703,9 +1905,9 @@ def _build_ranking_report_payload(
         "observed_recommendation_signal_effect",
         "ranking diagnostics summary",
     )
-    lineage = _ranking_field_lineage()
-    allowed_prompt_fields = list(JINJIANG_PROMPT_V2_PROFILE_FIELDS)
-    return FinalResearchRankingReportPayload(
+    lineage = _ranking_v5_field_lineage()
+    allowed_prompt_fields = list(JINJIANG_PROMPT_V3_PROFILE_FIELDS)
+    return FinalResearchRankingReportPayloadV5(
         title=title,
         core_objects=("TargetVideo", "ResearchUser", "PlatformRecommendationModel"),
         target_video=FinalResearchTargetVideo.model_validate(target_video),
@@ -1851,6 +2053,7 @@ def _build_ranking_report_payload(
             batches_with_top_selection_change=_as_int(effect.get("batches_with_top_selection_change")),
             diagnostic_decision_adapter_calls=_as_int(diagnostic_summary.get("diagnostic_decision_adapter_calls")),
         ),
+        evidence_state=RankingV5ExpandEvidence.model_validate(runtime_summary.get("evidence_state")),
         downloads=RankingReportDownloads(
             report=FINAL_RESEARCH_REPORT_ARTIFACTS["final_research_report"],
             payload=FINAL_RESEARCH_REPORT_ARTIFACTS["final_research_report_payload"],
@@ -1941,6 +2144,10 @@ def _ranking_lineage_field_names() -> set[str]:
     }
 
 
+def _ranking_v5_lineage_field_names() -> set[str]:
+    return _ranking_lineage_field_names() - {"interest_tags"}
+
+
 def _ranking_field_lineage() -> list[FieldLineageEntry]:
     trace_definitions = {
         definition.field_name: definition for definition in _historical_v4_field_lineage_definitions()
@@ -2019,8 +2226,12 @@ def _ranking_field_lineage() -> list[FieldLineageEntry]:
     return entries
 
 
+def _ranking_v5_field_lineage() -> list[FieldLineageEntry]:
+    return [entry for entry in _ranking_field_lineage() if entry.field_name != "interest_tags"]
+
+
 def _render_ranking_report(
-    payload: FinalResearchRankingReportPayloadV3 | FinalResearchRankingReportPayload,
+    payload: FinalResearchRankingReportPayloadV3 | FinalResearchRankingReportPayload | FinalResearchRankingReportPayloadV5,
 ) -> str:
     target = payload.target_video
     target_url = escape(target.video_url, quote=True)
@@ -2029,7 +2240,10 @@ def _render_ranking_report(
     engaged_neighbor_weight = weights["engaged_neighbor"] * 100
     tag_affinity_weight = weights["tag_affinity"] * 100
     final_reranking_batch = max(1, payload.run.horizon - 1)
-    explanation_catalog = ResearchExplanationCatalog.from_lineage(payload.field_lineage)
+    explanation_catalog = ResearchExplanationCatalog.from_lineage(
+        payload.field_lineage,
+        allowed_omissions=(frozenset({"interest_tags"}) if isinstance(payload, FinalResearchRankingReportPayloadV5) else frozenset()),
+    )
     sample = payload.sample_comparison
     total_exposures = sum(round_evidence.target_exposures for round_evidence in payload.ranking_rounds)
     configured_delivery_slots = payload.run.horizon * payload.run.delivery_capacity
@@ -2133,6 +2347,9 @@ def _render_ranking_report(
     platform_llm_boundary_image = _embedded_report_image("platform-llm-boundary.webp")
     neighbor_feedback_image = _embedded_report_image("neighbor-feedback.webp")
     capacity_network_impact_image = _embedded_report_image("capacity-network-impact.webp")
+    ranking_report_js = _ranking_report_javascript(
+        include_interest_tags=not isinstance(payload, FinalResearchRankingReportPayloadV5)
+    )
     return f"""<!doctype html>
 <html lang="zh-CN">
 <head>
@@ -2401,7 +2618,7 @@ def _render_ranking_report(
 </main>
 <script id="final-research-ranking-payload" type="application/json">{payload_json}</script>
 <script id="research-explanation-catalog" type="application/json">{explanation_json}</script>
-<script>{_RANKING_REPORT_JS}</script>
+<script>{ranking_report_js}</script>
 </body>
 </html>
 """
@@ -3667,7 +3884,7 @@ function populateUserFilters() {
 }
 
 function userSearchText(row) {
-  return [row.user_id,row.nickname,row.bio,row.signature,row.reason,row.sample_source_scope,row.sample_role,...row.interest_tags,...row.historical_tags,row.latent_class,row.latent_hotel_class,row.latent_travel_purpose].join(' ').toLowerCase();
+  return [row.user_id,row.nickname,row.bio,row.signature,row.reason,row.sample_source_scope,row.sample_role,__OPTIONAL_PROFILE_TOPIC_SEARCH__...row.historical_tags,row.latent_class,row.latent_hotel_class,row.latent_travel_purpose].join(' ').toLowerCase();
 }
 
 function renderUsers() {
@@ -3807,7 +4024,7 @@ function renderUserDetail(row) {
   proxyValues.dataset.testid = 'proxy-values';
   groups.append(
     traceGroup('直接观测',[['nickname（昵称）',row.nickname],['bio（简介）',row.bio],['signature（个性签名）',row.signature],['followers（粉丝数）',row.follower_count],['following（关注数）',row.following_count],['video_count（作品数）',row.video_count]]),
-    traceGroup('历史行为',[['interest_tags（兴趣标签）',row.interest_tags.join(', ')],['historical_tags（历史互动标签）',row.historical_tags.join(', ')],['weighted_degree（历史网络加权度）',row.historical_comment_network_weighted_degree]]),
+    traceGroup('历史行为',[__OPTIONAL_PROFILE_TOPIC_DETAIL__['historical_tags（历史互动标签）',row.historical_tags.join(', ')],['weighted_degree（历史网络加权度）',row.historical_comment_network_weighted_degree]]),
     proxyValues,
     traceGroup('合成标签',[['class（实验类别）',row.latent_class],['hotel class（酒店类别）',row.latent_hotel_class],['travel purpose（出行目的）',row.latent_travel_purpose],['age（年龄段）',row.latent_age],['income（月收入区间）',row.latent_monthly_income]]),
     traceGroup('样本与 ranking（排序）',[['role（角色）',sampleRoleLabels[row.sample_role] || row.sample_role],['scope（来源分组）',sourceScopeLabel(row.sample_source_scope)],['seed（种子用户）',row.is_seed],['network cohort（网络传播识别组）',row.is_network_cohort],['batch / rank（批次 / 名次）',`${row.latest_ranking_time_step} / ${row.latest_ranking_position}`],['score（分数）',fixed(row.recommendation_score)]]),
@@ -3836,6 +4053,16 @@ renderChartExplanations(); renderCharts(); populateUserFilters(); renderUsers();
 byId('lineage-search').addEventListener('input',renderLineage); byId('lineage-stage-filter').addEventListener('input',renderLineage);
 ['user-search','role-filter','result-filter','scope-filter','seed-filter','cohort-filter'].forEach((id) => byId(id).addEventListener('input',renderUsers));
 """
+
+
+def _ranking_report_javascript(*, include_interest_tags: bool) -> str:
+    return _RANKING_REPORT_JS.replace(
+        "__OPTIONAL_PROFILE_TOPIC_SEARCH__",
+        "...row.interest_tags," if include_interest_tags else "",
+    ).replace(
+        "__OPTIONAL_PROFILE_TOPIC_DETAIL__",
+        "['interest_tags（兴趣标签）',row.interest_tags.join(', ')]," if include_interest_tags else "",
+    )
 
 
 def _build_report_aggregates(rows: Sequence[UserReportRow], horizon: int) -> FinalResearchAggregates:
@@ -4050,17 +4277,24 @@ def _dispatch_ranking_rebuild_contract(
     payload_document: Mapping[str, object],
 ) -> _RankingRebuildContract:
     evidence = _collect_ranking_rebuild_evidence(run_path, manifest, payload_document)
-    v3_mismatches = _ranking_rebuild_contract_mismatches(_HISTORICAL_V3_REBUILD_CONTRACT, evidence)
-    v4_mismatches = _ranking_rebuild_contract_mismatches(_SEED_FIRST_V4_REBUILD_CONTRACT, evidence)
-    if not v3_mismatches:
-        return _HISTORICAL_V3_REBUILD_CONTRACT
-    if not v4_mismatches:
-        return _SEED_FIRST_V4_REBUILD_CONTRACT
-    contract, mismatches = (
-        (_HISTORICAL_V3_REBUILD_CONTRACT, v3_mismatches)
-        if len(v3_mismatches) < len(v4_mismatches)
-        else (_SEED_FIRST_V4_REBUILD_CONTRACT, v4_mismatches)
+    contract_mismatches = (
+        (
+            _HISTORICAL_V3_REBUILD_CONTRACT,
+            _ranking_rebuild_contract_mismatches(_HISTORICAL_V3_REBUILD_CONTRACT, evidence),
+        ),
+        (
+            _SEED_FIRST_V4_REBUILD_CONTRACT,
+            _ranking_rebuild_contract_mismatches(_SEED_FIRST_V4_REBUILD_CONTRACT, evidence),
+        ),
+        (
+            _SEED_FIRST_V5_REBUILD_CONTRACT,
+            _ranking_rebuild_contract_mismatches(_SEED_FIRST_V5_REBUILD_CONTRACT, evidence),
+        ),
     )
+    for contract, mismatches in contract_mismatches:
+        if not mismatches:
+            return contract
+    contract, mismatches = min(contract_mismatches, key=lambda item: len(item[1]))
     raise ValueError(f"Target Delivery Ranking rebuild contract mismatch: {contract.lineage}; " + "; ".join(mismatches))
 
 
@@ -4081,11 +4315,15 @@ def rebuild_final_research_report(run_dir: str | Path) -> Path:
     if _is_ranking_rebuild_candidate(manifest, payload_document):
         contract = _dispatch_ranking_rebuild_contract(run_path, manifest, payload_document)
         if contract is _HISTORICAL_V3_REBUILD_CONTRACT:
-            ranking_payload: FinalResearchRankingReportPayloadV3 | FinalResearchRankingReportPayload = (
-                FinalResearchRankingReportPayloadV3.model_validate(payload_document)
-            )
-        else:
+            ranking_payload: (
+                FinalResearchRankingReportPayloadV3
+                | FinalResearchRankingReportPayload
+                | FinalResearchRankingReportPayloadV5
+            ) = FinalResearchRankingReportPayloadV3.model_validate(payload_document)
+        elif contract is _SEED_FIRST_V4_REBUILD_CONTRACT:
             ranking_payload = FinalResearchRankingReportPayload.model_validate(payload_document)
+        else:
+            ranking_payload = FinalResearchRankingReportPayloadV5.model_validate(payload_document)
         _validate_ranking_rebuild_evidence(run_path, manifest, ranking_payload, contract)
         return _publish_report_files(run_path, ranking_payload)
 
@@ -4310,7 +4548,7 @@ def _build_explainable_payload(
 def _validate_ranking_rebuild_evidence(
     run_path: Path,
     manifest: Mapping[str, object],
-    payload: FinalResearchRankingReportPayloadV3 | FinalResearchRankingReportPayload,
+    payload: FinalResearchRankingReportPayloadV3 | FinalResearchRankingReportPayload | FinalResearchRankingReportPayloadV5,
     contract: _RankingRebuildContract,
 ) -> None:
     if manifest.get("manifest_version") != contract.runtime_schema:
@@ -4318,10 +4556,15 @@ def _validate_ranking_rebuild_evidence(
     artifacts = _required_mapping(manifest, "artifacts", "artifact manifest")
     if dict(artifacts) != dict(contract.artifacts):  # pragma: no cover - rejected by contract dispatch
         raise ValueError("artifact manifest does not match the selected ranking rebuild contract")
-    seed_first = contract is _SEED_FIRST_V4_REBUILD_CONTRACT
+    seed_first = contract in (_SEED_FIRST_V4_REBUILD_CONTRACT, _SEED_FIRST_V5_REBUILD_CONTRACT)
     sample_audit_name = contract.sample_audit_artifact
-    v4_payload = cast(FinalResearchRankingReportPayload, payload) if seed_first else None
-    is_v4 = v4_payload is not None
+    traced_payload = (
+        cast(FinalResearchRankingReportPayload | FinalResearchRankingReportPayloadV5, payload)
+        if seed_first
+        else None
+    )
+    is_v5 = contract is _SEED_FIRST_V5_REBUILD_CONTRACT
+    is_traced = traced_payload is not None
     artifact_paths: dict[str, Path] = {}
     for name, relative_path in artifacts.items():
         if not isinstance(name, str) or not isinstance(relative_path, str):
@@ -4350,7 +4593,7 @@ def _validate_ranking_rebuild_evidence(
         "ranking weight sensitivity",
     )
 
-    if v4_payload is not None:
+    if traced_payload is not None:
         catalog_document = _read_json_object(artifact_paths["field_lineage_catalog"])
         trace_document = _read_json_object(artifact_paths["user_field_trace"])
         source_document = _read_json_object(artifact_paths["field_source_records"])
@@ -4361,41 +4604,54 @@ def _validate_ranking_rebuild_evidence(
         if source_document.get("schema_version") != "field-source-records-v1":
             raise ValueError("unsupported field source records schema")
         if catalog_document.get("definitions") != [
-            definition.model_dump(mode="json") for definition in v4_payload.field_lineage_catalog
+            definition.model_dump(mode="json") for definition in traced_payload.field_lineage_catalog
         ]:
             raise ValueError("field lineage catalog artifact does not match ranking report payload")
-        if v4_payload.field_lineage_catalog != _historical_v4_field_lineage_definitions(_ranking_field_lineage()):
+        expected_definitions = (
+            _jinjiang_v5_field_lineage_definitions(_ranking_v5_field_lineage())
+            if is_v5
+            else _historical_v4_field_lineage_definitions(_ranking_field_lineage())
+        )
+        if traced_payload.field_lineage_catalog != expected_definitions:
             raise ValueError("field lineage catalog does not match the supported field definitions")
         expected_coverage_audit = field_lineage_coverage_audit(
-            v4_payload.field_lineage_catalog,
-            v4_payload.user_field_trace_index,
+            traced_payload.field_lineage_catalog,
+            traced_payload.user_field_trace_index,
         )
         if catalog_document.get("coverage_audit") != expected_coverage_audit:
             raise ValueError("field lineage coverage audit does not match ranking report payload")
         if trace_document.get("users") != {
             user_id: [trace.model_dump(mode="json") for trace in traces]
-            for user_id, traces in v4_payload.user_field_trace_index.items()
+            for user_id, traces in traced_payload.user_field_trace_index.items()
         }:
             raise ValueError("user field trace artifact does not match ranking report payload")
+        source_record_model = FieldSourceRecord if is_v5 else HistoricalFieldSourceRecordV4
         source_records = [
-            FieldSourceRecord.model_validate(record)
+            source_record_model.model_validate(record)
             for record in _required_list(source_document, "records", "field source records")
         ]
         source_records_by_user = {record.user_id: record for record in source_records}
         if len(source_records_by_user) != len(source_records):
             raise ValueError("field source records contain duplicate user_id")
-        if set(source_records_by_user) != set(v4_payload.user_field_trace_index):
+        if set(source_records_by_user) != set(traced_payload.user_field_trace_index):
             raise ValueError("field source records do not match ranking report users")
-        payload_users_by_id = {user.user_id: user for user in v4_payload.users}
-        catalog_by_field = {definition.field_name: definition for definition in v4_payload.field_lineage_catalog}
-        base_trace_field_names = {definition.field_name for definition in _historical_v4_field_lineage_definitions()}
+        payload_users_by_id = {user.user_id: user for user in traced_payload.users}
+        catalog_by_field = {definition.field_name: definition for definition in traced_payload.field_lineage_catalog}
+        base_trace_field_names = {
+            definition.field_name
+            for definition in (
+                _jinjiang_v5_field_lineage_definitions()
+                if is_v5
+                else _historical_v4_field_lineage_definitions()
+            )
+        }
         sample_records = _read_json_records(artifact_paths["sample_manifest_json"], "sample manifest")
         sample_records_by_user = _unique_user_rows(sample_records, "sample manifest")
         offline_records_by_user = _unique_user_rows(
             _read_csv_rows(artifact_paths["offline_scores"]),
             "offline scores",
         )
-        for user_id, traces in v4_payload.user_field_trace_index.items():
+        for user_id, traces in traced_payload.user_field_trace_index.items():
             source_record = source_records_by_user[user_id]
             payload_user = payload_users_by_id[user_id]
             payload_values = payload_user.model_dump(mode="json")
@@ -4425,8 +4681,10 @@ def _validate_ranking_rebuild_evidence(
                     failure_records_by_user=failure_records_by_user,
                     ablation_records_by_key=ablation_records_by_key,
                     sensitivity_records_by_key=sensitivity_records_by_key,
+                    diagnostics_schema=contract.diagnostics_schema,
+                    diagnostics_summary_schema=contract.diagnostics_summary_schema,
                 )
-                payload_value = _user_trace_payload_value(v4_payload, payload_user, trace.field_name)
+                payload_value = _user_trace_payload_value(traced_payload, payload_user, trace.field_name)
                 if trace.field_name not in base_trace_field_names:
                     if trace.value_status != field_value_status(payload_value):
                         raise ValueError(f"field trace value status does not match runtime evidence for {user_id}")
@@ -4447,6 +4705,8 @@ def _validate_ranking_rebuild_evidence(
                 )
                 values: object
                 if trace.field_name == "interest_tags":
+                    if not isinstance(source_record, HistoricalFieldSourceRecordV4):
+                        raise ValueError("v5 field source records cannot contain interest_tags")
                     values = source_record.interest_tags
                     source_evidence = source_record.interest_tag_evidence
                 elif trace.field_name == "historical_tags":
@@ -4475,7 +4735,7 @@ def _validate_ranking_rebuild_evidence(
     actual_scope_counts = dict(sorted(Counter(row.sample_source_scope for row in payload.users).items()))
     if dict(sorted(payload.sample_comparison.final_source_scope_counts.items())) != actual_scope_counts:
         raise ValueError("ranking report final source scope distribution does not match users")
-    if v4_payload is not None and v4_payload.sample_role_counts != dict(
+    if traced_payload is not None and traced_payload.sample_role_counts != dict(
         sorted(Counter(row.sample_role for row in payload.users).items())
     ):
         raise ValueError("ranking report sample role counts do not match users")
@@ -4553,6 +4813,17 @@ def _validate_ranking_rebuild_evidence(
     ):
         if provider_evidence.get("prompt_version") != contract.prompt_schema:
             raise ValueError(f"{evidence_name} Prompt schema does not match {contract.lineage}")
+    if is_v5:
+        if not isinstance(payload, FinalResearchRankingReportPayloadV5):  # pragma: no cover
+            raise ValueError("v5 rebuild contract requires a v5 payload")
+        expected_evidence_state = ranking_v5_expand_evidence()
+        for evidence_name, evidence_state in (
+            ("artifact manifest", manifest.get("evidence_state")),
+            ("ranking runtime summary", summary.get("evidence_state")),
+            ("ranking report payload", payload.evidence_state.model_dump(mode="json")),
+        ):
+            if evidence_state != expected_evidence_state:
+                raise ValueError(f"{evidence_name} does not contain pending v5 validation evidence")
     expected_sampling_method = payload.run.sampling_method
     expected_sampling_status = payload.run.sampling_status
     for evidence_name, evidence in (
@@ -4664,22 +4935,28 @@ def _validate_ranking_rebuild_evidence(
     if expected_diagnostics != payload.ranking_diagnostics_summary:
         raise ValueError("ranking diagnostics summary does not match report payload")
 
+    prompt_user_fields = RankingUserReportRowV5.model_fields if is_v5 else RankingUserReportRow.model_fields
+    prompt_profile_fields = JINJIANG_PROMPT_V3_PROFILE_FIELDS if is_v5 else JINJIANG_PROMPT_V2_PROFILE_FIELDS
     expected_prompt_fields = {
         entry.field_name
         for entry in payload.field_lineage
-        if entry.field_name in RankingUserReportRow.model_fields and "LLM Prompt" in entry.usage_stages
+        if entry.field_name in prompt_user_fields and "LLM Prompt" in entry.usage_stages
     }
-    if expected_prompt_fields != set(JINJIANG_PROMPT_V2_PROFILE_FIELDS):
+    if expected_prompt_fields != set(prompt_profile_fields):
         raise ValueError("ranking report Prompt usage declarations do not match Prompt Field Summary")
-    if set(payload.prompt_contract.allowed_profile_fields) != set(JINJIANG_PROMPT_V2_PROFILE_FIELDS):
+    if set(payload.prompt_contract.allowed_profile_fields) != set(prompt_profile_fields):
         raise ValueError("ranking report Prompt contract does not match Prompt Field Summary")
 
     user_document = _read_json_object(artifact_paths["final_research_users_json"])
-    persisted_users: _HistoricalRankingUsersDocumentV3 | _SeedFirstRankingUsersDocumentV4
+    persisted_users: (
+        _HistoricalRankingUsersDocumentV3 | _SeedFirstRankingUsersDocumentV4 | _SeedFirstRankingUsersDocumentV5
+    )
     if contract is _HISTORICAL_V3_REBUILD_CONTRACT:
         persisted_users = _HistoricalRankingUsersDocumentV3.model_validate(user_document)
-    else:
+    elif contract is _SEED_FIRST_V4_REBUILD_CONTRACT:
         persisted_users = _SeedFirstRankingUsersDocumentV4.model_validate(user_document)
+    else:
+        persisted_users = _SeedFirstRankingUsersDocumentV5.model_validate(user_document)
     if persisted_users.links.model_dump(mode="json") != payload.downloads.model_dump(mode="json"):
         raise ValueError("ranking user JSON links do not match report payload")
     if [row.model_dump(mode="json") for row in persisted_users.users] != [
@@ -4710,7 +4987,7 @@ def _validate_ranking_rebuild_evidence(
         "ranking_ablation_csv": artifacts.get("ranking_ablation_diagnostics_csv"),
         "ranking_sensitivity_csv": artifacts.get("ranking_weight_sensitivity_csv"),
     }
-    if is_v4:
+    if is_traced:
         expected_downloads.update(
             {
                 "field_lineage_catalog": artifacts.get("field_lineage_catalog"),
@@ -4864,7 +5141,7 @@ def _validate_trace_locator_record(
     locator: SourceRecordLocator,
     user_id: str,
     sample_records_by_user: Mapping[str, Mapping[str, object]],
-    source_records_by_user: Mapping[str, FieldSourceRecord],
+    source_records_by_user: Mapping[str, FieldSourceRecord | HistoricalFieldSourceRecordV4],
     offline_records_by_user: Mapping[str, Mapping[str, object]],
     candidate_records_by_key: Mapping[tuple[str, int], Mapping[str, object]],
     decision_records_by_user: Mapping[str, Mapping[str, object]],
@@ -4872,6 +5149,8 @@ def _validate_trace_locator_record(
     failure_records_by_user: Mapping[str, Mapping[str, object]],
     ablation_records_by_key: Mapping[tuple[str, int], Mapping[str, object]],
     sensitivity_records_by_key: Mapping[tuple[str, int], Mapping[str, object]],
+    diagnostics_schema: str,
+    diagnostics_summary_schema: str,
 ) -> None:
     if locator.artifact_id == "ranking_runtime_candidates":
         time_step = _as_int(locator.record_key.get("time_step"))
@@ -4904,13 +5183,13 @@ def _validate_trace_locator_record(
         return
     if locator.artifact_id == "ranking_diagnostics":
         if locator.record_key != {
-            "schema_version": "ranking-diagnostics-v1",
+            "schema_version": diagnostics_schema,
             "section": "historical_top20_diagnostic",
         }:
             raise ValueError(f"field trace locator has an invalid diagnostic key for {user_id}")
         return
     if locator.artifact_id == "ranking_diagnostics_summary":
-        if locator.record_key != {"schema_version": "ranking-diagnostics-summary-v1"}:
+        if locator.record_key != {"schema_version": diagnostics_summary_schema}:
             raise ValueError(f"field trace locator has an invalid diagnostic summary key for {user_id}")
         return
     if locator.record_key != {"user_id": user_id}:
@@ -5015,8 +5294,8 @@ def _variant_time_record_index(
 
 
 def _user_trace_payload_value(
-    payload: FinalResearchRankingReportPayload,
-    user: RankingUserReportRow,
+    payload: FinalResearchRankingReportPayload | FinalResearchRankingReportPayloadV5,
+    user: RankingUserReportRow | RankingUserReportRowV5,
     field_name: str,
 ) -> object:
     user_values = user.model_dump(mode="json")
@@ -5181,7 +5460,7 @@ def _stage_text(run_path: Path, target_name: str, content: str) -> Path:
 
 def _publish_report_files(
     run_path: Path,
-    payload: FinalResearchReportPayload | FinalResearchRankingReportPayloadV3 | FinalResearchRankingReportPayload,
+    payload: FinalResearchReportPayload | FinalResearchRankingReportPayloadV3 | FinalResearchRankingReportPayload | FinalResearchRankingReportPayloadV5,
 ) -> Path:
     payload_path = run_path / FINAL_RESEARCH_REPORT_ARTIFACTS["final_research_report_payload"]
     report_path = run_path / FINAL_RESEARCH_REPORT_ARTIFACTS["final_research_report"]

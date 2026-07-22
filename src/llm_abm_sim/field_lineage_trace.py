@@ -10,7 +10,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from .prompt_field_summary import JINJIANG_PROMPT_V2_PROFILE_FIELDS
+from .prompt_field_summary import JINJIANG_PROMPT_V2_PROFILE_FIELDS, JINJIANG_PROMPT_V3_PROFILE_FIELDS
 from .research_explanations import FieldProvenance, FieldUsageStage, LineageEntry
 
 ValueStatus = Literal["present", "empty", "unavailable"]
@@ -451,7 +451,7 @@ class UserFieldTrace(BaseModel):
     omission_reason: OmissionReason = ""
 
 
-class FieldSourceRecord(BaseModel):
+class HistoricalFieldSourceRecordV4(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     user_id: str
@@ -462,8 +462,22 @@ class FieldSourceRecord(BaseModel):
     derived_proxy_inputs: dict[str, int | float] = Field(default_factory=dict)
 
     @model_validator(mode="after")
-    def _validate_evidence_coverage(self) -> FieldSourceRecord:
+    def _validate_evidence_coverage(self) -> HistoricalFieldSourceRecordV4:
         _validate_evidence_coverage("interest_tags", self.interest_tags, self.interest_tag_evidence)
+        _validate_evidence_coverage("historical_tags", self.historical_tags, self.historical_tag_evidence)
+        return self
+
+
+class FieldSourceRecord(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    user_id: str
+    historical_tags: list[str]
+    historical_tag_evidence: list[FieldEvidenceReference]
+    derived_proxy_inputs: dict[str, int | float] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def _validate_evidence_coverage(self) -> FieldSourceRecord:
         _validate_evidence_coverage("historical_tags", self.historical_tags, self.historical_tag_evidence)
         return self
 
@@ -502,7 +516,6 @@ class FieldLineageTraceBundle(BaseModel):
 class FieldLineageTraceSource:
     users: Sequence[Mapping[str, object]]
     historical_tags_by_user: Mapping[str, Sequence[str]]
-    interest_tag_evidence_by_user: Mapping[str, Sequence[Mapping[str, object]]]
     historical_tag_evidence_by_user: Mapping[str, Sequence[Mapping[str, object]]]
     exposed_user_ids: set[str]
     prompt_inclusion_by_user: Mapping[str, Mapping[str, PromptInclusionStatus]]
@@ -534,16 +547,12 @@ class FieldLineageTraceModule:
             if not user_id or user_id in seen_user_ids:
                 raise ValueError("field trace users require unique non-empty user_id values")
             seen_user_ids.add(user_id)
-            interest_tags = _string_list(user.get("interest_tags")) if "interest_tags" in user else None
             historical_tags = sorted({str(tag) for tag in source.historical_tags_by_user.get(user_id, ()) if str(tag)})
-            interest_evidence = _evidence(source.interest_tag_evidence_by_user.get(user_id, ()))
             historical_evidence = _evidence(source.historical_tag_evidence_by_user.get(user_id, ()))
             source_records.append(
                 FieldSourceRecord(
                     user_id=user_id,
-                    interest_tags=interest_tags or [],
                     historical_tags=historical_tags,
-                    interest_tag_evidence=interest_evidence,
                     historical_tag_evidence=historical_evidence,
                     derived_proxy_inputs=dict(source.derived_proxy_inputs_by_user.get(user_id, {})),
                 )
@@ -578,11 +587,6 @@ class FieldLineageTraceModule:
             }
             latent_source = user.get("latent_attributes")
             latent_attributes: Mapping[str, object] = latent_source if isinstance(latent_source, Mapping) else {}
-            interest_prompt_status, interest_omission = _interest_prompt_status(
-                user_id=user_id,
-                value_status=_value_status(interest_tags),
-                source=source,
-            )
             trace_index[user_id] = [
                 *(
                     UserFieldTrace(
@@ -599,18 +603,6 @@ class FieldLineageTraceModule:
                         omission_reason="field_not_in_prompt_allowlist",
                     )
                     for field_name in _DIRECT_PROFILE_FIELDS
-                ),
-                UserFieldTrace(
-                    user_id=user_id,
-                    field_name="interest_tags",
-                    value_status=_value_status(interest_tags),
-                    source_record_locator=locator,
-                    evidence=interest_evidence,
-                    actual_usage_stages=(
-                        ["LLM Prompt", "Report Only"] if interest_prompt_status == "included" else ["Report Only"]
-                    ),
-                    prompt_inclusion_status=interest_prompt_status,
-                    omission_reason=interest_omission,
                 ),
                 UserFieldTrace(
                     user_id=user_id,
@@ -832,8 +824,23 @@ def _historical_v4_field_lineage_definitions(
     return definitions
 
 
-# Preserve the existing writer name while historical readers bind to the versioned function.
-field_lineage_definitions = _historical_v4_field_lineage_definitions
+def _jinjiang_v5_field_lineage_definitions(
+    report_lineage: Sequence[LineageEntry] = (),
+) -> list[FieldLineageDefinition]:
+    definitions: list[FieldLineageDefinition] = []
+    for definition in _historical_v4_field_lineage_definitions(report_lineage):
+        if definition.field_name == "interest_tags":
+            continue
+        if definition.field_name == "historical_tags":
+            definition = definition.model_copy(
+                update={"limitations": ["没有真实曝光日志。", "不得回填为通用用户兴趣画像。"]}
+            )
+        definitions.append(definition)
+    return definitions
+
+
+# Fresh writers use v5; historical readers bind directly to the frozen v4 function.
+field_lineage_definitions = _jinjiang_v5_field_lineage_definitions
 
 
 def is_user_field_trace_definition(definition: FieldLineageDefinition) -> bool:
@@ -1004,7 +1011,7 @@ def _report_field_spec(field_name: str) -> _ReportFieldSpec:
             ("schema_version", "section"),
             ("schema_version", "historical_top20_diagnostic"),
             (
-                ("schema_version", "ranking-diagnostics-v1"),
+                ("schema_version", "ranking-diagnostics-v2"),
                 ("section", "historical_top20_diagnostic"),
             ),
         ),
@@ -1012,7 +1019,7 @@ def _report_field_spec(field_name: str) -> _ReportFieldSpec:
             "ranking_diagnostics_summary",
             ("schema_version",),
             ("schema_version", "summary"),
-            (("schema_version", "ranking-diagnostics-summary-v1"),),
+            (("schema_version", "ranking-diagnostics-summary-v2"),),
         ),
     }
     if field_name in diagnostic_specs:
@@ -1204,7 +1211,7 @@ def _synthetic_trace(
     evidence = field_trace_evidence(definition, latent_attributes, locator)
     declared_stages: list[FieldUsageStage] = (
         ["LLM Prompt", "Report Only"]
-        if field_name in JINJIANG_PROMPT_V2_PROFILE_FIELDS
+        if field_name in JINJIANG_PROMPT_V3_PROFILE_FIELDS
         else ["Report Only"]
     )
     actual_stages: list[FieldUsageStage] = [stage for stage in declared_stages if stage != "LLM Prompt"]
@@ -1254,20 +1261,6 @@ def _historical_scalar_trace(
     )
 
 
-def _interest_prompt_status(
-    *,
-    user_id: str,
-    value_status: ValueStatus,
-    source: FieldLineageTraceSource,
-) -> tuple[PromptInclusionStatus, OmissionReason]:
-    return _prompt_status(
-        user_id=user_id,
-        field_name="interest_tags",
-        value_status=value_status,
-        source=source,
-    )
-
-
 def _prompt_status(
     *,
     user_id: str,
@@ -1275,7 +1268,7 @@ def _prompt_status(
     value_status: ValueStatus,
     source: FieldLineageTraceSource,
 ) -> tuple[PromptInclusionStatus, OmissionReason]:
-    if field_name not in JINJIANG_PROMPT_V2_PROFILE_FIELDS:
+    if field_name not in JINJIANG_PROMPT_V3_PROFILE_FIELDS:
         return "not_allowlisted", "field_not_in_prompt_allowlist"
     if user_id not in source.exposed_user_ids:
         return "not_exposed", "user_not_exposed_to_target_video"

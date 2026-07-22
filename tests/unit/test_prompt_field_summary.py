@@ -60,9 +60,10 @@ def test_prompt_field_summary_outputs_clean_chinese_profile_summary() -> None:
 
     assert "说明：活跃度、全平台影响力、锦江酒店社群内的局部影响力为可观测代理指标" in summary
     assert "环保意识倾向、消费价值、入住酒店类型和入住目的为虚拟实验标签" in summary
-    assert "历史 hashtags 与文本主题派生的兴趣代理：锦江酒店、环保生活" in summary
-    assert "不代表真实心理画像" in summary
-    assert "真实 profile 兴趣标签" not in summary
+    assert profile.interest_tags == [" 锦江酒店 ", "", "环保生活", "锦江酒店", "x" * 80]
+    assert "历史 hashtags 与文本主题派生的兴趣代理" not in summary
+    assert "环保生活" not in summary
+    assert "interest_tags" not in summary
     assert "活跃度：中等偏高（0.65）" in summary
     assert "全平台影响力：高（0.81）" in summary
     assert "锦江酒店社群内的局部影响力：中等偏低（0.34）" in summary
@@ -93,14 +94,15 @@ def test_prompt_field_summary_omits_empty_optional_fields() -> None:
     assert summary == ("说明：活跃度、全平台影响力、锦江酒店社群内的局部影响力为可观测代理指标；活跃度：中等（0.50）")
 
 
-def test_profile_prompt_field_inclusion_uses_the_same_interest_tag_cleaning_path() -> None:
+def test_prompt_v3_inclusion_ignores_generic_interest_tags() -> None:
     included = profile_prompt_field_inclusion(
         UserProfile(user_id="included", interest_tags=[" 绿色旅行 ", "", "绿色旅行"])
     )
     omitted = profile_prompt_field_inclusion(UserProfile(user_id="omitted", interest_tags=[]))
 
-    assert included["interest_tags"] == "included"
-    assert omitted["interest_tags"] == "empty_omitted"
+    assert "interest_tags" not in included
+    assert included == omitted
+    assert included["activity_score"] == "included"
 
 
 def test_prompt_field_inclusion_is_captured_only_when_summary_is_built() -> None:
@@ -116,23 +118,25 @@ def test_prompt_field_inclusion_is_captured_only_when_summary_is_built() -> None
         assert capture.by_user == {}
         build_prompt_field_summary(decision_input)
 
-    assert capture.by_user["u1"]["interest_tags"] == "included"
+    assert "interest_tags" not in capture.by_user["u1"]
+    assert capture.by_user["u1"]["activity_score"] == "included"
 
 
-def test_prompt_field_summary_deduplicates_after_interest_tag_truncation() -> None:
-    summary = summarize_prompt_fields(
-        UserProfile(
-            user_id="u3",
-            interest_tags=[
-                "a" * 30,
-                "a" * 24 + "different suffix",
-                "绿色营销",
-            ],
-        )
+def test_prompt_v3_does_not_consume_generic_interest_tags() -> None:
+    profile = UserProfile(
+        user_id="u3",
+        interest_tags=[
+            "a" * 30,
+            "a" * 24 + "different suffix",
+            "绿色营销",
+        ],
     )
 
-    assert summary.count("a" * 24) == 1
-    assert "绿色营销" in summary
+    summary = summarize_prompt_fields(profile)
+
+    assert profile.interest_tags[-1] == "绿色营销"
+    assert "a" * 24 not in summary
+    assert "绿色营销" not in summary
 
 
 def test_build_prompt_field_summary_converts_decision_input_context_to_chinese_summaries() -> None:
@@ -165,14 +169,12 @@ def test_build_prompt_field_summary_converts_decision_input_context_to_chinese_s
         "post_value_summary": "未提供明确价值维度",
         "observed_profile_summary": (
             "说明：活跃度、全平台影响力、锦江酒店社群内的局部影响力为可观测代理指标；"
-            "活跃度：中等偏高（0.60）；历史 hashtags 与文本主题派生的兴趣代理："
-            "绿色旅行（仅表示可复算的历史行为主题，不代表真实心理画像）"
+            "活跃度：中等偏高（0.60）"
         ),
         "consumption_preference_summary": "",
         "individual_preference_summary": (
             "说明：活跃度、全平台影响力、锦江酒店社群内的局部影响力为可观测代理指标；"
-            "活跃度：中等偏高（0.60）；历史 hashtags 与文本主题派生的兴趣代理："
-            "绿色旅行（仅表示可复算的历史行为主题，不代表真实心理画像）"
+            "活跃度：中等偏高（0.60）"
         ),
         "peer_influence_summary": "邻居曝光：4；邻居互动：2；互动比例：0.50；有影响力的已互动邻居：1；可见点赞：3；可见评论：1；可见分享：0",
         "platform_context_summary": "平台热门话题：环保；平台氛围：活动上线；Feed 排序权重：1.00；痕迹可见度：1.00",

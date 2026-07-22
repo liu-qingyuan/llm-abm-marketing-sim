@@ -63,6 +63,22 @@ def validate_release(*, repo_root: Path, contract_path: Path, source_dir: Path) 
     if not isinstance(contract, dict):
         raise ReleaseValidationError("release contract must be a JSON object")
     _expect_equal(contract.get("schema_version"), "abm-report-release-contract-v1", "contract schema_version")
+    _expect_equal(
+        contract.get("payload_schema_version"),
+        "final-research-ranking-report-payload-v4",
+        "v1 payload_schema_version",
+    )
+    _expect_equal(
+        contract.get("manifest_version"),
+        "final-research-ranking-runtime-v2",
+        "v1 manifest_version",
+    )
+    _expect_equal(
+        contract.get("sampling_method"),
+        "seed_first_research_sample_v1",
+        "v1 sampling_method",
+    )
+    _expect_equal(contract.get("sampling_status"), "validation_run", "v1 sampling_status")
 
     raw_expected_source = contract.get("source_directory")
     if not isinstance(raw_expected_source, str):

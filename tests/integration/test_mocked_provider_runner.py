@@ -55,7 +55,7 @@ class AlwaysLikeAdapter(LLMDecisionAdapter):
         )
 
 
-class PromptV2SequencedClient:
+class PromptV3SequencedClient:
     def __init__(self) -> None:
         self.calls: list[tuple[list[dict[str, str]], str]] = []
         self.responses = [
@@ -114,24 +114,24 @@ def test_mocked_provider_run_writes_allowlisted_redacted_artifacts(tmp_path: Pat
     assert "provider-backed decision observed" in (output_dir / "report.html").read_text(encoding="utf-8")
 
 
-def test_jinjiang_prompt_v2_mocked_provider_runs_end_to_end(tmp_path: Path):
-    client = PromptV2SequencedClient()
+def test_jinjiang_prompt_v3_mocked_provider_runs_end_to_end(tmp_path: Path):
+    client = PromptV3SequencedClient()
     provider_config = ProviderLLMConfig(
         enabled=True,
         provider="mocked_openai_compatible",
-        model="mock-jinjiang-prompt-v2",
+        model="mock-jinjiang-prompt-v3",
         base_url="https://user:pass@example.test/v1?api_key=secret",
         require_live_env=True,
     )
     adapter = OpenAICompatibleDecisionAdapter(provider_config, client=client)
-    output_dir = tmp_path / "runs" / "jinjiang-prompt-v2-mock-20260708T000000Z"
+    output_dir = tmp_path / "runs" / "jinjiang-prompt-v3-mock-20260708T000000Z"
 
-    runner = ExperimentRunner(_jinjiang_prompt_v2_config(provider_config), decision_adapter=adapter)
+    runner = ExperimentRunner(_jinjiang_prompt_v3_config(provider_config), decision_adapter=adapter)
     output_path = runner.run_and_write(output_dir)
 
     assert output_path == output_dir
     assert len(client.calls) == 4
-    assert {model for _, model in client.calls} == {"mock-jinjiang-prompt-v2"}
+    assert {model for _, model in client.calls} == {"mock-jinjiang-prompt-v3"}
 
     prompt_text = "\n".join(message["content"] for messages, _ in client.calls for message in messages)
     assert "锦江酒店集团使用秸秆制品、推进环保举措的绿色营销内容" in prompt_text
@@ -155,6 +155,9 @@ def test_jinjiang_prompt_v2_mocked_provider_runs_end_to_end(tmp_path: Path):
         "age_26_35",
         "bachelor",
         "income_8001_15000",
+        "interest_tags",
+        "可持续消费",
+        "绿色旅行",
         "raw_prompt",
         "api_key",
     ):
@@ -197,10 +200,10 @@ def test_jinjiang_prompt_v2_mocked_provider_runs_end_to_end(tmp_path: Path):
     evidence = metrics["provider_evidence"]
     assert evidence["provider_decision_count"] == 4
     assert evidence["first_provider_decision"]["action"] == "comment"
-    assert evidence["provider_metadata"]["prompt_version"] == "jinjiang-green-marketing-prompt-v2"
+    assert evidence["provider_metadata"]["prompt_version"] == "jinjiang-green-marketing-prompt-v3"
     assert evidence["provider_metadata"]["base_url"] == "https://example.test/v1"
     assert output_dir.parent.name == "runs"
-    assert output_dir.name.startswith("jinjiang-prompt-v2-mock-")
+    assert output_dir.name.startswith("jinjiang-prompt-v3-mock-")
 
     report_payload = json.loads((output_dir / "report_payload.json").read_text())
     report_decision_actions = {
@@ -235,9 +238,9 @@ def test_jinjiang_prompt_v2_mocked_provider_runs_end_to_end(tmp_path: Path):
     assert "provider-backed decision observed" in (output_dir / "report.html").read_text(encoding="utf-8")
 
 
-def _jinjiang_prompt_v2_config(provider_config: ProviderLLMConfig) -> SimulationInput:
+def _jinjiang_prompt_v3_config(provider_config: ProviderLLMConfig) -> SimulationInput:
     return SimulationInput(
-        run_id="jinjiang-prompt-v2-mock-test",
+        run_id="jinjiang-prompt-v3-mock-test",
         random_seed=20260708,
         simulation=SimulationConfig(
             horizon=1,
@@ -247,7 +250,7 @@ def _jinjiang_prompt_v2_config(provider_config: ProviderLLMConfig) -> Simulation
             hot_topic_exposure_boost=0.0,
             share_exposure_boost=0.0,
             time_step_label="day",
-            observation_window="mocked Prompt v2 smoke",
+            observation_window="mocked Prompt v3 smoke",
         ),
         platform_context=PlatformContext(
             time_label="绿色营销上线周",

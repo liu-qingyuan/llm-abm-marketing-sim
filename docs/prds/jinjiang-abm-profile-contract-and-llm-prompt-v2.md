@@ -21,6 +21,17 @@ Mocked provider validation: [`../references/jinjiang-prompt-v2-mock-validation-2
 
 当前验收不是 36,400 用户全量 live LLM 批量运行，而是 prompt contract + mocked provider + 端到端路径验证。#20 人口画像消融实验是后续可选项，不属于本主 Prompt v2 实施链路。
 
+## v5 合同撤销说明（2026-07-23）
+
+本 PRD 保留 #19 与 Prompt v2 的历史设计 lineage，不再代表当前锦江 Final Research 用户与 Prompt 合同。GitHub #72/#75 已根据权威 processed dataset 覆盖审计撤销 #19、#63、#66 延续的锦江 `interest_tags` 承诺：
+
+- 当前 ranking v5 `ResearchUser`、sample/user exports、report payload、HTML、Field Lineage Catalog、User Field Trace 和 source records 均不包含该字段；
+- 当前 `jinjiang-green-marketing-prompt-v3` 不渲染该字段，也不生成 Prompt inclusion evidence；
+- `historical_tags` 保持独立 Historical Behavioral Evidence，只用于 `historical_tag_affinity` Ranking，不进入 Prompt，也不回填为兴趣画像；
+- 通用 `UserProfile.interest_tags` 继续服务非锦江示例和 rule-based 仿真。
+
+权威数据聚合证据见 [`../references/jinjiang-interest-tags-contract-audit-20260723.md`](../references/jinjiang-interest-tags-contract-audit-20260723.md)。下文关于 Prompt v2 纳入兴趣代理的内容只用于解释历史合同，不能用于生成新的 v5 artifact。
+
 ## 问题陈述
 
 当前锦江酒店 Douyin ABM 已经有两类用户信息：一类是真实观测数据，例如活跃度和影响力代理指标；另一类是基于研究先验生成的合成实验标签，例如消费价值偏好、环保意识倾向和最近入住场景标签。

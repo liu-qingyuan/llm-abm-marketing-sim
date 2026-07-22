@@ -10,6 +10,19 @@ Prompt v2 mocked 验收：[`../references/jinjiang-prompt-v2-mock-validation-202
 Final dataset 验收：[`../references/jinjiang-final-dataset-latent-v1-validation-20260705.md`](../references/jinjiang-final-dataset-latent-v1-validation-20260705.md)
 Legacy source: `docs/04-开发验证/08-jinjiang-user-data-structure-diagrams.md`（已删除；迁移索引见 [`../04-开发验证/README.md`](../04-开发验证/README.md)）
 
+## v5 当前合同（2026-07-23）
+
+GitHub #72/#75 撤销了 #19、#63、#66 中把 `interest_tags` 作为锦江真实观测画像、历史兴趣代理和 Prompt 输入的现行承诺。权威 processed variant 的 `users.csv` 无该列，`profiles.csv` 与 `abm_user_profiles.csv` 的语义非空覆盖均为 0/36,400；聚合审计见 [`../references/jinjiang-interest-tags-contract-audit-20260723.md`](../references/jinjiang-interest-tags-contract-audit-20260723.md)。
+
+当前边界如下：
+
+- ranking v5 的 `ResearchUser`、sample/user exports、Prompt v3、report、Field Lineage Catalog、User Field Trace 与 source records 不包含该字段；
+- runtime projection 创建通用 `UserProfile` 时让其 `interest_tags` 保持默认空列表，不从 `historical_tags`、nickname、bio、signature 或其他字段回填；
+- `historical_tags` 继续表示 Historical Set 互动视频标签，只用于 `historical_tag_affinity` Ranking，不进入 Prompt；
+- 通用 `UserProfile.interest_tags` 和非锦江 rule-based 路径保持兼容。
+
+下文 Prompt v2 视角保留为历史架构 lineage；新运行使用 `jinjiang-green-marketing-prompt-v3`。
+
 ## 核心理解
 
 锦江用户数据的目标模型是：

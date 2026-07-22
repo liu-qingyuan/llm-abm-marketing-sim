@@ -3,11 +3,11 @@ from __future__ import annotations
 from .decision import DecisionInput
 from .prompt_field_summary import build_prompt_field_summary
 
-PROMPT_VERSION = "jinjiang-green-marketing-prompt-v2"
+PROMPT_VERSION = "jinjiang-green-marketing-prompt-v3"
 
 
 def build_engagement_prompt(decision_input: DecisionInput) -> list[dict[str, str]]:
-    """Build the Jinjiang Prompt v2 provider prompt with schema-safe context."""
+    """Build the Jinjiang Prompt v3 provider prompt with schema-safe context."""
 
     summaries = build_prompt_field_summary(decision_input)
     preference_summary = summaries["consumption_preference_summary"] or "未提供可用消费偏好摘要"

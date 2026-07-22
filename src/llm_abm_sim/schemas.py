@@ -279,7 +279,7 @@ class ProviderLLMConfig(BaseModel):
     max_retries: int = Field(default=0, ge=0, le=5)
     retry_backoff_seconds: float = Field(default=1.0, ge=0.0)
     fail_closed_action: FailClosedAction = FailClosedAction.RAISE
-    prompt_version: str = "jinjiang-green-marketing-prompt-v2"
+    prompt_version: str = "jinjiang-green-marketing-prompt-v3"
 
     def safe_metadata(self) -> dict[str, object]:
         """Return serialization-safe provider settings with no credentials."""

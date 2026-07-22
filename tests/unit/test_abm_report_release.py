@@ -132,6 +132,29 @@ def test_release_validator_accepts_only_matching_persisted_evidence(tmp_path: Pa
     assert "seed_first_research_sample_v1" in completed.stdout
 
 
+def test_release_v1_rejects_v5_validation_candidate(tmp_path: Path):
+    source, contract_path = _make_release(tmp_path)
+    payload_path = source / "final_research_report_payload.json"
+    payload = json.loads(payload_path.read_text(encoding="utf-8"))
+    payload["schema_version"] = "final-research-ranking-report-payload-v5"
+    _write_json(payload_path, payload)
+    manifest_path = source / "artifact_manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["manifest_version"] = "final-research-ranking-runtime-v3"
+    _write_json(manifest_path, manifest)
+    contract = json.loads(contract_path.read_text(encoding="utf-8"))
+    contract["payload_schema_version"] = "final-research-ranking-report-payload-v5"
+    contract["manifest_version"] = "final-research-ranking-runtime-v3"
+    contract["artifact_sha256"]["final_research_report_payload.json"] = _sha256(payload_path)
+    contract["artifact_sha256"]["artifact_manifest.json"] = _sha256(manifest_path)
+    _write_json(contract_path, contract)
+
+    completed = _validate(tmp_path, source, contract_path)
+
+    assert completed.returncode == 1
+    assert "v1 payload_schema_version" in completed.stderr
+
+
 def test_release_validator_rejects_tampered_evidence(tmp_path: Path):
     source, contract = _make_release(tmp_path)
     (source / "report.html").write_text("tampered", encoding="utf-8")

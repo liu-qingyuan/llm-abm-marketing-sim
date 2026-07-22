@@ -11,11 +11,19 @@ from typing import Any, cast
 import pytest
 from pydantic import ValidationError
 
-from llm_abm_sim import FinalResearchConfig, FinalResearchModel, FinalResearchRunner, rebuild_final_research_report
+from llm_abm_sim import (
+    FinalResearchConfig,
+    FinalResearchModel,
+    FinalResearchRunner,
+    ResearchUser,
+    rebuild_final_research_report,
+)
 from llm_abm_sim.decision import DecisionInput, EngageDecision, LLMDecisionAdapter, ProviderDecisionError
+from llm_abm_sim.field_lineage_trace import FieldLineageDefinition, UserFieldTrace, field_lineage_coverage_audit
 from llm_abm_sim.final_research_report import (
     FinalResearchRankingReportPayload,
     FinalResearchRankingReportPayloadV3,
+    FinalResearchRankingReportPayloadV5,
     FinalResearchReportWriter,
 )
 from llm_abm_sim.prompting import build_engagement_prompt
@@ -105,6 +113,17 @@ def _latent_row(user_number: int) -> dict[str, object]:
         "latent_education": "bachelor",
         "latent_monthly_income": "income_8001_15000",
     }
+
+
+def test_jinjiang_research_user_v5_rejects_interest_tags() -> None:
+    with pytest.raises(ValidationError, match="interest_tags"):
+        ResearchUser.model_validate(
+            {
+                "user_id": "u1",
+                "interest_tags": ["legacy"],
+                "latent_attributes": _latent_row(1),
+            }
+        )
 
 
 def _make_processed_fixture(tmp_path: Path, *, user_count: int = 6, dense_target_network: bool = False) -> Path:
@@ -914,7 +933,7 @@ def test_target_delivery_ranking_runtime_reranks_global_top20_after_seed_engagem
     second_output, second_adapter = run(tmp_path / "ranking-runtime-b")
 
     manifest = json.loads((first_output / "artifact_manifest.json").read_text(encoding="utf-8"))
-    assert manifest["manifest_version"] == "final-research-ranking-runtime-v2"
+    assert manifest["manifest_version"] == "final-research-ranking-runtime-v3"
     assert manifest["artifacts"] == {
         "config_snapshot": "config_snapshot.json",
         "final_research_report": "report.html",
@@ -1009,7 +1028,7 @@ def test_target_delivery_ranking_runtime_reranks_global_top20_after_seed_engagem
     assert all(call["peer_context"] == PeerContext() for call in first_adapter.calls)
     assert all(call["peer_context"] == PeerContext() for call in second_adapter.calls)
 
-    assert summary["runtime_version"] == "final-research-ranking-runtime-v2"
+    assert summary["runtime_version"] == "final-research-ranking-runtime-v3"
     assert summary["schedule_method"] == "global_stable_reranking_top20"
     assert summary["delivery_capacity"] == 20
     assert summary["ranking_formula"] == (
@@ -1019,7 +1038,7 @@ def test_target_delivery_ranking_runtime_reranks_global_top20_after_seed_engagem
     assert summary["maximum_target_exposures"] == 600
     assert "background_impressions" not in summary["counts"]
     assert summary["counts"]["decision_adapter_calls"] == len(first_adapter.calls)
-    assert ranking_diagnostics["schema_version"] == "ranking-diagnostics-v1"
+    assert ranking_diagnostics["schema_version"] == "ranking-diagnostics-v2"
     assert len(ranking_diagnostics["paired_ablation"]["batches"]) == len(steps) == 30
     assert ranking_diagnostics["paired_ablation"]["same_candidate_set_and_frozen_state"] is True
     assert ranking_diagnostics["paired_ablation"]["advances_user_state"] is False
@@ -1055,7 +1074,7 @@ def test_target_delivery_ranking_runtime_reranks_global_top20_after_seed_engagem
     )
     assert len(first_adapter.calls) == summary["counts"]["decision_adapter_calls"]
 
-    assert report_payload["schema_version"] == "final-research-ranking-report-payload-v4"
+    assert report_payload["schema_version"] == "final-research-ranking-report-payload-v5"
     assert report_payload["run"]["sampling_method"] == "seed_first_research_sample_v1"
     assert report_payload["run"]["sampling_status"] == "validation_run"
     assert report_payload["sample_comparison"]["final_sample_count"] == audit["final_sample"]["count"]
@@ -1222,6 +1241,78 @@ def test_target_delivery_ranking_runtime_reranks_global_top20_after_seed_engagem
         assert (first_output / relative_path).read_bytes() == (second_output / relative_path).read_bytes()
 
 
+def test_target_delivery_ranking_v5_excludes_interest_contract_and_is_validation_only(tmp_path: Path) -> None:
+    dataset_dir = _make_processed_fixture(tmp_path, user_count=6, dense_target_network=True)
+    user_rows = _read_csv(dataset_dir / "users.csv")
+    for row in user_rows:
+        row.pop("interest_tags")
+    user_rows[0]["nickname"] = "绿色旅行用户"
+    user_rows[0]["bio"] = "酒店环保内容"
+    user_rows[0]["signature"] = "锦江ESG"
+    _write_csv(dataset_dir / "users.csv", list(user_rows[0]), user_rows)
+    adapter = _TargetDeliveryAdapter()
+
+    output = FinalResearchRunner(
+        FinalResearchConfig(
+            dataset_dir=dataset_dir,
+            sample_size=6,
+            provider=ProviderLLMConfig(enabled=True, model="mock-model", require_live_env=False),
+        ),
+        adapter,
+    ).run_and_write(tmp_path / "ranking-v5-contract")
+
+    manifest = json.loads((output / "artifact_manifest.json").read_text(encoding="utf-8"))
+    summary = json.loads((output / "ranking_runtime_summary.json").read_text(encoding="utf-8"))
+    diagnostics = json.loads((output / "ranking_diagnostics.json").read_text(encoding="utf-8"))
+    diagnostics_summary = json.loads((output / "ranking_diagnostics_summary.json").read_text(encoding="utf-8"))
+    payload = json.loads((output / "final_research_report_payload.json").read_text(encoding="utf-8"))
+    users_document = json.loads((output / "final_research_users.json").read_text(encoding="utf-8"))
+    config_snapshot = json.loads((output / "config_snapshot.json").read_text(encoding="utf-8"))
+    expected_evidence_state = {
+        "schema_version": "ranking-v5-expand-evidence-v1",
+        "contract_stage": "validation_expand",
+        "target_aggregate_engagement_reference": {
+            "status": "pending",
+            "formal_research_evidence": False,
+        },
+        "decision_execution_evidence": {
+            "status": "pending",
+            "formal_research_evidence": False,
+        },
+        "production_deploy_eligible": False,
+    }
+
+    assert manifest["manifest_version"] == "final-research-ranking-runtime-v3"
+    assert summary["runtime_version"] == "final-research-ranking-runtime-v3"
+    assert diagnostics["schema_version"] == "ranking-diagnostics-v2"
+    assert diagnostics_summary["schema_version"] == "ranking-diagnostics-summary-v2"
+    assert payload["schema_version"] == "final-research-ranking-report-payload-v5"
+    assert users_document["schema_version"] == "final-research-ranking-users-v5"
+    assert config_snapshot["provider"]["prompt_version"] == "jinjiang-green-marketing-prompt-v3"
+    assert summary["provider_metadata"]["prompt_version"] == "jinjiang-green-marketing-prompt-v3"
+    assert manifest["sampling_status"] == summary["sampling_status"] == "validation_run"
+    assert payload["run"]["sampling_status"] == "validation_run"
+    assert manifest["evidence_state"] == summary["evidence_state"] == payload["evidence_state"]
+    assert payload["evidence_state"] == expected_evidence_state
+    assert "interest_tags" not in payload["prompt_contract"]["allowed_profile_fields"]
+    assert all(cast(UserProfile, call["profile"]).interest_tags == [] for call in adapter.calls)
+    assert any(user["historical_tags"] for user in payload["users"])
+
+    v5_user_artifacts = (
+        "sample_manifest.csv",
+        "sample_manifest.json",
+        "final_research_users.csv",
+        "final_research_users.json",
+        "final_research_report_payload.json",
+        "field_lineage_catalog.json",
+        "user_field_trace.json",
+        "field_source_records.json",
+        "report.html",
+    )
+    for artifact_name in v5_user_artifacts:
+        assert "interest_tags" not in (output / artifact_name).read_text(encoding="utf-8"), artifact_name
+
+
 def test_target_delivery_ranking_runtime_caps_delivery_and_marks_final_below_capacity(tmp_path: Path) -> None:
     dataset_dir = _make_processed_fixture(tmp_path, user_count=1010)
     provider_config = ProviderLLMConfig(enabled=True, model="mock-model", require_live_env=False)
@@ -1272,7 +1363,8 @@ def test_target_delivery_ranking_runtime_caps_delivery_and_marks_final_below_cap
     below_traces = {
         trace["field_name"]: trace for trace in report_payload["user_field_trace_index"][below_user_id]
     }
-    assert below_traces["interest_tags"]["prompt_inclusion_status"] == "not_exposed"
+    assert "interest_tags" not in below_traces
+    assert below_traces["historical_tags"]["prompt_inclusion_status"] == "not_allowlisted"
     assert below_traces["result_status"]["source_record_locator"]["artifact_id"] == "ranking_runtime_outcomes"
     assert below_traces["action"]["evidence"][0]["evidence_kind"] == "not_exposed_no_action"
     assert below_traces["action"]["source_record_locator"]["artifact_id"] == "ranking_runtime_outcomes"
@@ -1289,7 +1381,7 @@ def test_target_delivery_ranking_runtime_caps_delivery_and_marks_final_below_cap
         assert "provider_status=not_called" in trace["evidence"][0]["matched_values"]
 
 
-def test_target_delivery_ranking_v4_persists_interest_and_historical_field_traces(tmp_path: Path) -> None:
+def test_target_delivery_ranking_v5_persists_historical_field_traces_without_interest_contract(tmp_path: Path) -> None:
     dataset_dir = _make_processed_fixture(tmp_path, user_count=6, dense_target_network=True)
     user_rows = _read_csv(dataset_dir / "users.csv")
     user_rows[0]["interest_tags"] = json.dumps(["锦江ESG"], ensure_ascii=False)
@@ -1304,7 +1396,7 @@ def test_target_delivery_ranking_v4_persists_interest_and_historical_field_trace
             provider=provider_config,
         ),
         _TargetDeliveryAdapter(),
-    ).run_and_write(tmp_path / "ranking-v4-field-trace")
+    ).run_and_write(tmp_path / "ranking-v5-field-trace")
 
     manifest = json.loads((output / "artifact_manifest.json").read_text(encoding="utf-8"))
     payload = json.loads((output / "final_research_report_payload.json").read_text(encoding="utf-8"))
@@ -1312,7 +1404,7 @@ def test_target_delivery_ranking_v4_persists_interest_and_historical_field_trace
     trace_document = json.loads((output / manifest["artifacts"]["user_field_trace"]).read_text(encoding="utf-8"))
     source_document = json.loads((output / manifest["artifacts"]["field_source_records"]).read_text(encoding="utf-8"))
 
-    assert payload["schema_version"] == "final-research-ranking-report-payload-v4"
+    assert payload["schema_version"] == "final-research-ranking-report-payload-v5"
     assert catalog_document["schema_version"] == "field-lineage-catalog-v1"
     assert trace_document["schema_version"] == "user-field-trace-v1"
     assert source_document["schema_version"] == "field-source-records-v1"
@@ -1326,6 +1418,7 @@ def test_target_delivery_ranking_v4_persists_interest_and_historical_field_trace
         if "user_id" in definition["record_key_fields"] or field_name.startswith("ranking_diagnostics.")
     }
     assert set(catalog_by_field) == expected_catalog_fields
+    assert "interest_tags" not in expected_catalog_fields
     assert {entry["provenance"] for entry in payload["field_lineage_catalog"]} == {
         "Direct Observed Profile Field",
         "Historical Behavioral Evidence",
@@ -1346,20 +1439,7 @@ def test_target_delivery_ranking_v4_persists_interest_and_historical_field_trace
     assert sum(coverage_audit["provenance_field_counts"].values()) == len(expected_catalog_fields)
 
     u1_traces = {trace["field_name"]: trace for trace in payload["user_field_trace_index"]["u1"]}
-    assert u1_traces["interest_tags"]["value_status"] == "present"
-    assert u1_traces["interest_tags"]["prompt_inclusion_status"] == "included"
-    assert u1_traces["interest_tags"]["actual_usage_stages"] == ["LLM Prompt", "Report Only"]
-    assert u1_traces["interest_tags"]["evidence"] == [
-        {
-            "evidence_kind": "historical_video_hashtags",
-            "record_key": {"video_id": "history-jinjiang"},
-            "source_fields": ["hashtags"],
-            "matched_values": ["锦江ESG"],
-        }
-    ]
-    locator = u1_traces["interest_tags"]["source_record_locator"]
-    assert manifest["artifacts"][locator["artifact_id"]] == locator["relative_path"]
-    assert locator["record_key"] == {"user_id": "u1"}
+    assert "interest_tags" not in u1_traces
     assert u1_traces["nickname"]["source_record_locator"]["artifact_id"] == "sample_manifest_json"
     assert u1_traces["activity_score"]["source_record_locator"]["artifact_id"] == "sample_manifest_json"
     assert u1_traces["base_network_relevance"]["source_record_locator"]["artifact_id"] == "field_source_records"
@@ -1403,21 +1483,20 @@ def test_target_delivery_ranking_v4_persists_interest_and_historical_field_trace
     assert u1_traces["ranking_diagnostics.historical_top20_diagnostic"]["source_record_locator"][
         "record_key"
     ] == {
-        "schema_version": "ranking-diagnostics-v1",
+        "schema_version": "ranking-diagnostics-v2",
         "section": "historical_top20_diagnostic",
     }
     assert u1_traces["ranking_diagnostics.summary"]["source_record_locator"]["record_key"] == {
-        "schema_version": "ranking-diagnostics-summary-v1"
+        "schema_version": "ranking-diagnostics-summary-v2"
     }
 
     u2_traces = {trace["field_name"]: trace for trace in payload["user_field_trace_index"]["u2"]}
-    assert u2_traces["interest_tags"]["value_status"] == "empty"
-    assert u2_traces["interest_tags"]["prompt_inclusion_status"] == "empty_omitted"
+    assert "interest_tags" not in u2_traces
     assert u2_traces["historical_tags"]["value_status"] == "present"
     assert u2_traces["historical_tags"]["prompt_inclusion_status"] == "not_allowlisted"
     assert u2_traces["action"]["evidence"][0]["evidence_kind"] == "no_propagation_action"
     source_records = {record["user_id"]: record for record in source_document["records"]}
-    assert source_records["u2"]["interest_tags"] == []
+    assert "interest_tags" not in source_records["u2"]
     assert source_records["u2"]["historical_tags"] == ["锦江ESG"]
 
     assert payload["downloads"]["field_lineage_catalog"] == manifest["artifacts"]["field_lineage_catalog"]
@@ -1430,12 +1509,13 @@ def test_target_delivery_ranking_v4_persists_interest_and_historical_field_trace
             manifest["artifacts"]["field_source_records"],
         )
     )
+    assert "interest_tags" not in persisted_text
     assert "raw_prompt" not in persisted_text
     assert "raw_provider_response" not in persisted_text
     assert "sk-secret" not in persisted_text
 
 
-def test_target_delivery_ranking_runtime_persists_live_status_after_adapter_call(tmp_path: Path) -> None:
+def test_target_delivery_ranking_v5_remains_validation_when_adapter_sets_live_flag(tmp_path: Path) -> None:
     dataset_dir = _make_target_delivery_fixture(tmp_path)
     provider_config = ProviderLLMConfig(enabled=True, model="mock-model", require_live_env=False)
     adapter = _TargetDeliveryAdapter(mark_live_api_triggered=True)
@@ -1457,10 +1537,11 @@ def test_target_delivery_ranking_runtime_persists_live_status_after_adapter_call
     report_payload = json.loads((run_dir / "final_research_report_payload.json").read_text(encoding="utf-8"))
 
     assert adapter.live_api_triggered is True
-    assert all(document["sampling_status"] == "persisted_seed_first_formal_run" for document in documents)
-    assert report_payload["run"]["sampling_status"] == "persisted_seed_first_formal_run"
+    assert all(document["sampling_status"] == "validation_run" for document in documents)
+    assert report_payload["run"]["sampling_status"] == "validation_run"
     assert documents[3]["live_api_triggered"] is True
-    assert "Persisted Seed-First Formal Run" in (run_dir / "report.html").read_text(encoding="utf-8")
+    assert report_payload["evidence_state"]["production_deploy_eligible"] is False
+    assert "Persisted Seed-First Formal Run" not in (run_dir / "report.html").read_text(encoding="utf-8")
     assert rebuild_final_research_report(run_dir) == run_dir / "report.html"
 
 
@@ -1587,9 +1668,9 @@ def test_target_delivery_ranking_report_rebuild_is_deterministic(tmp_path: Path)
     calls_before_rebuild = len(adapter.calls)
     report_path = run_dir / "report.html"
     payload_path = run_dir / "final_research_report_payload.json"
-    payload = FinalResearchRankingReportPayload.model_validate_json(payload_path.read_text(encoding="utf-8"))
+    payload = FinalResearchRankingReportPayloadV5.model_validate_json(payload_path.read_text(encoding="utf-8"))
     users_document = json.loads((run_dir / "final_research_users.json").read_text(encoding="utf-8"))
-    assert users_document["schema_version"] == "final-research-ranking-users-v4"
+    assert users_document["schema_version"] == "final-research-ranking-users-v5"
     direct_report = FinalResearchReportWriter.render_payload(payload).encode()
     assert report_path.read_bytes() == direct_report
     preserved_artifacts = {
@@ -1610,10 +1691,184 @@ def test_target_delivery_ranking_report_rebuild_is_deterministic(tmp_path: Path)
     } == preserved_artifacts
 
 
-def _convert_seed_first_v4_run_to_historical_v3(run_dir: Path) -> dict[str, Any]:
+def _convert_seed_first_v5_run_to_historical_v4(run_dir: Path) -> dict[str, Any]:
+    payload_path = run_dir / "final_research_report_payload.json"
+    payload = json.loads(payload_path.read_text(encoding="utf-8"))
+    payload["schema_version"] = "final-research-ranking-report-payload-v4"
+    payload.pop("evidence_state")
+    payload["field_lineage"].append(
+        {
+            "field_name": "interest_tags",
+            "provenance": "Historical Behavioral Evidence",
+            "usage_stages": ["LLM Prompt", "Report Only"],
+        }
+    )
+    payload["prompt_contract"]["allowed_profile_fields"].insert(0, "interest_tags")
+    payload["ranking_diagnostics"]["schema_version"] = "ranking-diagnostics-v1"
+    payload["ranking_diagnostics"]["summary"]["schema_version"] = "ranking-diagnostics-summary-v1"
+    for user in payload["users"]:
+        user["interest_tags"] = []
+
+    interest_definition = {
+        "field_name": "interest_tags",
+        "display_name_zh": "兴趣标签",
+        "meaning": "processed variant 从历史 hashtags 与文本主题证据整理的用户兴趣主题。",
+        "provenance": "Historical Behavioral Evidence",
+        "source_artifact_kind": "allowlisted processed historical topic evidence snapshot",
+        "record_key_fields": ["user_id"],
+        "source_fields": ["historical_video_hashtags", "historical_text_topic_terms"],
+        "transformation_method": "historical_topic_tags_stable_unique_v1",
+        "transformation_description": "提取历史视频 hashtags 与相关文本主题词，清理空值、去重并稳定排序。",
+        "declared_usage_stages": ["LLM Prompt", "Report Only"],
+        "value_range": "去重后的字符串列表，可为空。",
+        "interpretation": "表示可复算的历史主题代理，不是直接观测 profile 字段。",
+        "limitations": [
+            "仅表示可复算的历史行为主题，不代表真实心理画像。",
+            "空列表不代表用户没有兴趣。",
+            "不得从 historical_tags 静默回填。",
+        ],
+    }
+    catalog = payload["field_lineage_catalog"]
+    historical_index = next(index for index, definition in enumerate(catalog) if definition["field_name"] == "historical_tags")
+    catalog[historical_index]["limitations"] = ["没有真实曝光日志。", "不得回填到 interest_tags。"]
+    catalog.insert(historical_index + 1, interest_definition)
+
+    for user in payload["users"]:
+        user_id = user["user_id"]
+        traces = payload["user_field_trace_index"][user_id]
+        for trace in traces:
+            locator = trace["source_record_locator"]
+            if trace["field_name"] == "ranking_diagnostics.historical_top20_diagnostic":
+                locator["record_key"]["schema_version"] = "ranking-diagnostics-v1"
+            if trace["field_name"] == "ranking_diagnostics.summary":
+                locator["record_key"]["schema_version"] = "ranking-diagnostics-summary-v1"
+        exposed = user["result_status"] != "below_delivery_capacity"
+        traces.append(
+            {
+                "user_id": user_id,
+                "field_name": "interest_tags",
+                "value_status": "empty",
+                "source_record_locator": {
+                    "artifact_id": "field_source_records",
+                    "relative_path": "field_source_records.json",
+                    "record_key": {"user_id": user_id},
+                },
+                "evidence": [],
+                "actual_usage_stages": ["Report Only"],
+                "prompt_inclusion_status": "empty_omitted" if exposed else "not_exposed",
+                "omission_reason": "empty_value_omitted_from_prompt" if exposed else "user_not_exposed_to_target_video",
+            }
+        )
+
+    catalog_models = [FieldLineageDefinition.model_validate(definition) for definition in catalog]
+    trace_models = {
+        user_id: [UserFieldTrace.model_validate(trace) for trace in traces]
+        for user_id, traces in payload["user_field_trace_index"].items()
+    }
+    catalog_document = {
+        "schema_version": "field-lineage-catalog-v1",
+        "definitions": catalog,
+        "coverage_audit": field_lineage_coverage_audit(catalog_models, trace_models),
+    }
+    (run_dir / "field_lineage_catalog.json").write_text(
+        json.dumps(catalog_document, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
+    (run_dir / "user_field_trace.json").write_text(
+        json.dumps({"schema_version": "user-field-trace-v1", "users": payload["user_field_trace_index"]}, ensure_ascii=False)
+        + "\n",
+        encoding="utf-8",
+    )
+    source_path = run_dir / "field_source_records.json"
+    source_document = json.loads(source_path.read_text(encoding="utf-8"))
+    for record in source_document["records"]:
+        record["interest_tags"] = []
+        record["interest_tag_evidence"] = []
+    source_path.write_text(json.dumps(source_document, ensure_ascii=False) + "\n", encoding="utf-8")
+
+    sample_json_path = run_dir / "sample_manifest.json"
+    sample_records = json.loads(sample_json_path.read_text(encoding="utf-8"))
+    for record in sample_records:
+        record["interest_tags"] = []
+    sample_json_path.write_text(json.dumps(sample_records, ensure_ascii=False) + "\n", encoding="utf-8")
+    for csv_name in ("sample_manifest.csv", "final_research_users.csv"):
+        csv_path = run_dir / csv_name
+        rows = _read_csv(csv_path)
+        for row in rows:
+            row["interest_tags"] = "[]"
+        _write_csv(csv_path, list(rows[0]), rows)
+
+    users_path = run_dir / "final_research_users.json"
+    users_document = json.loads(users_path.read_text(encoding="utf-8"))
+    users_document["schema_version"] = "final-research-ranking-users-v4"
+    users_document["users"] = payload["users"]
+    users_path.write_text(json.dumps(users_document, ensure_ascii=False) + "\n", encoding="utf-8")
+    payload_path.write_text(json.dumps(payload, ensure_ascii=False) + "\n", encoding="utf-8")
+
+    manifest_path = run_dir / "artifact_manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["manifest_version"] = "final-research-ranking-runtime-v2"
+    manifest.pop("evidence_state")
+    manifest_path.write_text(json.dumps(manifest, ensure_ascii=False) + "\n", encoding="utf-8")
+
+    config_path = run_dir / "config_snapshot.json"
+    config = json.loads(config_path.read_text(encoding="utf-8"))
+    config["provider"]["prompt_version"] = "jinjiang-green-marketing-prompt-v2"
+    config_path.write_text(json.dumps(config, ensure_ascii=False) + "\n", encoding="utf-8")
+    summary_path = run_dir / "ranking_runtime_summary.json"
+    summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    summary["runtime_version"] = "final-research-ranking-runtime-v2"
+    summary["provider_metadata"]["prompt_version"] = "jinjiang-green-marketing-prompt-v2"
+    summary.pop("evidence_state")
+    summary_path.write_text(json.dumps(summary, ensure_ascii=False) + "\n", encoding="utf-8")
+    diagnostics_path = run_dir / "ranking_diagnostics.json"
+    diagnostics = json.loads(diagnostics_path.read_text(encoding="utf-8"))
+    diagnostics["schema_version"] = "ranking-diagnostics-v1"
+    diagnostics["summary"]["schema_version"] = "ranking-diagnostics-summary-v1"
+    diagnostics_path.write_text(json.dumps(diagnostics, ensure_ascii=False) + "\n", encoding="utf-8")
+    diagnostics_summary_path = run_dir / "ranking_diagnostics_summary.json"
+    diagnostics_summary = json.loads(diagnostics_summary_path.read_text(encoding="utf-8"))
+    diagnostics_summary["schema_version"] = "ranking-diagnostics-summary-v1"
+    diagnostics_summary_path.write_text(json.dumps(diagnostics_summary, ensure_ascii=False) + "\n", encoding="utf-8")
+    return manifest
+
+
+def test_seed_first_v4_rebuild_preserves_historical_interest_contract(tmp_path: Path) -> None:
+    dataset_dir = _make_target_delivery_fixture(tmp_path)
+    run_dir = FinalResearchRunner(
+        FinalResearchConfig(
+            dataset_dir=dataset_dir,
+            sample_size=70,
+            provider=ProviderLLMConfig(enabled=True, model="mock-model", require_live_env=False),
+        ),
+        _TargetDeliveryAdapter(),
+    ).run_and_write(tmp_path / "ranking-historical-v4")
+    _convert_seed_first_v5_run_to_historical_v4(run_dir)
+    payload_path = run_dir / "final_research_report_payload.json"
+
+    assert rebuild_final_research_report(run_dir) == run_dir / "report.html"
+    rebuilt = FinalResearchRankingReportPayload.model_validate_json(payload_path.read_text(encoding="utf-8"))
+    assert rebuilt.schema_version == "final-research-ranking-report-payload-v4"
+    assert all(user.interest_tags == [] for user in rebuilt.users)
+    assert "interest_tags" in {definition.field_name for definition in rebuilt.field_lineage_catalog}
+    assert "interest_tags" in (run_dir / "report.html").read_text(encoding="utf-8")
+
+
+def _convert_seed_first_v5_run_to_historical_v3(run_dir: Path) -> dict[str, Any]:
     payload_path = run_dir / "final_research_report_payload.json"
     payload_document = json.loads(payload_path.read_text(encoding="utf-8"))
     payload_document["schema_version"] = "final-research-ranking-report-payload-v3"
+    payload_document.pop("evidence_state")
+    payload_document["field_lineage"].append(
+        {
+            "field_name": "interest_tags",
+            "provenance": "Historical Behavioral Evidence",
+            "usage_stages": ["LLM Prompt", "Report Only"],
+        }
+    )
+    payload_document["ranking_diagnostics"]["schema_version"] = "ranking-diagnostics-v1"
+    payload_document["ranking_diagnostics"]["summary"]["schema_version"] = "ranking-diagnostics-summary-v1"
+    payload_document["prompt_contract"]["allowed_profile_fields"].append("interest_tags")
     payload_document["run"]["sampling_method"] = "network_augmented_research_sample"
     payload_document["run"]["sampling_status"] = "historical_network_augmented_run"
     payload_document.pop("sample_role_counts")
@@ -1629,6 +1884,7 @@ def _convert_seed_first_v4_run_to_historical_v3(run_dir: Path) -> dict[str, Any]
     scope_counts: dict[str, int] = {}
     seed_user_ids: list[str] = []
     for user in users:
+        user["interest_tags"] = []
         user["in_base_sample"] = user["user_id"] != cohort_user_id
         user["is_network_cohort"] = user["user_id"] == cohort_user_id
         user["sample_role"] = (
@@ -1655,6 +1911,8 @@ def _convert_seed_first_v4_run_to_historical_v3(run_dir: Path) -> dict[str, Any]
 
     manifest_path = run_dir / "artifact_manifest.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["manifest_version"] = "final-research-ranking-runtime-v2"
+    manifest.pop("evidence_state")
     seed_audit_path = run_dir / manifest["artifacts"].pop("seed_first_sample_audit")
     seed_audit_path.unlink()
     manifest["artifacts"]["network_augmented_sample_audit"] = "network_augmented_sample_audit.json"
@@ -1694,7 +1952,23 @@ def _convert_seed_first_v4_run_to_historical_v3(run_dir: Path) -> dict[str, Any]
         document = json.loads(document_path.read_text(encoding="utf-8"))
         document.pop("sampling_method", None)
         document.pop("sampling_status", None)
+        if file_name == "config_snapshot.json":
+            document["provider"]["prompt_version"] = "jinjiang-green-marketing-prompt-v2"
+        if file_name == "ranking_runtime_summary.json":
+            document["runtime_version"] = "final-research-ranking-runtime-v2"
+            document["provider_metadata"]["prompt_version"] = "jinjiang-green-marketing-prompt-v2"
+            document.pop("evidence_state")
         document_path.write_text(json.dumps(document, ensure_ascii=False) + "\n", encoding="utf-8")
+
+    diagnostics_path = run_dir / "ranking_diagnostics.json"
+    diagnostics = json.loads(diagnostics_path.read_text(encoding="utf-8"))
+    diagnostics["schema_version"] = "ranking-diagnostics-v1"
+    diagnostics["summary"]["schema_version"] = "ranking-diagnostics-summary-v1"
+    diagnostics_path.write_text(json.dumps(diagnostics, ensure_ascii=False) + "\n", encoding="utf-8")
+    diagnostics_summary_path = run_dir / "ranking_diagnostics_summary.json"
+    diagnostics_summary = json.loads(diagnostics_summary_path.read_text(encoding="utf-8"))
+    diagnostics_summary["schema_version"] = "ranking-diagnostics-summary-v1"
+    diagnostics_summary_path.write_text(json.dumps(diagnostics_summary, ensure_ascii=False) + "\n", encoding="utf-8")
 
     users_path = run_dir / "final_research_users.json"
     users_document = json.loads(users_path.read_text(encoding="utf-8"))
@@ -1712,7 +1986,7 @@ def test_historical_network_augmented_v3_rebuild_preserves_legacy_artifact_contr
         FinalResearchConfig(dataset_dir=dataset_dir, sample_size=70, provider=provider_config),
         _TargetDeliveryAdapter(mark_live_api_triggered=True),
     ).run_and_write(tmp_path / "ranking-legacy-v3")
-    manifest = _convert_seed_first_v4_run_to_historical_v3(run_dir)
+    manifest = _convert_seed_first_v5_run_to_historical_v3(run_dir)
     payload_path = run_dir / "final_research_report_payload.json"
 
     assert rebuild_final_research_report(run_dir) == run_dir / "report.html"
@@ -1752,7 +2026,7 @@ def test_historical_v3_rebuild_rejects_explicit_null_sampling_fields(tmp_path: P
         FinalResearchConfig(dataset_dir=dataset_dir, sample_size=70, provider=provider_config),
         _TargetDeliveryAdapter(),
     ).run_and_write(tmp_path / "historical-v3-source")
-    _convert_seed_first_v4_run_to_historical_v3(source_run)
+    _convert_seed_first_v5_run_to_historical_v3(source_run)
     matrix = (
         ("artifact_manifest.json", "sampling_method", "manifest_sampling_method"),
         ("artifact_manifest.json", "sampling_status", "manifest_sampling_status"),
@@ -1809,6 +2083,13 @@ def _corrupt_ranking_rebuild_contract(run_dir: Path, corruption: str) -> None:
         document = read_document("ranking_runtime_summary.json")
         document["runtime_version"] = "final-research-ranking-runtime-v999"
         write_document("ranking_runtime_summary.json", document)
+    elif corruption == "crossed_runtime_v2":
+        manifest = read_document("artifact_manifest.json")
+        summary = read_document("ranking_runtime_summary.json")
+        manifest["manifest_version"] = "final-research-ranking-runtime-v2"
+        summary["runtime_version"] = "final-research-ranking-runtime-v2"
+        write_document("artifact_manifest.json", manifest)
+        write_document("ranking_runtime_summary.json", summary)
     elif corruption == "diagnostics_schema":
         document = read_document("ranking_diagnostics.json")
         document["schema_version"] = "ranking-diagnostics-v999"
@@ -1817,6 +2098,13 @@ def _corrupt_ranking_rebuild_contract(run_dir: Path, corruption: str) -> None:
         document = read_document("ranking_diagnostics_summary.json")
         document["schema_version"] = "ranking-diagnostics-summary-v999"
         write_document("ranking_diagnostics_summary.json", document)
+    elif corruption == "crossed_diagnostics_v1":
+        diagnostics = read_document("ranking_diagnostics.json")
+        summary = read_document("ranking_diagnostics_summary.json")
+        diagnostics["schema_version"] = "ranking-diagnostics-v1"
+        summary["schema_version"] = "ranking-diagnostics-summary-v1"
+        write_document("ranking_diagnostics.json", diagnostics)
+        write_document("ranking_diagnostics_summary.json", summary)
     elif corruption == "config_prompt_schema":
         document = read_document("config_snapshot.json")
         document["provider"]["prompt_version"] = "jinjiang-green-marketing-prompt-v999"
@@ -1825,6 +2113,13 @@ def _corrupt_ranking_rebuild_contract(run_dir: Path, corruption: str) -> None:
         document = read_document("ranking_runtime_summary.json")
         document["provider_metadata"]["prompt_version"] = "jinjiang-green-marketing-prompt-v999"
         write_document("ranking_runtime_summary.json", document)
+    elif corruption == "crossed_prompt_v2":
+        config = read_document("config_snapshot.json")
+        summary = read_document("ranking_runtime_summary.json")
+        config["provider"]["prompt_version"] = "jinjiang-green-marketing-prompt-v2"
+        summary["provider_metadata"]["prompt_version"] = "jinjiang-green-marketing-prompt-v2"
+        write_document("config_snapshot.json", config)
+        write_document("ranking_runtime_summary.json", summary)
     elif corruption == "sample_audit_schema":
         document = read_document("seed_first_sample_audit.json")
         document["schema_version"] = "network-augmented-sample-audit-v1"
@@ -1878,10 +2173,13 @@ def test_ranking_rebuild_contract_rejects_unknown_missing_and_crossed_evidence(t
         "missing_users_schema": "users_schema",
         "manifest_runtime_schema": "manifest_runtime_schema",
         "summary_runtime_schema": "summary_runtime_schema",
+        "crossed_runtime_v2": "manifest_runtime_schema",
         "diagnostics_schema": "diagnostics_schema",
         "diagnostics_summary_schema": "diagnostics_summary_schema",
+        "crossed_diagnostics_v1": "diagnostics_schema",
         "config_prompt_schema": "config_prompt_schema",
         "runtime_prompt_schema": "runtime_prompt_schema",
+        "crossed_prompt_v2": "config_prompt_schema",
         "sample_audit_schema": "sample_audit_schema",
         "missing_sample_audit": "sample_audit_schema",
         "crossed_sample_audit_artifact": "sample_audit_artifact",
@@ -1910,6 +2208,95 @@ def test_ranking_rebuild_contract_rejects_unknown_missing_and_crossed_evidence(t
         assert report_path.read_bytes() == persisted_report, corruption
 
 
+@pytest.mark.parametrize("file_name", ["artifact_manifest.json", "ranking_runtime_summary.json"])
+def test_v5_rebuild_rejects_tampered_pending_evidence_without_publish(tmp_path: Path, file_name: str) -> None:
+    dataset_dir = _make_target_delivery_fixture(tmp_path)
+    source_run = FinalResearchRunner(
+        FinalResearchConfig(
+            dataset_dir=dataset_dir,
+            sample_size=70,
+            provider=ProviderLLMConfig(enabled=True, model="mock-model", require_live_env=False),
+        ),
+        _TargetDeliveryAdapter(),
+    ).run_and_write(tmp_path / "ranking-v5-evidence-source")
+    run_dir = tmp_path / f"ranking-v5-evidence-{file_name}"
+    shutil.copytree(source_run, run_dir)
+    evidence_path = run_dir / file_name
+    evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+    evidence["evidence_state"]["decision_execution_evidence"]["status"] = "persisted"
+    evidence_path.write_text(json.dumps(evidence, ensure_ascii=False) + "\n", encoding="utf-8")
+    payload_path = run_dir / "final_research_report_payload.json"
+    report_path = run_dir / "report.html"
+    persisted_payload = payload_path.read_bytes()
+    persisted_report = report_path.read_bytes()
+
+    with pytest.raises(ValueError, match="does not contain pending v5 validation evidence"):
+        rebuild_final_research_report(run_dir)
+
+    assert payload_path.read_bytes() == persisted_payload
+    assert report_path.read_bytes() == persisted_report
+
+
+def test_v5_rebuild_rejects_missing_payload_evidence_without_publish(tmp_path: Path) -> None:
+    dataset_dir = _make_target_delivery_fixture(tmp_path)
+    run_dir = FinalResearchRunner(
+        FinalResearchConfig(
+            dataset_dir=dataset_dir,
+            sample_size=70,
+            provider=ProviderLLMConfig(enabled=True, model="mock-model", require_live_env=False),
+        ),
+        _TargetDeliveryAdapter(),
+    ).run_and_write(tmp_path / "ranking-v5-missing-payload-evidence")
+    payload_path = run_dir / "final_research_report_payload.json"
+    payload = json.loads(payload_path.read_text(encoding="utf-8"))
+    payload.pop("evidence_state")
+    payload_path.write_text(json.dumps(payload, ensure_ascii=False) + "\n", encoding="utf-8")
+    report_path = run_dir / "report.html"
+    persisted_payload = payload_path.read_bytes()
+    persisted_report = report_path.read_bytes()
+
+    with pytest.raises(ValueError, match="evidence_state"):
+        rebuild_final_research_report(run_dir)
+
+    assert payload_path.read_bytes() == persisted_payload
+    assert report_path.read_bytes() == persisted_report
+
+
+def test_v5_rebuild_rejects_incomplete_nested_payload_evidence_without_publish(tmp_path: Path) -> None:
+    dataset_dir = _make_target_delivery_fixture(tmp_path)
+    source_run = FinalResearchRunner(
+        FinalResearchConfig(
+            dataset_dir=dataset_dir,
+            sample_size=70,
+            provider=ProviderLLMConfig(enabled=True, model="mock-model", require_live_env=False),
+        ),
+        _TargetDeliveryAdapter(),
+    ).run_and_write(tmp_path / "ranking-v5-incomplete-payload-evidence-source")
+
+    for corruption, expected_field in (
+        ("empty_evidence_state", "schema_version"),
+        ("missing_nested_field", "formal_research_evidence"),
+    ):
+        run_dir = tmp_path / f"ranking-v5-{corruption}"
+        shutil.copytree(source_run, run_dir)
+        payload_path = run_dir / "final_research_report_payload.json"
+        payload = json.loads(payload_path.read_text(encoding="utf-8"))
+        if corruption == "empty_evidence_state":
+            payload["evidence_state"] = {}
+        else:
+            payload["evidence_state"]["decision_execution_evidence"].pop("formal_research_evidence")
+        payload_path.write_text(json.dumps(payload, ensure_ascii=False) + "\n", encoding="utf-8")
+        report_path = run_dir / "report.html"
+        persisted_payload = payload_path.read_bytes()
+        persisted_report = report_path.read_bytes()
+
+        with pytest.raises(ValueError, match=expected_field):
+            rebuild_final_research_report(run_dir)
+
+        assert payload_path.read_bytes() == persisted_payload
+        assert report_path.read_bytes() == persisted_report
+
+
 def test_target_delivery_ranking_report_escapes_download_paths_in_html(tmp_path: Path) -> None:
     dataset_dir = _make_target_delivery_fixture(tmp_path)
     provider_config = ProviderLLMConfig(enabled=True, model="mock-model", require_live_env=False)
@@ -1917,7 +2304,7 @@ def test_target_delivery_ranking_report_escapes_download_paths_in_html(tmp_path:
         FinalResearchConfig(dataset_dir=dataset_dir, sample_size=70, provider=provider_config),
         _TargetDeliveryAdapter(),
     ).run_and_write(tmp_path / "ranking-download-escaping")
-    payload = FinalResearchRankingReportPayload.model_validate_json(
+    payload = FinalResearchRankingReportPayloadV5.model_validate_json(
         (run_dir / "final_research_report_payload.json").read_text(encoding="utf-8")
     )
     payload.downloads.csv = 'users" onmouseover="alert(1).csv'
@@ -2529,7 +2916,7 @@ def test_final_research_report_dynamic_neighbor_activation_requires_actual_boost
     assert "均为 0" not in neighbor_summary["explanation"]
 
 
-def test_final_research_report_uses_configured_formula_and_interest_tags(tmp_path: Path) -> None:
+def test_final_research_report_uses_configured_formula_without_jinjiang_interest_projection(tmp_path: Path) -> None:
     dataset_dir = _make_processed_fixture(tmp_path)
     user_rows = _read_csv(dataset_dir / "users.csv")
     user_rows[0]["interest_tags"] = json.dumps(["hotel"])
@@ -2550,7 +2937,7 @@ def test_final_research_report_uses_configured_formula_and_interest_tags(tmp_pat
     report_rows = _read_csv(output / "final_research_users.csv")
     assert "0.65 network + 0.35 historical tag affinity" in report_html
     assert "min(1, base + 0.15 × engaged direct neighbors)" in report_html
-    assert json.loads(next(row for row in report_rows if row["user_id"] == "u1")["interest_tags"]) == ["hotel"]
+    assert json.loads(next(row for row in report_rows if row["user_id"] == "u1")["interest_tags"]) == []
 
 
 @pytest.mark.parametrize(
@@ -2629,7 +3016,7 @@ def test_final_research_config_rejects_missing_target_and_oversized_sample(tmp_p
             provider=ProviderLLMConfig(enabled=True),
         )
 
-    with pytest.raises(ValidationError, match="jinjiang-green-marketing-prompt-v2"):
+    with pytest.raises(ValidationError, match="jinjiang-green-marketing-prompt-v3"):
         FinalResearchConfig(
             dataset_dir=dataset_dir,
             sample_size=4,

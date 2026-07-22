@@ -29,6 +29,9 @@ JINJIANG_PROMPT_V2_PROFILE_FIELDS: tuple[str, ...] = (
     "latent_hotel_class",
     "latent_travel_purpose",
 )
+JINJIANG_PROMPT_V3_PROFILE_FIELDS: tuple[str, ...] = tuple(
+    field_name for field_name in JINJIANG_PROMPT_V2_PROFILE_FIELDS if field_name != "interest_tags"
+)
 
 VALUE_LABELS: dict[str, str] = {
     "epistemic": "认知探索价值",
@@ -110,7 +113,6 @@ def profile_prompt_field_inclusion(profile: UserProfile) -> dict[str, PromptFiel
 
     extra = profile.model_extra or {}
     included = {
-        "interest_tags": bool(_clean_interest_tags(profile.interest_tags)),
         "activity_score": True,
         "global_influence_score": _optional_float(extra.get("global_influence_score")) is not None,
         "local_influence_score": _optional_float(extra.get("local_influence_score")) is not None,
@@ -126,7 +128,7 @@ def profile_prompt_field_inclusion(profile: UserProfile) -> dict[str, PromptFiel
     )
     return {
         field_name: "included" if included[field_name] else "empty_omitted"
-        for field_name in JINJIANG_PROMPT_V2_PROFILE_FIELDS
+        for field_name in JINJIANG_PROMPT_V3_PROFILE_FIELDS
     }
 
 
@@ -139,13 +141,6 @@ def summarize_observed_prompt_fields(profile: UserProfile) -> str:
         score = profile.activity_score if field_name == "activity_score" else _optional_float(extra.get(field_name))
         if score is not None:
             parts.append(_score_summary(label, score))
-
-    interest_tags = _clean_interest_tags(profile.interest_tags)
-    if interest_tags:
-        parts.append(
-            "历史 hashtags 与文本主题派生的兴趣代理："
-            f"{'、'.join(interest_tags)}（仅表示可复算的历史行为主题，不代表真实心理画像）"
-        )
 
     return "；".join(parts)
 

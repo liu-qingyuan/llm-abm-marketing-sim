@@ -1223,7 +1223,12 @@ class ResearchExplanationCatalog(Mapping[str, FieldExplanation]):
         self._explanations = dict(explanations)
 
     @classmethod
-    def from_lineage(cls, lineage: Sequence[LineageEntry]) -> ResearchExplanationCatalog:
+    def from_lineage(
+        cls,
+        lineage: Sequence[LineageEntry],
+        *,
+        allowed_omissions: frozenset[str] = frozenset(),
+    ) -> ResearchExplanationCatalog:
         declared = [entry.field_name for entry in lineage]
         duplicates = sorted({field_name for field_name in declared if declared.count(field_name) > 1})
         if duplicates:
@@ -1232,7 +1237,7 @@ class ResearchExplanationCatalog(Mapping[str, FieldExplanation]):
         declared_fields = set(declared)
         supported_fields = set(_FIELD_SPECS)
         missing = sorted(declared_fields - supported_fields)
-        unknown = sorted(supported_fields - declared_fields)
+        unknown = sorted(supported_fields - declared_fields - allowed_omissions)
         if missing or unknown:
             raise ValueError(f"explanation catalog does not match lineage; missing={missing}, unknown={unknown}")
 

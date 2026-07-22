@@ -7,7 +7,7 @@ import { expect, test, type Locator, type Page, type TestInfo } from '@playwrigh
 type RankingUser = {
   user_id: string;
   nickname: string;
-  interest_tags: string[];
+  historical_tags: string[];
   reason: string;
   result_status: string;
   action: string;
@@ -222,8 +222,8 @@ else:
     sample_size = 1000
     failed_user_id = "u1"
 user_rows = module._read_csv(fixture_dir / "users.csv")
-user_rows[0]["interest_tags"] = '["锦江ESG"]'
-user_rows[1]["interest_tags"] = '[]'
+for row in user_rows:
+    row.pop("interest_tags")
 module._write_csv(fixture_dir / "users.csv", list(user_rows[0]), user_rows)
 comment_rows = module._read_csv(fixture_dir / "all_comments.csv")
 for row in comment_rows:
@@ -780,8 +780,8 @@ async function assertRankingReport(
   await expect(page.getByTestId('visible-user-count')).toHaveText(
     `${payload.users.length.toLocaleString()} / ${payload.users.length.toLocaleString()}`,
   );
-  const tagUser = users.find((user) => user.interest_tags.length > 1) ?? users[0];
-  await page.getByTestId('user-search').fill(tagUser.interest_tags[1] ?? tagUser.user_id);
+  const tagUser = users.find((user) => user.historical_tags.length > 0) ?? users[0];
+  await page.getByTestId('user-search').fill(tagUser.historical_tags[0] ?? tagUser.user_id);
   await expect(page.getByTestId('user-table')).toContainText(tagUser.user_id);
   await page.getByTestId('user-search').fill('controlled ignore');
   await expect(page.getByTestId('user-table').locator('tbody tr').first()).toContainText('controlled ignore');
@@ -1821,8 +1821,22 @@ test('ranking research report exposes complete paired selection identities', asy
   expect(await deltas.locator('tbody tr').count()).toBeGreaterThan(20);
 });
 
-test('user drawer expands v4 field traces with keyboard focus restoration', async ({ page }, testInfo) => {
+test('user drawer expands v5 field traces without the revoked interest contract', async ({ page }, testInfo) => {
   const { outputDir, payload } = generateRankingReport(testInfo, 'effect');
+  for (const artifactName of [
+    'sample_manifest.csv',
+    'sample_manifest.json',
+    'final_research_users.csv',
+    'final_research_users.json',
+    'final_research_report_payload.json',
+    'field_lineage_catalog.json',
+    'user_field_trace.json',
+    'field_source_records.json',
+    'report.html',
+  ]) {
+    expect(readFileSync(path.join(outputDir, artifactName), 'utf8'), artifactName).not.toContain('interest_tags');
+  }
+  expect(payload.prompt_contract.allowed_profile_fields).not.toContain('interest_tags');
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto(pathToFileURL(path.join(outputDir, 'report.html')).toString());
   await page.getByTestId('run-evidence-mode-button').click();
@@ -1833,36 +1847,31 @@ test('user drawer expands v4 field traces with keyboard focus restoration', asyn
 
   const drawer = page.getByTestId('evidence-drawer');
   await expect(drawer).toHaveAttribute('data-selection-kind', 'user');
-  const interestTrace = drawer.getByTestId('user-field-trace-interest_tags');
-  await interestTrace.focus();
-  await interestTrace.press('Enter');
-  await expect(interestTrace).toHaveAttribute('aria-expanded', 'true');
+  await expect(drawer.getByTestId('user-field-trace-interest_tags')).toHaveCount(0);
+  const historicalTrace = drawer.getByTestId('user-field-trace-historical_tags');
+  await historicalTrace.focus();
+  await historicalTrace.press('Enter');
+  await expect(historicalTrace).toHaveAttribute('aria-expanded', 'true');
   const detail = drawer.getByTestId('user-field-trace-detail');
-  await expect(detail).toContainText('interest_tags（兴趣标签）');
-  await expect(detail).toContainText('empty（空值）');
+  await expect(detail).toContainText('historical_tags（历史互动标签）');
   await expect(detail).toContainText('Historical Behavioral Evidence（历史行为证据）');
   await expect(detail).toContainText('field_source_records');
   await expect(detail).toContainText('field_source_records.json');
   await expect(detail).toContainText('{"user_id":"u2"}');
-  await expect(detail).toContainText('historical_video_hashtags');
-  await expect(detail).toContainText('historical_topic_tags_stable_unique_v1');
+  await expect(detail).toContainText('commenter_user_id · video_id · hashtags');
+  await expect(detail).toContainText('historical_interaction_video_tags_v1');
   await expect(detail).toContainText('Declared Usage Stage（声明用途）');
   await expect(detail).toContainText('Actual Usage Stage（本次实际用途）');
-  await expect(detail).toContainText('empty_omitted（空值省略）');
-  await expect(detail).toContainText('empty_value_omitted_from_prompt');
-  await expect(detail.getByRole('link', { name: '打开来源 artifact' })).toHaveAttribute(
-    'href',
-    'field_source_records.json',
-  );
-
-  const historicalTrace = drawer.getByTestId('user-field-trace-historical_tags');
-  await historicalTrace.click();
-  await expect(detail).toContainText('historical_tags（历史互动标签）');
   await expect(detail).toContainText('not_allowlisted（未列入 Prompt allowlist）');
+  await expect(detail).toContainText('field_not_in_prompt_allowlist');
   const expectedHistoryStatus = payload.user_field_trace_index.u2.find(
     (trace) => trace.field_name === 'historical_tags',
   )?.value_status;
   await expect(detail).toContainText(expectedHistoryStatus === 'present' ? 'present（有值）' : 'empty（空值）');
+  await expect(detail.getByRole('link', { name: '打开来源 artifact' })).toHaveAttribute(
+    'href',
+    'field_source_records.json',
+  );
 
   const provenanceFilter = drawer.getByTestId('user-field-trace-provenance-filter');
   await provenanceFilter.selectOption('Direct Observed Profile Field');
@@ -1907,21 +1916,6 @@ test('user drawer expands v4 field traces with keyboard focus restoration', asyn
   await page.keyboard.press('Escape');
   await expect(drawer).toBeHidden();
   await expect(userRow).toBeFocused();
-
-  await page.getByTestId('user-search').fill('u1');
-  const nonEmptyUserId = page.locator('.profile-id').filter({ hasText: /^u1$/ });
-  const nonEmptyUserRow = page.getByTestId('user-table').locator('tbody tr').filter({ has: nonEmptyUserId });
-  await nonEmptyUserRow.click();
-  const nonEmptyInterestTrace = drawer.getByTestId('user-field-trace-interest_tags');
-  await nonEmptyInterestTrace.click();
-  await expect(detail).toContainText('present（有值）');
-  await expect(detail).toContainText('锦江ESG');
-  await expect(detail).toContainText('historical_text_topic_terms');
-  await expect(detail).toContainText('included（已进入 Prompt）');
-
-  await page.keyboard.press('Escape');
-  await expect(drawer).toBeHidden();
-  await expect(nonEmptyUserRow).toBeFocused();
 
   await page.getByTestId('user-search').fill('u80');
   const engagedUserId = page.locator('.profile-id').filter({ hasText: /^u80$/ });

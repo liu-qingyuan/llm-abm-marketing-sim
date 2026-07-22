@@ -106,7 +106,7 @@ class RankingDiagnostics:
         ablation_rows = _ablation_rows(paired_batches, batches)
         sensitivity_rows = _sensitivity_rows(sensitivity_variants)
         summary = {
-            "schema_version": "ranking-diagnostics-summary-v1",
+            "schema_version": "ranking-diagnostics-summary-v2",
             "diagnostic_decision_adapter_calls": 0,
             "counts": {
                 "batches": len(paired_batches),
@@ -135,7 +135,7 @@ class RankingDiagnostics:
         }
         return RankingDiagnosticArtifacts(
             payload={
-                "schema_version": "ranking-diagnostics-v1",
+                "schema_version": "ranking-diagnostics-v2",
                 "paired_ablation": {
                     "same_candidate_set_and_frozen_state": True,
                     "shadow_ranking_only": True,
