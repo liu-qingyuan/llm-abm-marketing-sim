@@ -132,6 +132,8 @@ type RankingPayload = {
   ranking_diagnostics_summary: {
     batches_with_top_selection_change: number;
     top_selection_changed: boolean;
+    network_signals_in_formula: boolean;
+    diagnostic_decision_adapter_calls: number;
     main_weights: {
       base_network: number;
       engaged_neighbor: number;
@@ -229,7 +231,7 @@ function sensitivityAverages(variant: SensitivityVariant): { overlap: number; ch
 
 function generateRankingReport(
   testInfo: TestInfo,
-  fixtureKind: 'capacity' | 'effect' = 'capacity',
+  fixtureKind: 'capacity' | 'effect' | 'small' = 'capacity',
 ): { outputDir: string; payload: RankingPayload } {
   const fixtureDir = path.join(testInfo.outputDir, `processed-ranking-fixture-${fixtureKind}`);
   const outputDir = path.join(testInfo.outputDir, `ranking-report-${fixtureKind}`);
@@ -250,6 +252,10 @@ if fixture_kind == "effect":
     fixture_dir = module._make_target_delivery_fixture(Path(fixture_path))
     sample_size = 70
     failed_user_id = "u79"
+elif fixture_kind == "small":
+    fixture_dir = module._make_processed_fixture(Path(fixture_path), user_count=30)
+    sample_size = 30
+    failed_user_id = "u1"
 else:
     fixture_dir = module._make_processed_fixture(Path(fixture_path), user_count=1010)
     sample_size = 1000
@@ -1725,6 +1731,125 @@ test('one persisted Batch selection updates direct-neighbor feedback without pro
   await expect(drawer).toContainText('Field Provenance（字段来源）');
   await expect(drawer).toContainText('Field Usage Stage（字段使用阶段）');
   await expect(drawer).toContainText('每次反馈只作用于一跳直接邻居');
+});
+
+test('signal inclusion selection effect and dynamic feedback are visible before diagnostics expand', async ({ page }, testInfo) => {
+  const { outputDir, payload } = generateRankingReport(testInfo, 'effect');
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.goto(pathToFileURL(path.join(outputDir, 'report.html')).toString());
+  await page.getByTestId('run-evidence-mode-button').click();
+
+  const contrast = page.getByTestId('network-signal-contrast');
+  const diagnostics = page.getByTestId('network-impact-details');
+  const pairedBatches = payload.ranking_diagnostics.paired_ablation.batches;
+  const competitiveBatches = pairedBatches.filter(
+    (batch) => batch.eligible_count > payload.run.delivery_capacity,
+  );
+  const activatedCandidateRows = payload.ranking_rounds.reduce(
+    (total, round) => total + round.candidates.filter((candidate) => candidate.engaged_neighbor_signal > 0).length,
+    0,
+  );
+  const activatedBatches = payload.ranking_rounds.filter(
+    (round) => round.candidates.some((candidate) => candidate.engaged_neighbor_signal > 0),
+  ).length;
+  expect(payload.ranking_diagnostics_summary.batches_with_top_selection_change).toBeGreaterThan(0);
+  expect(activatedCandidateRows).toBeGreaterThan(0);
+  expect(activatedBatches).toBeGreaterThan(0);
+
+  await expect(contrast).toBeVisible();
+  await expect(diagnostics).not.toHaveAttribute('open', '');
+  await expect(contrast).toContainText('公式配置不等于本次结果');
+  await expect(contrast).toContainText('网络信号组已纳入');
+  await expect(contrast).toContainText(
+    `${competitiveBatches.length} / ${pairedBatches.length} 个批次形成 Top${payload.run.delivery_capacity}（前 ${payload.run.delivery_capacity} 名） 容量竞争`,
+  );
+  await expect(contrast).toContainText(
+    `${payload.ranking_diagnostics_summary.batches_with_top_selection_change} / ${pairedBatches.length} 个批次的 Top${payload.run.delivery_capacity}（前 ${payload.run.delivery_capacity} 名） 成员改变`,
+  );
+  await expect(contrast).toContainText('完整网络信号组消融');
+  await expect(contrast).toContainText(
+    `${activatedCandidateRows} 条候选记录 · ${activatedBatches} 个批次`,
+  );
+  await expect(contrast).toContainText('动态邻居反馈激活');
+});
+
+test('canonical deployed evidence keeps the visible six-of-thirty selection effect wording', async ({ page }, testInfo) => {
+  const reference = JSON.parse(
+    readFileSync(path.resolve('tests/fixtures/reports/jinjiang-canonical-network-effect-v4.json'), 'utf8'),
+  ) as {
+    delivery_capacity: number;
+    total_batches: number;
+    competitive_batches: number;
+    changed_batches: number;
+  };
+  const { outputDir } = generateRankingReport(testInfo, 'effect');
+  await page.goto(pathToFileURL(path.join(outputDir, 'report.html')).toString());
+
+  const model = await page.evaluate((canonical) => {
+    const source = {
+      run: { delivery_capacity: canonical.delivery_capacity },
+      ranking_diagnostics_summary: {
+        batches_with_top_selection_change: canonical.changed_batches,
+        top_selection_changed: canonical.changed_batches > 0,
+        network_signals_in_formula: true,
+        diagnostic_decision_adapter_calls: 0,
+        main_weights: { base_network: 0.5, engaged_neighbor: 0.3, tag_affinity: 0.2 },
+      },
+      ranking_diagnostics: {
+        paired_ablation: {
+          batches: Array.from({ length: canonical.total_batches }, (_, index) => ({
+            eligible_count: index < canonical.competitive_batches
+              ? canonical.delivery_capacity + 1
+              : canonical.delivery_capacity,
+          })),
+        },
+      },
+      ranking_rounds: Array.from({ length: canonical.total_batches }, () => ({ candidates: [] })),
+    };
+    const globalWithContrast = window as unknown as {
+      networkSignalContrastModel: (value: unknown) => {
+        effectValue: string;
+        reading: string;
+        pairedBatchCount: number;
+        competitiveBatchCount: number;
+      };
+    };
+    return globalWithContrast.networkSignalContrastModel(source);
+  }, reference);
+
+  expect(reference).toEqual({
+    source_run: 'runs/jinjiang-runtime-trace-mock-validation-20260720T130020Z',
+    release_id: 'seed-first-validation-20260720-r3',
+    delivery_capacity: 20,
+    total_batches: 30,
+    competitive_batches: 29,
+    changed_batches: 6,
+    interpretation: expect.any(String),
+  });
+  expect(model.pairedBatchCount).toBe(30);
+  expect(model.competitiveBatchCount).toBe(29);
+  expect(model.effectValue).toBe('6 / 30 个批次的 Top20（前 20 名） 成员改变');
+  expect(model.reading).toContain('本次有 29 个可比较批次；6 个批次');
+});
+
+test('small fixture reports no capacity competition instead of claiming no network effect', async ({ page }, testInfo) => {
+  const { outputDir, payload } = generateRankingReport(testInfo, 'small');
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await page.goto(pathToFileURL(path.join(outputDir, 'report.html')).toString());
+  await page.getByTestId('run-evidence-mode-button').click();
+
+  const contrast = page.getByTestId('network-signal-contrast');
+  await expect(contrast).toBeVisible();
+  await expect(contrast).toContainText(
+    `0 / ${payload.ranking_diagnostics.paired_ablation.batches.length} 个批次形成 Top${payload.run.delivery_capacity}（前 ${payload.run.delivery_capacity} 名） 容量竞争`,
+  );
+  await expect(contrast).toContainText('没有形成可充分检验的 Top20（前 20 名） 成员竞争');
+  await expect(contrast).not.toContainText('网络信号未产生影响');
+  await expectNoLayoutFailures(page);
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(contrast).toBeVisible();
+  await expectNoLayoutFailures(page);
 });
 
 test('network impact expands inside feedback with payload-derived capacity and paired ranking', async ({ page }, testInfo) => {

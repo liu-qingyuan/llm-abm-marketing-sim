@@ -1,0 +1,9 @@
+{
+  "source_run": "runs/jinjiang-runtime-trace-mock-validation-20260720T130020Z",
+  "release_id": "seed-first-validation-20260720-r3",
+  "delivery_capacity": 20,
+  "total_batches": 30,
+  "competitive_batches": 29,
+  "changed_batches": 6,
+  "interpretation": "The full network signal group changed Top20 membership in 6 of 30 frozen-batch shadow comparisons. This does not isolate dynamic neighbor feedback or establish causality."
+}

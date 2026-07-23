@@ -2857,6 +2857,12 @@ def _render_ranking_report(
     <span class="eyebrow">NETWORK FEEDBACK（网络反馈）</span><h2 id="network-feedback-title"></h2>
     <p class="network-feedback-boundary"><code>like / comment / share</code> 激活 Comment-Derived User Interaction Graph 中直接邻居的优先级，只影响下一轮 Global Reranking。<code>ignore</code> 不传播；每次反馈只作用于一跳直接邻居，后续互动可能跨批形成新的直接邻居反馈。这不表示用户真实看见了邻居互动。</p>
     <div id="network-feedback-summary" class="effect-grid" data-testid="network-feedback-summary"></div>
+    <div id="network-signal-contrast" class="network-signal-contrast" data-testid="network-signal-contrast">
+      <span class="eyebrow">SIGNAL CONFIGURATION / OBSERVED RUN EVIDENCE</span>
+      <h3>公式配置不等于本次结果</h3>
+      <p id="network-signal-contrast-reading" class="observed-effect-reading"></p>
+      <div id="network-signal-contrast-summary" class="effect-grid"></div>
+    </div>
     <details class="network-impact-details" data-testid="network-impact-details">
       <summary>展开网络影响证据</summary>
       <div id="network-effect" class="network-effect-content" data-testid="network-effect-section">
@@ -3167,6 +3173,8 @@ code { color:var(--blue); }
 .network-reading-note,.prompt-reading-note { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:20px; margin:0 0 18px; padding-block:12px; border-block:1px solid var(--line); }
 .network-reading-note p,.prompt-reading-note p { margin:0; color:var(--muted); }
 .network-feedback-boundary { max-width:900px; color:var(--muted); }
+.network-signal-contrast { margin-top:22px; padding-block:18px 4px; border-block:1px solid var(--line); }
+.network-signal-contrast h3 { margin:4px 0 8px; }
 .network-impact-details { margin-top:22px; border-top:1px solid var(--line); }
 .network-impact-details > summary { padding:14px 0; color:var(--green); font-weight:800; cursor:pointer; }
 .network-impact-details > summary:focus-visible { outline:2px solid var(--green); outline-offset:3px; }
@@ -3286,7 +3294,8 @@ code { color:var(--blue); }
 .downloads a { min-height:42px; display:flex; align-items:center; padding:8px 10px; border:1px solid var(--line); border-radius:4px; text-decoration:none; font-weight:750; }
 .limitations-band { display:grid; grid-template-columns:180px 1fr; background:#fff8ec; }
 .limitations-band li { margin:5px 0; }
-@media (max-width:1000px) { .mechanism-scene-header { grid-template-columns:1fr; }.sample-metrics,.effect-grid { grid-template-columns:repeat(2,minmax(0,1fr)); }.diagnostic-layout { grid-template-columns:1fr; }.lineage-detail { min-height:0; }.filters { grid-template-columns:repeat(3,minmax(0,1fr)); }.trace-groups { grid-template-columns:repeat(2,minmax(0,1fr)); }.drawer-detail .trace-groups { grid-template-columns:1fr; } }
+@media (max-width:1000px) { .topbar { grid-template-columns:minmax(0,1fr) auto; gap:10px 16px; }.workflow-nav { grid-column:1 / -1; justify-content:flex-start; overflow-x:auto; }.run-evidence-heading { grid-template-columns:minmax(0,1fr); }.target-link { width:auto; white-space:normal; }.section-heading { align-items:flex-start; flex-direction:column; }.compact-filters { width:100%; grid-template-columns:repeat(2,minmax(0,1fr)); }.object-flow { grid-template-columns:1fr; }.object-flow i { justify-self:center; transform:rotate(90deg); }.mechanism-scene-header { grid-template-columns:1fr; }.sample-metrics,.effect-grid { grid-template-columns:repeat(2,minmax(0,1fr)); }.diagnostic-layout { grid-template-columns:1fr; }.lineage-detail { min-height:0; }.filters { grid-template-columns:repeat(3,minmax(0,1fr)); }.trace-groups { grid-template-columns:repeat(2,minmax(0,1fr)); }.drawer-detail .trace-groups { grid-template-columns:1fr; } }
+@media (max-width:600px) { h1 { overflow-wrap:anywhere; }.compact-filters,.sample-metrics,.effect-grid,.round-summary,.ablation-summary,.filters,.trace-groups,.run-evidence-facts { grid-template-columns:1fr; }.run-evidence-facts article + article { padding-left:0; border-top:1px solid var(--line); border-left:0; } }
 """
 
 
@@ -4040,14 +4049,53 @@ function renderNetworkFeedbackDetail(label, value, note, lineageField, timeStep)
   openDrawer('network',{fieldName:lineageField,batch:timeStep});
 }
 
-function renderNetworkSummary() {
-  const summary = payload.ranking_diagnostics_summary;
+function networkSignalContrastModel(source) {
+  const summary = source.ranking_diagnostics_summary;
   const weights = summary.main_weights;
   const weightLabel = `${(weights.base_network * 100).toFixed(0)}/${(weights.engaged_neighbor * 100).toFixed(0)}/${(weights.tag_affinity * 100).toFixed(0)}`;
-  const inclusion = metric('Recommendation Signal Inclusion（推荐信号已纳入）',summary.network_signals_in_formula ? '已纳入' : '未纳入',`${weightLabel} 权重 · diagnostic adapter calls（诊断适配器调用）${summary.diagnostic_decision_adapter_calls}`);
-  const effect = metric('Observed Recommendation Signal Effect（推荐信号产生可观测影响）',summary.top_selection_changed ? `${topLabel}（前列集合）已改变` : `${topLabel}（前列集合）未改变`,`${summary.batches_with_top_selection_change} / ${payload.ranking_rounds.length} 个批次的同批 ${topLabel} membership（成员集合）发生变化`);
-  byId('network-effect-summary').append(inclusion,effect);
-  byId('network-effect-reading').textContent = summary.top_selection_changed
+  const pairedBatches = source.ranking_diagnostics.paired_ablation.batches;
+  const sourceTopLabel = `Top${source.run.delivery_capacity}（前 ${source.run.delivery_capacity} 名）`;
+  const competitiveBatches = pairedBatches.filter((batch) => batch.eligible_count > source.run.delivery_capacity);
+  const activatedCandidateRows = source.ranking_rounds.reduce(
+    (total, round) => total + round.candidates.filter((candidate) => candidate.engaged_neighbor_signal > 0).length,
+    0,
+  );
+  const activatedBatches = source.ranking_rounds.filter(
+    (round) => round.candidates.some((candidate) => candidate.engaged_neighbor_signal > 0),
+  ).length;
+  return {
+    summary,
+    weightLabel,
+    pairedBatchCount: pairedBatches.length,
+    competitiveBatchCount: competitiveBatches.length,
+    activatedCandidateRows,
+    activatedBatches,
+    topLabel: sourceTopLabel,
+    inclusionValue: summary.network_signals_in_formula ? '网络信号组已纳入' : '网络信号组未纳入',
+    effectValue: competitiveBatches.length
+      ? `${summary.batches_with_top_selection_change} / ${pairedBatches.length} 个批次的 ${sourceTopLabel} 成员改变`
+      : '不可充分检验',
+    reading: competitiveBatches.length
+      ? `本次有 ${competitiveBatches.length} 个可比较批次；${summary.batches_with_top_selection_change} 个批次在 no-network shadow ranking 下改变了 ${sourceTopLabel} 成员。`
+      : `本次没有形成可充分检验的 ${sourceTopLabel} 成员竞争；不能据此判断网络项是否改变选择。`,
+  };
+}
+
+function renderNetworkSummary() {
+  const model = networkSignalContrastModel(payload);
+  const contrast = byId('network-signal-contrast-summary');
+  contrast.replaceChildren(
+    metric('Recommendation Signal Inclusion（推荐信号已纳入）',model.inclusionValue,`${model.weightLabel} 权重表示公式配置，不是运行结果`),
+    metric('容量竞争批次',`${model.competitiveBatchCount} / ${model.pairedBatchCount} 个批次形成 ${model.topLabel} 容量竞争`,'只有候选数超过投放容量时，排序信号才可能改变谁获得曝光'),
+    metric('Observed Recommendation Signal Effect（推荐信号产生可观测影响）',model.effectValue,'完整网络信号组消融：同时移除 base network（历史网络位置）与 engaged neighbor（已互动邻居）；不单独归因于 dynamic feedback（动态反馈）'),
+    metric('动态邻居反馈激活',`${model.activatedCandidateRows} 条候选记录 · ${model.activatedBatches} 个批次`,'只统计 persisted engaged_neighbor_signal（持久化已互动邻居信号）大于 0，不由静态网络位置代替'),
+  );
+  byId('network-signal-contrast-reading').textContent = model.reading;
+
+  const inclusion = metric('Recommendation Signal Inclusion（推荐信号已纳入）',model.summary.network_signals_in_formula ? '已纳入' : '未纳入',`${model.weightLabel} 权重 · diagnostic adapter calls（诊断适配器调用）${model.summary.diagnostic_decision_adapter_calls}`);
+  const effect = metric('Observed Recommendation Signal Effect（推荐信号产生可观测影响）',model.summary.top_selection_changed ? `${topLabel}（前列集合）已改变` : `${topLabel}（前列集合）未改变`,`${model.summary.batches_with_top_selection_change} / ${payload.ranking_rounds.length} 个批次的同批 ${topLabel} membership（成员集合）发生变化`);
+  byId('network-effect-summary').replaceChildren(inclusion,effect);
+  byId('network-effect-reading').textContent = model.summary.top_selection_changed
     ? 'Observed Recommendation Signal Effect：本次运行存在可观测变化'
     : 'Observed Recommendation Signal Effect：本次运行未观察到变化';
 }
