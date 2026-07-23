@@ -178,7 +178,7 @@ def test_mocked_provider_success_validates_engage_decision():
     assert adapter.live_api_triggered is False
 
 
-def test_live_sdk_client_uses_scoped_codex_http_headers_without_serializing_values(monkeypatch, tmp_path):
+def test_live_sdk_client_uses_scoped_codex_auth_and_headers_without_serializing_values(monkeypatch, tmp_path):
     secret = "sub2api-header-secret"
     (tmp_path / "config.toml").write_text(
         f'''
@@ -193,6 +193,7 @@ http_headers = {{ "x-openai-actor-authorization" = "{secret}" }}
 ''',
         encoding="utf-8",
     )
+    (tmp_path / "auth.json").write_text('{"OPENAI_API_KEY":"codex-secret"}', encoding="utf-8")
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     monkeypatch.setenv("LLM_ABM_RUN_LIVE_LLM", "1")
     monkeypatch.setattr(openai_compatible.importlib.util, "find_spec", lambda _name: object())
@@ -210,7 +211,7 @@ http_headers = {{ "x-openai-actor-authorization" = "{secret}" }}
 
     adapter._build_live_client()
 
-    assert captured["api_key"] is None
+    assert captured["api_key"] == "codex-secret"
     assert captured["default_headers"] == {"x-openai-actor-authorization": secret}
     assert secret not in json.dumps(adapter.safe_metadata)
     assert adapter.safe_metadata["codex_provider"]["http_header_names"] == ["x-openai-actor-authorization"]
@@ -231,6 +232,7 @@ http_headers = { "x-openai-actor-authorization" = "selected-secret" }
 ''',
         encoding="utf-8",
     )
+    (tmp_path / "auth.json").write_text('{"OPENAI_API_KEY":"codex-secret"}', encoding="utf-8")
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     monkeypatch.setenv("LLM_ABM_RUN_LIVE_LLM", "1")
     monkeypatch.setattr(openai_compatible.importlib.util, "find_spec", lambda _name: object())

@@ -107,7 +107,7 @@ def test_live_llm_gate_requires_explicit_opt_in_and_auth(monkeypatch, tmp_path):
     assert should_run_live_llm(tmp_path) is True
 
 
-def test_live_llm_gate_accepts_scoped_codex_http_headers_without_exposing_values(monkeypatch, tmp_path):
+def test_live_llm_gate_requires_codex_auth_snapshot_for_actor_authorized_provider(monkeypatch, tmp_path):
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     write_codex_header_config(tmp_path)
     monkeypatch.setenv("LLM_ABM_RUN_LIVE_LLM", "1")
@@ -117,12 +117,21 @@ def test_live_llm_gate_accepts_scoped_codex_http_headers_without_exposing_values
 
     assert config is not None
     assert config.http_header_names == ("x-openai-actor-authorization",)
+    assert config.uses_openai_actor_authorization is True
+    assert config.auth_available is False
     assert config.redacted()["http_header_names"] == ["x-openai-actor-authorization"]
     assert "sub2api-secret" not in json.dumps(config.redacted())
-    assert should_run_live_llm(tmp_path) is True
+    assert should_run_live_llm(tmp_path) is False
     assert runtime_headers is not None
     assert runtime_headers.values == {"x-openai-actor-authorization": "sub2api-secret"}
     assert "sub2api-secret" not in repr(runtime_headers)
+
+    (tmp_path / "auth.json").write_text('{"OPENAI_API_KEY":"codex-secret"}', encoding="utf-8")
+    config = load_codex_provider_config(tmp_path)
+
+    assert config is not None
+    assert config.auth_available is True
+    assert should_run_live_llm(tmp_path) is True
 
 
 def test_runtime_http_headers_only_use_the_selected_provider(monkeypatch, tmp_path):
@@ -274,3 +283,16 @@ def test_resolve_runtime_credential_does_not_use_codex_auth_for_unscoped_provide
     (tmp_path / "auth.json").write_text('{"OPENAI_API_KEY":"codex-secret"}', encoding="utf-8")
 
     assert resolve_runtime_credential(codex_home=tmp_path) is None
+
+
+def test_resolve_runtime_credential_uses_codex_snapshot_for_actor_authorized_provider(monkeypatch, tmp_path):
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    write_codex_header_config(tmp_path)
+    (tmp_path / "auth.json").write_text('{"OPENAI_API_KEY":"codex-secret"}', encoding="utf-8")
+
+    credential = resolve_runtime_credential(codex_home=tmp_path)
+
+    assert credential is not None
+    assert credential.value == "codex-secret"
+    assert credential.source == "codex_auth"
+    assert "codex-secret" not in repr(credential)

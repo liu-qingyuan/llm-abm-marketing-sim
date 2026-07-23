@@ -24,7 +24,7 @@
 
 不要在 committed config 或测试中硬编码真实 host。实现不得把 auth files、bearer token、API key、cookie、raw headers 或其他秘密复制到仓库文件、日志、文档、fixtures、pytest output、run artifacts、cache 或 handoff。
 
-Codex auth 复用仅在所选 Provider config 显式声明 `requires_openai_auth = true` 时允许。`requires_openai_auth = false` 的 Sub2API provider 可以使用同一 selected provider table 中显式配置的静态 `http_headers`；header value 只在 live gate 后以 runtime-only container 传给 SDK，不能进入脱敏 metadata 或 persisted artifacts。该 header-only 路径与 Codex wire 行为一致：不会自动生成 `Authorization: Bearer ...`；若 selected provider 自己显式声明 `Authorization` header，则保留该值。没有 scoped headers 时 gate 继续 fail closed，或要求显式 Provider credentials。`OPENAI_API_KEY` 仍是 OpenAI-compatible/sub2api API key 的 fallback。
+Codex auth 只允许复用到当前 selected Provider 和它声明的 `base_url`。`requires_openai_auth = true` 时可直接复用 Codex auth snapshot；`requires_openai_auth = false` 通常不复用，但 selected provider 声明 `x-openai-actor-authorization` 时遵循 Codex 0.145 的组合语义：已有 Codex auth snapshot 作为 Bearer，actor header 作为附加 header，两者缺一时 live gate 都 fail closed。其他 selected-provider 静态 `http_headers` 仍可走 header-only 路径，不会自动生成 `Authorization: Bearer ...`；若 provider 自己显式声明 `Authorization` header，则保留该值。所有 header value 只在 live gate 后以 runtime-only container 传给 SDK，不能进入脱敏 metadata 或 persisted artifacts。`OPENAI_API_KEY` 仍是 OpenAI-compatible/sub2api API key 的显式环境 fallback。
 
 ## 必需行为
 
@@ -67,8 +67,9 @@ provider_llm:
 - `fail_closed_action: raise` 是默认策略，也是手动 live smoke 策略。
 - `fail_closed_action: no_engage` 只有显式配置时才返回 `ignore` 决策。
 - `fail_closed_action: skip_run` 是 run-level fail-closed stop signal，应在正常 runner 启动部分仿真前拒绝。
-- Codex/sub2api 复用优先读取 Codex Provider metadata；`requires_openai_auth=true` 时只读取最小 Codex runtime credential，`requires_openai_auth=false` 时只允许当前 selected provider 自己的已验证 `http_headers`，两条路径不能跨 provider 混用。
+- Codex/sub2api 复用优先读取 Codex Provider metadata；`requires_openai_auth=true` 时读取最小 Codex runtime credential；actor-authorized relay 路径只允许同一 selected provider 的 Codex auth snapshot 与已验证 header 组合，不能跨 provider 或跨 `base_url` 混用。
 - Runtime headers 拒绝非法名称、CR/LF value 和 `host`、`content-length`、`connection`、`transfer-encoding` 等传输级覆盖。
+- Actor-authorization 不是主 API credential；仅有 `x-openai-actor-authorization` 时 readiness 必须为 false，不能发起必然失败的请求。
 - Header-only 请求必须在最终 wire headers 中省略 SDK 合成的 `Authorization`，不得发送 placeholder bearer；selected provider 显式配置的 `Authorization` 除外。
 - OpenAI SDK 内建重试固定为 `0`；所有 Provider 重试只由 `provider_llm.max_retries` 控制并计入 adapter invocation budget。
 - Runtime readiness 使用的脱敏 Codex metadata 可以包含 header names/count 以解释 gate；persisted Provider evidence 的 allowlist 继续剔除所有 header 相关键。

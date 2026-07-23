@@ -15,6 +15,7 @@ SAFE_METADATA_KEYS = {"api_key_env", "requires_openai_auth", "auth_available"}
 SECRET_VALUE_PLACEHOLDER = "<redacted>"
 HTTP_HEADER_NAME_PATTERN = re.compile(r"^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$")
 FORBIDDEN_RUNTIME_HTTP_HEADERS = frozenset({"connection", "content-length", "host", "transfer-encoding"})
+OPENAI_ACTOR_AUTHORIZATION_HEADER = "x-openai-actor-authorization"
 
 
 @dataclass(frozen=True)
@@ -28,6 +29,10 @@ class CodexProviderConfig:
     requires_openai_auth: bool
     auth_available: bool
     http_header_names: tuple[str, ...] = ()
+
+    @property
+    def uses_openai_actor_authorization(self) -> bool:
+        return any(name.lower() == OPENAI_ACTOR_AUTHORIZATION_HEADER for name in self.http_header_names)
 
     def redacted(self) -> dict[str, Any]:
         return {
@@ -84,18 +89,24 @@ def load_codex_provider_config(codex_home: str | Path | None = None) -> CodexPro
         return None
     provider = providers[provider_name]
     requires_openai_auth = bool(provider.get("requires_openai_auth", False))
+    http_header_names = (
+        tuple(sorted(str(name) for name in provider.get("http_headers", {})))
+        if isinstance(provider.get("http_headers", {}), dict)
+        else ()
+    )
+    uses_actor_authorization = any(
+        name.lower() == OPENAI_ACTOR_AUTHORIZATION_HEADER for name in http_header_names
+    )
     return CodexProviderConfig(
         provider_name=str(provider_name),
         base_url=str(provider.get("base_url", "")),
         wire_api=str(provider.get("wire_api", "")),
         model=data.get("model"),
         requires_openai_auth=requires_openai_auth,
-        auth_available=_codex_auth_available(home) if requires_openai_auth else False,
-        http_header_names=(
-            tuple(sorted(str(name) for name in provider.get("http_headers", {})))
-            if isinstance(provider.get("http_headers", {}), dict)
-            else ()
+        auth_available=(
+            _codex_auth_available(home) if requires_openai_auth or uses_actor_authorization else False
         ),
+        http_header_names=http_header_names,
     )
 
 
@@ -110,7 +121,10 @@ def should_run_live_llm(codex_home: str | Path | None = None) -> bool:
         config = load_codex_provider_config(codex_home)
         if config and config.requires_openai_auth and config.auth_available:
             return True
-        return resolve_runtime_http_headers(codex_home=codex_home, codex_provider=config) is not None
+        runtime_headers = resolve_runtime_http_headers(codex_home=codex_home, codex_provider=config)
+        if config and config.uses_openai_actor_authorization:
+            return config.auth_available and runtime_headers is not None
+        return runtime_headers is not None
     except (OSError, ValueError):
         return False
 
@@ -124,8 +138,8 @@ def resolve_runtime_credential(
     """Resolve one runtime credential without exposing it to config or artifacts.
 
     OPENAI_API_KEY remains the explicit fallback. Codex auth reuse is allowed
-    only for the selected provider when `requires_openai_auth=true`, matching
-    Codex's provider-scoping guardrail.
+    for the selected provider when `requires_openai_auth=true`, or when that
+    provider uses Codex's actor-authorization header alongside its auth snapshot.
     """
 
     env_value = os.environ.get(api_key_env)
@@ -133,7 +147,7 @@ def resolve_runtime_credential(
         return RuntimeCredential(value=env_value, source=f"env:{api_key_env}")
 
     provider = codex_provider or load_codex_provider_config(codex_home)
-    if not provider or not provider.requires_openai_auth:
+    if not provider or not (provider.requires_openai_auth or provider.uses_openai_actor_authorization):
         return None
     token = _read_codex_auth_token(_codex_home(codex_home))
     if not token:
