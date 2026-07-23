@@ -13,11 +13,15 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
+from llm_abm_sim.final_research_reason_context import ReasonContextDiagnostics
 from llm_abm_sim.final_research_report import (
     FinalResearchRankingReportPayloadV5,
+    FinalResearchRankingReportPayloadV6,
     RankingV5FormalEvidence,
+    RankingV6FormalEvidence,
     _validate_persisted_ranking_report,
 )
+from llm_abm_sim.provider_accounting import ProviderAccounting
 
 
 class ReleaseValidationError(ValueError):
@@ -114,6 +118,101 @@ class _ReleaseContractV2(BaseModel):
             raise ValueError("decided_users must equal sum(action_counts)")
         if counts.decided_users != sum(self.decision_source_counts.values()):
             raise ValueError("decided_users must equal sum(decision_source_counts)")
+        return self
+
+
+class _ReleaseContractV3(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    schema_version: Literal["abm-report-release-contract-v3"]
+    release_purpose: Literal["formal_research"]
+    source_directory: str = Field(min_length=1)
+    payload_schema_version: Literal["final-research-ranking-report-payload-v6"]
+    users_schema_version: Literal["final-research-ranking-users-v5"]
+    manifest_version: Literal["final-research-ranking-runtime-v4"]
+    diagnostics_schema_version: Literal["ranking-diagnostics-v2"]
+    diagnostics_summary_schema_version: Literal["ranking-diagnostics-summary-v2"]
+    prompt_version: Literal["jinjiang-green-marketing-prompt-v3"]
+    evidence_schema_version: Literal["ranking-v6-formal-evidence-v1"]
+    decision_execution_evidence_schema_version: Literal["final-research-decision-execution-evidence-v2"]
+    sampling_method: Literal["seed_first_research_sample_v1"]
+    sampling_status: Literal["persisted_seed_first_formal_run"]
+    decision_execution_mode: Literal["live_provider"]
+    adapter_chain: list[Literal["openai_compatible"]]
+    requested_model: Literal["gpt-5.4-mini"]
+    live_api_triggered: Literal[True]
+    formal_research_evidence: Literal[True]
+    production_deploy_eligible: Literal[True]
+    sample_role_counts: dict[str, int]
+    decision_source_counts: dict[str, int]
+    action_counts: dict[str, int]
+    terminal_counts: _TerminalCounts
+    degeneracy_flags: _DegeneracyFlags
+    provider_accounting: ProviderAccounting
+    reason_context_diagnostics: ReasonContextDiagnostics
+    target_aggregate_engagement_reference: _TargetAggregateEngagementReference
+    artifact_sha256: dict[str, str]
+
+    @model_validator(mode="after")
+    def _validate_formal_contract(self) -> _ReleaseContractV3:
+        if self.adapter_chain != ["openai_compatible"]:
+            raise ValueError("adapter_chain must be exactly ['openai_compatible']")
+        allowed_roles = {"seed", "network_cohort", "ordinary"}
+        if not self.sample_role_counts or set(self.sample_role_counts) - allowed_roles:
+            raise ValueError("sample_role_counts must contain only seed/network_cohort/ordinary roles")
+        if set(self.decision_source_counts) - {"provider"}:
+            raise ValueError("decision_source_counts must contain only provider Decisions")
+        if set(self.action_counts) != {"like", "comment", "share", "ignore"}:
+            raise ValueError("action_counts must contain like/comment/share/ignore exactly once")
+        all_counts = [
+            *self.sample_role_counts.values(),
+            *self.decision_source_counts.values(),
+            *self.action_counts.values(),
+        ]
+        if any(value < 0 for value in all_counts):
+            raise ValueError("release evidence counts must be non-negative")
+        counts = self.terminal_counts
+        if counts.sample_users != counts.exposed_users + counts.below_delivery_capacity:
+            raise ValueError("sample_users must equal exposed_users + below_delivery_capacity")
+        if counts.exposed_users != counts.decided_users + counts.provider_failed:
+            raise ValueError("exposed_users must equal decided_users + provider_failed")
+        if counts.decided_users != sum(self.action_counts.values()):
+            raise ValueError("decided_users must equal sum(action_counts)")
+        if counts.decided_users != sum(self.decision_source_counts.values()):
+            raise ValueError("decided_users must equal sum(decision_source_counts)")
+
+        accounting = self.provider_accounting
+        if accounting.external_request_invocations <= 0:
+            raise ValueError("v3 Formal accounting requires at least one external request invocation")
+        if not (
+            accounting.external_request_invocations
+            >= accounting.provider_response_count
+            >= accounting.successful_decision_count
+            == counts.decided_users
+        ):
+            raise ValueError("v3 accounting requires invocations >= responses >= successful Decisions == decided_users")
+        if accounting.observed_model_counts != {self.requested_model: accounting.provider_response_count}:
+            raise ValueError("observed_model_counts must report only the exact requested model for every response")
+        if accounting.observed_model_missing_response_count or accounting.observed_model_malformed_response_count:
+            raise ValueError("v3 Formal accounting cannot contain missing or malformed observed models")
+        if accounting.usage_complete_response_count != accounting.provider_response_count:
+            raise ValueError("complete usage must cover every returned Provider response")
+        if accounting.usage_missing_response_count or accounting.usage_malformed_response_count:
+            raise ValueError("v3 Formal accounting cannot contain missing or malformed usage")
+
+        diagnostics = self.reason_context_diagnostics
+        if diagnostics.exact_reason_facts.decision_row_count != counts.decided_users:
+            raise ValueError("exact reason denominator must equal decided_users")
+        peer_context = diagnostics.decision_visible_peer_context
+        if (
+            peer_context.context_count != counts.exposed_users
+            or peer_context.neutral_context_count != peer_context.context_count
+            or peer_context.non_neutral_context_count != 0
+            or any(peer_context.counter_totals.values())
+        ):
+            raise ValueError("Decision-visible PeerContext must be neutral for every exposed user")
+        if diagnostics.selected_ranking_context.selected_candidate_count != counts.exposed_users:
+            raise ValueError("selected Ranking context denominator must equal exposed_users")
         return self
 
 
@@ -459,6 +558,161 @@ def _validate_v2(
     }
 
 
+def _validate_v3(
+    *,
+    repo_root: Path,
+    contract_document: dict[str, object],
+    source_dir: Path,
+    snapshot_dir: Path | None = None,
+) -> dict[str, object]:
+    try:
+        contract = _ReleaseContractV3.model_validate(contract_document)
+    except ValidationError as exc:
+        raise ReleaseValidationError(f"invalid v3 release contract: {exc}") from exc
+    raw_expected_source, source_dir = _validated_source_directory(
+        repo_root=repo_root,
+        raw_expected_source=contract.source_directory,
+        source_dir=source_dir,
+    )
+    evidence_dir = source_dir
+    if snapshot_dir is not None:
+        if snapshot_dir.is_symlink() or not snapshot_dir.is_dir():
+            raise ReleaseValidationError("release snapshot must be a non-symlink directory")
+        _reject_symlinks(snapshot_dir)
+        evidence_dir = snapshot_dir.resolve()
+    try:
+        validated = _validate_persisted_ranking_report(evidence_dir)
+    except (OSError, ValueError) as exc:
+        raise ReleaseValidationError(f"persisted v6 evidence is invalid: {exc}") from exc
+    if not isinstance(validated.payload, FinalResearchRankingReportPayloadV6):
+        raise ReleaseValidationError("v3 release contract requires a v6 ranking report payload")
+    payload = validated.payload
+    if not isinstance(payload.evidence_state, RankingV6FormalEvidence):
+        raise ReleaseValidationError("v3 release contract requires Formal v6 evidence")
+    if not payload.evidence_state.production_deploy_eligible:
+        raise ReleaseValidationError("v3 release contract requires production-deploy-eligible v6 evidence")
+    decision = payload.evidence_state.decision_execution_evidence
+    accounting = decision.provider_accounting
+    if decision.adapter_chain != ["openai_compatible"]:
+        raise ReleaseValidationError("v3 Formal evidence requires bare ['openai_compatible'] adapter chain")
+    if decision.provider_metadata.get("adapter") != "openai_compatible":
+        raise ReleaseValidationError("v3 Formal provider metadata does not match the adapter chain")
+    if (
+        decision.provider_metadata.get("enabled") is not True
+        or decision.provider_metadata.get("require_live_env") is not True
+    ):
+        raise ReleaseValidationError("v3 Formal provider metadata requires the explicit live environment gate")
+    if decision.provider_metadata.get("model") != contract.requested_model:
+        raise ReleaseValidationError("v3 requested model does not match persisted Provider metadata")
+    if set(decision.decision_source_counts) - {"provider"}:
+        raise ReleaseValidationError("v3 Formal evidence contains a non-provider Decision source")
+    if not (
+        accounting.external_request_invocations
+        >= accounting.provider_response_count
+        >= accounting.successful_decision_count
+        == decision.terminal_counts.decided_users
+    ):
+        raise ReleaseValidationError(
+            "v3 persisted accounting requires invocations >= responses >= successful Decisions == decided_users"
+        )
+    if accounting.observed_model_counts != {contract.requested_model: accounting.provider_response_count}:
+        raise ReleaseValidationError("v3 observed models do not match the exact requested model")
+    if accounting.observed_model_missing_response_count or accounting.observed_model_malformed_response_count:
+        raise ReleaseValidationError("v3 observed-model accounting is incomplete")
+    if (
+        accounting.usage_complete_response_count != accounting.provider_response_count
+        or accounting.usage_missing_response_count
+        or accounting.usage_malformed_response_count
+    ):
+        raise ReleaseValidationError("v3 usage accounting is incomplete")
+
+    artifacts = validated.manifest.get("artifacts")
+    if not isinstance(artifacts, dict) or not artifacts:
+        raise ReleaseValidationError("v3 artifact manifest must contain artifacts")
+    diagnostics = payload.ranking_diagnostics
+    historical = diagnostics.get("historical_top20_diagnostic")
+    if not isinstance(historical, dict):  # pragma: no cover - validated by the payload model.
+        raise ReleaseValidationError("v3 release requires historical Top20 diagnostics")
+    aggregate_reference = historical.get("target_aggregate_engagement_reference")
+    evidence_expectations = {
+        "sample_role_counts": payload.sample_role_counts,
+        "decision_source_counts": decision.decision_source_counts,
+        "action_counts": decision.action_counts,
+        "terminal_counts": decision.terminal_counts.model_dump(mode="json"),
+        "degeneracy_flags": decision.degeneracy_flags.model_dump(mode="json"),
+        "provider_accounting": accounting.model_dump(mode="json"),
+        "reason_context_diagnostics": payload.reason_context_diagnostics.model_dump(mode="json"),
+        "target_aggregate_engagement_reference": aggregate_reference,
+    }
+    contract_evidence = {
+        "sample_role_counts": contract.sample_role_counts,
+        "decision_source_counts": contract.decision_source_counts,
+        "action_counts": contract.action_counts,
+        "terminal_counts": contract.terminal_counts.model_dump(mode="json"),
+        "degeneracy_flags": contract.degeneracy_flags.model_dump(mode="json"),
+        "provider_accounting": contract.provider_accounting.model_dump(mode="json"),
+        "reason_context_diagnostics": contract.reason_context_diagnostics.model_dump(mode="json"),
+        "target_aggregate_engagement_reference": contract.target_aggregate_engagement_reference.model_dump(mode="json"),
+    }
+    for field_name, expected in evidence_expectations.items():
+        _expect_equal(contract_evidence[field_name], expected, f"v3 {field_name}")
+
+    _expect_equal(payload.run.sampling_method, contract.sampling_method, "v3 sampling_method")
+    _expect_equal(payload.run.sampling_status, contract.sampling_status, "v3 sampling_status")
+    _expect_equal(decision.schema_version, contract.decision_execution_evidence_schema_version, "v3 Decision schema")
+    _expect_equal(decision.decision_execution_mode, contract.decision_execution_mode, "v3 execution mode")
+    _expect_equal(decision.adapter_chain, contract.adapter_chain, "v3 adapter chain")
+    _expect_equal(decision.live_api_triggered, contract.live_api_triggered, "v3 live_api_triggered")
+    _expect_equal(decision.formal_research_evidence, contract.formal_research_evidence, "v3 Formal evidence")
+    _expect_equal(payload.evidence_state.schema_version, contract.evidence_schema_version, "v3 evidence schema")
+    _expect_equal(
+        payload.evidence_state.production_deploy_eligible,
+        contract.production_deploy_eligible,
+        "v3 production_deploy_eligible",
+    )
+
+    manifest_paths = list(artifacts.values())
+    if not all(isinstance(path, str) for path in manifest_paths):  # pragma: no cover - reader validates this.
+        raise ReleaseValidationError("v3 artifact manifest paths must be strings")
+    if len(manifest_paths) != len(set(manifest_paths)):
+        raise ReleaseValidationError("v3 artifact manifest paths must be unique")
+    required_hash_paths = {*manifest_paths, "artifact_manifest.json"}
+    source_files = {path.relative_to(evidence_dir).as_posix() for path in evidence_dir.rglob("*") if path.is_file()}
+    if source_files != required_hash_paths:
+        raise ReleaseValidationError(
+            "source directory contains files outside the v3 artifact manifest or omits declared files; "
+            f"missing={sorted(required_hash_paths - source_files)}, "
+            f"extra={sorted(source_files - required_hash_paths)}"
+        )
+    actual_hash_paths = set(contract.artifact_sha256)
+    if actual_hash_paths != required_hash_paths:
+        raise ReleaseValidationError(
+            "v3 artifact_sha256 must cover the exact manifest artifacts and artifact_manifest.json; "
+            f"missing={sorted(required_hash_paths - actual_hash_paths)}, "
+            f"extra={sorted(actual_hash_paths - required_hash_paths)}"
+        )
+    for raw_path, expected_hash in contract.artifact_sha256.items():
+        if len(expected_hash) != 64 or any(character not in "0123456789abcdef" for character in expected_hash):
+            raise ReleaseValidationError(f"v3 SHA-256 for {raw_path} must be 64 lowercase hexadecimal characters")
+        artifact = _safe_artifact(evidence_dir, raw_path, f"v3 hashed artifact {raw_path}")
+        _expect_equal(_sha256(artifact), expected_hash, f"SHA-256 for {raw_path}")
+
+    return {
+        "schema_version": contract.schema_version,
+        "release_purpose": contract.release_purpose,
+        "source_directory": raw_expected_source,
+        "sampling_method": contract.sampling_method,
+        "sampling_status": contract.sampling_status,
+        "sample_role_counts": contract.sample_role_counts,
+        "decision_execution_mode": contract.decision_execution_mode,
+        "requested_model": contract.requested_model,
+        "live_api_triggered": contract.live_api_triggered,
+        "artifact_count": len(artifacts),
+        "report_sha256": contract.artifact_sha256["report.html"],
+        "production_deploy_eligible": contract.production_deploy_eligible,
+    }
+
+
 def validate_release(
     *,
     repo_root: Path,
@@ -482,6 +736,14 @@ def validate_release(
             source_dir=source_dir,
             snapshot_dir=snapshot_dir,
         )
+    if schema_version == "abm-report-release-contract-v3":
+        _safe_contract_file(repo_root, contract_path)
+        return _validate_v3(
+            repo_root=repo_root,
+            contract_document=contract,
+            source_dir=source_dir,
+            snapshot_dir=snapshot_dir,
+        )
     raise ReleaseValidationError(f"unsupported release contract schema_version: {schema_version!r}")
 
 
@@ -498,7 +760,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--require-formal-production",
         action="store_true",
-        help="Reject validated evidence unless it is a deploy-eligible v2 formal research release",
+        help="Reject validated evidence unless it is a deploy-eligible v2 or v3 formal research release",
     )
     return parser.parse_args()
 
@@ -513,12 +775,13 @@ def main() -> int:
             snapshot_dir=args.snapshot_dir,
         )
         if args.require_formal_production and (
-            result.get("schema_version") != "abm-report-release-contract-v2"
+            result.get("schema_version") not in {"abm-report-release-contract-v2", "abm-report-release-contract-v3"}
             or result.get("release_purpose") != "formal_research"
             or result.get("production_deploy_eligible") is not True
         ):
             raise ReleaseValidationError(
-                "formal production deployment requires abm-report-release-contract-v2 formal_research evidence"
+                "formal production deployment requires abm-report-release-contract-v2 or "
+                "abm-report-release-contract-v3 formal_research evidence"
             )
     except ReleaseValidationError as exc:
         print(f"release validation error: {exc}", file=sys.stderr)

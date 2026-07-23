@@ -151,8 +151,13 @@ class _FinalResearchDecisionEvidenceBuilder:
             else empty_provider_accounting()
         )
 
-    def external_provider_calls_configured(self) -> bool:
-        return type(self._leaf) is OpenAICompatibleDecisionAdapter and self._leaf.client is None
+    def require_external_provider_live_gate(self) -> None:
+        if (
+            type(self._leaf) is OpenAICompatibleDecisionAdapter
+            and self._leaf.client is None
+            and not self._leaf.config.require_live_env
+        ):
+            raise ValueError("Final Research v6 external Provider requires require_live_env=true")
 
     def classification(self) -> DecisionAdapterClassification:
         current = self._leaf

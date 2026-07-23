@@ -891,13 +891,15 @@ def test_provider_retries_timeout_before_success():
     assert adapter.provider_accounting.usage_missing_response_count == 1
 
 
-def test_live_client_transport_attempts_count_invocations_without_synthesizing_responses(monkeypatch):
+def test_sdk_wrapper_transport_attempts_count_invocations_without_synthesizing_responses(monkeypatch):
     client = FakeProviderClient(None, exc=TimeoutError("temporary"))
+    sdk_client = object.__new__(_OpenAISDKClient)
+    cast(Any, sdk_client).create_response = client.create_response
     adapter = OpenAICompatibleDecisionAdapter(
         ProviderLLMConfig(enabled=True, require_live_env=False, max_retries=1, retry_backoff_seconds=0),
         sleep=lambda _delay: None,
     )
-    monkeypatch.setattr(adapter, "_build_live_client", lambda: client)
+    monkeypatch.setattr(adapter, "_build_live_client", lambda: sdk_client)
 
     with pytest.raises(ProviderDecisionError, match="TimeoutError"):
         adapter.decide(**sample_context())

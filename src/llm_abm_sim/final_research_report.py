@@ -835,6 +835,9 @@ def _ranking_v5_evidence(value: object) -> RankingV5Evidence:
     return RankingV5ExpandEvidence.model_validate(value)
 
 
+_V6_FORMAL_MODEL = "gpt-5.4-mini"
+
+
 class RankingV6ExpandEvidence(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
@@ -853,22 +856,86 @@ class RankingV6ExpandEvidence(BaseModel):
         return self
 
 
+class RankingV6FormalEvidence(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    schema_version: Literal["ranking-v6-formal-evidence-v1"]
+    contract_stage: Literal["formal_release"]
+    target_aggregate_engagement_reference: RankingPersistedEvidenceState
+    decision_execution_evidence: DecisionExecutionEvidenceV2
+    production_deploy_eligible: bool
+
+    @model_validator(mode="after")
+    def _validate_formal_lineage(self) -> RankingV6FormalEvidence:
+        decision = self.decision_execution_evidence
+        if not decision.formal_research_evidence or not decision.live_api_triggered:
+            raise ValueError("v6 Formal evidence requires actual live Provider execution")
+        if decision.decision_execution_mode != "live_provider":
+            raise ValueError("v6 Formal evidence requires live_provider execution mode")
+        if decision.sampling_status != "persisted_seed_first_formal_run":
+            raise ValueError("v6 Formal evidence requires persisted_seed_first_formal_run")
+        expected_eligibility = _v6_production_deploy_eligible(decision)
+        if self.production_deploy_eligible != expected_eligibility:
+            raise ValueError("v6 production eligibility does not match persisted execution evidence")
+        return self
+
+
+RankingV6Evidence = RankingV6ExpandEvidence | RankingV6FormalEvidence
+
+
+def _v6_production_deploy_eligible(decision: DecisionExecutionEvidenceV2) -> bool:
+    accounting = decision.provider_accounting
+    return (
+        decision.formal_research_evidence
+        and decision.decision_execution_mode == "live_provider"
+        and decision.live_api_triggered
+        and decision.sampling_status == "persisted_seed_first_formal_run"
+        and decision.adapter_chain == ["openai_compatible"]
+        and decision.provider_metadata.get("adapter") == "openai_compatible"
+        and decision.provider_metadata.get("enabled") is True
+        and decision.provider_metadata.get("require_live_env") is True
+        and decision.provider_metadata.get("model") == _V6_FORMAL_MODEL
+        and not (set(decision.decision_source_counts) - {"provider"})
+        and accounting.external_request_invocations > 0
+        and accounting.external_request_invocations >= accounting.provider_response_count
+        and accounting.provider_response_count >= accounting.successful_decision_count
+        and accounting.successful_decision_count == decision.terminal_counts.decided_users
+        and accounting.observed_model_counts == {_V6_FORMAL_MODEL: accounting.provider_response_count}
+        and accounting.observed_model_missing_response_count == 0
+        and accounting.observed_model_malformed_response_count == 0
+        and accounting.usage_complete_response_count == accounting.provider_response_count
+        and accounting.usage_missing_response_count == 0
+        and accounting.usage_malformed_response_count == 0
+    )
+
+
 def ranking_v6_release_evidence(
     decision_execution_evidence: DecisionExecutionEvidenceV2,
 ) -> dict[str, object]:
+    target_evidence = RankingPersistedEvidenceState(
+        status="persisted",
+        formal_research_evidence=False,
+    )
+    if decision_execution_evidence.formal_research_evidence:
+        return RankingV6FormalEvidence(
+            schema_version="ranking-v6-formal-evidence-v1",
+            contract_stage="formal_release",
+            target_aggregate_engagement_reference=target_evidence,
+            decision_execution_evidence=decision_execution_evidence,
+            production_deploy_eligible=_v6_production_deploy_eligible(decision_execution_evidence),
+        ).model_dump(mode="json")
     return RankingV6ExpandEvidence(
         schema_version="ranking-v6-expand-evidence-v1",
         contract_stage="validation_expand",
-        target_aggregate_engagement_reference=RankingPersistedEvidenceState(
-            status="persisted",
-            formal_research_evidence=False,
-        ),
+        target_aggregate_engagement_reference=target_evidence,
         decision_execution_evidence=decision_execution_evidence,
         production_deploy_eligible=False,
     ).model_dump(mode="json")
 
 
-def _ranking_v6_evidence(value: object) -> RankingV6ExpandEvidence:
+def _ranking_v6_evidence(value: object) -> RankingV6Evidence:
+    if isinstance(value, Mapping) and value.get("schema_version") == "ranking-v6-formal-evidence-v1":
+        return RankingV6FormalEvidence.model_validate(value)
     return RankingV6ExpandEvidence.model_validate(value)
 
 
@@ -1230,7 +1297,7 @@ class FinalResearchRankingReportPayloadV5(BaseModel):
 
 class FinalResearchRankingReportPayloadV6(FinalResearchRankingReportPayloadV5):
     schema_version: Literal["final-research-ranking-report-payload-v6"] = "final-research-ranking-report-payload-v6"  # type: ignore[assignment]
-    evidence_state: RankingV6ExpandEvidence  # type: ignore[assignment]
+    evidence_state: RankingV6Evidence  # type: ignore[assignment]
     provider_accounting: ProviderAccounting
     reason_context_diagnostics: ReasonContextDiagnostics
 
@@ -1376,7 +1443,7 @@ _SEED_FIRST_V5_REBUILD_CONTRACT = _RankingRebuildContract(
     artifacts=_RANKING_V5_ARTIFACTS,
 )
 _SEED_FIRST_V6_REBUILD_CONTRACT = _RankingRebuildContract(
-    lineage="Seed-First v6 expand evidence",
+    lineage="Seed-First v6 evidence",
     payload_schema=_RANKING_PAYLOAD_V6_SCHEMA,
     users_schema=_RANKING_USERS_V5_SCHEMA,
     runtime_schema=FINAL_RESEARCH_RANKING_RUNTIME_V4_VERSION,
@@ -1386,10 +1453,10 @@ _SEED_FIRST_V6_REBUILD_CONTRACT = _RankingRebuildContract(
     sample_audit_artifact="seed_first_sample_audit",
     sample_audit_schema="seed-first-sample-audit-v1",
     sampling_method="seed_first_research_sample_v1",
-    sampling_statuses=("validation_run",),
+    sampling_statuses=("validation_run", "persisted_seed_first_formal_run"),
     persists_sampling_fields=True,
     artifacts=_RANKING_V5_ARTIFACTS,
-    evidence_schemas=("ranking-v6-expand-evidence-v1",),
+    evidence_schemas=("ranking-v6-expand-evidence-v1", "ranking-v6-formal-evidence-v1"),
     decision_evidence_schemas=("final-research-decision-execution-evidence-v2",),
 )
 
@@ -2563,6 +2630,15 @@ def _render_v6_expanded_evidence(payload: FinalResearchRankingReportPayloadV6) -
     reason = diagnostics.exact_reason_facts
     peer = diagnostics.decision_visible_peer_context
     ranking = diagnostics.selected_ranking_context
+    if isinstance(payload.evidence_state, RankingV6FormalEvidence):
+        eligibility_note = (
+            "Formal evidence 已闭合并记录 production_deploy_eligible=true；仍需显式 v3 contract、"
+            "human authorization 与 deploy preflight 才能发布。"
+            if payload.evidence_state.production_deploy_eligible
+            else "Formal evidence 已记录 live invocation，但 production_deploy_eligible=false；v3 release gate 会拒绝。"
+        )
+    else:
+        eligibility_note = "Validation evidence 不表示 production eligibility。"
     peer_rows = "".join(
         f"<tr><th><code>{escape(field_name)}</code></th><td>{value:,}</td></tr>"
         for field_name, value in sorted(peer.counter_totals.items())
@@ -2594,7 +2670,7 @@ def _render_v6_expanded_evidence(payload: FinalResearchRankingReportPayloadV6) -
           <p><code>selected={ranking.selected_candidate_count}</code> · <code>engaged_neighbor_count=0: {ranking.zero_engaged_neighbor_count}</code> · <code>positive: {ranking.positive_engaged_neighbor_count}</code> · <code>maximum={ranking.maximum_engaged_neighbor_count}</code></p>
         </article>
       </div>
-      <p class="target-aggregate-reference-limit" data-testid="v6-evidence-limitations">Observed model 与 token usage 只描述 Provider 返回的 allowlisted metadata，不是价格、账单或模型可用性证明；transport failure 可能没有 returned usage。Exact reason 只做原字符串相等统计，不判断语义相似、理由质量、真实性或文案多样性。Ranking context 只影响投放排序，不是 Prompt input；Validation evidence 不表示 production eligibility。</p>
+      <p class="target-aggregate-reference-limit" data-testid="v6-evidence-limitations">Observed model 与 token usage 只描述 Provider 返回的 allowlisted metadata，不是价格、账单或模型可用性证明；transport failure 可能没有 returned usage。Exact reason 只做原字符串相等统计，不判断语义相似、理由质量、真实性或文案多样性。Ranking context 只影响投放排序，不是 Prompt input；{escape(eligibility_note)}</p>
     """
 
 

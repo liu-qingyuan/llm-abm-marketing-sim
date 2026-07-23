@@ -17,7 +17,12 @@ from llm_abm_sim.final_research_decision_evidence import (
     DecisionExecutionEvidenceV2,
     _FinalResearchDecisionEvidenceBuilder,
 )
-from llm_abm_sim.final_research_report import RankingV5ExpandEvidence, ranking_v5_release_evidence
+from llm_abm_sim.final_research_report import (
+    RankingV5ExpandEvidence,
+    RankingV6FormalEvidence,
+    ranking_v5_release_evidence,
+    ranking_v6_release_evidence,
+)
 from llm_abm_sim.providers.openai_compatible import OpenAICompatibleDecisionAdapter, ProviderResponseEnvelope
 from llm_abm_sim.safe_serialization import safe_data
 from llm_abm_sim.schemas import PeerContext, PlatformContext, PostContent, ProviderLLMConfig, UserProfile
@@ -181,6 +186,125 @@ def test_ranking_v5_release_evidence_promotes_only_actual_live_execution():
     assert formal_target_evidence["status"] == "persisted"
     assert formal_state["decision_execution_evidence"] == formal_evidence.model_dump(mode="json")
     assert formal_state["production_deploy_eligible"] is True
+
+
+def test_ranking_v6_formal_evidence_keeps_incomplete_live_accounting_ineligible():
+    complete_evidence = DecisionExecutionEvidenceV2.model_validate(
+        {
+            "schema_version": "final-research-decision-execution-evidence-v2",
+            "status": "persisted",
+            "formal_research_evidence": True,
+            "decision_execution_mode": "live_provider",
+            "adapter_chain": ["openai_compatible"],
+            "decision_source_counts": {"provider": 1},
+            "action_counts": {"like": 0, "comment": 0, "share": 0, "ignore": 1},
+            "terminal_counts": {
+                "sample_users": 1,
+                "exposed_users": 1,
+                "decided_users": 1,
+                "provider_failed": 0,
+                "below_delivery_capacity": 0,
+            },
+            "provider_metadata": {
+                "adapter": "openai_compatible",
+                "enabled": True,
+                "model": "gpt-5.4-mini",
+                "prompt_version": "jinjiang-green-marketing-prompt-v3",
+                "require_live_env": True,
+            },
+            "provider_accounting": {
+                "schema_version": "provider-accounting-v1",
+                "external_request_invocations": 1,
+                "provider_response_count": 1,
+                "successful_decision_count": 1,
+                "observed_model_counts": {"gpt-5.4-mini": 1},
+                "observed_model_missing_response_count": 0,
+                "observed_model_malformed_response_count": 0,
+                "usage_complete_response_count": 1,
+                "usage_missing_response_count": 0,
+                "usage_malformed_response_count": 0,
+                "input_tokens": 9,
+                "output_tokens": 3,
+                "total_tokens": 12,
+                "cached_input_tokens": None,
+                "cached_input_tokens_reported_response_count": 0,
+            },
+            "live_api_triggered": True,
+            "sampling_status": "persisted_seed_first_formal_run",
+            "degeneracy_flags": {
+                "all_decisions_ignore": True,
+                "single_action_only": True,
+                "no_engagement_feedback": True,
+            },
+        }
+    )
+
+    complete_state = ranking_v6_release_evidence(complete_evidence)
+
+    assert RankingV6FormalEvidence.model_validate(complete_state).production_deploy_eligible is True
+
+    incomplete_document = complete_evidence.model_dump(mode="json")
+    incomplete_document["provider_accounting"].update(
+        {
+            "usage_complete_response_count": 0,
+            "usage_missing_response_count": 1,
+            "input_tokens": None,
+            "output_tokens": None,
+            "total_tokens": None,
+        }
+    )
+    incomplete_state = ranking_v6_release_evidence(DecisionExecutionEvidenceV2.model_validate(incomplete_document))
+
+    assert incomplete_state["schema_version"] == "ranking-v6-formal-evidence-v1"
+    assert incomplete_state["contract_stage"] == "formal_release"
+    assert incomplete_state["production_deploy_eligible"] is False
+
+    ineligible_documents = []
+    cached_document = complete_evidence.model_dump(mode="json")
+    cached_document["adapter_chain"] = ["cached", "openai_compatible"]
+    ineligible_documents.append(cached_document)
+    wrong_requested_model = complete_evidence.model_dump(mode="json")
+    wrong_requested_model["provider_metadata"]["model"] = "gpt-5.4"
+    ineligible_documents.append(wrong_requested_model)
+    missing_live_gate = complete_evidence.model_dump(mode="json")
+    missing_live_gate["provider_metadata"]["require_live_env"] = False
+    ineligible_documents.append(missing_live_gate)
+    mixed_observed_model = complete_evidence.model_dump(mode="json")
+    mixed_observed_model["provider_accounting"]["observed_model_counts"] = {"fallback-model": 1}
+    ineligible_documents.append(mixed_observed_model)
+    zero_invocations = complete_evidence.model_dump(mode="json")
+    zero_invocations["terminal_counts"] = {
+        "sample_users": 0,
+        "exposed_users": 0,
+        "decided_users": 0,
+        "provider_failed": 0,
+        "below_delivery_capacity": 0,
+    }
+    zero_invocations["decision_source_counts"] = {}
+    zero_invocations["action_counts"] = {"like": 0, "comment": 0, "share": 0, "ignore": 0}
+    zero_invocations["provider_accounting"] = {
+        "schema_version": "provider-accounting-v1",
+        "external_request_invocations": 0,
+        "provider_response_count": 0,
+        "successful_decision_count": 0,
+        "observed_model_counts": {"gpt-5.4-mini": 0},
+        "observed_model_missing_response_count": 0,
+        "observed_model_malformed_response_count": 0,
+        "usage_complete_response_count": 0,
+        "usage_missing_response_count": 0,
+        "usage_malformed_response_count": 0,
+        "input_tokens": None,
+        "output_tokens": None,
+        "total_tokens": None,
+        "cached_input_tokens": None,
+        "cached_input_tokens_reported_response_count": 0,
+    }
+    ineligible_documents.append(zero_invocations)
+
+    for document in ineligible_documents:
+        state = ranking_v6_release_evidence(DecisionExecutionEvidenceV2.model_validate(document))
+        assert state["schema_version"] == "ranking-v6-formal-evidence-v1"
+        assert state["production_deploy_eligible"] is False
 
 
 def test_v2_bare_provider_rejects_runtime_decisions_without_leaf_success_accounting():

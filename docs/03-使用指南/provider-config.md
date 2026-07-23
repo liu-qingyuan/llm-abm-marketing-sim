@@ -55,6 +55,8 @@ Adapter 的 `provider_accounting` 是独立 strict typed evidence，不放入 `p
 
 这些 usage 只描述 Provider 在 returned response 中报告的 allowlisted metadata。Transport failure 可能没有 returned usage，因此 persisted usage 不是完整 billed cost、价格、折扣、模型可用性或节省成本的证明。
 
+Final Research v6 只在 `require_live_env=true` 且内部 OpenAI-compatible SDK wrapper 实际 invocation 后写 `ranking-v6-formal-evidence-v1`，但 Formal status 不等于 production eligibility。`abm-report-release-contract-v3` 只接受 bare `["openai_compatible"]`、exact requested/observed `gpt-5.4-mini`、每个 returned response 的 complete usage，以及与 persisted Decisions/actions/终态一致的 run-local accounting。缺失、畸形、mixed model、partial usage、cache wrapper 或 count mismatch 都保留为可审计事实并使 `production_deploy_eligible=false`；不会估算 transport failure 的 tokens。Injected client 或任意替代 SDK builder 的 protocol client 仍是 mock evidence，不能产生 live fact。
+
 ## Web 控制台 Provider 模式
 
 离线浏览器 demo 使用 **Use mock provider for test/dev**。这条路径使用确定性 mock decisions，并在 UI、payload、artifact 中标记 mock provider evidence，输出到 `runs/web/<run-id>/`。

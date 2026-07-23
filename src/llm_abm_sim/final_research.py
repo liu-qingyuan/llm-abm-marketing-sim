@@ -1234,10 +1234,7 @@ class FinalResearchRunner:
         if self.config.provider.enabled:
             if model_policy.model is FinalResearchModel.TARGET_DELIVERY_RANKING_V2:
                 decision_evidence_builder = _FinalResearchDecisionEvidenceBuilder(self.decision_adapter)
-                if decision_evidence_builder.external_provider_calls_configured():
-                    raise ValueError(
-                        "Final Research v6 is Validation-only and cannot call an external Provider"
-                    )
+                decision_evidence_builder.require_external_provider_live_gate()
                 adapter_classification = decision_evidence_builder.classification()
                 ranking_runtime = self._run_target_delivery_runtime(
                     prepared,

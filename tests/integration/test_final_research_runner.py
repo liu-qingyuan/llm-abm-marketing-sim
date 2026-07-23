@@ -9,6 +9,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 from collections import Counter
 from pathlib import Path
 from typing import Any, cast
@@ -40,7 +41,11 @@ from llm_abm_sim.final_research_report import (
     RankingV6ExpandEvidence,
     _validate_persisted_ranking_report,
 )
-from llm_abm_sim.providers.openai_compatible import OpenAICompatibleDecisionAdapter, ProviderResponseEnvelope
+from llm_abm_sim.providers.openai_compatible import (
+    OpenAICompatibleDecisionAdapter,
+    ProviderResponseEnvelope,
+    _OpenAISDKClient,
+)
 from llm_abm_sim.safe_serialization import artifact_has_forbidden_terms
 from llm_abm_sim.schemas import (
     FailClosedAction,
@@ -719,6 +724,8 @@ def _TargetDeliveryAdapter(
     engage_seed_user: bool = True,
     cycle_actions: bool = False,
     reason: str = "controlled deterministic provider decision",
+    model: str = "mock-model",
+    require_live_env: bool = False,
 ) -> OpenAICompatibleDecisionAdapter:
     client = _TargetDeliveryProviderClient(
         failed_user_id=failed_user_id,
@@ -728,10 +735,16 @@ def _TargetDeliveryAdapter(
         reason=reason,
     )
     return OpenAICompatibleDecisionAdapter(
-        ProviderLLMConfig(enabled=True, model="mock-model", require_live_env=False),
+        ProviderLLMConfig(enabled=True, model=model, require_live_env=require_live_env),
         client=client,
         sleep=lambda _delay: None,
     )
+
+
+def _sdk_wrapper_stub(client: _TargetDeliveryProviderClient) -> _OpenAISDKClient:
+    sdk_client = object.__new__(_OpenAISDKClient)
+    cast(Any, sdk_client).create_response = client.create_response
+    return sdk_client
 
 
 def _target_delivery_client(adapter: OpenAICompatibleDecisionAdapter) -> _TargetDeliveryProviderClient:
@@ -1595,28 +1608,145 @@ def test_target_delivery_ranking_v6_expands_accounting_context_and_stays_validat
     assert (output / "final_research_report_payload.json").read_bytes() == persisted_payload
 
 
-def test_v6_rejects_external_provider_configuration_before_first_call(tmp_path: Path, monkeypatch) -> None:
+def test_v6_external_provider_requires_live_env_gate_before_sdk_build(tmp_path: Path, monkeypatch) -> None:
     dataset_dir = _make_processed_fixture(tmp_path, user_count=6, dense_target_network=True)
-    provider_config = ProviderLLMConfig(enabled=True, model="live-model", require_live_env=False)
+    provider_config = ProviderLLMConfig(enabled=True, model="gpt-5.4-mini", require_live_env=False)
     adapter = OpenAICompatibleDecisionAdapter(provider_config)
+    client_builds = 0
+
+    def fail_client_build():
+        nonlocal client_builds
+        client_builds += 1
+        raise AssertionError("v6 live gate must fail before SDK construction")
+
+    monkeypatch.setattr(adapter, "_build_live_client", fail_client_build)
+
+    with pytest.raises(ValueError, match="requires require_live_env=true"):
+        FinalResearchRunner(
+            FinalResearchConfig(dataset_dir=dataset_dir, sample_size=6, provider=provider_config),
+            adapter,
+        ).run_and_write(tmp_path / "v6-live-gate-required")
+
+    assert client_builds == 0
+    assert adapter.external_request_invocations == 0
+
+
+def test_v6_arbitrary_built_client_remains_validation_evidence(tmp_path: Path, monkeypatch) -> None:
+    dataset_dir = _make_processed_fixture(tmp_path, user_count=6, dense_target_network=True)
+    provider_config = ProviderLLMConfig(enabled=True, model="gpt-5.4-mini", require_live_env=True)
+    adapter = OpenAICompatibleDecisionAdapter(provider_config)
+    client = _TargetDeliveryProviderClient()
+    monkeypatch.setenv("LLM_ABM_RUN_LIVE_LLM", "1")
+    monkeypatch.setattr(adapter, "_build_live_client", lambda: client)
+
+    output = FinalResearchRunner(
+        FinalResearchConfig(dataset_dir=dataset_dir, sample_size=6, provider=provider_config),
+        adapter,
+    ).run_and_write(tmp_path / "v6-arbitrary-built-client")
+
+    payload = json.loads((output / "final_research_report_payload.json").read_text(encoding="utf-8"))
+    evidence = payload["evidence_state"]
+    accounting = evidence["decision_execution_evidence"]["provider_accounting"]
+    assert evidence["schema_version"] == "ranking-v6-expand-evidence-v1"
+    assert evidence["production_deploy_eligible"] is False
+    assert evidence["decision_execution_evidence"]["live_api_triggered"] is False
+    assert accounting["external_request_invocations"] == 0
+    assert accounting["provider_response_count"] == accounting["successful_decision_count"] == 6
+    assert adapter.external_request_invocations == 0
+    assert len(client.calls) == 6
+
+
+def test_v6_sdk_wrapper_path_persists_eligible_formal_evidence(tmp_path: Path, monkeypatch) -> None:
+    dataset_dir = _make_processed_fixture(tmp_path, user_count=6, dense_target_network=True)
+    provider_config = ProviderLLMConfig(enabled=True, model="gpt-5.4-mini", require_live_env=True)
+    adapter = OpenAICompatibleDecisionAdapter(provider_config)
+    client = _TargetDeliveryProviderClient()
+    sdk_client = _sdk_wrapper_stub(client)
     client_builds = 0
 
     def build_client():
         nonlocal client_builds
         client_builds += 1
-        raise AssertionError("v6 preflight must stop before SDK client construction")
+        return sdk_client
 
+    monkeypatch.setenv("LLM_ABM_RUN_LIVE_LLM", "1")
     monkeypatch.setattr(adapter, "_build_live_client", build_client)
 
-    with pytest.raises(ValueError, match="v6 is Validation-only"):
-        FinalResearchRunner(
-            FinalResearchConfig(dataset_dir=dataset_dir, sample_size=6, provider=provider_config),
-            adapter,
-        ).run_and_write(tmp_path / "v6-external-provider-rejected")
+    output = FinalResearchRunner(
+        FinalResearchConfig(dataset_dir=dataset_dir, sample_size=6, provider=provider_config),
+        adapter,
+    ).run_and_write(tmp_path / "v6-formal-sdk-path")
 
-    assert client_builds == 0
-    assert adapter.external_request_invocations == 0
-    assert adapter.provider_accounting.provider_response_count == 0
+    payload = json.loads((output / "final_research_report_payload.json").read_text(encoding="utf-8"))
+    evidence = payload["evidence_state"]
+    accounting = evidence["decision_execution_evidence"]["provider_accounting"]
+    assert evidence["schema_version"] == "ranking-v6-formal-evidence-v1"
+    assert evidence["contract_stage"] == "formal_release"
+    assert evidence["production_deploy_eligible"] is True
+    assert evidence["decision_execution_evidence"]["adapter_chain"] == ["openai_compatible"]
+    assert evidence["decision_execution_evidence"]["provider_metadata"]["require_live_env"] is True
+    assert accounting["external_request_invocations"] == 6
+    assert accounting["provider_response_count"] == 6
+    assert accounting["successful_decision_count"] == 6
+    assert accounting["observed_model_counts"] == {"gpt-5.4-mini": 6}
+    assert client_builds == 6
+    assert len(client.calls) == 6
+    assert "production_deploy_eligible=true" in (output / "report.html").read_text(encoding="utf-8")
+    validated = _validate_persisted_ranking_report(output)
+    assert isinstance(validated.payload, FinalResearchRankingReportPayloadV6)
+    assert (
+        validated.payload.evidence_state == FinalResearchRankingReportPayloadV6.model_validate(payload).evidence_state
+    )
+
+
+def test_v6_sdk_wrapper_path_keeps_incomplete_accounting_formal_but_ineligible(
+    tmp_path: Path, monkeypatch
+) -> None:
+    dataset_dir = _make_processed_fixture(tmp_path, user_count=6, dense_target_network=True)
+    provider_config = ProviderLLMConfig(enabled=True, model="gpt-5.4-mini", require_live_env=True)
+    adapter = OpenAICompatibleDecisionAdapter(provider_config)
+
+    class MissingUsageClient(_TargetDeliveryProviderClient):
+        def create_response(self, messages: list[dict[str, str]], model: str) -> ProviderResponseEnvelope:
+            complete = super().create_response(messages, model)
+            return ProviderResponseEnvelope(
+                decision_text=complete.decision_text,
+                observed_model=complete.observed_model,
+                observed_model_status=complete.observed_model_status,
+                usage_status="missing",
+                input_tokens=None,
+                output_tokens=None,
+                total_tokens=None,
+                cached_input_tokens=None,
+            )
+
+    client = MissingUsageClient()
+    sdk_client = _sdk_wrapper_stub(client)
+    monkeypatch.setenv("LLM_ABM_RUN_LIVE_LLM", "1")
+    monkeypatch.setattr(adapter, "_build_live_client", lambda: sdk_client)
+    output = FinalResearchRunner(
+        FinalResearchConfig(dataset_dir=dataset_dir, sample_size=6, provider=provider_config),
+        adapter,
+    ).run_and_write(tmp_path / "runs" / "v6-formal-incomplete-usage")
+
+    payload = json.loads((output / "final_research_report_payload.json").read_text(encoding="utf-8"))
+    evidence = payload["evidence_state"]
+    accounting = evidence["decision_execution_evidence"]["provider_accounting"]
+    assert evidence["schema_version"] == "ranking-v6-formal-evidence-v1"
+    assert evidence["production_deploy_eligible"] is False
+    assert accounting["external_request_invocations"] == accounting["provider_response_count"] == 6
+    assert accounting["usage_complete_response_count"] == 0
+    assert accounting["usage_missing_response_count"] == 6
+    assert accounting["input_tokens"] is accounting["output_tokens"] is accounting["total_tokens"] is None
+    assert "production_deploy_eligible=false" in (output / "report.html").read_text(encoding="utf-8")
+    validated = _validate_persisted_ranking_report(output)
+    assert isinstance(validated.payload, FinalResearchRankingReportPayloadV6)
+    assert validated.payload.evidence_state.production_deploy_eligible is False
+
+    contract = _write_v3_release_contract(tmp_path, output)
+    rejected = _validate_release(tmp_path, output, contract)
+    assert rejected.returncode == 1
+    assert "invalid v3 release contract" in rejected.stderr
 
 
 def test_v6_reason_facts_use_the_exact_sanitized_persisted_reason(tmp_path: Path) -> None:
@@ -1958,6 +2088,439 @@ def _make_synthetic_formal_release(tmp_path: Path) -> tuple[Path, Path]:
     _downgrade_v6_to_historical_v5_fixture(output)
     _promote_to_synthetic_formal_release(output)
     return output, _write_v2_release_contract(tmp_path, output)
+
+
+def _promote_v6_to_synthetic_formal_release(run_dir: Path) -> None:
+    payload_path = run_dir / "final_research_report_payload.json"
+    payload = json.loads(payload_path.read_text(encoding="utf-8"))
+    decision_evidence = payload["evidence_state"]["decision_execution_evidence"]
+    accounting = decision_evidence["provider_accounting"]
+    accounting["external_request_invocations"] = accounting["provider_response_count"]
+    decision_evidence.update(
+        {
+            "formal_research_evidence": True,
+            "decision_execution_mode": "live_provider",
+            "live_api_triggered": True,
+            "sampling_status": "persisted_seed_first_formal_run",
+        }
+    )
+    formal_state = {
+        "schema_version": "ranking-v6-formal-evidence-v1",
+        "contract_stage": "formal_release",
+        "target_aggregate_engagement_reference": payload["evidence_state"]["target_aggregate_engagement_reference"],
+        "decision_execution_evidence": decision_evidence,
+        "production_deploy_eligible": True,
+    }
+    payload["run"]["sampling_status"] = "persisted_seed_first_formal_run"
+    payload["evidence_state"] = formal_state
+    payload["provider_accounting"] = accounting
+    _write_json(payload_path, payload)
+
+    manifest_path = run_dir / "artifact_manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest.update(
+        {
+            "sampling_status": "persisted_seed_first_formal_run",
+            "decision_execution_mode": "live_provider",
+            "live_api_triggered": True,
+            "evidence_state": formal_state,
+        }
+    )
+    _write_json(manifest_path, manifest)
+
+    summary_path = run_dir / "ranking_runtime_summary.json"
+    summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    summary.update(
+        {
+            "sampling_status": "persisted_seed_first_formal_run",
+            "decision_execution_mode": "live_provider",
+            "live_api_triggered": True,
+            "provider_accounting": accounting,
+            "evidence_state": formal_state,
+        }
+    )
+    _write_json(summary_path, summary)
+
+    audit_path = run_dir / "seed_first_sample_audit.json"
+    audit = json.loads(audit_path.read_text(encoding="utf-8"))
+    audit["sampling_status"] = "persisted_seed_first_formal_run"
+    _write_json(audit_path, audit)
+    rebuild_final_research_report(run_dir)
+
+
+def _write_v3_release_contract(
+    repo_root: Path,
+    run_dir: Path,
+    *,
+    contract_path: Path | None = None,
+) -> Path:
+    manifest = json.loads((run_dir / "artifact_manifest.json").read_text(encoding="utf-8"))
+    payload = json.loads((run_dir / "final_research_report_payload.json").read_text(encoding="utf-8"))
+    users = json.loads((run_dir / "final_research_users.json").read_text(encoding="utf-8"))
+    diagnostics = json.loads((run_dir / "ranking_diagnostics.json").read_text(encoding="utf-8"))
+    diagnostics_summary = json.loads((run_dir / "ranking_diagnostics_summary.json").read_text(encoding="utf-8"))
+    config = json.loads((run_dir / "config_snapshot.json").read_text(encoding="utf-8"))
+    evidence_state = payload["evidence_state"]
+    decision_evidence = evidence_state["decision_execution_evidence"]
+    aggregate_reference = diagnostics["historical_top20_diagnostic"]["target_aggregate_engagement_reference"]
+    artifact_paths = [*manifest["artifacts"].values(), "artifact_manifest.json"]
+    contract = {
+        "schema_version": "abm-report-release-contract-v3",
+        "release_purpose": "formal_research",
+        "source_directory": run_dir.relative_to(repo_root).as_posix(),
+        "payload_schema_version": payload["schema_version"],
+        "users_schema_version": users["schema_version"],
+        "manifest_version": manifest["manifest_version"],
+        "diagnostics_schema_version": diagnostics["schema_version"],
+        "diagnostics_summary_schema_version": diagnostics_summary["schema_version"],
+        "prompt_version": config["provider"]["prompt_version"],
+        "evidence_schema_version": evidence_state["schema_version"],
+        "decision_execution_evidence_schema_version": decision_evidence["schema_version"],
+        "sampling_method": payload["run"]["sampling_method"],
+        "sampling_status": payload["run"]["sampling_status"],
+        "decision_execution_mode": decision_evidence["decision_execution_mode"],
+        "adapter_chain": decision_evidence["adapter_chain"],
+        "requested_model": decision_evidence["provider_metadata"]["model"],
+        "live_api_triggered": decision_evidence["live_api_triggered"],
+        "formal_research_evidence": decision_evidence["formal_research_evidence"],
+        "production_deploy_eligible": evidence_state["production_deploy_eligible"],
+        "sample_role_counts": payload["sample_role_counts"],
+        "decision_source_counts": decision_evidence["decision_source_counts"],
+        "action_counts": decision_evidence["action_counts"],
+        "terminal_counts": decision_evidence["terminal_counts"],
+        "degeneracy_flags": decision_evidence["degeneracy_flags"],
+        "provider_accounting": decision_evidence["provider_accounting"],
+        "reason_context_diagnostics": payload["reason_context_diagnostics"],
+        "target_aggregate_engagement_reference": aggregate_reference,
+        "artifact_sha256": {path: _sha256(run_dir / path) for path in artifact_paths},
+    }
+    resolved_contract_path = contract_path or (
+        repo_root / "configs" / "deployments" / "synthetic-v6-formal-fixture.json"
+    )
+    _write_json(resolved_contract_path, contract)
+    return resolved_contract_path
+
+
+def _make_synthetic_v6_formal_release(tmp_path: Path) -> tuple[Path, Path]:
+    dataset_dir = _make_processed_fixture(tmp_path, user_count=6, dense_target_network=True)
+    output = FinalResearchRunner(
+        FinalResearchConfig(
+            dataset_dir=dataset_dir,
+            sample_size=6,
+            provider=ProviderLLMConfig(enabled=True, model="gpt-5.4-mini", require_live_env=True),
+        ),
+        _TargetDeliveryAdapter(model="gpt-5.4-mini", require_live_env=True),
+    ).run_and_write(tmp_path / "runs" / "synthetic-v6-formal-fixture")
+    _promote_v6_to_synthetic_formal_release(output)
+    return output, _write_v3_release_contract(tmp_path, output)
+
+
+def test_release_v3_accepts_synthetic_v6_formal_fixture_without_rewriting(tmp_path: Path) -> None:
+    output, contract = _make_synthetic_v6_formal_release(tmp_path)
+    report_before = (output / "report.html").read_bytes()
+    payload_before = (output / "final_research_report_payload.json").read_bytes()
+
+    validated = _validate_release(tmp_path, output, contract)
+
+    assert validated.returncode == 0, validated.stderr
+    assert "abm-report-release-contract-v3" in validated.stdout
+    assert "persisted_seed_first_formal_run" in validated.stdout
+    assert (output / "report.html").read_bytes() == report_before
+    assert (output / "final_research_report_payload.json").read_bytes() == payload_before
+
+
+def test_release_v3_rejects_runner_generated_v6_validation_candidate(tmp_path: Path) -> None:
+    dataset_dir = _make_processed_fixture(tmp_path, user_count=6, dense_target_network=True)
+    output = FinalResearchRunner(
+        FinalResearchConfig(
+            dataset_dir=dataset_dir,
+            sample_size=6,
+            provider=ProviderLLMConfig(enabled=True, model="gpt-5.4-mini", require_live_env=False),
+        ),
+        _TargetDeliveryAdapter(model="gpt-5.4-mini"),
+    ).run_and_write(tmp_path / "runs" / "v6-validation-candidate")
+    contract = _write_v3_release_contract(tmp_path, output)
+
+    rejected = _validate_release(tmp_path, output, contract)
+
+    assert rejected.returncode == 1
+    assert "invalid v3 release contract" in rejected.stderr
+    assert "evidence_schema_version" in rejected.stderr or "production_deploy_eligible" in rejected.stderr
+
+
+@pytest.mark.parametrize(
+    ("corruption", "expected_error"),
+    [
+        ("requested_model", "requested_model"),
+        ("cached_wrapper", "adapter_chain"),
+        ("mixed_model", "observed_model_counts"),
+        ("missing_model", "observed_model_counts"),
+        ("missing_usage", "complete usage"),
+        ("malformed_usage", "complete usage"),
+        ("invocation_count", "invocations"),
+        ("successful_decision_count", "successful Decisions"),
+        ("token_total", "total_tokens"),
+        ("boolean_token", "input_tokens"),
+        ("cached_over_input", "cached input tokens"),
+        ("reason_denominator", "reason counts"),
+        ("context_denominator", "context"),
+        ("missing_hash", "exact manifest artifacts"),
+        ("crossed_evidence_schema", "evidence_schema_version"),
+        ("production_ineligible", "production_deploy_eligible"),
+        ("extra_field", "extra_forbidden"),
+    ],
+)
+def test_release_v3_rejects_crossed_model_accounting_and_contract_evidence(
+    tmp_path: Path,
+    corruption: str,
+    expected_error: str,
+) -> None:
+    output, contract_path = _make_synthetic_v6_formal_release(tmp_path)
+    contract = json.loads(contract_path.read_text(encoding="utf-8"))
+    accounting = contract["provider_accounting"]
+    response_count = accounting["provider_response_count"]
+    if corruption == "requested_model":
+        contract["requested_model"] = "gpt-5.4"
+    elif corruption == "cached_wrapper":
+        contract["adapter_chain"] = ["cached", "openai_compatible"]
+    elif corruption == "mixed_model":
+        accounting["observed_model_counts"] = {"gpt-5.4-mini": response_count - 1, "fallback-model": 1}
+    elif corruption == "missing_model":
+        accounting["observed_model_counts"] = {"gpt-5.4-mini": response_count - 1}
+        accounting["observed_model_missing_response_count"] = 1
+    elif corruption in {"missing_usage", "malformed_usage"}:
+        accounting["usage_complete_response_count"] = response_count - 1
+        accounting[
+            "usage_missing_response_count" if corruption == "missing_usage" else "usage_malformed_response_count"
+        ] = 1
+        for field_name in ("input_tokens", "output_tokens", "total_tokens", "cached_input_tokens"):
+            accounting[field_name] -= accounting[field_name] // response_count
+        accounting["cached_input_tokens_reported_response_count"] -= 1
+    elif corruption == "invocation_count":
+        accounting["external_request_invocations"] = response_count - 1
+    elif corruption == "successful_decision_count":
+        accounting["successful_decision_count"] -= 1
+    elif corruption == "token_total":
+        accounting["total_tokens"] += 1
+    elif corruption == "boolean_token":
+        accounting["input_tokens"] = True
+    elif corruption == "cached_over_input":
+        accounting["cached_input_tokens"] = accounting["input_tokens"] + 1
+    elif corruption == "reason_denominator":
+        contract["reason_context_diagnostics"]["exact_reason_facts"]["decision_row_count"] -= 1
+    elif corruption == "context_denominator":
+        contract["reason_context_diagnostics"]["decision_visible_peer_context"]["context_count"] -= 1
+    elif corruption == "missing_hash":
+        contract["artifact_sha256"].pop("runtime_actions.csv")
+    elif corruption == "crossed_evidence_schema":
+        contract["evidence_schema_version"] = "ranking-v6-expand-evidence-v1"
+    elif corruption == "production_ineligible":
+        contract["production_deploy_eligible"] = False
+    elif corruption == "extra_field":
+        contract["authorization_claim"] = "synthetic fixtures do not authorize production"
+    else:  # pragma: no cover
+        raise AssertionError(corruption)
+    _write_json(contract_path, contract)
+
+    rejected = _validate_release(tmp_path, output, contract_path)
+
+    assert rejected.returncode == 1
+    assert "invalid v3 release contract" in rejected.stderr or "v3 " in rejected.stderr
+    assert expected_error in rejected.stderr
+
+
+@pytest.mark.parametrize(
+    ("corruption", "expected_error"),
+    [
+        ("reason_row", "exact reason facts do not match persisted Decision rows"),
+        ("ranking_context", "field trace source value does not match ranking report user"),
+        ("holdout_reference", "target aggregate engagement reference does not match source artifact"),
+    ],
+)
+def test_release_v3_rejects_cross_artifact_tampering_even_with_current_hashes(
+    tmp_path: Path,
+    corruption: str,
+    expected_error: str,
+) -> None:
+    output, _contract = _make_synthetic_v6_formal_release(tmp_path)
+    if corruption == "reason_row":
+        path = output / "runtime_decisions.csv"
+        rows = _read_csv(path)
+        rows[0]["reason"] = "synthetic tampered exact reason"
+        _write_csv(path, list(rows[0]), rows)
+    elif corruption == "ranking_context":
+        path = output / "ranking_runtime_candidates.csv"
+        rows = _read_csv(path)
+        selected = next(row for row in rows if row["selected"] == "true")
+        selected["engaged_neighbor_count"] = str(int(selected["engaged_neighbor_count"]) + 2)
+        _write_csv(path, list(rows[0]), rows)
+    elif corruption == "holdout_reference":
+        path = output / "top20_holdout_diagnostic.json"
+        document = json.loads(path.read_text(encoding="utf-8"))
+        document["target_aggregate_engagement_reference"]["like_count"] += 1
+        _write_json(path, document)
+    else:  # pragma: no cover
+        raise AssertionError(corruption)
+    contract = _write_v3_release_contract(tmp_path, output)
+
+    rejected = _validate_release(tmp_path, output, contract)
+
+    assert rejected.returncode == 1
+    assert expected_error in rejected.stderr
+
+
+def test_release_v3_snapshot_binds_validation_to_uploaded_bytes(tmp_path: Path) -> None:
+    output, contract = _make_synthetic_v6_formal_release(tmp_path)
+    snapshot = tmp_path / "deploy-snapshot"
+    shutil.copytree(output, snapshot)
+    (output / "report.html").write_text("source changed after snapshot", encoding="utf-8")
+
+    validated = _validate_release(tmp_path, output, contract, snapshot_dir=snapshot)
+
+    assert validated.returncode == 0, validated.stderr
+    (snapshot / "report.html").write_text("snapshot tampered", encoding="utf-8")
+    rejected = _validate_release(tmp_path, output, contract, snapshot_dir=snapshot)
+    assert rejected.returncode == 1
+    assert "SHA-256 for report.html mismatch" in rejected.stderr
+
+
+@pytest.mark.parametrize(
+    ("corruption", "expected_error"),
+    [
+        ("hash", "SHA-256 for report.html mismatch"),
+        ("parent_path", "artifact_set does not match exact contract"),
+        ("symlink", "source directory contains symlink"),
+    ],
+)
+def test_release_v3_rejects_hash_path_and_symlink_corruption(
+    tmp_path: Path,
+    corruption: str,
+    expected_error: str,
+) -> None:
+    output, contract_path = _make_synthetic_v6_formal_release(tmp_path)
+    if corruption == "hash":
+        (output / "report.html").write_text("tampered", encoding="utf-8")
+    elif corruption == "parent_path":
+        manifest_path = output / "artifact_manifest.json"
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest["artifacts"]["runtime_actions"] = "../runtime_actions.csv"
+        _write_json(manifest_path, manifest)
+        contract = json.loads(contract_path.read_text(encoding="utf-8"))
+        contract["artifact_sha256"]["artifact_manifest.json"] = _sha256(manifest_path)
+        _write_json(contract_path, contract)
+    elif corruption == "symlink":
+        catalog = output / "field_lineage_catalog.json"
+        catalog.unlink()
+        os.symlink(output / "user_field_trace.json", catalog)
+    else:  # pragma: no cover
+        raise AssertionError(corruption)
+
+    rejected = _validate_release(tmp_path, output, contract_path)
+
+    assert rejected.returncode == 1
+    assert expected_error in rejected.stderr
+
+
+def _deploy_ssh_marker_environment(tmp_path: Path) -> tuple[dict[str, str], Path, Path]:
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    ssh_marker = tmp_path / "ssh-invoked"
+    ssh = bin_dir / "ssh"
+    ssh.write_text(
+        '#!/usr/bin/env bash\nprintf invoked > "${FAKE_SSH_MARKER}"\nexit 23\n',
+        encoding="utf-8",
+    )
+    ssh.chmod(0o755)
+    snapshot_root = tmp_path / "snapshots"
+    snapshot_root.mkdir()
+    env = os.environ.copy()
+    env.update(
+        {
+            "PATH": f"{bin_dir}:{env['PATH']}",
+            "ABM_DEPLOY_PYTHON": sys.executable,
+            "FAKE_SSH_MARKER": str(ssh_marker),
+            "TMPDIR": str(snapshot_root),
+        }
+    )
+    return env, ssh_marker, snapshot_root
+
+
+def test_deploy_v3_reaches_remote_only_after_valid_local_formal_preflight(tmp_path: Path) -> None:
+    repo_root = Path(__file__).resolve().parents[2]
+    deploy_script = repo_root / "scripts" / "deploy_abm_report.sh"
+    with tempfile.TemporaryDirectory(prefix="issue-85-v3-deploy-", dir=repo_root / "tmp") as temporary:
+        fixture_root = Path(temporary)
+        output, _ = _make_synthetic_v6_formal_release(fixture_root)
+        contract = _write_v3_release_contract(
+            repo_root,
+            output,
+            contract_path=fixture_root / "synthetic-v3-contract.json",
+        )
+        env, ssh_marker, snapshot_root = _deploy_ssh_marker_environment(tmp_path)
+
+        completed = subprocess.run(
+            [
+                str(deploy_script),
+                "--contract",
+                str(contract),
+                "--source-dir",
+                str(output),
+                "--release-id",
+                "synthetic-v3-candidate",
+            ],
+            text=True,
+            capture_output=True,
+            env=env,
+            cwd=repo_root,
+        )
+
+        assert completed.returncode != 0
+        assert "abm-report-release-contract-v3" in completed.stdout
+        assert ssh_marker.read_text(encoding="utf-8") == "invoked"
+        assert list(snapshot_root.iterdir()) == []
+
+
+def test_deploy_v3_rejects_validation_evidence_before_first_remote_action(tmp_path: Path) -> None:
+    repo_root = Path(__file__).resolve().parents[2]
+    deploy_script = repo_root / "scripts" / "deploy_abm_report.sh"
+    with tempfile.TemporaryDirectory(prefix="issue-85-v3-validation-", dir=repo_root / "tmp") as temporary:
+        fixture_root = Path(temporary)
+        dataset_dir = _make_processed_fixture(fixture_root, user_count=6, dense_target_network=True)
+        output = FinalResearchRunner(
+            FinalResearchConfig(
+                dataset_dir=dataset_dir,
+                sample_size=6,
+                provider=ProviderLLMConfig(enabled=True, model="gpt-5.4-mini", require_live_env=False),
+            ),
+            _TargetDeliveryAdapter(model="gpt-5.4-mini"),
+        ).run_and_write(fixture_root / "runs" / "v6-validation-candidate")
+        contract = _write_v3_release_contract(
+            repo_root,
+            output,
+            contract_path=fixture_root / "validation-v3-contract.json",
+        )
+        env, ssh_marker, snapshot_root = _deploy_ssh_marker_environment(tmp_path)
+
+        completed = subprocess.run(
+            [
+                str(deploy_script),
+                "--contract",
+                str(contract),
+                "--source-dir",
+                str(output),
+                "--release-id",
+                "must-not-reach-remote",
+            ],
+            text=True,
+            capture_output=True,
+            env=env,
+            cwd=repo_root,
+        )
+
+        assert completed.returncode != 0
+        assert "invalid v3 release contract" in completed.stderr
+        assert not ssh_marker.exists()
+        assert list(snapshot_root.iterdir()) == []
 
 
 def test_release_v2_rejects_v6_validation_candidate(tmp_path: Path) -> None:

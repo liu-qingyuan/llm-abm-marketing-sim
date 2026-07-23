@@ -121,12 +121,12 @@ class OpenAICompatibleDecisionAdapter(LLMDecisionAdapter):
             prompt_version=self.config.prompt_version,
         )
         messages = build_engagement_prompt(decision_input)
-        uses_live_client = self.client is None
         client = self._build_live_client() if self.client is None else self.client
+        uses_external_sdk = self.client is None and type(client) is _OpenAISDKClient
         last_error: Exception | None = None
         for attempt in range(self.config.max_retries + 1):
             try:
-                if uses_live_client:
+                if uses_external_sdk:
                     self.external_request_invocations += 1
                 raw = client.create_response(messages, cast(str, self.model))
                 response = coerce_provider_response_envelope(raw)
