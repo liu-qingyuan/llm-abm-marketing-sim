@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 
+import httpx
 import pytest
 from pydantic import ValidationError
 
@@ -209,7 +210,7 @@ http_headers = {{ "x-openai-actor-authorization" = "{secret}" }}
 
     adapter._build_live_client()
 
-    assert captured["api_key"] == "codex-config-http-headers"
+    assert captured["api_key"] is None
     assert captured["default_headers"] == {"x-openai-actor-authorization": secret}
     assert secret not in json.dumps(adapter.safe_metadata)
     assert adapter.safe_metadata["codex_provider"]["http_header_names"] == ["x-openai-actor-authorization"]
@@ -247,19 +248,91 @@ http_headers = { "x-openai-actor-authorization" = "selected-secret" }
         adapter._build_live_client()
 
 
-def test_openai_sdk_client_merges_scoped_headers_without_network(monkeypatch):
+def test_openai_sdk_client_sends_scoped_headers_without_synthetic_bearer(monkeypatch):
+    for name in ("ALL_PROXY", "HTTP_PROXY", "HTTPS_PROXY", "all_proxy", "http_proxy", "https_proxy"):
+        monkeypatch.delenv(name, raising=False)
+    requests: list[httpx.Request] = []
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(
+            200,
+            json={
+                "id": "resp_test",
+                "created_at": 0,
+                "model": "test-model",
+                "object": "response",
+                "output": [],
+                "parallel_tool_calls": False,
+                "tool_choice": "auto",
+                "tools": [],
+            },
+            request=request,
+        )
+
+    client = _OpenAISDKClient(
+        api_key=None,
+        base_url="https://api.example.test",
+        timeout=1.0,
+        default_headers={"x-openai-actor-authorization": "test-only-secret"},
+        http_client=httpx.Client(transport=httpx.MockTransport(handle)),
+    )
+
+    assert client.create_response([{"role": "user", "content": "test"}], "test-model") == ""
+    assert len(requests) == 1
+    assert requests[0].headers["x-openai-actor-authorization"] == "test-only-secret"
+    assert "authorization" not in requests[0].headers
+    assert client._client.max_retries == 0
+
+
+def test_openai_sdk_client_preserves_explicit_provider_authorization(monkeypatch):
+    for name in ("ALL_PROXY", "HTTP_PROXY", "HTTPS_PROXY", "all_proxy", "http_proxy", "https_proxy"):
+        monkeypatch.delenv(name, raising=False)
+    requests: list[httpx.Request] = []
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(
+            200,
+            json={
+                "id": "resp_test",
+                "created_at": 0,
+                "model": "test-model",
+                "object": "response",
+                "output": [],
+                "parallel_tool_calls": False,
+                "tool_choice": "auto",
+                "tools": [],
+            },
+            request=request,
+        )
+
+    client = _OpenAISDKClient(
+        api_key=None,
+        base_url="https://api.example.test",
+        timeout=1.0,
+        default_headers={"Authorization": "Bearer selected-provider-token"},
+        http_client=httpx.Client(transport=httpx.MockTransport(handle)),
+    )
+
+    client.create_response([{"role": "user", "content": "test"}], "test-model")
+
+    assert len(requests) == 1
+    assert requests[0].headers["authorization"] == "Bearer selected-provider-token"
+
+
+def test_openai_sdk_client_keeps_bearer_when_runtime_credential_exists(monkeypatch):
     for name in ("ALL_PROXY", "HTTP_PROXY", "HTTPS_PROXY", "all_proxy", "http_proxy", "https_proxy"):
         monkeypatch.delenv(name, raising=False)
 
     client = _OpenAISDKClient(
-        api_key="codex-config-http-headers",
+        api_key="provider-api-key",
         base_url="https://api.example.test",
         timeout=1.0,
-        default_headers={"x-openai-actor-authorization": "test-only-secret"},
     )
 
-    assert client._client.default_headers["x-openai-actor-authorization"] == "test-only-secret"
-    assert client._client.auth_headers["Authorization"] == "Bearer codex-config-http-headers"
+    assert client._client.auth_headers == {"Authorization": "Bearer provider-api-key"}
+    assert client._client.max_retries == 0
 
 
 def test_building_live_sdk_client_does_not_mark_external_request_invocation(monkeypatch):

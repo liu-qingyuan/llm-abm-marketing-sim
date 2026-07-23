@@ -165,7 +165,7 @@ class OpenAICompatibleDecisionAdapter(LLMDecisionAdapter):
             self.codex_provider_config.wire_api if self.codex_provider_config else "responses"
         )
         return _OpenAISDKClient(
-            api_key=credential.value if credential is not None else "codex-config-http-headers",
+            api_key=credential.value if credential is not None else None,
             base_url=base_url,
             timeout=self.config.timeout_seconds,
             wire_api=wire_api,
@@ -193,20 +193,38 @@ class _OpenAISDKClient:
     def __init__(
         self,
         *,
-        api_key: str,
+        api_key: str | None,
         base_url: str | None,
         timeout: float,
         wire_api: str = "responses",
         default_headers: dict[str, str] | None = None,
+        http_client: Any | None = None,
     ) -> None:
-        from openai import OpenAI  # type: ignore[import-not-found]
+        from openai import Omit, OpenAI  # type: ignore[import-not-found]
 
-        kwargs: dict[str, Any] = {"api_key": api_key, "timeout": timeout}
+        if api_key is None and not default_headers:
+            raise ProviderConfigurationError("header-only SDK client requires selected-provider runtime headers")
+
+        header_only = api_key is None
+        # Older OpenAI SDKs require a constructor credential. Header-only calls
+        # explicitly omit Authorization per request, then clear this placeholder.
+        sdk_api_key = api_key or "unused-header-only-provider"
+        kwargs: dict[str, Any] = {"api_key": sdk_api_key, "timeout": timeout, "max_retries": 0}
         if base_url:
             kwargs["base_url"] = base_url
         if default_headers:
             kwargs["default_headers"] = default_headers
+        if http_client is not None:
+            kwargs["http_client"] = http_client
         self._client = OpenAI(**kwargs)
+        if header_only:
+            self._client.api_key = ""
+        configured_authorization = bool(
+            default_headers and any(name.lower() == "authorization" for name in default_headers)
+        )
+        self._extra_headers = (
+            {"Authorization": Omit()} if header_only and not configured_authorization else None
+        )
         self._wire_api = wire_api
 
     def create_response(self, messages: list[dict[str, str]], model: str) -> str:
@@ -216,6 +234,7 @@ class _OpenAISDKClient:
                 model=model,
                 messages=sdk_messages,
                 response_format={"type": "json_object"},
+                extra_headers=self._extra_headers,
             )
             content = chat_response.choices[0].message.content
             return content or ""
@@ -223,6 +242,7 @@ class _OpenAISDKClient:
             model=model,
             input=sdk_messages,
             text=cast(Any, {"format": _engage_decision_json_schema()}),
+            extra_headers=self._extra_headers,
         )
         return str(provider_response.output_text)
 
