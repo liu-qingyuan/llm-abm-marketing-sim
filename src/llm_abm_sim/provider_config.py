@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -12,6 +13,8 @@ import tomllib
 SECRET_KEYS = ("api_key", "token", "secret", "password", "credential", "auth", "bearer")
 SAFE_METADATA_KEYS = {"api_key_env", "requires_openai_auth", "auth_available"}
 SECRET_VALUE_PLACEHOLDER = "<redacted>"
+HTTP_HEADER_NAME_PATTERN = re.compile(r"^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$")
+FORBIDDEN_RUNTIME_HTTP_HEADERS = frozenset({"connection", "content-length", "host", "transfer-encoding"})
 
 
 @dataclass(frozen=True)
@@ -24,6 +27,7 @@ class CodexProviderConfig:
     model: str | None
     requires_openai_auth: bool
     auth_available: bool
+    http_header_names: tuple[str, ...] = ()
 
     def redacted(self) -> dict[str, Any]:
         return {
@@ -33,6 +37,8 @@ class CodexProviderConfig:
             "model": self.model,
             "requires_openai_auth": self.requires_openai_auth,
             "auth_available": self.auth_available,
+            "http_header_names": list(self.http_header_names),
+            "http_header_count": len(self.http_header_names),
         }
 
 
@@ -45,6 +51,18 @@ class RuntimeCredential:
 
     def __repr__(self) -> str:  # pragma: no cover - defensive display guard.
         return f"RuntimeCredential(value=<redacted>, source={self.source!r})"
+
+
+@dataclass(frozen=True)
+class RuntimeHTTPHeaders:
+    """Selected-provider headers that exist only long enough to build the SDK client."""
+
+    values: dict[str, str]
+    source: str
+
+    def __repr__(self) -> str:  # pragma: no cover - defensive display guard.
+        names = sorted(self.values)
+        return f"RuntimeHTTPHeaders(names={names!r}, values=<redacted>, source={self.source!r})"
 
 
 def _codex_home(codex_home: str | Path | None = None) -> Path:
@@ -73,6 +91,11 @@ def load_codex_provider_config(codex_home: str | Path | None = None) -> CodexPro
         model=data.get("model"),
         requires_openai_auth=requires_openai_auth,
         auth_available=_codex_auth_available(home) if requires_openai_auth else False,
+        http_header_names=(
+            tuple(sorted(str(name) for name in provider.get("http_headers", {})))
+            if isinstance(provider.get("http_headers", {}), dict)
+            else ()
+        ),
     )
 
 
@@ -83,8 +106,13 @@ def should_run_live_llm(codex_home: str | Path | None = None) -> bool:
         return False
     if os.environ.get("OPENAI_API_KEY"):
         return True
-    config = load_codex_provider_config(codex_home)
-    return bool(config and config.requires_openai_auth and config.auth_available)
+    try:
+        config = load_codex_provider_config(codex_home)
+        if config and config.requires_openai_auth and config.auth_available:
+            return True
+        return resolve_runtime_http_headers(codex_home=codex_home, codex_provider=config) is not None
+    except (OSError, ValueError):
+        return False
 
 
 def resolve_runtime_credential(
@@ -111,6 +139,51 @@ def resolve_runtime_credential(
     if not token:
         return None
     return RuntimeCredential(value=token, source="codex_auth")
+
+
+def resolve_runtime_http_headers(
+    *,
+    codex_home: str | Path | None = None,
+    codex_provider: CodexProviderConfig | None = None,
+) -> RuntimeHTTPHeaders | None:
+    """Load static headers only from the currently selected Codex provider."""
+
+    home = _codex_home(codex_home)
+    config_path = home / "config.toml"
+    if not config_path.exists():
+        return None
+    data = tomllib.loads(config_path.read_text(encoding="utf-8"))
+    selected = data.get("model_provider")
+    providers = data.get("model_providers") or {}
+    if not isinstance(selected, str) or selected not in providers:
+        return None
+    if codex_provider is not None and selected != codex_provider.provider_name:
+        return None
+    provider = providers[selected]
+    if not isinstance(provider, dict):
+        raise ValueError("selected Codex provider config must be a table")
+    if codex_provider is not None and sanitize_url(str(provider.get("base_url", ""))) != sanitize_url(
+        codex_provider.base_url
+    ):
+        raise ValueError("selected Codex provider changed after metadata resolution")
+    headers = provider.get("http_headers")
+    if headers is None:
+        return None
+    if not isinstance(headers, dict):
+        raise ValueError("Codex provider http_headers must be a table")
+
+    validated: dict[str, str] = {}
+    for name, value in headers.items():
+        if not isinstance(name, str) or not HTTP_HEADER_NAME_PATTERN.fullmatch(name):
+            raise ValueError("Codex provider http_headers contains an invalid header name")
+        if name.lower() in FORBIDDEN_RUNTIME_HTTP_HEADERS:
+            raise ValueError(f"Codex provider http_headers cannot override {name.lower()}")
+        if not isinstance(value, str) or not value.strip() or "\r" in value or "\n" in value:
+            raise ValueError(f"Codex provider http_headers contains an invalid value for {name}")
+        validated[name] = value
+    if not validated:
+        return None
+    return RuntimeHTTPHeaders(values=validated, source=f"codex_config:{selected}.http_headers")
 
 
 def _codex_auth_available(home: Path) -> bool:

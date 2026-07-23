@@ -9,7 +9,12 @@ from llm_abm_sim.decision import DecisionInput, ProviderDecisionError
 from llm_abm_sim.prompting import build_engagement_prompt
 from llm_abm_sim.provider_config import RuntimeCredential, redact_secrets
 from llm_abm_sim.providers import openai_compatible
-from llm_abm_sim.providers.openai_compatible import OpenAICompatibleDecisionAdapter, ProviderRunSkipped
+from llm_abm_sim.providers.openai_compatible import (
+    OpenAICompatibleDecisionAdapter,
+    ProviderConfigurationError,
+    ProviderRunSkipped,
+    _OpenAISDKClient,
+)
 from llm_abm_sim.schemas import (
     FailClosedAction,
     LatentAttributes,
@@ -170,6 +175,91 @@ def test_mocked_provider_success_validates_engage_decision():
     assert decision.provider_metadata is not None
     assert client.calls[0][1] == "mock-model"
     assert adapter.live_api_triggered is False
+
+
+def test_live_sdk_client_uses_scoped_codex_http_headers_without_serializing_values(monkeypatch, tmp_path):
+    secret = "sub2api-header-secret"
+    (tmp_path / "config.toml").write_text(
+        f'''
+model = "gpt-5.6-sol"
+model_provider = "sub2api"
+
+[model_providers.sub2api]
+base_url = "https://api.example.test"
+wire_api = "responses"
+requires_openai_auth = false
+http_headers = {{ "x-openai-actor-authorization" = "{secret}" }}
+''',
+        encoding="utf-8",
+    )
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.setenv("LLM_ABM_RUN_LIVE_LLM", "1")
+    monkeypatch.setattr(openai_compatible.importlib.util, "find_spec", lambda _name: object())
+    captured: dict[str, object] = {}
+
+    def build_client(**kwargs):
+        captured.update(kwargs)
+        return _UnusedSDKClient()
+
+    monkeypatch.setattr(openai_compatible, "_OpenAISDKClient", build_client)
+    adapter = OpenAICompatibleDecisionAdapter(
+        ProviderLLMConfig(enabled=True, use_codex_provider_config=True, require_live_env=True),
+        codex_home=tmp_path,
+    )
+
+    adapter._build_live_client()
+
+    assert captured["api_key"] == "codex-config-http-headers"
+    assert captured["default_headers"] == {"x-openai-actor-authorization": secret}
+    assert secret not in json.dumps(adapter.safe_metadata)
+    assert adapter.safe_metadata["codex_provider"]["http_header_names"] == ["x-openai-actor-authorization"]
+    assert adapter.live_api_triggered is False
+
+
+def test_scoped_codex_headers_reject_a_different_base_url(monkeypatch, tmp_path):
+    (tmp_path / "config.toml").write_text(
+        '''
+model = "gpt-5.6-sol"
+model_provider = "sub2api"
+
+[model_providers.sub2api]
+base_url = "https://selected.example.test"
+wire_api = "responses"
+requires_openai_auth = false
+http_headers = { "x-openai-actor-authorization" = "selected-secret" }
+''',
+        encoding="utf-8",
+    )
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.setenv("LLM_ABM_RUN_LIVE_LLM", "1")
+    monkeypatch.setattr(openai_compatible.importlib.util, "find_spec", lambda _name: object())
+    adapter = OpenAICompatibleDecisionAdapter(
+        ProviderLLMConfig(
+            enabled=True,
+            base_url="https://unselected.example.test",
+            use_codex_provider_config=True,
+            require_live_env=True,
+        ),
+        codex_home=tmp_path,
+    )
+
+    with pytest.raises(ProviderConfigurationError, match="base_url"):
+        adapter._build_live_client()
+
+
+def test_openai_sdk_client_merges_scoped_headers_without_network(monkeypatch):
+    for name in ("ALL_PROXY", "HTTP_PROXY", "HTTPS_PROXY", "all_proxy", "http_proxy", "https_proxy"):
+        monkeypatch.delenv(name, raising=False)
+
+    client = _OpenAISDKClient(
+        api_key="codex-config-http-headers",
+        base_url="https://api.example.test",
+        timeout=1.0,
+        default_headers={"x-openai-actor-authorization": "test-only-secret"},
+    )
+
+    assert client._client.default_headers["x-openai-actor-authorization"] == "test-only-secret"
+    assert client._client.auth_headers["Authorization"] == "Bearer codex-config-http-headers"
 
 
 def test_building_live_sdk_client_does_not_mark_external_request_invocation(monkeypatch):

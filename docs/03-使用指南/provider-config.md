@@ -19,11 +19,12 @@
 - `wire_api`；
 - selected `model`；
 - `requires_openai_auth`；
-- 是否存在可用的 Codex runtime credential。
+- 是否存在可用的 Codex runtime credential；
+- selected provider 声明的 `http_headers` 名称与数量，不包含 header value。
 
 不要在 committed config 或测试中硬编码真实 host。实现不得把 auth files、bearer token、API key、cookie、raw headers 或其他秘密复制到仓库文件、日志、文档、fixtures、pytest output、run artifacts、cache 或 handoff。
 
-Codex auth 复用仅在所选 Provider config 显式声明 `requires_openai_auth = true` 时允许。否则 gate 会 fail closed，或要求显式 Provider credentials。`OPENAI_API_KEY` 仍是 OpenAI-compatible/sub2api API key 的 fallback。
+Codex auth 复用仅在所选 Provider config 显式声明 `requires_openai_auth = true` 时允许。`requires_openai_auth = false` 的 Sub2API provider 可以使用同一 selected provider table 中显式配置的静态 `http_headers`；header value 只在 live gate 后以 runtime-only container 传给 SDK，不能进入脱敏 metadata 或 persisted artifacts。没有 scoped headers 时 gate 继续 fail closed，或要求显式 Provider credentials。`OPENAI_API_KEY` 仍是 OpenAI-compatible/sub2api API key 的 fallback。
 
 ## 必需行为
 
@@ -66,9 +67,10 @@ provider_llm:
 - `fail_closed_action: raise` 是默认策略，也是手动 live smoke 策略。
 - `fail_closed_action: no_engage` 只有显式配置时才返回 `ignore` 决策。
 - `fail_closed_action: skip_run` 是 run-level fail-closed stop signal，应在正常 runner 启动部分仿真前拒绝。
-- Codex/sub2api 复用优先读取 Codex Provider metadata；只有 `requires_openai_auth=true` 时才在调用时读取最小 runtime credential，否则使用配置的 API-key 环境变量 fallback。
-- 序列化 Provider metadata 只能包含 allowlist：provider name、脱敏 base URL、wire API、model、adapter name/version、auth-required/readiness booleans、fail-closed action、prompt/schema version、provider decision count、decision source summary。
-- 不序列化 free-form provider dictionaries、headers、tokens、cookies、auth file contents、raw prompts、raw responses、credential paths。
+- Codex/sub2api 复用优先读取 Codex Provider metadata；`requires_openai_auth=true` 时只读取最小 Codex runtime credential，`requires_openai_auth=false` 时只允许当前 selected provider 自己的已验证 `http_headers`，两条路径不能跨 provider 混用。
+- Runtime headers 拒绝非法名称、CR/LF value 和 `host`、`content-length`、`connection`、`transfer-encoding` 等传输级覆盖。
+- Runtime readiness 使用的脱敏 Codex metadata 可以包含 header names/count 以解释 gate；persisted Provider evidence 的 allowlist 继续剔除所有 header 相关键。
+- 不序列化 free-form provider dictionaries、header names/values、tokens、cookies、auth file contents、raw prompts、raw responses、credential paths。
 
 ## 手动 live smoke
 
@@ -84,7 +86,7 @@ API-key fallback smoke：
 OPENAI_API_KEY=... LLM_ABM_RUN_LIVE_LLM=1 pytest -q -m live_llm -rs
 ```
 
-如果 Codex auth 缺失、Provider config 不属于 OpenAI-auth 范围、可选 `openai` 依赖缺失或凭证不可用，测试会以脱敏原因 skip/fail closed。默认 `pytest -q` 仍然离线。
+如果 Codex auth、selected-provider runtime headers 与 API-key fallback 均不可用，或可选 `openai` 依赖缺失，测试会以脱敏原因 skip/fail closed。默认 `pytest -q` 仍然离线。
 
 ## Live Provider smoke config
 

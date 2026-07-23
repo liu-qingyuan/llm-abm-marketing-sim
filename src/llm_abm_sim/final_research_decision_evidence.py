@@ -271,7 +271,7 @@ def _derive_decision_row_facts(
     if set(decisions) & (failed_outcome_ids | below_capacity_ids):  # pragma: no cover - guarded above.
         raise ValueError("failed or below-capacity users cannot have successful Decisions")
 
-    stable_action_counts = {action: action_counts[action] for action in _ACTIONS}
+    stable_action_counts: dict[str, int] = {action: action_counts[action] for action in _ACTIONS}
     terminal_counts = DecisionTerminalCounts(
         sample_users=sample_users,
         exposed_users=len(decisions) + len(failures),

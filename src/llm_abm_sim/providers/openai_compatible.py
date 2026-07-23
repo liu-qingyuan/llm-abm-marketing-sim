@@ -9,7 +9,13 @@ from typing import Any, Protocol, cast
 
 from llm_abm_sim.decision import DecisionInput, EngageDecision, LLMDecisionAdapter, ProviderDecisionError
 from llm_abm_sim.prompting import build_engagement_prompt
-from llm_abm_sim.provider_config import load_codex_provider_config, resolve_runtime_credential, should_run_live_llm
+from llm_abm_sim.provider_config import (
+    load_codex_provider_config,
+    resolve_runtime_credential,
+    resolve_runtime_http_headers,
+    sanitize_url,
+    should_run_live_llm,
+)
 from llm_abm_sim.schemas import (
     FailClosedAction,
     PeerContext,
@@ -25,6 +31,7 @@ class ProviderClient(Protocol):
 
     def create_response(self, messages: list[dict[str, str]], model: str) -> str | dict[str, Any]:
         """Return provider text or a parsed dict containing an engagement decision."""
+        raise NotImplementedError
 
 
 class ProviderRunSkipped(RuntimeError):
@@ -51,9 +58,12 @@ class OpenAICompatibleDecisionAdapter(LLMDecisionAdapter):
     ) -> None:
         self.config = config or ProviderLLMConfig(enabled=True)
         self.codex_home = codex_home
-        self.codex_provider_config = (
-            load_codex_provider_config(codex_home) if self.config.use_codex_provider_config else None
-        )
+        try:
+            self.codex_provider_config = (
+                load_codex_provider_config(codex_home) if self.config.use_codex_provider_config else None
+            )
+        except (OSError, ValueError) as exc:
+            raise ProviderConfigurationError("invalid Codex provider configuration") from exc
         self.prompt_version = self.config.prompt_version
         model = self.config.model or (self.codex_provider_config.model if self.codex_provider_config else None)
         self.model = model or "gpt-5.5"
@@ -128,19 +138,38 @@ class OpenAICompatibleDecisionAdapter(LLMDecisionAdapter):
             codex_home=self.codex_home,
             codex_provider=self.codex_provider_config,
         )
-        if credential is None:
+        runtime_headers = None
+        if self.codex_provider_config is not None:
+            try:
+                runtime_headers = resolve_runtime_http_headers(
+                    codex_home=self.codex_home,
+                    codex_provider=self.codex_provider_config,
+                )
+            except ValueError as exc:
+                raise ProviderConfigurationError(str(exc)) from exc
+        if credential is None and runtime_headers is None:
             raise ProviderConfigurationError(
-                f"missing runtime credential from Codex auth or API key env {self.config.api_key_env}"
+                f"missing runtime auth from selected Codex provider or API key env {self.config.api_key_env}"
             )
-        base_url = self.config.base_url or (self.codex_provider_config.base_url if self.codex_provider_config else None)
+        codex_base_url = self.codex_provider_config.base_url if self.codex_provider_config else None
+        base_url: str | None
+        if runtime_headers is not None:
+            if not codex_base_url:
+                raise ProviderConfigurationError("selected Codex provider headers require a provider base_url")
+            if self.config.base_url and sanitize_url(self.config.base_url) != sanitize_url(codex_base_url):
+                raise ProviderConfigurationError("selected Codex provider headers cannot be used with a base_url override")
+            base_url = codex_base_url
+        else:
+            base_url = self.config.base_url or codex_base_url
         wire_api = self.config.wire_api or (
             self.codex_provider_config.wire_api if self.codex_provider_config else "responses"
         )
         return _OpenAISDKClient(
-            api_key=credential.value,
+            api_key=credential.value if credential is not None else "codex-config-http-headers",
             base_url=base_url,
             timeout=self.config.timeout_seconds,
             wire_api=wire_api,
+            default_headers=runtime_headers.values if runtime_headers is not None else None,
         )
 
     def _handle_failure(self, exc: Exception) -> EngageDecision:
@@ -161,30 +190,41 @@ class OpenAICompatibleDecisionAdapter(LLMDecisionAdapter):
 
 
 class _OpenAISDKClient:
-    def __init__(self, *, api_key: str, base_url: str | None, timeout: float, wire_api: str = "responses") -> None:
+    def __init__(
+        self,
+        *,
+        api_key: str,
+        base_url: str | None,
+        timeout: float,
+        wire_api: str = "responses",
+        default_headers: dict[str, str] | None = None,
+    ) -> None:
         from openai import OpenAI  # type: ignore[import-not-found]
 
         kwargs: dict[str, Any] = {"api_key": api_key, "timeout": timeout}
         if base_url:
             kwargs["base_url"] = base_url
+        if default_headers:
+            kwargs["default_headers"] = default_headers
         self._client = OpenAI(**kwargs)
         self._wire_api = wire_api
 
     def create_response(self, messages: list[dict[str, str]], model: str) -> str:
+        sdk_messages = cast(Any, messages)
         if self._wire_api == "chat":
-            response = self._client.chat.completions.create(  # type: ignore[call-overload]
+            chat_response = self._client.chat.completions.create(
                 model=model,
-                messages=messages,
+                messages=sdk_messages,
                 response_format={"type": "json_object"},
             )
-            content = response.choices[0].message.content
+            content = chat_response.choices[0].message.content
             return content or ""
-        response = self._client.responses.create(  # type: ignore[call-overload]
+        provider_response = self._client.responses.create(
             model=model,
-            input=messages,
-            text={"format": _engage_decision_json_schema()},
+            input=sdk_messages,
+            text=cast(Any, {"format": _engage_decision_json_schema()}),
         )
-        return str(response.output_text)
+        return str(provider_response.output_text)
 
 
 def _engage_decision_json_schema() -> dict[str, Any]:

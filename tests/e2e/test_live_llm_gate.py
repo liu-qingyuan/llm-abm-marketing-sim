@@ -17,7 +17,7 @@ from llm_abm_sim.schemas import (
 def test_manual_live_llm_gate_makes_one_decision_only_when_explicitly_ready():
     if not should_run_live_llm():
         pytest.skip(
-            "live LLM gate requires LLM_ABM_RUN_LIVE_LLM=1 plus OPENAI_API_KEY or ready Codex auth/provider config"
+            "live LLM gate requires LLM_ABM_RUN_LIVE_LLM=1 plus API key, scoped Codex auth, or selected-provider headers"
         )
 
     config = load_codex_provider_config()

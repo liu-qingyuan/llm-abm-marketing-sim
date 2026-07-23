@@ -1,12 +1,15 @@
 import json
 from pathlib import Path
 
+import pytest
+
 from llm_abm_sim.decision import EngageDecision
 from llm_abm_sim.outputs import copy_config_source
 from llm_abm_sim.provider_config import (
     load_codex_provider_config,
     redact_secrets,
     resolve_runtime_credential,
+    resolve_runtime_http_headers,
     should_run_live_llm,
 )
 
@@ -24,6 +27,29 @@ base_url = "https://api.example.test"
 wire_api = "responses"
 requires_openai_auth = {str(requires_auth).lower()}
 """
+    )
+
+
+def write_codex_header_config(
+    home: Path,
+    *,
+    header_name: str = "x-openai-actor-authorization",
+    header_value: str = "sub2api-secret",
+) -> None:
+    home.mkdir(exist_ok=True)
+    (home / "config.toml").write_text(
+        f'''
+model = "gpt-5.6-sol"
+model_provider = "sub2api"
+
+[model_providers.sub2api]
+name = "sub2api"
+base_url = "https://api.example.test"
+wire_api = "responses"
+requires_openai_auth = false
+http_headers = {{ "{header_name}" = "{header_value}" }}
+''',
+        encoding="utf-8",
     )
 
 
@@ -79,6 +105,77 @@ def test_live_llm_gate_requires_explicit_opt_in_and_auth(monkeypatch, tmp_path):
 
     monkeypatch.setenv("LLM_ABM_RUN_LIVE_LLM", "1")
     assert should_run_live_llm(tmp_path) is True
+
+
+def test_live_llm_gate_accepts_scoped_codex_http_headers_without_exposing_values(monkeypatch, tmp_path):
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    write_codex_header_config(tmp_path)
+    monkeypatch.setenv("LLM_ABM_RUN_LIVE_LLM", "1")
+
+    config = load_codex_provider_config(tmp_path)
+    runtime_headers = resolve_runtime_http_headers(codex_home=tmp_path, codex_provider=config)
+
+    assert config is not None
+    assert config.http_header_names == ("x-openai-actor-authorization",)
+    assert config.redacted()["http_header_names"] == ["x-openai-actor-authorization"]
+    assert "sub2api-secret" not in json.dumps(config.redacted())
+    assert should_run_live_llm(tmp_path) is True
+    assert runtime_headers is not None
+    assert runtime_headers.values == {"x-openai-actor-authorization": "sub2api-secret"}
+    assert "sub2api-secret" not in repr(runtime_headers)
+
+
+def test_runtime_http_headers_only_use_the_selected_provider(monkeypatch, tmp_path):
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    tmp_path.mkdir(exist_ok=True)
+    (tmp_path / "config.toml").write_text(
+        '''
+model = "gpt-5.6-sol"
+model_provider = "selected"
+
+[model_providers.selected]
+base_url = "https://selected.example.test"
+wire_api = "responses"
+requires_openai_auth = false
+http_headers = { "x-selected-auth" = "selected-secret" }
+
+[model_providers.unselected]
+base_url = "https://unselected.example.test"
+wire_api = "responses"
+requires_openai_auth = false
+http_headers = { "x-unselected-auth" = "unselected-secret" }
+''',
+        encoding="utf-8",
+    )
+
+    config = load_codex_provider_config(tmp_path)
+    runtime_headers = resolve_runtime_http_headers(codex_home=tmp_path, codex_provider=config)
+
+    assert config is not None
+    assert config.provider_name == "selected"
+    assert runtime_headers is not None
+    assert runtime_headers.values == {"x-selected-auth": "selected-secret"}
+    assert "unselected-secret" not in repr(runtime_headers)
+
+
+def test_malformed_codex_config_fails_the_live_gate_closed(monkeypatch, tmp_path):
+    tmp_path.mkdir(exist_ok=True)
+    (tmp_path / "config.toml").write_text('model_provider = "broken"\n[model_providers.broken', encoding="utf-8")
+    monkeypatch.setenv("LLM_ABM_RUN_LIVE_LLM", "1")
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+
+    assert should_run_live_llm(tmp_path) is False
+
+
+def test_runtime_http_headers_reject_unsafe_names_values_and_transport_overrides(tmp_path):
+    for header_name, header_value in [
+        ("bad header", "value"),
+        ("content-length", "12"),
+        ("x-safe", "line\\r\\ninjection"),
+    ]:
+        write_codex_header_config(tmp_path, header_name=header_name, header_value=header_value)
+        with pytest.raises(ValueError, match="Codex provider http_headers"):
+            resolve_runtime_http_headers(codex_home=tmp_path)
 
 
 def test_codex_auth_fallback_requires_provider_flag(monkeypatch, tmp_path):
