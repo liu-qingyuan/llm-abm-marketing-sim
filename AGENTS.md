@@ -133,6 +133,14 @@ python -m llm_abm_sim.run --config configs/default.yaml --output runs/sample
 - 是否触发 live API；
 - 是否读取、打印或写入秘密（正常应为否）。
 
+### Canonical Final Research 发布
+
+- `https://abm.q1ngyuan.top/` 是 Final Research 的 canonical endpoint。
+- 影响该网页 persisted contract、runtime evidence 或用户可见报告的更新，只有在适用的 Formal release 完成 contract validation、candidate deployment 和公网验收后才算完整交付；没有合法 Formal artifact 时，建立 `ready-for-human` operational Ticket，不得部署 Validation/mock/rule-based fixture 或绕过门禁。
+- 每次真实 Formal Run 仍需明确记录 Provider、模型、调用/费用预算和独立输出目录；该授权不由代码提交、Spec、Ralph label 或测试 fixture 推定。
+- Formal Run 一旦获得明确授权并通过当前 production release contract，默认继续部署到上述 canonical endpoint，无需对同一域名重复询问部署授权；更换域名、主机、远程根目录或部署结构时必须重新授权。
+- 部署必须使用显式 contract、source directory 和 release id，禁止扫描“最新”目录；继续执行本地 preflight、candidate health check、原子 `current` 切换、失败回退和公网 evidence 验收，并在 operational Ticket 记录 source run、release id、hash、部署时间和结果。
+
 ## 7. 文档规则
 
 - `AGENTS.md` 只写长期有效规则。
