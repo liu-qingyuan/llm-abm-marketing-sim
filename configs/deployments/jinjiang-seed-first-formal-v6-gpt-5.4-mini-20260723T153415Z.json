@@ -1,0 +1,144 @@
+{
+  "action_counts": {
+    "comment": 0,
+    "ignore": 222,
+    "like": 378,
+    "share": 0
+  },
+  "adapter_chain": [
+    "openai_compatible"
+  ],
+  "artifact_sha256": {
+    "artifact_manifest.json": "8c61440e26bec556eda76fa9ac60251a73de461f32be70952832cabfb6f067f9",
+    "config_snapshot.json": "475b1a7e1d5607ff5b7e29cd093d0f13b2325e4c0b3da8f89c7c3c853d1c5103",
+    "field_lineage_catalog.json": "2d62d85d201e67a9cd16f82d2475014a9fc986d425e5bf73af2e5bd025a87808",
+    "field_source_records.json": "f39e1c19d9441a4e52c22674d41e35ae42518d1d6c52769799563821a5be73bd",
+    "final_research_report_payload.json": "7a63a7f4df4756796280716cfd089afb6b2b64d3aff7c12281fc3f389221ec44",
+    "final_research_users.csv": "bef4cbdaa394d1faeb1ce626865a62adb0c2cc674ba8ae23b6d8b494dadb134c",
+    "final_research_users.json": "6c7911455e2fc7b7afa5cd9d18286303c68111a7d6728c5701f9e241818da0c8",
+    "holdout_safe_audit.json": "f9a2cd3b55c06e4f69d2450fbeb955eca7d9f1859e0490b0d846f027fa9c45e9",
+    "offline_score_summary.json": "6d8d7543ad0c9782b22829e9577cfc11b3bb79d887f07cb76c4f7ab56394caf3",
+    "offline_scores.csv": "d308953e3a063bb4f33dde04a70ec5b1f7f2f7f1876cec3c3d32549077a9ab9f",
+    "ranking_ablation_diagnostics.csv": "b01a4c3f017a13732080d809abddfc0b137a2b81e86a4762b9ffc86fb3a3c96c",
+    "ranking_diagnostics.json": "c980b6250dbd6e44cc10a75b5b81b2a7d1e7e2b1f8318380118c161db89d5aa8",
+    "ranking_diagnostics_summary.json": "203d1e992d538ce6c2aa6df46917ee5dcbbf7076ece0361c589efe722479f441",
+    "ranking_runtime_candidates.csv": "a0f06a6abb4834c8e78d456795e4f78351cb6b3e397355982bd49a0ae1892ac9",
+    "ranking_runtime_outcomes.csv": "4a02c1bbab97db343d74e849b8df875a29bba33fbba66fcadfeb5c10ec8d9ab6",
+    "ranking_runtime_steps.csv": "22d7c0e10d70db581a152c030c82f2e5ed4895c1487a8eacdb6bf36dd3ec42a4",
+    "ranking_runtime_summary.json": "e7db88b3e7985b3f7db9c02412ffa9756294abeeb8b9d852e4b5399be309b1a0",
+    "ranking_weight_sensitivity.csv": "ba0e4a4507497777266dd278dfe1f450af6d28d24b22fdb3332376ab3a6057dd",
+    "report.html": "b50f3a48c20d6f978a9f3a4f896cd01392288297688ffab9c152259979055c15",
+    "runtime_actions.csv": "c932c3942645d17f6bafa4684b58e261d7ac27e7855c8f5bc762a11fa0f1d968",
+    "runtime_decisions.csv": "54ba07db336fe406570850476b799af8a4c80c00704f5d1be951679c4c064379",
+    "runtime_provider_failures.csv": "690b34c3c896ddb43456e4a74a3456e2be32000ed8ad404a8aff38c82a2ef8e7",
+    "sample_manifest.csv": "43b08240b786e4e1d960f9d4ec77ffd689d3d3ce1d22ffbf89416089c3adfa48",
+    "sample_manifest.json": "f44b9dadab31130b2685b54906360834673a495d9dfccc5445fbfbcc74c79636",
+    "seed_first_sample_audit.json": "2456ee07705cec886406fa0f3c36aa9f2fd6f4c3d5c95fe6532d7ca2b320bed0",
+    "target_video_snapshot.json": "c368c397bd3bd6883e3e47152accbfa201103c900ab3803c6691082fcbf5aadd",
+    "top20_holdout_diagnostic.json": "6747498deead4981c7e25a027798d39bac857f8e085befb23b6d5fcbfb792f90",
+    "user_field_trace.json": "7d67b3103bd25c54755a8b9c64b2f4105ead0f4f56142306d3638ac2dc6fe8cf"
+  },
+  "decision_execution_evidence_schema_version": "final-research-decision-execution-evidence-v2",
+  "decision_execution_mode": "live_provider",
+  "decision_source_counts": {
+    "provider": 600
+  },
+  "degeneracy_flags": {
+    "all_decisions_ignore": false,
+    "no_engagement_feedback": false,
+    "single_action_only": false
+  },
+  "diagnostics_schema_version": "ranking-diagnostics-v2",
+  "diagnostics_summary_schema_version": "ranking-diagnostics-summary-v2",
+  "evidence_schema_version": "ranking-v6-formal-evidence-v1",
+  "formal_research_evidence": true,
+  "live_api_triggered": true,
+  "manifest_version": "final-research-ranking-runtime-v4",
+  "observed_model": "gpt-5.4-mini-2026-03-17",
+  "payload_schema_version": "final-research-ranking-report-payload-v6",
+  "production_deploy_eligible": true,
+  "prompt_version": "jinjiang-green-marketing-prompt-v3",
+  "provider_accounting": {
+    "cached_input_tokens": 2563584,
+    "cached_input_tokens_reported_response_count": 600,
+    "external_request_invocations": 600,
+    "input_tokens": 3076024,
+    "observed_model_counts": {
+      "gpt-5.4-mini-2026-03-17": 600
+    },
+    "observed_model_malformed_response_count": 0,
+    "observed_model_missing_response_count": 0,
+    "output_tokens": 55953,
+    "provider_response_count": 600,
+    "schema_version": "provider-accounting-v1",
+    "successful_decision_count": 600,
+    "total_tokens": 3131977,
+    "usage_complete_response_count": 600,
+    "usage_malformed_response_count": 0,
+    "usage_missing_response_count": 0
+  },
+  "reason_context_diagnostics": {
+    "decision_visible_peer_context": {
+      "context_count": 600,
+      "counter_totals": {
+        "engaged_neighbors": 0,
+        "exposed_neighbors": 0,
+        "influential_engaged_neighbors": 0,
+        "visible_comments": 0,
+        "visible_likes": 0,
+        "visible_shares": 0
+      },
+      "neutral_context_count": 600,
+      "non_neutral_context_count": 0
+    },
+    "exact_reason_facts": {
+      "decision_row_count": 600,
+      "empty_reason_count": 0,
+      "exact_duplicate_row_count": 0,
+      "exact_unique_reason_count": 600,
+      "maximum_exact_reason_frequency": 1,
+      "non_empty_reason_count": 600
+    },
+    "schema_version": "final-research-reason-context-diagnostics-v1",
+    "selected_ranking_context": {
+      "engaged_neighbor_count_total": 11,
+      "maximum_engaged_neighbor_count": 1,
+      "positive_engaged_neighbor_count": 11,
+      "selected_candidate_count": 600,
+      "zero_engaged_neighbor_count": 589
+    }
+  },
+  "release_purpose": "formal_research",
+  "requested_model": "gpt-5.4-mini",
+  "sample_role_counts": {
+    "network_cohort": 60,
+    "ordinary": 920,
+    "seed": 20
+  },
+  "sampling_method": "seed_first_research_sample_v1",
+  "sampling_status": "persisted_seed_first_formal_run",
+  "schema_version": "abm-report-release-contract-v3",
+  "source_directory": "runs/jinjiang-seed-first-formal-v6-gpt-5.4-mini-20260723T153415Z",
+  "target_aggregate_engagement_reference": {
+    "action_mutual_exclusivity_known": false,
+    "collect_count": 1428,
+    "comment_count": 37,
+    "diagnostic_only": true,
+    "like_count": 5857,
+    "real_exposure_denominator_available": false,
+    "record_key": {
+      "video_id": "7328592728139353363"
+    },
+    "share_count": 551,
+    "source_artifact": "videos.csv",
+    "user_level_attribution_available": false
+  },
+  "terminal_counts": {
+    "below_delivery_capacity": 400,
+    "decided_users": 600,
+    "exposed_users": 600,
+    "provider_failed": 0,
+    "sample_users": 1000
+  },
+  "users_schema_version": "final-research-ranking-users-v5"
+}
