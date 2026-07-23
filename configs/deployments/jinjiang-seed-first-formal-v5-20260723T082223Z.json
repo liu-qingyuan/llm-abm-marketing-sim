@@ -1,0 +1,89 @@
+{
+  "schema_version": "abm-report-release-contract-v2",
+  "release_purpose": "formal_research",
+  "source_directory": "runs/jinjiang-seed-first-formal-v5-20260723T082223Z",
+  "payload_schema_version": "final-research-ranking-report-payload-v5",
+  "users_schema_version": "final-research-ranking-users-v5",
+  "manifest_version": "final-research-ranking-runtime-v3",
+  "diagnostics_schema_version": "ranking-diagnostics-v2",
+  "diagnostics_summary_schema_version": "ranking-diagnostics-summary-v2",
+  "prompt_version": "jinjiang-green-marketing-prompt-v3",
+  "evidence_schema_version": "ranking-v5-formal-evidence-v1",
+  "decision_execution_evidence_schema_version": "final-research-decision-execution-evidence-v1",
+  "sampling_method": "seed_first_research_sample_v1",
+  "sampling_status": "persisted_seed_first_formal_run",
+  "decision_execution_mode": "live_provider",
+  "live_api_triggered": true,
+  "formal_research_evidence": true,
+  "production_deploy_eligible": true,
+  "sample_role_counts": {
+    "network_cohort": 60,
+    "ordinary": 920,
+    "seed": 20
+  },
+  "decision_source_counts": {
+    "provider": 600
+  },
+  "action_counts": {
+    "comment": 0,
+    "ignore": 331,
+    "like": 269,
+    "share": 0
+  },
+  "terminal_counts": {
+    "below_delivery_capacity": 400,
+    "decided_users": 600,
+    "exposed_users": 600,
+    "provider_failed": 0,
+    "sample_users": 1000
+  },
+  "degeneracy_flags": {
+    "all_decisions_ignore": false,
+    "no_engagement_feedback": false,
+    "single_action_only": false
+  },
+  "target_aggregate_engagement_reference": {
+    "action_mutual_exclusivity_known": false,
+    "collect_count": 1428,
+    "comment_count": 37,
+    "diagnostic_only": true,
+    "like_count": 5857,
+    "real_exposure_denominator_available": false,
+    "record_key": {
+      "video_id": "7328592728139353363"
+    },
+    "share_count": 551,
+    "source_artifact": "videos.csv",
+    "user_level_attribution_available": false
+  },
+  "artifact_sha256": {
+    "config_snapshot.json": "d90d1ca66c5f70de7a744a4f0168e502b03f43a100a43980351c7099d217cbd7",
+    "field_lineage_catalog.json": "2d62d85d201e67a9cd16f82d2475014a9fc986d425e5bf73af2e5bd025a87808",
+    "field_source_records.json": "f39e1c19d9441a4e52c22674d41e35ae42518d1d6c52769799563821a5be73bd",
+    "report.html": "cd971c9f7b9533336143bf90bf63e6bd1311cbea1b90660bdb66c6021f49450a",
+    "final_research_report_payload.json": "e4c94656cd84b1896dbb36381bcdbaaf0620baabc326e7ef20d006e38fd9dbe6",
+    "final_research_users.csv": "76f82f80005994844020bceb0e308239a1a91b57175a63c6dd52854a39d261f8",
+    "final_research_users.json": "ab40be47d2face3839eb5494d01d71523cd69bd1f02ed3d1704591ea5ecb0806",
+    "top20_holdout_diagnostic.json": "6747498deead4981c7e25a027798d39bac857f8e085befb23b6d5fcbfb792f90",
+    "holdout_safe_audit.json": "f9a2cd3b55c06e4f69d2450fbeb955eca7d9f1859e0490b0d846f027fa9c45e9",
+    "offline_score_summary.json": "6d8d7543ad0c9782b22829e9577cfc11b3bb79d887f07cb76c4f7ab56394caf3",
+    "offline_scores.csv": "d308953e3a063bb4f33dde04a70ec5b1f7f2f7f1876cec3c3d32549077a9ab9f",
+    "ranking_ablation_diagnostics.csv": "5233481388bb475af3396540f8254a0591215c4b32d1f24185a08aaf040a506e",
+    "ranking_diagnostics.json": "5bce65f7c788751b3838c744953fada34d0e1c920f53178ed7246e6ac590053f",
+    "ranking_diagnostics_summary.json": "203d1e992d538ce6c2aa6df46917ee5dcbbf7076ece0361c589efe722479f441",
+    "ranking_runtime_candidates.csv": "0621c88daba4ac56b71414a36386e2a40f0d1d3dfede324bd30dfbccfd622830",
+    "ranking_runtime_outcomes.csv": "d3b5b6b1bd990e0699b8e265606752bd760a24a44b457a7d629ea1633ca48e84",
+    "ranking_runtime_steps.csv": "b248f36c5d42a0e4061585bbf7ce73224484e8b2f5d359b54542149f37befbad",
+    "ranking_runtime_summary.json": "f1db7fde1219a99f92ee822c72580eefdc96b8acfc9640857d007bbfea903d2e",
+    "ranking_weight_sensitivity.csv": "141e27e9a857ca75b40eabe5a3c48056f5ceed60ea08bf70aeedfbf352ac86ff",
+    "runtime_actions.csv": "5845b5b868651569f2df1c2537146355dc8cc3b57c1ae6dbf02f26a921a8584c",
+    "runtime_decisions.csv": "9e72585b5a806e00abd7293063b97f97ddbce5dba2e790dd80cc900b7b9444b8",
+    "runtime_provider_failures.csv": "690b34c3c896ddb43456e4a74a3456e2be32000ed8ad404a8aff38c82a2ef8e7",
+    "sample_manifest.csv": "43b08240b786e4e1d960f9d4ec77ffd689d3d3ce1d22ffbf89416089c3adfa48",
+    "sample_manifest.json": "f44b9dadab31130b2685b54906360834673a495d9dfccc5445fbfbcc74c79636",
+    "seed_first_sample_audit.json": "2456ee07705cec886406fa0f3c36aa9f2fd6f4c3d5c95fe6532d7ca2b320bed0",
+    "target_video_snapshot.json": "c368c397bd3bd6883e3e47152accbfa201103c900ab3803c6691082fcbf5aadd",
+    "user_field_trace.json": "9f1cad2784f7e74f5133b1cb7b68bfa90f669282b645690370e1befa7cdc59a7",
+    "artifact_manifest.json": "86378a706ca29ca91e2b875228a999a327b8e32128c0c0cb9eb475d4720648fa"
+  }
+}
