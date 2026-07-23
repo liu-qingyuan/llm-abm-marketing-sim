@@ -57,6 +57,8 @@ from llm_abm_sim.schemas import (
 )
 
 TARGET_VIDEO_ID = "7328592728139353363"
+V6_REQUESTED_MODEL = "gpt-5.4-mini"
+V6_OBSERVED_MODEL = "gpt-5.4-mini-2026-03-17"
 V5_DECISION_DOWNLOAD_FIELDS = (
     "runtime_decisions",
     "runtime_actions",
@@ -673,12 +675,14 @@ class _TargetDeliveryProviderClient:
         engage_seed_user: bool = True,
         cycle_actions: bool = False,
         reason: str = "controlled deterministic provider decision",
+        observed_model: str | None = None,
     ) -> None:
         self.failed_user_id = failed_user_id
         self.engage_all = engage_all
         self.engage_seed_user = engage_seed_user
         self.cycle_actions = cycle_actions
         self.reason = reason
+        self.observed_model = observed_model
         self.calls: list[dict[str, object]] = []
 
     def create_response(self, messages: list[dict[str, str]], model: str) -> ProviderResponseEnvelope:
@@ -707,7 +711,7 @@ class _TargetDeliveryProviderClient:
                 },
                 ensure_ascii=False,
             ),
-            observed_model=model,
+            observed_model=self.observed_model or model,
             observed_model_status="reported",
             usage_status="complete",
             input_tokens=100,
@@ -725,6 +729,7 @@ def _TargetDeliveryAdapter(
     cycle_actions: bool = False,
     reason: str = "controlled deterministic provider decision",
     model: str = "mock-model",
+    observed_model: str | None = None,
     require_live_env: bool = False,
 ) -> OpenAICompatibleDecisionAdapter:
     client = _TargetDeliveryProviderClient(
@@ -733,6 +738,7 @@ def _TargetDeliveryAdapter(
         engage_seed_user=engage_seed_user,
         cycle_actions=cycle_actions,
         reason=reason,
+        observed_model=observed_model,
     )
     return OpenAICompatibleDecisionAdapter(
         ProviderLLMConfig(enabled=True, model=model, require_live_env=require_live_env),
@@ -1658,9 +1664,9 @@ def test_v6_arbitrary_built_client_remains_validation_evidence(tmp_path: Path, m
 
 def test_v6_sdk_wrapper_path_persists_eligible_formal_evidence(tmp_path: Path, monkeypatch) -> None:
     dataset_dir = _make_processed_fixture(tmp_path, user_count=6, dense_target_network=True)
-    provider_config = ProviderLLMConfig(enabled=True, model="gpt-5.4-mini", require_live_env=True)
+    provider_config = ProviderLLMConfig(enabled=True, model=V6_REQUESTED_MODEL, require_live_env=True)
     adapter = OpenAICompatibleDecisionAdapter(provider_config)
-    client = _TargetDeliveryProviderClient()
+    client = _TargetDeliveryProviderClient(observed_model=V6_OBSERVED_MODEL)
     sdk_client = _sdk_wrapper_stub(client)
     client_builds = 0
 
@@ -1685,10 +1691,11 @@ def test_v6_sdk_wrapper_path_persists_eligible_formal_evidence(tmp_path: Path, m
     assert evidence["production_deploy_eligible"] is True
     assert evidence["decision_execution_evidence"]["adapter_chain"] == ["openai_compatible"]
     assert evidence["decision_execution_evidence"]["provider_metadata"]["require_live_env"] is True
+    assert evidence["decision_execution_evidence"]["provider_metadata"]["model"] == V6_REQUESTED_MODEL
     assert accounting["external_request_invocations"] == 6
     assert accounting["provider_response_count"] == 6
     assert accounting["successful_decision_count"] == 6
-    assert accounting["observed_model_counts"] == {"gpt-5.4-mini": 6}
+    assert accounting["observed_model_counts"] == {V6_OBSERVED_MODEL: 6}
     assert client_builds == 6
     assert len(client.calls) == 6
     assert "production_deploy_eligible=true" in (output / "report.html").read_text(encoding="utf-8")
@@ -2181,6 +2188,7 @@ def _write_v3_release_contract(
         "decision_execution_mode": decision_evidence["decision_execution_mode"],
         "adapter_chain": decision_evidence["adapter_chain"],
         "requested_model": decision_evidence["provider_metadata"]["model"],
+        "observed_model": next(iter(decision_evidence["provider_accounting"]["observed_model_counts"])),
         "live_api_triggered": decision_evidence["live_api_triggered"],
         "formal_research_evidence": decision_evidence["formal_research_evidence"],
         "production_deploy_eligible": evidence_state["production_deploy_eligible"],
@@ -2207,9 +2215,13 @@ def _make_synthetic_v6_formal_release(tmp_path: Path) -> tuple[Path, Path]:
         FinalResearchConfig(
             dataset_dir=dataset_dir,
             sample_size=6,
-            provider=ProviderLLMConfig(enabled=True, model="gpt-5.4-mini", require_live_env=True),
+            provider=ProviderLLMConfig(enabled=True, model=V6_REQUESTED_MODEL, require_live_env=True),
         ),
-        _TargetDeliveryAdapter(model="gpt-5.4-mini", require_live_env=True),
+        _TargetDeliveryAdapter(
+            model=V6_REQUESTED_MODEL,
+            observed_model=V6_OBSERVED_MODEL,
+            require_live_env=True,
+        ),
     ).run_and_write(tmp_path / "runs" / "synthetic-v6-formal-fixture")
     _promote_v6_to_synthetic_formal_release(output)
     return output, _write_v3_release_contract(tmp_path, output)
@@ -2219,6 +2231,16 @@ def test_release_v3_accepts_synthetic_v6_formal_fixture_without_rewriting(tmp_pa
     output, contract = _make_synthetic_v6_formal_release(tmp_path)
     report_before = (output / "report.html").read_bytes()
     payload_before = (output / "final_research_report_payload.json").read_bytes()
+    contract_document = json.loads(contract.read_text(encoding="utf-8"))
+    payload_document = json.loads(payload_before)
+    decision_evidence = payload_document["evidence_state"]["decision_execution_evidence"]
+
+    assert contract_document["requested_model"] == V6_REQUESTED_MODEL
+    assert contract_document["observed_model"] == V6_OBSERVED_MODEL
+    assert decision_evidence["provider_metadata"]["model"] == V6_REQUESTED_MODEL
+    assert decision_evidence["provider_accounting"]["observed_model_counts"] == {V6_OBSERVED_MODEL: 6}
+    assert V6_REQUESTED_MODEL.encode() in report_before
+    assert V6_OBSERVED_MODEL.encode() in report_before
 
     validated = _validate_release(tmp_path, output, contract)
 
@@ -2252,9 +2274,14 @@ def test_release_v3_rejects_runner_generated_v6_validation_candidate(tmp_path: P
     ("corruption", "expected_error"),
     [
         ("requested_model", "requested_model"),
+        ("observed_base_alias", "observed_model"),
+        ("observed_other_date", "observed_model"),
+        ("observed_other_family", "observed_model"),
         ("cached_wrapper", "adapter_chain"),
         ("mixed_model", "observed_model_counts"),
         ("missing_model", "observed_model_counts"),
+        ("malformed_model", "observed_model_counts"),
+        ("contract_accounting_mismatch", "v3 provider_accounting mismatch"),
         ("missing_usage", "complete usage"),
         ("malformed_usage", "complete usage"),
         ("invocation_count", "invocations"),
@@ -2281,13 +2308,25 @@ def test_release_v3_rejects_crossed_model_accounting_and_contract_evidence(
     response_count = accounting["provider_response_count"]
     if corruption == "requested_model":
         contract["requested_model"] = "gpt-5.4"
+    elif corruption == "observed_base_alias":
+        contract["observed_model"] = V6_REQUESTED_MODEL
+    elif corruption == "observed_other_date":
+        contract["observed_model"] = "gpt-5.4-mini-2026-03-18"
+    elif corruption == "observed_other_family":
+        contract["observed_model"] = "gpt-5.4-2026-03-17"
     elif corruption == "cached_wrapper":
         contract["adapter_chain"] = ["cached", "openai_compatible"]
     elif corruption == "mixed_model":
-        accounting["observed_model_counts"] = {"gpt-5.4-mini": response_count - 1, "fallback-model": 1}
-    elif corruption == "missing_model":
-        accounting["observed_model_counts"] = {"gpt-5.4-mini": response_count - 1}
-        accounting["observed_model_missing_response_count"] = 1
+        accounting["observed_model_counts"] = {V6_OBSERVED_MODEL: response_count - 1, "fallback-model": 1}
+    elif corruption in {"missing_model", "malformed_model"}:
+        accounting["observed_model_counts"] = {V6_OBSERVED_MODEL: response_count - 1}
+        accounting[
+            "observed_model_missing_response_count"
+            if corruption == "missing_model"
+            else "observed_model_malformed_response_count"
+        ] = 1
+    elif corruption == "contract_accounting_mismatch":
+        accounting["external_request_invocations"] += 1
     elif corruption in {"missing_usage", "malformed_usage"}:
         accounting["usage_complete_response_count"] = response_count - 1
         accounting[

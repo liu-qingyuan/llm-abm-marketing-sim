@@ -870,7 +870,13 @@ async function assertRankingReport(
     `selected=${rankingFacts.selected_candidate_count}`,
   );
   await expect(decisionEvidencePanel.getByTestId('v6-evidence-limitations')).toContainText(
-    '不是价格、账单或模型可用性证明',
+    'Requested model 与 Observed model 是独立 transport evidence',
+  );
+  await expect(decisionEvidencePanel.getByTestId('v6-evidence-limitations')).toContainText(
+    'dated snapshot 不表示不同 model family',
+  );
+  await expect(decisionEvidencePanel.getByTestId('v6-evidence-limitations')).toContainText(
+    '不是价格、账单、模型可用性或质量证明',
   );
   await expect(decisionEvidencePanel.getByTestId('v6-evidence-limitations')).toContainText(
     '不判断语义相似、理由质量、真实性或文案多样性',

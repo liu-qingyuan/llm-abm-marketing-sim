@@ -75,7 +75,7 @@ python scripts/validate_abm_report_release.py \
   --source-dir runs/<persisted-run>
 ```
 
-该命令支持历史 `abm-report-release-contract-v1` 的本地证据验证、当前历史基线 `abm-report-release-contract-v2` Formal 验证，以及 exact `gpt-5.4-mini` 的 `abm-report-release-contract-v3` Formal 验证。v2/v3 contract 必须位于仓库内且不经过 symlink，固定 `release_purpose=formal_research`；v3 额外绑定 bare Adapter、requested/observed model、完整 returned-response usage、run-local counts、reason/context 和 v6 tuple。source directory 不允许绝对/父级 artifact path、symlink、FIFO/socket/device 等非 regular entry、未声明文件、缺失下载或 hash 不一致。
+该命令支持历史 `abm-report-release-contract-v1` 的本地证据验证、当前历史基线 `abm-report-release-contract-v2` Formal 验证，以及 `abm-report-release-contract-v3` Formal 验证。v2/v3 contract 必须位于仓库内且不经过 symlink，固定 `release_purpose=formal_research`；v3 额外绑定 bare Adapter、exact requested `gpt-5.4-mini`、独立 exact observed `gpt-5.4-mini-2026-03-17`、完整 returned-response usage、run-local counts、reason/context 和 v6 tuple。该 mapping 来自 #87 qualification；任一 snapshot 变化都必须新建 Ticket 并重新 qualification，不能静默 fallback 或按 family/prefix 接受。source directory 不允许绝对/父级 artifact path、symlink、FIFO/socket/device 等非 regular entry、未声明文件、缺失下载或 hash 不一致。
 
 production deploy 只能显式提供通过本地 gate 的 v2 或 v3 Formal contract：
 

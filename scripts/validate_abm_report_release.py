@@ -140,6 +140,7 @@ class _ReleaseContractV3(BaseModel):
     decision_execution_mode: Literal["live_provider"]
     adapter_chain: list[Literal["openai_compatible"]]
     requested_model: Literal["gpt-5.4-mini"]
+    observed_model: Literal["gpt-5.4-mini-2026-03-17"]
     live_api_triggered: Literal[True]
     formal_research_evidence: Literal[True]
     production_deploy_eligible: Literal[True]
@@ -191,8 +192,10 @@ class _ReleaseContractV3(BaseModel):
             == counts.decided_users
         ):
             raise ValueError("v3 accounting requires invocations >= responses >= successful Decisions == decided_users")
-        if accounting.observed_model_counts != {self.requested_model: accounting.provider_response_count}:
-            raise ValueError("observed_model_counts must report only the exact requested model for every response")
+        if accounting.observed_model_counts != {self.observed_model: accounting.provider_response_count}:
+            raise ValueError(
+                "observed_model_counts must report only the exact contract observed_model for every response"
+            )
         if accounting.observed_model_missing_response_count or accounting.observed_model_malformed_response_count:
             raise ValueError("v3 Formal accounting cannot contain missing or malformed observed models")
         if accounting.usage_complete_response_count != accounting.provider_response_count:
@@ -615,8 +618,8 @@ def _validate_v3(
         raise ReleaseValidationError(
             "v3 persisted accounting requires invocations >= responses >= successful Decisions == decided_users"
         )
-    if accounting.observed_model_counts != {contract.requested_model: accounting.provider_response_count}:
-        raise ReleaseValidationError("v3 observed models do not match the exact requested model")
+    if accounting.observed_model_counts != {contract.observed_model: accounting.provider_response_count}:
+        raise ReleaseValidationError("v3 observed models do not match the exact contract observed_model")
     if accounting.observed_model_missing_response_count or accounting.observed_model_malformed_response_count:
         raise ReleaseValidationError("v3 observed-model accounting is incomplete")
     if (
@@ -706,6 +709,7 @@ def _validate_v3(
         "sample_role_counts": contract.sample_role_counts,
         "decision_execution_mode": contract.decision_execution_mode,
         "requested_model": contract.requested_model,
+        "observed_model": contract.observed_model,
         "live_api_triggered": contract.live_api_triggered,
         "artifact_count": len(artifacts),
         "report_sha256": contract.artifact_sha256["report.html"],

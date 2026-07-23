@@ -835,7 +835,8 @@ def _ranking_v5_evidence(value: object) -> RankingV5Evidence:
     return RankingV5ExpandEvidence.model_validate(value)
 
 
-_V6_FORMAL_MODEL = "gpt-5.4-mini"
+_V6_FORMAL_REQUESTED_MODEL = "gpt-5.4-mini"
+_V6_FORMAL_OBSERVED_MODEL = "gpt-5.4-mini-2026-03-17"
 
 
 class RankingV6ExpandEvidence(BaseModel):
@@ -894,13 +895,13 @@ def _v6_production_deploy_eligible(decision: DecisionExecutionEvidenceV2) -> boo
         and decision.provider_metadata.get("adapter") == "openai_compatible"
         and decision.provider_metadata.get("enabled") is True
         and decision.provider_metadata.get("require_live_env") is True
-        and decision.provider_metadata.get("model") == _V6_FORMAL_MODEL
+        and decision.provider_metadata.get("model") == _V6_FORMAL_REQUESTED_MODEL
         and not (set(decision.decision_source_counts) - {"provider"})
         and accounting.external_request_invocations > 0
         and accounting.external_request_invocations >= accounting.provider_response_count
         and accounting.provider_response_count >= accounting.successful_decision_count
         and accounting.successful_decision_count == decision.terminal_counts.decided_users
-        and accounting.observed_model_counts == {_V6_FORMAL_MODEL: accounting.provider_response_count}
+        and accounting.observed_model_counts == {_V6_FORMAL_OBSERVED_MODEL: accounting.provider_response_count}
         and accounting.observed_model_missing_response_count == 0
         and accounting.observed_model_malformed_response_count == 0
         and accounting.usage_complete_response_count == accounting.provider_response_count
@@ -2670,7 +2671,7 @@ def _render_v6_expanded_evidence(payload: FinalResearchRankingReportPayloadV6) -
           <p><code>selected={ranking.selected_candidate_count}</code> · <code>engaged_neighbor_count=0: {ranking.zero_engaged_neighbor_count}</code> · <code>positive: {ranking.positive_engaged_neighbor_count}</code> · <code>maximum={ranking.maximum_engaged_neighbor_count}</code></p>
         </article>
       </div>
-      <p class="target-aggregate-reference-limit" data-testid="v6-evidence-limitations">Observed model 与 token usage 只描述 Provider 返回的 allowlisted metadata，不是价格、账单或模型可用性证明；transport failure 可能没有 returned usage。Exact reason 只做原字符串相等统计，不判断语义相似、理由质量、真实性或文案多样性。Ranking context 只影响投放排序，不是 Prompt input；{escape(eligibility_note)}</p>
+      <p class="target-aggregate-reference-limit" data-testid="v6-evidence-limitations">Requested model 与 Observed model 是独立 transport evidence；dated snapshot 不表示不同 model family。Observed model 与 token usage 只描述 Provider 返回的 allowlisted metadata，不是价格、账单、模型可用性或质量证明；transport failure 可能没有 returned usage。Exact reason 只做原字符串相等统计，不判断语义相似、理由质量、真实性或文案多样性。Ranking context 只影响投放排序，不是 Prompt input；{escape(eligibility_note)}</p>
     """
 
 

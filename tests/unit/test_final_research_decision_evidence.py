@@ -217,7 +217,7 @@ def test_ranking_v6_formal_evidence_keeps_incomplete_live_accounting_ineligible(
                 "external_request_invocations": 1,
                 "provider_response_count": 1,
                 "successful_decision_count": 1,
-                "observed_model_counts": {"gpt-5.4-mini": 1},
+                "observed_model_counts": {"gpt-5.4-mini-2026-03-17": 1},
                 "observed_model_missing_response_count": 0,
                 "observed_model_malformed_response_count": 0,
                 "usage_complete_response_count": 1,
@@ -242,6 +242,8 @@ def test_ranking_v6_formal_evidence_keeps_incomplete_live_accounting_ineligible(
     complete_state = ranking_v6_release_evidence(complete_evidence)
 
     assert RankingV6FormalEvidence.model_validate(complete_state).production_deploy_eligible is True
+    assert complete_evidence.provider_metadata["model"] == "gpt-5.4-mini"
+    assert complete_evidence.provider_accounting.observed_model_counts == {"gpt-5.4-mini-2026-03-17": 1}
 
     incomplete_document = complete_evidence.model_dump(mode="json")
     incomplete_document["provider_accounting"].update(
@@ -269,9 +271,33 @@ def test_ranking_v6_formal_evidence_keeps_incomplete_live_accounting_ineligible(
     missing_live_gate = complete_evidence.model_dump(mode="json")
     missing_live_gate["provider_metadata"]["require_live_env"] = False
     ineligible_documents.append(missing_live_gate)
+    observed_base_alias = complete_evidence.model_dump(mode="json")
+    observed_base_alias["provider_accounting"]["observed_model_counts"] = {"gpt-5.4-mini": 1}
+    ineligible_documents.append(observed_base_alias)
+    other_snapshot = complete_evidence.model_dump(mode="json")
+    other_snapshot["provider_accounting"]["observed_model_counts"] = {"gpt-5.4-mini-2026-03-18": 1}
+    ineligible_documents.append(other_snapshot)
+    other_family = complete_evidence.model_dump(mode="json")
+    other_family["provider_accounting"]["observed_model_counts"] = {"gpt-5.4-2026-03-17": 1}
+    ineligible_documents.append(other_family)
     mixed_observed_model = complete_evidence.model_dump(mode="json")
-    mixed_observed_model["provider_accounting"]["observed_model_counts"] = {"fallback-model": 1}
+    mixed_accounting = mixed_observed_model["provider_accounting"]
+    mixed_accounting["external_request_invocations"] = 2
+    mixed_accounting["provider_response_count"] = 2
+    mixed_accounting["observed_model_counts"] = {
+        "gpt-5.4-mini-2026-03-17": 1,
+        "fallback-model": 1,
+    }
+    mixed_accounting["usage_complete_response_count"] = 2
     ineligible_documents.append(mixed_observed_model)
+    missing_observed_model = complete_evidence.model_dump(mode="json")
+    missing_observed_model["provider_accounting"]["observed_model_counts"] = {}
+    missing_observed_model["provider_accounting"]["observed_model_missing_response_count"] = 1
+    ineligible_documents.append(missing_observed_model)
+    malformed_observed_model = complete_evidence.model_dump(mode="json")
+    malformed_observed_model["provider_accounting"]["observed_model_counts"] = {}
+    malformed_observed_model["provider_accounting"]["observed_model_malformed_response_count"] = 1
+    ineligible_documents.append(malformed_observed_model)
     zero_invocations = complete_evidence.model_dump(mode="json")
     zero_invocations["terminal_counts"] = {
         "sample_users": 0,
@@ -287,7 +313,7 @@ def test_ranking_v6_formal_evidence_keeps_incomplete_live_accounting_ineligible(
         "external_request_invocations": 0,
         "provider_response_count": 0,
         "successful_decision_count": 0,
-        "observed_model_counts": {"gpt-5.4-mini": 0},
+        "observed_model_counts": {"gpt-5.4-mini-2026-03-17": 0},
         "observed_model_missing_response_count": 0,
         "observed_model_malformed_response_count": 0,
         "usage_complete_response_count": 0,
