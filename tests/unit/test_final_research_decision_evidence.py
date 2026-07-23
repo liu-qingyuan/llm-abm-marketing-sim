@@ -14,10 +14,12 @@ from llm_abm_sim.decision import (
 )
 from llm_abm_sim.final_research_decision_evidence import (
     DecisionExecutionEvidence,
+    DecisionExecutionEvidenceV2,
     _FinalResearchDecisionEvidenceBuilder,
 )
 from llm_abm_sim.final_research_report import RankingV5ExpandEvidence, ranking_v5_release_evidence
-from llm_abm_sim.providers.openai_compatible import OpenAICompatibleDecisionAdapter
+from llm_abm_sim.providers.openai_compatible import OpenAICompatibleDecisionAdapter, ProviderResponseEnvelope
+from llm_abm_sim.safe_serialization import safe_data
 from llm_abm_sim.schemas import PeerContext, PlatformContext, PostContent, ProviderLLMConfig, UserProfile
 
 
@@ -179,6 +181,207 @@ def test_ranking_v5_release_evidence_promotes_only_actual_live_execution():
     assert formal_target_evidence["status"] == "persisted"
     assert formal_state["decision_execution_evidence"] == formal_evidence.model_dump(mode="json")
     assert formal_state["production_deploy_eligible"] is True
+
+
+def test_v2_bare_provider_rejects_runtime_decisions_without_leaf_success_accounting():
+    provider = OpenAICompatibleDecisionAdapter(
+        ProviderLLMConfig(enabled=True, model="mock-model", require_live_env=False),
+        client=_UnusedProviderClient(),
+    )
+    decision = {**_decision_row("u1", "like"), "decision_source": "provider"}
+
+    with pytest.raises(ValidationError, match="bare Provider accounting must cover every persisted runtime Decision"):
+        _FinalResearchDecisionEvidenceBuilder(provider).build_v2(
+            sample_users=1,
+            decision_rows=[decision],
+            action_rows=[_action_row("u1", "like")],
+            outcome_rows=[{"user_id": "u1", "result_status": "like", "provider_status": "succeeded"}],
+            provider_failure_rows=[],
+        )
+
+
+def test_v2_decision_evidence_uses_run_local_provider_accounting_delta():
+    response = ProviderResponseEnvelope(
+        decision_text=(
+            '{"engage": true, "probability": 0.7, "reason": "fit", '
+            '"confidence": 0.8, "action": "like"}'
+        ),
+        observed_model="observed-model",
+        observed_model_status="reported",
+        usage_status="complete",
+        input_tokens=9,
+        output_tokens=3,
+        total_tokens=12,
+        cached_input_tokens=None,
+    )
+
+    class ReusableClient:
+        def create_response(self, messages: list[dict[str, str]], model: str) -> ProviderResponseEnvelope:
+            del messages, model
+            return response
+
+    provider = OpenAICompatibleDecisionAdapter(
+        ProviderLLMConfig(enabled=True, model="requested-model", require_live_env=False),
+        client=ReusableClient(),
+    )
+    context = {
+        "post": PostContent(post_id="p1", text="target"),
+        "profile": UserProfile(user_id="u1"),
+        "peer_context": PeerContext(),
+    }
+    provider.decide(**context)
+    builder = _FinalResearchDecisionEvidenceBuilder(provider)
+    provider.decide(**context)
+    decision = {**_decision_row("u1", "like"), "decision_source": "provider"}
+
+    evidence = builder.build_v2(
+        sample_users=1,
+        decision_rows=[decision],
+        action_rows=[_action_row("u1", "like")],
+        outcome_rows=[{"user_id": "u1", "result_status": "like", "provider_status": "succeeded"}],
+        provider_failure_rows=[],
+    )
+
+    assert isinstance(evidence, DecisionExecutionEvidenceV2)
+    assert evidence.schema_version == "final-research-decision-execution-evidence-v2"
+    assert evidence.provider_accounting.provider_response_count == 1
+    assert evidence.provider_accounting.successful_decision_count == 1
+    assert evidence.provider_accounting.observed_model_counts == {"observed-model": 1}
+    assert evidence.provider_accounting.usage_complete_response_count == 1
+    assert evidence.provider_accounting.input_tokens == 9
+    assert evidence.provider_accounting.output_tokens == 3
+    assert evidence.provider_accounting.total_tokens == 12
+    assert evidence.provider_accounting.external_request_invocations == 0
+
+
+def test_v2_provider_accounting_is_a_strict_safe_serialization_sibling():
+    evidence = DecisionExecutionEvidenceV2.model_validate(
+        {
+            "schema_version": "final-research-decision-execution-evidence-v2",
+            "status": "persisted",
+            "formal_research_evidence": False,
+            "decision_execution_mode": "mock_provider",
+            "adapter_chain": ["openai_compatible"],
+            "decision_source_counts": {"provider": 1},
+            "action_counts": {"like": 1, "comment": 0, "share": 0, "ignore": 0},
+            "terminal_counts": {
+                "sample_users": 1,
+                "exposed_users": 1,
+                "decided_users": 1,
+                "provider_failed": 0,
+                "below_delivery_capacity": 0,
+            },
+            "provider_metadata": {"adapter": "openai_compatible", "model": "requested-model"},
+            "provider_accounting": {
+                "schema_version": "provider-accounting-v1",
+                "external_request_invocations": 0,
+                "provider_response_count": 1,
+                "successful_decision_count": 1,
+                "observed_model_counts": {"observed-model": 1},
+                "observed_model_missing_response_count": 0,
+                "observed_model_malformed_response_count": 0,
+                "usage_complete_response_count": 1,
+                "usage_missing_response_count": 0,
+                "usage_malformed_response_count": 0,
+                "input_tokens": 9,
+                "output_tokens": 3,
+                "total_tokens": 12,
+                "cached_input_tokens": None,
+                "cached_input_tokens_reported_response_count": 0,
+            },
+            "live_api_triggered": False,
+            "sampling_status": "validation_run",
+            "degeneracy_flags": {
+                "all_decisions_ignore": False,
+                "single_action_only": True,
+                "no_engagement_feedback": False,
+            },
+        }
+    )
+
+    serialized = safe_data(evidence)
+
+    assert serialized["provider_accounting"]["input_tokens"] == 9
+    assert serialized["provider_accounting"]["total_tokens"] == 12
+    assert "provider_accounting" not in serialized["provider_metadata"]
+
+    unsafe = evidence.model_dump(mode="json")
+    unsafe["provider_accounting"]["raw_provider_response"] = "forbidden"
+    with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
+        DecisionExecutionEvidenceV2.model_validate(unsafe)
+
+
+def test_v2_rule_based_evidence_rejects_forged_provider_accounting():
+    evidence = _FinalResearchDecisionEvidenceBuilder(RuleBasedDecisionAdapter()).build_v2(
+        sample_users=0,
+        decision_rows=[],
+        action_rows=[],
+        outcome_rows=[],
+        provider_failure_rows=[],
+    )
+    forged = evidence.model_dump(mode="json")
+    forged["provider_accounting"].update(
+        {
+            "provider_response_count": 1,
+            "observed_model_missing_response_count": 1,
+            "usage_missing_response_count": 1,
+        }
+    )
+
+    with pytest.raises(ValidationError, match="rule-based Decision evidence cannot contain Provider accounting"):
+        DecisionExecutionEvidenceV2.model_validate(forged)
+
+
+def test_v2_cached_provider_hit_remains_a_runtime_decision_without_response_evidence():
+    response = ProviderResponseEnvelope(
+        decision_text=(
+            '{"engage": true, "probability": 0.7, "reason": "cached", '
+            '"confidence": 0.8, "action": "like"}'
+        ),
+        observed_model="observed-model",
+        observed_model_status="reported",
+        usage_status="complete",
+        input_tokens=9,
+        output_tokens=3,
+        total_tokens=12,
+        cached_input_tokens=None,
+    )
+
+    class OneResponseClient:
+        def create_response(self, messages: list[dict[str, str]], model: str) -> ProviderResponseEnvelope:
+            del messages, model
+            return response
+
+    provider = OpenAICompatibleDecisionAdapter(
+        ProviderLLMConfig(enabled=True, model="requested-model", require_live_env=False),
+        client=OneResponseClient(),
+    )
+    adapter = CachedDecisionAdapter(provider, InMemoryDecisionCache())
+    context = {
+        "post": PostContent(post_id="p1", text="target"),
+        "profile": UserProfile(user_id="u1"),
+        "peer_context": PeerContext(),
+    }
+    adapter.decide(**context)
+    builder = _FinalResearchDecisionEvidenceBuilder(adapter)
+    cached_decision = adapter.decide(**context)
+    decision = {**_decision_row("u1", "like"), "decision_source": cached_decision.decision_source}
+
+    evidence = builder.build_v2(
+        sample_users=1,
+        decision_rows=[decision],
+        action_rows=[_action_row("u1", "like")],
+        outcome_rows=[{"user_id": "u1", "result_status": "like", "provider_status": "succeeded"}],
+        provider_failure_rows=[],
+    )
+
+    assert evidence.adapter_chain == ["cached", "openai_compatible"]
+    assert evidence.decision_source_counts == {"provider": 1}
+    assert evidence.provider_accounting.provider_response_count == 0
+    assert evidence.provider_accounting.successful_decision_count == 0
+    assert evidence.provider_accounting.observed_model_counts == {}
+    assert evidence.provider_accounting.usage_complete_response_count == 0
+    assert evidence.terminal_counts.decided_users - evidence.provider_accounting.successful_decision_count == 1
 
 
 def test_decision_evidence_builds_counts_from_canonical_runtime_rows():

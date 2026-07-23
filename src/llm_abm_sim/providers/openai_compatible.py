@@ -9,6 +9,14 @@ from typing import Any, Protocol, cast
 
 from llm_abm_sim.decision import DecisionInput, EngageDecision, LLMDecisionAdapter, ProviderDecisionError
 from llm_abm_sim.prompting import build_engagement_prompt
+from llm_abm_sim.provider_accounting import (
+    ProviderAccounting,
+    ProviderAccountingTracker,
+    ProviderResponseEnvelope,
+    coerce_provider_response_envelope,
+    normalize_provider_response_envelope,
+    response_field,
+)
 from llm_abm_sim.provider_config import (
     load_codex_provider_config,
     resolve_runtime_credential,
@@ -29,8 +37,12 @@ from llm_abm_sim.schemas import (
 class ProviderClient(Protocol):
     """Minimal client protocol used by tests and optional OpenAI SDK wrapper."""
 
-    def create_response(self, messages: list[dict[str, str]], model: str) -> str | dict[str, Any]:
-        """Return provider text or a parsed dict containing an engagement decision."""
+    def create_response(
+        self,
+        messages: list[dict[str, str]],
+        model: str,
+    ) -> ProviderResponseEnvelope | str | dict[str, Any]:
+        """Return a safe response envelope; legacy injected clients may return Decision text."""
         raise NotImplementedError
 
 
@@ -70,10 +82,17 @@ class OpenAICompatibleDecisionAdapter(LLMDecisionAdapter):
         self.client = client
         self._sleep = sleep
         self.external_request_invocations = 0
+        self._provider_accounting = ProviderAccountingTracker()
 
     @property
     def live_api_triggered(self) -> bool:
         return self.external_request_invocations > 0
+
+    @property
+    def provider_accounting(self) -> ProviderAccounting:
+        return self._provider_accounting.snapshot(
+            external_request_invocations=self.external_request_invocations,
+        )
 
     @property
     def safe_metadata(self) -> dict[str, Any]:
@@ -103,14 +122,17 @@ class OpenAICompatibleDecisionAdapter(LLMDecisionAdapter):
         )
         messages = build_engagement_prompt(decision_input)
         uses_live_client = self.client is None
-        client = self.client or self._build_live_client()
+        client = self._build_live_client() if self.client is None else self.client
         last_error: Exception | None = None
         for attempt in range(self.config.max_retries + 1):
             try:
                 if uses_live_client:
                     self.external_request_invocations += 1
                 raw = client.create_response(messages, cast(str, self.model))
-                decision = _parse_provider_decision(raw)
+                response = coerce_provider_response_envelope(raw)
+                self._provider_accounting.record_response(response)
+                decision = _parse_provider_decision(response.decision_text)
+                self._provider_accounting.record_successful_decision()
                 return decision.model_copy(
                     update={
                         "decision_source": "provider",
@@ -227,7 +249,7 @@ class _OpenAISDKClient:
         )
         self._wire_api = wire_api
 
-    def create_response(self, messages: list[dict[str, str]], model: str) -> str:
+    def create_response(self, messages: list[dict[str, str]], model: str) -> ProviderResponseEnvelope:
         sdk_messages = cast(Any, messages)
         if self._wire_api == "chat":
             chat_response = self._client.chat.completions.create(
@@ -236,15 +258,42 @@ class _OpenAISDKClient:
                 response_format={"type": "json_object"},
                 extra_headers=self._extra_headers,
             )
-            content = chat_response.choices[0].message.content
-            return content or ""
+            return normalize_provider_response_envelope(
+                decision_text=_chat_decision_text(chat_response),
+                observed_model=response_field(chat_response, "model"),
+                usage=response_field(chat_response, "usage"),
+                input_tokens_field="prompt_tokens",
+                output_tokens_field="completion_tokens",
+                cached_details_field="prompt_tokens_details",
+            )
         provider_response = self._client.responses.create(
             model=model,
             input=sdk_messages,
             text=cast(Any, {"format": _engage_decision_json_schema()}),
             extra_headers=self._extra_headers,
         )
-        return str(provider_response.output_text)
+        return normalize_provider_response_envelope(
+            decision_text=_responses_decision_text(provider_response),
+            observed_model=response_field(provider_response, "model"),
+            usage=response_field(provider_response, "usage"),
+            input_tokens_field="input_tokens",
+            output_tokens_field="output_tokens",
+            cached_details_field="input_tokens_details",
+        )
+
+
+def _responses_decision_text(response: object) -> str:
+    output_text = response_field(response, "output_text")
+    return output_text if isinstance(output_text, str) else ""
+
+
+def _chat_decision_text(response: object) -> str:
+    choices = response_field(response, "choices")
+    if not isinstance(choices, list) or not choices:
+        return ""
+    message = response_field(choices[0], "message")
+    content = response_field(message, "content")
+    return content if isinstance(content, str) else ""
 
 
 def _engage_decision_json_schema() -> dict[str, Any]:

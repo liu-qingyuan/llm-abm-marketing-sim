@@ -35,6 +35,26 @@ Codex auth 只允许复用到当前 selected Provider 和它声明的 `base_url`
 - `GET /api/provider/readiness?mock_provider=true` 返回明确标记的 mock readiness，用于离线 Web demo/tests。
 - `GET /api/provider/readiness` 不带 mock 模式时，必须在 optional SDK、`LLM_ABM_RUN_LIVE_LLM=1`、Provider metadata、runtime credential 全部可用前返回 `blocked`；`POST /api/runs` 也应镜像 blocked 状态，不得回退到离线决策。
 
+## Safe response envelope 与 accounting
+
+OpenAI-compatible Adapter 的 Responses 与 chat-compatible wire path 都先归一化为内部 safe response envelope。Envelope 只保留：
+
+- 用于解析结构化 Decision 的 `decision_text`；
+- allowlisted `observed_model` 及其 `reported` / `missing` / `malformed` 状态；
+- `complete` / `missing` / `malformed` usage 状态；
+- complete usage 的 `input_tokens`、`output_tokens`、`total_tokens` 和可选 `cached_input_tokens`。
+
+Envelope 不保留 response id、headers、credential、request body、raw response 或 SDK object。Complete usage 只接受非 boolean 的非负整数，要求 `total_tokens == input_tokens + output_tokens`；cached tokens 是 input 子集，不能再次加入 total。未提供 cached detail 时保留 `null`，不合成 0。缺失或畸形 model/usage 只降低 evidence completeness，不改变可解析 Decision，也不触发额外 retry。
+
+Adapter 的 `provider_accounting` 是独立 strict typed evidence，不放入 `provider_metadata`、`safe_metadata` 或 metadata allowlist。计数语义为：
+
+- `external_request_invocations`：真实 SDK call attempts，包括随后 transport failure 的尝试；injected deterministic client 与 cache hit 不增加；
+- `provider_response_count`：所有已返回 safe envelope，包括 Decision text 随后解析失败并 retry 的 response；
+- `successful_decision_count`：Provider leaf 成功解析的 Decision；cached `decision_source=provider` 不构成本 run 的 response/model/usage evidence；
+- model/usage 状态计数覆盖每个 returned response；token aggregate 只汇总 complete usage，不估算 missing/malformed usage。
+
+这些 usage 只描述 Provider 在 returned response 中报告的 allowlisted metadata。Transport failure 可能没有 returned usage，因此 persisted usage 不是完整 billed cost、价格、折扣、模型可用性或节省成本的证明。
+
 ## Web 控制台 Provider 模式
 
 离线浏览器 demo 使用 **Use mock provider for test/dev**。这条路径使用确定性 mock decisions，并在 UI、payload、artifact 中标记 mock provider evidence，输出到 `runs/web/<run-id>/`。

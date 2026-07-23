@@ -35,11 +35,12 @@ from llm_abm_sim.final_research_report import (
     FinalResearchRankingReportPayload,
     FinalResearchRankingReportPayloadV3,
     FinalResearchRankingReportPayloadV5,
+    FinalResearchRankingReportPayloadV6,
     FinalResearchReportWriter,
-    RankingV5ExpandEvidence,
+    RankingV6ExpandEvidence,
     _validate_persisted_ranking_report,
 )
-from llm_abm_sim.providers.openai_compatible import OpenAICompatibleDecisionAdapter
+from llm_abm_sim.providers.openai_compatible import OpenAICompatibleDecisionAdapter, ProviderResponseEnvelope
 from llm_abm_sim.safe_serialization import artifact_has_forbidden_terms
 from llm_abm_sim.schemas import (
     FailClosedAction,
@@ -666,14 +667,16 @@ class _TargetDeliveryProviderClient:
         engage_all: bool = False,
         engage_seed_user: bool = True,
         cycle_actions: bool = False,
+        reason: str = "controlled deterministic provider decision",
     ) -> None:
         self.failed_user_id = failed_user_id
         self.engage_all = engage_all
         self.engage_seed_user = engage_seed_user
         self.cycle_actions = cycle_actions
+        self.reason = reason
         self.calls: list[dict[str, object]] = []
 
-    def create_response(self, messages: list[dict[str, str]], model: str) -> dict[str, object]:
+    def create_response(self, messages: list[dict[str, str]], model: str) -> ProviderResponseEnvelope:
         prompt = messages[-1]["content"]
         match = _PROMPT_GLOBAL_INFLUENCE.search(prompt)
         if match is None:
@@ -688,13 +691,25 @@ class _TargetDeliveryProviderClient:
             action = "like"
         else:
             action = "ignore"
-        return {
-            "engage": action != "ignore",
-            "probability": 0.9 if action != "ignore" else 0.1,
-            "reason": "controlled deterministic provider decision",
-            "confidence": 1.0,
-            "action": action,
-        }
+        return ProviderResponseEnvelope(
+            decision_text=json.dumps(
+                {
+                    "engage": action != "ignore",
+                    "probability": 0.9 if action != "ignore" else 0.1,
+                    "reason": self.reason,
+                    "confidence": 1.0,
+                    "action": action,
+                },
+                ensure_ascii=False,
+            ),
+            observed_model=model,
+            observed_model_status="reported",
+            usage_status="complete",
+            input_tokens=100,
+            output_tokens=20,
+            total_tokens=120,
+            cached_input_tokens=10,
+        )
 
 
 def _TargetDeliveryAdapter(
@@ -703,12 +718,14 @@ def _TargetDeliveryAdapter(
     engage_all: bool = False,
     engage_seed_user: bool = True,
     cycle_actions: bool = False,
+    reason: str = "controlled deterministic provider decision",
 ) -> OpenAICompatibleDecisionAdapter:
     client = _TargetDeliveryProviderClient(
         failed_user_id=failed_user_id,
         engage_all=engage_all,
         engage_seed_user=engage_seed_user,
         cycle_actions=cycle_actions,
+        reason=reason,
     )
     return OpenAICompatibleDecisionAdapter(
         ProviderLLMConfig(enabled=True, model="mock-model", require_live_env=False),
@@ -971,7 +988,7 @@ def test_target_delivery_ranking_runtime_reranks_global_top20_after_seed_engagem
     second_adapter_calls = _target_delivery_client(second_adapter).calls
 
     manifest = json.loads((first_output / "artifact_manifest.json").read_text(encoding="utf-8"))
-    assert manifest["manifest_version"] == "final-research-ranking-runtime-v3"
+    assert manifest["manifest_version"] == "final-research-ranking-runtime-v4"
     assert manifest["artifacts"] == {
         "config_snapshot": "config_snapshot.json",
         "final_research_report": "report.html",
@@ -1069,7 +1086,7 @@ def test_target_delivery_ranking_runtime_reranks_global_top20_after_seed_engagem
         neutral_peer_summary in json.dumps(call["messages"], ensure_ascii=False) for call in second_adapter_calls
     )
 
-    assert summary["runtime_version"] == "final-research-ranking-runtime-v3"
+    assert summary["runtime_version"] == "final-research-ranking-runtime-v4"
     assert summary["schedule_method"] == "global_stable_reranking_top20"
     assert summary["delivery_capacity"] == 20
     assert summary["ranking_formula"] == (
@@ -1114,8 +1131,18 @@ def test_target_delivery_ranking_runtime_reranks_global_top20_after_seed_engagem
         == diagnostic_summary["observed_recommendation_signal_effect"]["batches_with_top_selection_change"]
     )
     assert len(first_adapter_calls) == summary["counts"]["decision_adapter_calls"]
+    provider_accounting = summary["provider_accounting"]
+    assert provider_accounting["provider_response_count"] == len(decisions)
+    assert provider_accounting["successful_decision_count"] == len(decisions)
+    assert provider_accounting["observed_model_counts"] == {"mock-model": len(decisions)}
+    assert provider_accounting["usage_complete_response_count"] == len(decisions)
+    reason_context = summary["reason_context_diagnostics"]
+    assert reason_context["exact_reason_facts"]["decision_row_count"] == len(decisions)
+    assert reason_context["decision_visible_peer_context"]["context_count"] == len(exposed_outcomes)
+    assert reason_context["decision_visible_peer_context"]["neutral_context_count"] == len(exposed_outcomes)
+    assert reason_context["selected_ranking_context"]["selected_candidate_count"] == len(exposed_outcomes)
 
-    assert report_payload["schema_version"] == "final-research-ranking-report-payload-v5"
+    assert report_payload["schema_version"] == "final-research-ranking-report-payload-v6"
     assert report_payload["run"]["sampling_method"] == "seed_first_research_sample_v1"
     assert report_payload["run"]["sampling_status"] == "validation_run"
     assert report_payload["sample_comparison"]["final_sample_count"] == audit["final_sample"]["count"]
@@ -1418,7 +1445,7 @@ def test_target_aggregate_counts_are_post_runtime_diagnostic_only(tmp_path: Path
     assert _target_delivery_client(first_adapter).calls == _target_delivery_client(second_adapter).calls
 
 
-def test_target_delivery_ranking_v5_excludes_interest_contract_and_is_validation_only(tmp_path: Path) -> None:
+def test_target_delivery_ranking_v6_expands_accounting_context_and_stays_validation_only(tmp_path: Path) -> None:
     dataset_dir = _make_processed_fixture(tmp_path, user_count=6, dense_target_network=True)
     user_rows = _read_csv(dataset_dir / "users.csv")
     for row in user_rows:
@@ -1450,23 +1477,23 @@ def test_target_delivery_ranking_v5_excludes_interest_contract_and_is_validation
         "formal_research_evidence": False,
     }
 
-    assert manifest["manifest_version"] == "final-research-ranking-runtime-v3"
-    assert summary["runtime_version"] == "final-research-ranking-runtime-v3"
+    assert manifest["manifest_version"] == "final-research-ranking-runtime-v4"
+    assert summary["runtime_version"] == "final-research-ranking-runtime-v4"
     assert diagnostics["schema_version"] == "ranking-diagnostics-v2"
     assert diagnostics_summary["schema_version"] == "ranking-diagnostics-summary-v2"
-    assert payload["schema_version"] == "final-research-ranking-report-payload-v5"
+    assert payload["schema_version"] == "final-research-ranking-report-payload-v6"
     assert users_document["schema_version"] == "final-research-ranking-users-v5"
     assert config_snapshot["provider"]["prompt_version"] == "jinjiang-green-marketing-prompt-v3"
     assert summary["provider_metadata"]["prompt_version"] == "jinjiang-green-marketing-prompt-v3"
     assert manifest["sampling_status"] == summary["sampling_status"] == "validation_run"
     assert payload["run"]["sampling_status"] == "validation_run"
     assert manifest["evidence_state"] == summary["evidence_state"] == payload["evidence_state"]
-    assert payload["evidence_state"]["schema_version"] == "ranking-v5-expand-evidence-v1"
+    assert payload["evidence_state"]["schema_version"] == "ranking-v6-expand-evidence-v1"
     assert payload["evidence_state"]["contract_stage"] == "validation_expand"
     assert payload["evidence_state"]["target_aggregate_engagement_reference"] == expected_target_evidence
     assert payload["evidence_state"]["production_deploy_eligible"] is False
     decision_evidence = payload["evidence_state"]["decision_execution_evidence"]
-    assert decision_evidence["schema_version"] == "final-research-decision-execution-evidence-v1"
+    assert decision_evidence["schema_version"] == "final-research-decision-execution-evidence-v2"
     assert decision_evidence["status"] == "persisted"
     assert decision_evidence["formal_research_evidence"] is False
     assert decision_evidence["decision_execution_mode"] == "mock_provider"
@@ -1488,15 +1515,55 @@ def test_target_delivery_ranking_v5_excludes_interest_contract_and_is_validation
         "no_engagement_feedback": True,
     }
     assert decision_evidence["provider_metadata"]["adapter"] == "openai_compatible"
-    crossed_evidence_state = {
-        **payload["evidence_state"],
-        "target_aggregate_engagement_reference": {
-            "status": "pending",
-            "formal_research_evidence": False,
+    expected_accounting = {
+        "schema_version": "provider-accounting-v1",
+        "external_request_invocations": 0,
+        "provider_response_count": 6,
+        "successful_decision_count": 6,
+        "observed_model_counts": {"mock-model": 6},
+        "observed_model_missing_response_count": 0,
+        "observed_model_malformed_response_count": 0,
+        "usage_complete_response_count": 6,
+        "usage_missing_response_count": 0,
+        "usage_malformed_response_count": 0,
+        "input_tokens": 600,
+        "output_tokens": 120,
+        "total_tokens": 720,
+        "cached_input_tokens": 60,
+        "cached_input_tokens_reported_response_count": 6,
+    }
+    assert decision_evidence["provider_accounting"] == expected_accounting
+    assert summary["provider_accounting"] == payload["provider_accounting"] == expected_accounting
+    reason_context = payload["reason_context_diagnostics"]
+    assert summary["reason_context_diagnostics"] == reason_context
+    assert reason_context["exact_reason_facts"] == {
+        "decision_row_count": 6,
+        "non_empty_reason_count": 6,
+        "empty_reason_count": 0,
+        "exact_unique_reason_count": 1,
+        "exact_duplicate_row_count": 5,
+        "maximum_exact_reason_frequency": 6,
+    }
+    assert reason_context["decision_visible_peer_context"] == {
+        "context_count": 6,
+        "neutral_context_count": 6,
+        "non_neutral_context_count": 0,
+        "counter_totals": {
+            "engaged_neighbors": 0,
+            "exposed_neighbors": 0,
+            "influential_engaged_neighbors": 0,
+            "visible_likes": 0,
+            "visible_comments": 0,
+            "visible_shares": 0,
         },
     }
-    with pytest.raises(ValidationError, match="persisted Decision evidence requires persisted target aggregate"):
-        RankingV5ExpandEvidence.model_validate(crossed_evidence_state)
+    assert reason_context["selected_ranking_context"]["selected_candidate_count"] == 6
+    crossed_evidence_state = json.loads(json.dumps(payload["evidence_state"]))
+    crossed_evidence_state["decision_execution_evidence"]["schema_version"] = (
+        "final-research-decision-execution-evidence-v1"
+    )
+    with pytest.raises(ValidationError, match="final-research-decision-execution-evidence-v2"):
+        RankingV6ExpandEvidence.model_validate(crossed_evidence_state)
     assert "interest_tags" not in payload["prompt_contract"]["allowed_profile_fields"]
     assert all(
         "interest_tags" not in json.dumps(call["messages"], ensure_ascii=False)
@@ -1522,10 +1589,243 @@ def test_target_delivery_ranking_v5_excludes_interest_contract_and_is_validation
     persisted_payload = (output / "final_research_report_payload.json").read_bytes()
     validated = _validate_persisted_ranking_report(output)
 
-    assert isinstance(validated.payload, FinalResearchRankingReportPayloadV5)
-    assert validated.manifest["manifest_version"] == "final-research-ranking-runtime-v3"
+    assert isinstance(validated.payload, FinalResearchRankingReportPayloadV6)
+    assert validated.manifest["manifest_version"] == "final-research-ranking-runtime-v4"
     assert (output / "report.html").read_bytes() == persisted_report
     assert (output / "final_research_report_payload.json").read_bytes() == persisted_payload
+
+
+def test_v6_rejects_external_provider_configuration_before_first_call(tmp_path: Path, monkeypatch) -> None:
+    dataset_dir = _make_processed_fixture(tmp_path, user_count=6, dense_target_network=True)
+    provider_config = ProviderLLMConfig(enabled=True, model="live-model", require_live_env=False)
+    adapter = OpenAICompatibleDecisionAdapter(provider_config)
+    client_builds = 0
+
+    def build_client():
+        nonlocal client_builds
+        client_builds += 1
+        raise AssertionError("v6 preflight must stop before SDK client construction")
+
+    monkeypatch.setattr(adapter, "_build_live_client", build_client)
+
+    with pytest.raises(ValueError, match="v6 is Validation-only"):
+        FinalResearchRunner(
+            FinalResearchConfig(dataset_dir=dataset_dir, sample_size=6, provider=provider_config),
+            adapter,
+        ).run_and_write(tmp_path / "v6-external-provider-rejected")
+
+    assert client_builds == 0
+    assert adapter.external_request_invocations == 0
+    assert adapter.provider_accounting.provider_response_count == 0
+
+
+def test_v6_reason_facts_use_the_exact_sanitized_persisted_reason(tmp_path: Path) -> None:
+    dataset_dir = _make_processed_fixture(tmp_path, user_count=6, dense_target_network=True)
+    output = FinalResearchRunner(
+        FinalResearchConfig(
+            dataset_dir=dataset_dir,
+            sample_size=6,
+            provider=ProviderLLMConfig(enabled=True, model="mock-model", require_live_env=False),
+        ),
+        _TargetDeliveryAdapter(reason="Bearer test-only-secret"),
+    ).run_and_write(tmp_path / "v6-sanitized-reasons")
+
+    decisions = _read_csv(output / "runtime_decisions.csv")
+    payload = json.loads((output / "final_research_report_payload.json").read_text(encoding="utf-8"))
+    facts = payload["reason_context_diagnostics"]["exact_reason_facts"]
+    artifact_text = "\n".join(
+        path.read_text(encoding="utf-8") for path in output.iterdir() if path.is_file()
+    )
+
+    assert {row["reason"] for row in decisions} == {"<redacted>"}
+    assert {user["reason"] for user in payload["users"]} == {"<redacted>"}
+    assert facts["non_empty_reason_count"] == 6
+    assert facts["exact_unique_reason_count"] == 1
+    assert facts["exact_duplicate_row_count"] == 5
+    assert "test-only-secret" not in artifact_text
+    assert rebuild_final_research_report(output) == output / "report.html"
+
+
+def test_v6_report_accounts_malformed_decision_response_before_retry(tmp_path: Path) -> None:
+    dataset_dir = _make_processed_fixture(tmp_path, user_count=6, dense_target_network=True)
+
+    class RetryClient:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def create_response(self, messages: list[dict[str, str]], model: str) -> ProviderResponseEnvelope:
+            del messages
+            self.calls += 1
+            return ProviderResponseEnvelope(
+                decision_text=(
+                    "not-json"
+                    if self.calls == 1
+                    else json.dumps(
+                        {
+                            "engage": False,
+                            "probability": 0.1,
+                            "reason": "retry persisted",
+                            "confidence": 0.9,
+                            "action": "ignore",
+                        }
+                    )
+                ),
+                observed_model="retry-model" if self.calls == 1 else model,
+                observed_model_status="reported",
+                usage_status="complete",
+                input_tokens=10,
+                output_tokens=2,
+                total_tokens=12,
+                cached_input_tokens=None,
+            )
+
+    client = RetryClient()
+    provider_config = ProviderLLMConfig(
+        enabled=True,
+        model="mock-model",
+        require_live_env=False,
+        max_retries=1,
+        retry_backoff_seconds=0,
+    )
+    output = FinalResearchRunner(
+        FinalResearchConfig(dataset_dir=dataset_dir, sample_size=6, provider=provider_config),
+        OpenAICompatibleDecisionAdapter(provider_config, client=client, sleep=lambda _delay: None),
+    ).run_and_write(tmp_path / "v6-malformed-decision-retry")
+
+    payload = json.loads((output / "final_research_report_payload.json").read_text(encoding="utf-8"))
+    accounting = payload["provider_accounting"]
+
+    assert len(_read_csv(output / "runtime_decisions.csv")) == 6
+    assert client.calls == 7
+    assert accounting["provider_response_count"] == 7
+    assert accounting["successful_decision_count"] == 6
+    assert accounting["observed_model_counts"] == {"mock-model": 6, "retry-model": 1}
+    assert accounting["usage_complete_response_count"] == 7
+    assert accounting["input_tokens"] == 70
+    assert accounting["output_tokens"] == 14
+    assert accounting["total_tokens"] == 84
+    assert rebuild_final_research_report(output) == output / "report.html"
+
+
+def test_v6_reader_recomputes_reason_ranking_and_neutral_peer_context(tmp_path: Path) -> None:
+    dataset_dir = _make_processed_fixture(tmp_path, user_count=6, dense_target_network=True)
+    source = FinalResearchRunner(
+        FinalResearchConfig(
+            dataset_dir=dataset_dir,
+            sample_size=6,
+            provider=ProviderLLMConfig(enabled=True, model="mock-model", require_live_env=False),
+        ),
+        _TargetDeliveryAdapter(),
+    ).run_and_write(tmp_path / "v6-reader-source")
+
+    def corrupt(name: str, mutate) -> Path:
+        target = tmp_path / name
+        shutil.copytree(source, target)
+        for file_name in ("final_research_report_payload.json", "ranking_runtime_summary.json"):
+            path = target / file_name
+            document = json.loads(path.read_text(encoding="utf-8"))
+            mutate(document["reason_context_diagnostics"])
+            _write_json(path, document)
+        return target
+
+    reason_tampered = corrupt(
+        "v6-reason-tampered",
+        lambda diagnostics: diagnostics["exact_reason_facts"].update(
+            {
+                "exact_unique_reason_count": 2,
+                "exact_duplicate_row_count": 4,
+                "maximum_exact_reason_frequency": 5,
+            }
+        ),
+    )
+    with pytest.raises(ValueError, match="exact reason facts do not match persisted Decision rows"):
+        _validate_persisted_ranking_report(reason_tampered)
+
+    ranking_tampered = corrupt(
+        "v6-ranking-context-tampered",
+        lambda diagnostics: diagnostics["selected_ranking_context"].update(
+            {
+                "zero_engaged_neighbor_count": 5,
+                "positive_engaged_neighbor_count": 1,
+                "engaged_neighbor_count_total": 1,
+                "maximum_engaged_neighbor_count": 1,
+            }
+        ),
+    )
+    with pytest.raises(ValueError, match="selected Ranking context does not match persisted candidate rows"):
+        _validate_persisted_ranking_report(ranking_tampered)
+
+    peer_tampered = corrupt(
+        "v6-peer-context-tampered",
+        lambda diagnostics: diagnostics["decision_visible_peer_context"].update(
+            {
+                "neutral_context_count": 5,
+                "non_neutral_context_count": 1,
+                "counter_totals": {
+                    **diagnostics["decision_visible_peer_context"]["counter_totals"],
+                    "visible_likes": 1,
+                },
+            }
+        ),
+    )
+    with pytest.raises(ValueError, match="PeerContext evidence must be neutral"):
+        _validate_persisted_ranking_report(peer_tampered)
+
+
+def test_v6_reader_rejects_crossed_payload_runtime_tuple(tmp_path: Path) -> None:
+    dataset_dir = _make_processed_fixture(tmp_path, user_count=6, dense_target_network=True)
+    output = FinalResearchRunner(
+        FinalResearchConfig(
+            dataset_dir=dataset_dir,
+            sample_size=6,
+            provider=ProviderLLMConfig(enabled=True, model="mock-model", require_live_env=False),
+        ),
+        _TargetDeliveryAdapter(),
+    ).run_and_write(tmp_path / "v6-crossed-tuple")
+    payload_path = output / "final_research_report_payload.json"
+    payload = json.loads(payload_path.read_text(encoding="utf-8"))
+    payload["schema_version"] = "final-research-ranking-report-payload-v5"
+    _write_json(payload_path, payload)
+
+    with pytest.raises(ValueError, match="Target Delivery Ranking rebuild contract mismatch"):
+        _validate_persisted_ranking_report(output)
+
+
+def _downgrade_v6_to_historical_v5_fixture(run_dir: Path) -> None:
+    payload_path = run_dir / "final_research_report_payload.json"
+    payload = json.loads(payload_path.read_text(encoding="utf-8"))
+    decision_evidence = payload["evidence_state"]["decision_execution_evidence"]
+    decision_evidence["schema_version"] = "final-research-decision-execution-evidence-v1"
+    decision_evidence.pop("provider_accounting")
+    v5_state = {
+        "schema_version": "ranking-v5-expand-evidence-v1",
+        "contract_stage": "validation_expand",
+        "target_aggregate_engagement_reference": payload["evidence_state"][
+            "target_aggregate_engagement_reference"
+        ],
+        "decision_execution_evidence": decision_evidence,
+        "production_deploy_eligible": False,
+    }
+    payload["schema_version"] = "final-research-ranking-report-payload-v5"
+    payload["evidence_state"] = v5_state
+    payload.pop("provider_accounting")
+    payload.pop("reason_context_diagnostics")
+    _write_json(payload_path, payload)
+
+    summary_path = run_dir / "ranking_runtime_summary.json"
+    summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    summary["runtime_version"] = "final-research-ranking-runtime-v3"
+    summary["evidence_state"] = v5_state
+    summary.pop("provider_accounting")
+    summary.pop("reason_context_diagnostics")
+    _write_json(summary_path, summary)
+
+    manifest_path = run_dir / "artifact_manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["manifest_version"] = "final-research-ranking-runtime-v3"
+    manifest["evidence_state"] = v5_state
+    _write_json(manifest_path, manifest)
+    rebuild_final_research_report(run_dir)
 
 
 def _promote_to_synthetic_formal_release(run_dir: Path) -> None:
@@ -1655,8 +1955,27 @@ def _make_synthetic_formal_release(tmp_path: Path) -> tuple[Path, Path]:
         ),
         _TargetDeliveryAdapter(),
     ).run_and_write(tmp_path / "runs" / "synthetic-formal-fixture")
+    _downgrade_v6_to_historical_v5_fixture(output)
     _promote_to_synthetic_formal_release(output)
     return output, _write_v2_release_contract(tmp_path, output)
+
+
+def test_release_v2_rejects_v6_validation_candidate(tmp_path: Path) -> None:
+    dataset_dir = _make_processed_fixture(tmp_path, user_count=6, dense_target_network=True)
+    output = FinalResearchRunner(
+        FinalResearchConfig(
+            dataset_dir=dataset_dir,
+            sample_size=6,
+            provider=ProviderLLMConfig(enabled=True, model="mock-model", require_live_env=False),
+        ),
+        _TargetDeliveryAdapter(),
+    ).run_and_write(tmp_path / "runs" / "v6-validation-candidate")
+    contract = _write_v2_release_contract(tmp_path, output)
+
+    rejected = _validate_release(tmp_path, output, contract)
+
+    assert rejected.returncode == 1
+    assert "v5" in rejected.stderr or "release contract" in rejected.stderr
 
 
 def test_release_v2_snapshot_binds_validation_to_uploaded_bytes(tmp_path: Path) -> None:
@@ -1903,6 +2222,37 @@ def test_target_delivery_rule_based_evidence_does_not_use_configured_provider_id
     assert rebuild_final_research_report(output) == output / "report.html"
 
 
+def test_v6_cached_provider_run_reports_runtime_decision_coverage_gap(tmp_path: Path) -> None:
+    dataset_dir = _make_processed_fixture(tmp_path, user_count=6, dense_target_network=True)
+    provider_config = ProviderLLMConfig(enabled=True, model="mock-model", require_live_env=False)
+    provider = _TargetDeliveryAdapter()
+    adapter = CachedDecisionAdapter(provider, InMemoryDecisionCache())
+    config = FinalResearchConfig(
+        dataset_dir=dataset_dir,
+        sample_size=6,
+        provider=provider_config,
+    )
+
+    FinalResearchRunner(config, adapter).run_and_write(tmp_path / "cached-provider-first")
+    second = FinalResearchRunner(config, adapter).run_and_write(tmp_path / "cached-provider-second")
+
+    payload = json.loads((second / "final_research_report_payload.json").read_text(encoding="utf-8"))
+    evidence = payload["evidence_state"]["decision_execution_evidence"]
+    accounting = evidence["provider_accounting"]
+    report_html = (second / "report.html").read_text(encoding="utf-8")
+
+    assert evidence["adapter_chain"] == ["cached", "openai_compatible"]
+    assert evidence["decision_source_counts"] == {"provider": 6}
+    assert evidence["terminal_counts"]["decided_users"] == 6
+    assert accounting["provider_response_count"] == 0
+    assert accounting["successful_decision_count"] == 0
+    assert accounting["observed_model_counts"] == {}
+    assert accounting["usage_complete_response_count"] == 0
+    assert 'data-testid="provider-counts"' in report_html
+    assert "runtime_decision_coverage_gap=6" in report_html
+    assert rebuild_final_research_report(second) == second / "report.html"
+
+
 def test_target_delivery_deterministic_provider_covers_all_actions_in_one_run(tmp_path: Path) -> None:
     dataset_dir = _make_processed_fixture(tmp_path, user_count=30, dense_target_network=True)
     adapter = _TargetDeliveryAdapter(cycle_actions=True)
@@ -2053,7 +2403,7 @@ def test_target_delivery_ranking_runtime_caps_delivery_and_marks_final_below_cap
         assert "provider_status=not_called" in trace["evidence"][0]["matched_values"]
 
 
-def test_target_delivery_ranking_v5_persists_historical_field_traces_without_interest_contract(tmp_path: Path) -> None:
+def test_target_delivery_ranking_v6_persists_historical_field_traces_without_interest_contract(tmp_path: Path) -> None:
     dataset_dir = _make_processed_fixture(tmp_path, user_count=6, dense_target_network=True)
     user_rows = _read_csv(dataset_dir / "users.csv")
     user_rows[0]["interest_tags"] = json.dumps(["锦江ESG"], ensure_ascii=False)
@@ -2076,7 +2426,7 @@ def test_target_delivery_ranking_v5_persists_historical_field_traces_without_int
     trace_document = json.loads((output / manifest["artifacts"]["user_field_trace"]).read_text(encoding="utf-8"))
     source_document = json.loads((output / manifest["artifacts"]["field_source_records"]).read_text(encoding="utf-8"))
 
-    assert payload["schema_version"] == "final-research-ranking-report-payload-v5"
+    assert payload["schema_version"] == "final-research-ranking-report-payload-v6"
     assert catalog_document["schema_version"] == "field-lineage-catalog-v1"
     assert trace_document["schema_version"] == "user-field-trace-v1"
     assert source_document["schema_version"] == "field-source-records-v1"
@@ -2351,7 +2701,7 @@ def test_target_delivery_ranking_report_rebuild_is_deterministic(tmp_path: Path)
     calls_before_rebuild = len(_target_delivery_client(adapter).calls)
     report_path = run_dir / "report.html"
     payload_path = run_dir / "final_research_report_payload.json"
-    payload = FinalResearchRankingReportPayloadV5.model_validate_json(payload_path.read_text(encoding="utf-8"))
+    payload = FinalResearchRankingReportPayloadV6.model_validate_json(payload_path.read_text(encoding="utf-8"))
     users_document = json.loads((run_dir / "final_research_users.json").read_text(encoding="utf-8"))
     assert users_document["schema_version"] == "final-research-ranking-users-v5"
     direct_report = FinalResearchReportWriter.render_payload(payload).encode()
@@ -2396,6 +2746,7 @@ def _restore_historical_top20_v1_catalog_definition(catalog: list[dict[str, Any]
 
 
 def _convert_persisted_v5_run_to_pending_v5(run_dir: Path) -> None:
+    _downgrade_v6_to_historical_v5_fixture(run_dir)
     pending_evidence_state = {
         "schema_version": "ranking-v5-expand-evidence-v1",
         "contract_stage": "validation_expand",
@@ -2472,12 +2823,14 @@ def test_v5_rebuild_preserves_pending_expand_artifacts(tmp_path: Path) -> None:
         rebuilt.ranking_diagnostics["historical_top20_diagnostic"],
     )
     assert 'data-testid="target-aggregate-engagement-reference"' not in first_report.decode()
+    assert "v6-evidence-grid" not in first_report.decode()
     assert rebuild_final_research_report(run_dir) == report_path
     assert payload_path.read_bytes() == first_payload
     assert report_path.read_bytes() == first_report
 
 
 def _convert_seed_first_v5_run_to_historical_v4(run_dir: Path) -> dict[str, Any]:
+    _downgrade_v6_to_historical_v5_fixture(run_dir)
     payload_path = run_dir / "final_research_report_payload.json"
     payload = json.loads(payload_path.read_text(encoding="utf-8"))
     payload["schema_version"] = "final-research-ranking-report-payload-v4"
@@ -2704,6 +3057,7 @@ def test_seed_first_v4_rebuild_rejects_v2_target_aggregate_reference(tmp_path: P
 
 
 def _convert_seed_first_v5_run_to_historical_v3(run_dir: Path) -> dict[str, Any]:
+    _downgrade_v6_to_historical_v5_fixture(run_dir)
     payload_path = run_dir / "final_research_report_payload.json"
     payload_document = json.loads(payload_path.read_text(encoding="utf-8"))
     payload_document["schema_version"] = "final-research-ranking-report-payload-v3"
@@ -3186,7 +3540,7 @@ def test_v5_rebuild_rejects_missing_payload_evidence_without_publish(tmp_path: P
     persisted_payload = payload_path.read_bytes()
     persisted_report = report_path.read_bytes()
 
-    with pytest.raises(ValueError, match="evidence_state"):
+    with pytest.raises(ValueError, match="payload_evidence_schema"):
         rebuild_final_research_report(run_dir)
 
     assert payload_path.read_bytes() == persisted_payload
@@ -3205,7 +3559,7 @@ def test_v5_rebuild_rejects_incomplete_nested_payload_evidence_without_publish(t
     ).run_and_write(tmp_path / "ranking-v5-incomplete-payload-evidence-source")
 
     for corruption, expected_field in (
-        ("empty_evidence_state", "schema_version"),
+        ("empty_evidence_state", "payload_evidence_schema"),
         ("missing_nested_field", "formal_research_evidence"),
     ):
         run_dir = tmp_path / f"ranking-v5-{corruption}"
@@ -3316,7 +3670,7 @@ def test_target_delivery_ranking_report_escapes_download_paths_in_html(tmp_path:
         FinalResearchConfig(dataset_dir=dataset_dir, sample_size=70, provider=provider_config),
         _TargetDeliveryAdapter(),
     ).run_and_write(tmp_path / "ranking-download-escaping")
-    payload = FinalResearchRankingReportPayloadV5.model_validate_json(
+    payload = FinalResearchRankingReportPayloadV6.model_validate_json(
         (run_dir / "final_research_report_payload.json").read_text(encoding="utf-8")
     )
     payload.downloads.csv = 'users" onmouseover="alert(1).csv'

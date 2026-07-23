@@ -62,6 +62,7 @@ type PairedAblationBatch = {
 };
 
 type RankingPayload = {
+  schema_version: string;
   users: RankingUser[];
   run_funnel: Array<{
     key: string;
@@ -178,9 +179,51 @@ type RankingPayload = {
       live_api_triggered: boolean;
       sampling_status: string;
       degeneracy_flags: Record<'all_decisions_ignore' | 'single_action_only' | 'no_engagement_feedback', boolean>;
+      provider_accounting: ProviderAccounting;
+    };
+  };
+  provider_accounting: ProviderAccounting;
+  reason_context_diagnostics: {
+    exact_reason_facts: {
+      decision_row_count: number;
+      non_empty_reason_count: number;
+      empty_reason_count: number;
+      exact_unique_reason_count: number;
+      exact_duplicate_row_count: number;
+      maximum_exact_reason_frequency: number;
+    };
+    decision_visible_peer_context: {
+      context_count: number;
+      neutral_context_count: number;
+      non_neutral_context_count: number;
+      counter_totals: Record<string, number>;
+    };
+    selected_ranking_context: {
+      selected_candidate_count: number;
+      zero_engaged_neighbor_count: number;
+      positive_engaged_neighbor_count: number;
+      engaged_neighbor_count_total: number;
+      maximum_engaged_neighbor_count: number;
     };
   };
   downloads: Record<string, string>;
+};
+
+type ProviderAccounting = {
+  external_request_invocations: number;
+  provider_response_count: number;
+  successful_decision_count: number;
+  observed_model_counts: Record<string, number>;
+  observed_model_missing_response_count: number;
+  observed_model_malformed_response_count: number;
+  usage_complete_response_count: number;
+  usage_missing_response_count: number;
+  usage_malformed_response_count: number;
+  input_tokens: number | null;
+  output_tokens: number | null;
+  total_tokens: number | null;
+  cached_input_tokens: number | null;
+  cached_input_tokens_reported_response_count: number;
 };
 
 type CandidateWithBatch = RankingCandidate & { time_step: number };
@@ -793,6 +836,48 @@ async function assertRankingReport(
       `${flag}=${String(enabled)}`,
     );
   }
+  expect(payload.schema_version).toBe('final-research-ranking-report-payload-v6');
+  expect(decisionEvidence.schema_version).toBe('final-research-decision-execution-evidence-v2');
+  expect(payload.provider_accounting).toEqual(decisionEvidence.provider_accounting);
+  const accounting = payload.provider_accounting;
+  const modelPanel = decisionEvidencePanel.getByTestId('model-response-accounting');
+  await expect(modelPanel.getByTestId('requested-model')).toHaveText('mock-model');
+  for (const [model, count] of Object.entries(accounting.observed_model_counts)) {
+    await expect(modelPanel.getByTestId('observed-model-counts')).toContainText(model);
+    await expect(modelPanel.getByTestId('observed-model-counts')).toContainText(count.toLocaleString());
+  }
+  await expect(modelPanel.getByTestId('provider-counts')).toContainText(
+    `provider_response_count=${accounting.provider_response_count}`,
+  );
+  await expect(modelPanel.getByTestId('provider-counts')).toContainText(
+    `successful_decision_count=${accounting.successful_decision_count}`,
+  );
+  const usagePanel = decisionEvidencePanel.getByTestId('token-usage-evidence');
+  await expect(usagePanel).toContainText(`complete`);
+  await expect(usagePanel).toContainText(accounting.total_tokens?.toLocaleString() ?? 'null');
+  const reasonFacts = payload.reason_context_diagnostics.exact_reason_facts;
+  await expect(decisionEvidencePanel.getByTestId('exact-reason-diagnostics')).toContainText(
+    `exact_duplicate_rows=${reasonFacts.exact_duplicate_row_count}`,
+  );
+  const peerFacts = payload.reason_context_diagnostics.decision_visible_peer_context;
+  await expect(decisionEvidencePanel.getByTestId('peer-context-diagnostics')).toContainText(
+    `neutral=${peerFacts.neutral_context_count}`,
+  );
+  expect(peerFacts.neutral_context_count).toBe(peerFacts.context_count);
+  expect(Object.values(peerFacts.counter_totals).every((value) => value === 0)).toBeTruthy();
+  const rankingFacts = payload.reason_context_diagnostics.selected_ranking_context;
+  await expect(decisionEvidencePanel.getByTestId('ranking-context-diagnostics')).toContainText(
+    `selected=${rankingFacts.selected_candidate_count}`,
+  );
+  await expect(decisionEvidencePanel.getByTestId('v6-evidence-limitations')).toContainText(
+    '不是价格、账单或模型可用性证明',
+  );
+  await expect(decisionEvidencePanel.getByTestId('v6-evidence-limitations')).toContainText(
+    '不判断语义相似、理由质量、真实性或文案多样性',
+  );
+  await expect(decisionEvidencePanel.getByTestId('v6-evidence-limitations')).toContainText(
+    'Ranking context 只影响投放排序，不是 Prompt input',
+  );
   for (const downloadName of [
     'runtime_decisions',
     'runtime_actions',
@@ -2017,6 +2102,32 @@ test('ranking candidates users and prompt fields share one right detail drawer',
   await page.getByTestId('mechanism-mode-button').click();
   await expect(drawer).toBeHidden();
   await expect(drawer).not.toHaveAttribute('data-selection-kind', /.+/);
+});
+
+test('v6 evidence is readable at 390px without browser or layout errors', async ({ page }, testInfo) => {
+  test.slow();
+  const browserErrors: string[] = [];
+  page.on('console', (message) => {
+    if (message.type() === 'error') browserErrors.push(`console:${message.text()}`);
+  });
+  page.on('pageerror', (error) => browserErrors.push(`pageerror:${error.message}`));
+  const { outputDir, payload } = generateRankingReport(testInfo, 'small');
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto(pathToFileURL(path.join(outputDir, 'report.html')).toString());
+  await page.getByTestId('run-evidence-mode-button').click();
+
+  expect(payload.schema_version).toBe('final-research-ranking-report-payload-v6');
+  const panel = page.getByTestId('decision-execution-evidence');
+  await expect(panel).toBeVisible();
+  await expect(panel.getByTestId('v6-expanded-evidence')).toBeVisible();
+  await expect(panel.getByTestId('model-response-accounting')).toBeVisible();
+  await expect(panel.getByTestId('token-usage-evidence')).toBeVisible();
+  await expect(panel.getByTestId('exact-reason-diagnostics')).toBeVisible();
+  await expect(panel.getByTestId('peer-context-diagnostics')).toBeVisible();
+  await expect(panel.getByTestId('ranking-context-diagnostics')).toBeVisible();
+  await expect(page.getByTestId('download-ranking-runtime-summary')).toBeVisible();
+  await expectNoLayoutFailures(page);
+  expect(browserErrors).toEqual([]);
 });
 
 test('ranking research report is complete and interactive on desktop viewports', async ({ page }, testInfo) => {

@@ -5,6 +5,7 @@ from typing import Any
 
 from pydantic import BaseModel
 
+from .provider_accounting import ProviderAccounting
 from .provider_config import redact_secrets, sanitize_url
 from .provider_evidence import allowlisted_provider_evidence
 from .schemas import LEGACY_DEMO_PRESET_FIELDS
@@ -43,7 +44,7 @@ def safe_data(value: Any) -> Any:
 
     if isinstance(value, BaseModel):
         value = value.model_dump(mode="json")
-    return _artifact_scrub(redact_secrets(value))
+    return _artifact_scrub(value)
 
 
 def safe_json(value: Any, *, indent: int | None = 2, sort_keys: bool = True) -> str:
@@ -57,7 +58,7 @@ def safe_user_data(value: Any) -> Any:
 
     if isinstance(value, BaseModel):
         value = value.model_dump(mode="json")
-    return _artifact_scrub(redact_secrets(value), allowed_text_fields=_ALLOWED_USER_TEXT_FIELDS)
+    return _artifact_scrub(value, allowed_text_fields=_ALLOWED_USER_TEXT_FIELDS)
 
 
 def safe_user_json(value: Any, *, indent: int | None = 2, sort_keys: bool = True) -> str:
@@ -79,15 +80,22 @@ def _artifact_scrub(value: Any, *, allowed_text_fields: frozenset[str] = frozens
             if key == "provider_metadata":
                 scrubbed[key] = allowlisted_provider_evidence(item)
                 continue
+            if key == "provider_accounting":
+                scrubbed[key] = ProviderAccounting.model_validate(item).model_dump(mode="json")
+                continue
             if key in LEGACY_DEMO_PRESET_FIELDS:
                 continue
             if key not in allowed_text_fields and any(fragment in lowered for fragment in _DROP_KEY_FRAGMENTS):
                 continue
+            if redact_secrets({key: None})[key] is not None:
+                scrubbed[key] = redact_secrets({key: item})[key]
+                continue
             if isinstance(item, str) and "url" in lowered:
-                scrubbed[key] = sanitize_url(item.strip())
+                redacted = redact_secrets(item)
+                scrubbed[key] = redacted if redacted != item else sanitize_url(item.strip())
                 continue
             scrubbed[key] = _artifact_scrub(item, allowed_text_fields=allowed_text_fields)
         return scrubbed
     if isinstance(value, list):
         return [_artifact_scrub(item, allowed_text_fields=allowed_text_fields) for item in value]
-    return value
+    return redact_secrets(value)

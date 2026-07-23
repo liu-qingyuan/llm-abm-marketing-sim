@@ -7,6 +7,11 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from .decision import CachedDecisionAdapter, LLMDecisionAdapter, RuleBasedDecisionAdapter
+from .provider_accounting import (
+    ProviderAccounting,
+    empty_provider_accounting,
+    provider_accounting_delta,
+)
 from .provider_evidence import allowlisted_provider_evidence
 from .providers.openai_compatible import OpenAICompatibleDecisionAdapter
 
@@ -102,6 +107,36 @@ class DecisionExecutionEvidence(BaseModel):
         return self
 
 
+class DecisionExecutionEvidenceV2(DecisionExecutionEvidence):
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    schema_version: Literal["final-research-decision-execution-evidence-v2"]  # type: ignore[assignment]
+    provider_accounting: ProviderAccounting
+
+    @model_validator(mode="after")
+    def _validate_provider_accounting(self) -> DecisionExecutionEvidenceV2:
+        accounting = self.provider_accounting
+        if accounting.successful_decision_count > self.terminal_counts.decided_users:
+            raise ValueError("Provider leaf successful Decisions cannot exceed persisted runtime Decisions")
+        if self.decision_execution_mode == "rule_based" and accounting != empty_provider_accounting():
+            raise ValueError("rule-based Decision evidence cannot contain Provider accounting")
+        if (
+            self.adapter_chain == ["openai_compatible"]
+            and accounting.successful_decision_count != self.terminal_counts.decided_users
+        ):
+            raise ValueError("bare Provider accounting must cover every persisted runtime Decision")
+        if self.decision_execution_mode == "live_provider":
+            if not (
+                accounting.external_request_invocations
+                >= accounting.provider_response_count
+                >= accounting.successful_decision_count
+            ):
+                raise ValueError("live Provider accounting requires invocations >= responses >= successful Decisions")
+        elif accounting.external_request_invocations != 0:
+            raise ValueError("non-live Decision evidence cannot contain external request invocations")
+        return self
+
+
 class _FinalResearchDecisionEvidenceBuilder:
     """Build one closed Decision evidence object from registered adapters and runtime rows."""
 
@@ -110,6 +145,14 @@ class _FinalResearchDecisionEvidenceBuilder:
         self._external_request_baseline = (
             self._leaf.external_request_invocations if type(self._leaf) is OpenAICompatibleDecisionAdapter else 0
         )
+        self._provider_accounting_baseline = (
+            self._leaf.provider_accounting
+            if type(self._leaf) is OpenAICompatibleDecisionAdapter
+            else empty_provider_accounting()
+        )
+
+    def external_provider_calls_configured(self) -> bool:
+        return type(self._leaf) is OpenAICompatibleDecisionAdapter and self._leaf.client is None
 
     def classification(self) -> DecisionAdapterClassification:
         current = self._leaf
@@ -140,7 +183,7 @@ class _FinalResearchDecisionEvidenceBuilder:
             )
         raise AssertionError("registered adapter leaf changed unexpectedly")  # pragma: no cover
 
-    def build(
+    def _run_evidence_inputs(
         self,
         *,
         sample_users: int,
@@ -148,7 +191,7 @@ class _FinalResearchDecisionEvidenceBuilder:
         action_rows: Sequence[Mapping[str, object]],
         outcome_rows: Sequence[Mapping[str, object]],
         provider_failure_rows: Sequence[Mapping[str, object]],
-    ) -> DecisionExecutionEvidence:
+    ) -> tuple[_DecisionRowFacts, DecisionAdapterClassification, bool]:
         facts = _derive_decision_row_facts(
             sample_users=sample_users,
             decision_rows=decision_rows,
@@ -158,6 +201,24 @@ class _FinalResearchDecisionEvidenceBuilder:
         )
         classification = self.classification()
         is_live = classification.decision_execution_mode == "live_provider" and classification.live_api_triggered
+        return facts, classification, is_live
+
+    def build(
+        self,
+        *,
+        sample_users: int,
+        decision_rows: Sequence[Mapping[str, object]],
+        action_rows: Sequence[Mapping[str, object]],
+        outcome_rows: Sequence[Mapping[str, object]],
+        provider_failure_rows: Sequence[Mapping[str, object]],
+    ) -> DecisionExecutionEvidence:
+        facts, classification, is_live = self._run_evidence_inputs(
+            sample_users=sample_users,
+            decision_rows=decision_rows,
+            action_rows=action_rows,
+            outcome_rows=outcome_rows,
+            provider_failure_rows=provider_failure_rows,
+        )
         return DecisionExecutionEvidence(
             schema_version="final-research-decision-execution-evidence-v1",
             status="persisted",
@@ -168,6 +229,44 @@ class _FinalResearchDecisionEvidenceBuilder:
             action_counts=facts.action_counts,
             terminal_counts=facts.terminal_counts,
             provider_metadata=classification.provider_metadata,
+            live_api_triggered=classification.live_api_triggered,
+            sampling_status="persisted_seed_first_formal_run" if is_live else "validation_run",
+            degeneracy_flags=facts.degeneracy_flags,
+        )
+
+    def build_v2(
+        self,
+        *,
+        sample_users: int,
+        decision_rows: Sequence[Mapping[str, object]],
+        action_rows: Sequence[Mapping[str, object]],
+        outcome_rows: Sequence[Mapping[str, object]],
+        provider_failure_rows: Sequence[Mapping[str, object]],
+    ) -> DecisionExecutionEvidenceV2:
+        facts, classification, is_live = self._run_evidence_inputs(
+            sample_users=sample_users,
+            decision_rows=decision_rows,
+            action_rows=action_rows,
+            outcome_rows=outcome_rows,
+            provider_failure_rows=provider_failure_rows,
+        )
+        current_accounting = (
+            self._leaf.provider_accounting
+            if type(self._leaf) is OpenAICompatibleDecisionAdapter
+            else empty_provider_accounting()
+        )
+        accounting = provider_accounting_delta(current_accounting, self._provider_accounting_baseline)
+        return DecisionExecutionEvidenceV2(
+            schema_version="final-research-decision-execution-evidence-v2",
+            status="persisted",
+            formal_research_evidence=is_live,
+            decision_execution_mode=classification.decision_execution_mode,
+            adapter_chain=classification.adapter_chain,
+            decision_source_counts=facts.decision_source_counts,
+            action_counts=facts.action_counts,
+            terminal_counts=facts.terminal_counts,
+            provider_metadata=classification.provider_metadata,
+            provider_accounting=accounting,
             live_api_triggered=classification.live_api_triggered,
             sampling_status="persisted_seed_first_formal_run" if is_live else "validation_run",
             degeneracy_flags=facts.degeneracy_flags,

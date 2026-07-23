@@ -39,9 +39,16 @@ from .field_lineage_trace import (
 )
 from .final_research_decision_evidence import (
     DecisionExecutionEvidence,
+    DecisionExecutionEvidenceV2,
     _FinalResearchDecisionEvidenceBuilder,
 )
+from .final_research_reason_context import (
+    ReasonContextDiagnostics,
+    derive_exact_reason_facts,
+    derive_selected_ranking_context,
+)
 from .prompt_field_summary import JINJIANG_PROMPT_V2_PROFILE_FIELDS, JINJIANG_PROMPT_V3_PROFILE_FIELDS
+from .provider_accounting import ProviderAccounting
 from .research_explanations import (
     ExplanationContext,
     FieldProvenance,
@@ -60,6 +67,7 @@ FINAL_RESEARCH_REPORT_ARTIFACTS = {
 FINAL_RESEARCH_RUNTIME_VERSION = "final-research-runtime-v1"
 FINAL_RESEARCH_RANKING_RUNTIME_VERSION = "final-research-ranking-runtime-v2"
 FINAL_RESEARCH_RANKING_RUNTIME_V3_VERSION = "final-research-ranking-runtime-v3"
+FINAL_RESEARCH_RANKING_RUNTIME_V4_VERSION = "final-research-ranking-runtime-v4"
 FINAL_RESEARCH_SCHEDULE_METHOD = "stable_shuffle_round_robin_batches"
 FINAL_RESEARCH_SEED_STEP = 0
 FINAL_RESEARCH_USER_OPPORTUNITY_LIMIT = 1
@@ -69,6 +77,7 @@ FINAL_RESEARCH_DYNAMIC_NETWORK_FORMULA = "min(1.0, base_network_score + neighbor
 _RANKING_PAYLOAD_V3_SCHEMA = "final-research-ranking-report-payload-v3"
 _RANKING_PAYLOAD_V4_SCHEMA = "final-research-ranking-report-payload-v4"
 _RANKING_PAYLOAD_V5_SCHEMA = "final-research-ranking-report-payload-v5"
+_RANKING_PAYLOAD_V6_SCHEMA = "final-research-ranking-report-payload-v6"
 _RANKING_USERS_V3_SCHEMA = "final-research-ranking-users-v3"
 _RANKING_USERS_V4_SCHEMA = "final-research-ranking-users-v4"
 _RANKING_USERS_V5_SCHEMA = "final-research-ranking-users-v5"
@@ -198,7 +207,7 @@ def _report_users_schema(payload_schema: object) -> ReportUsersSchema:
         return cast(ReportUsersSchema, _RANKING_USERS_V3_SCHEMA)
     if payload_schema == _RANKING_PAYLOAD_V4_SCHEMA:
         return cast(ReportUsersSchema, _RANKING_USERS_V4_SCHEMA)
-    if payload_schema == _RANKING_PAYLOAD_V5_SCHEMA:
+    if payload_schema in {_RANKING_PAYLOAD_V5_SCHEMA, _RANKING_PAYLOAD_V6_SCHEMA}:
         return cast(ReportUsersSchema, _RANKING_USERS_V5_SCHEMA)
     if payload_schema in {"final-research-report-payload-v1", "final-research-report-payload-v2"}:
         return "final-research-users-v1"
@@ -826,6 +835,43 @@ def _ranking_v5_evidence(value: object) -> RankingV5Evidence:
     return RankingV5ExpandEvidence.model_validate(value)
 
 
+class RankingV6ExpandEvidence(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    schema_version: Literal["ranking-v6-expand-evidence-v1"]
+    contract_stage: Literal["validation_expand"]
+    target_aggregate_engagement_reference: RankingPersistedEvidenceState
+    decision_execution_evidence: DecisionExecutionEvidenceV2
+    production_deploy_eligible: Literal[False]
+
+    @model_validator(mode="after")
+    def _validate_validation_only_lineage(self) -> RankingV6ExpandEvidence:
+        if self.decision_execution_evidence.formal_research_evidence:
+            raise ValueError("v6 expand evidence cannot claim Formal Provider execution")
+        if self.decision_execution_evidence.sampling_status != "validation_run":
+            raise ValueError("v6 expand evidence requires validation_run")
+        return self
+
+
+def ranking_v6_release_evidence(
+    decision_execution_evidence: DecisionExecutionEvidenceV2,
+) -> dict[str, object]:
+    return RankingV6ExpandEvidence(
+        schema_version="ranking-v6-expand-evidence-v1",
+        contract_stage="validation_expand",
+        target_aggregate_engagement_reference=RankingPersistedEvidenceState(
+            status="persisted",
+            formal_research_evidence=False,
+        ),
+        decision_execution_evidence=decision_execution_evidence,
+        production_deploy_eligible=False,
+    ).model_dump(mode="json")
+
+
+def _ranking_v6_evidence(value: object) -> RankingV6ExpandEvidence:
+    return RankingV6ExpandEvidence.model_validate(value)
+
+
 class RankingUserReportRow(BaseModel):
     """Frozen user allowlist for historical v3 and Seed-First v4 readers/writers."""
 
@@ -1025,15 +1071,15 @@ class _FrozenRankingReportPayloadV3V4Base(BaseModel):
 
 
 class FinalResearchRankingReportPayloadV3(_FrozenRankingReportPayloadV3V4Base):
-    schema_version: Literal["final-research-ranking-report-payload-v3"] = "final-research-ranking-report-payload-v3"
+    schema_version: Literal["final-research-ranking-report-payload-v3"] = "final-research-ranking-report-payload-v3"  # type: ignore[reportIncompatibleVariableOverride]
 
 
 class FinalResearchRankingReportPayload(_FrozenRankingReportPayloadV3V4Base):
-    schema_version: Literal["final-research-ranking-report-payload-v4"] = "final-research-ranking-report-payload-v4"
+    schema_version: Literal["final-research-ranking-report-payload-v4"] = "final-research-ranking-report-payload-v4"  # type: ignore[reportIncompatibleVariableOverride]
     sample_role_counts: dict[SampleRole, int]
     field_lineage_catalog: list[FieldLineageDefinition]
     user_field_trace_index: dict[str, list[UserFieldTrace]]
-    downloads: RankingReportDownloads
+    downloads: RankingReportDownloads  # type: ignore[reportIncompatibleVariableOverride]
 
     @model_validator(mode="after")
     def _validate_field_trace(self) -> FinalResearchRankingReportPayload:
@@ -1182,6 +1228,27 @@ class FinalResearchRankingReportPayloadV5(BaseModel):
         return self
 
 
+class FinalResearchRankingReportPayloadV6(FinalResearchRankingReportPayloadV5):
+    schema_version: Literal["final-research-ranking-report-payload-v6"] = "final-research-ranking-report-payload-v6"  # type: ignore[assignment]
+    evidence_state: RankingV6ExpandEvidence  # type: ignore[assignment]
+    provider_accounting: ProviderAccounting
+    reason_context_diagnostics: ReasonContextDiagnostics
+
+    @model_validator(mode="after")
+    def _validate_v6_expanded_evidence(self) -> FinalResearchRankingReportPayloadV6:
+        decision_evidence = self.evidence_state.decision_execution_evidence
+        if self.provider_accounting != decision_evidence.provider_accounting:
+            raise ValueError("payload Provider accounting must match Decision evidence")
+        if self.reason_context_diagnostics.exact_reason_facts.decision_row_count != (
+            decision_evidence.terminal_counts.decided_users
+        ):
+            raise ValueError("exact reason denominator must equal persisted Decisions")
+        context_count = self.reason_context_diagnostics.decision_visible_peer_context.context_count
+        if context_count != decision_evidence.terminal_counts.exposed_users:
+            raise ValueError("Decision-visible PeerContext denominator must equal exposed users")
+        return self
+
+
 class _HistoricalRankingUsersDocumentV3(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -1221,6 +1288,8 @@ class _RankingRebuildContract:
     sampling_statuses: tuple[SamplingStatus, ...]
     persists_sampling_fields: bool
     artifacts: Mapping[str, str]
+    evidence_schemas: tuple[str, ...] | None = None
+    decision_evidence_schemas: tuple[str, ...] | None = None
 
 
 @dataclass(frozen=True)
@@ -1234,6 +1303,8 @@ class _RankingRebuildEvidence:
     config_prompt_schema: object
     runtime_prompt_schema: object
     payload_decision_execution_mode: object
+    payload_evidence_schema: object
+    payload_decision_evidence_schema: object
     sample_audit_artifact: object
     sample_audit_schema: object
     payload_sampling_method: object
@@ -1251,7 +1322,10 @@ class _RankingRebuildEvidence:
 class _ValidatedRankingReport:
     manifest: dict[str, object]
     payload: (
-        FinalResearchRankingReportPayloadV3 | FinalResearchRankingReportPayload | FinalResearchRankingReportPayloadV5
+        FinalResearchRankingReportPayloadV3
+        | FinalResearchRankingReportPayload
+        | FinalResearchRankingReportPayloadV5
+        | FinalResearchRankingReportPayloadV6
     )
     contract: _RankingRebuildContract
 
@@ -1300,6 +1374,23 @@ _SEED_FIRST_V5_REBUILD_CONTRACT = _RankingRebuildContract(
     sampling_statuses=("validation_run", "persisted_seed_first_formal_run"),
     persists_sampling_fields=True,
     artifacts=_RANKING_V5_ARTIFACTS,
+)
+_SEED_FIRST_V6_REBUILD_CONTRACT = _RankingRebuildContract(
+    lineage="Seed-First v6 expand evidence",
+    payload_schema=_RANKING_PAYLOAD_V6_SCHEMA,
+    users_schema=_RANKING_USERS_V5_SCHEMA,
+    runtime_schema=FINAL_RESEARCH_RANKING_RUNTIME_V4_VERSION,
+    diagnostics_schema=_RANKING_DIAGNOSTICS_V2_SCHEMA,
+    diagnostics_summary_schema=_RANKING_DIAGNOSTICS_SUMMARY_V2_SCHEMA,
+    prompt_schema=_JINJIANG_PROMPT_V3,
+    sample_audit_artifact="seed_first_sample_audit",
+    sample_audit_schema="seed-first-sample-audit-v1",
+    sampling_method="seed_first_research_sample_v1",
+    sampling_statuses=("validation_run",),
+    persists_sampling_fields=True,
+    artifacts=_RANKING_V5_ARTIFACTS,
+    evidence_schemas=("ranking-v6-expand-evidence-v1",),
+    decision_evidence_schemas=("final-research-decision-execution-evidence-v2",),
 )
 
 
@@ -1383,7 +1474,7 @@ class FinalResearchReportWriter:
     def _build_payload(
         self,
         trace_bundle: FieldLineageTraceBundle | None = None,
-    ) -> FinalResearchReportPayload | FinalResearchRankingReportPayloadV5:
+    ) -> FinalResearchReportPayload | FinalResearchRankingReportPayloadV5 | FinalResearchRankingReportPayloadV6:
         if self.source.ranking_runtime_summary is not None:
             if trace_bundle is None:  # pragma: no cover
                 raise ValueError("ranking report requires field trace evidence")
@@ -1895,7 +1986,7 @@ class FinalResearchReportWriter:
 def _build_ranking_report_payload(
     source: FinalResearchReportSource,
     trace_bundle: FieldLineageTraceBundle,
-) -> FinalResearchRankingReportPayloadV5:
+) -> FinalResearchRankingReportPayloadV5 | FinalResearchRankingReportPayloadV6:
     if source.network_sample_audit is None:
         raise ValueError("ranking report requires network sample audit evidence")
     if source.ranking_runtime_summary is None:
@@ -2075,7 +2166,7 @@ def _build_ranking_report_payload(
     )
     lineage = _ranking_v5_field_lineage()
     allowed_prompt_fields = list(JINJIANG_PROMPT_V3_PROFILE_FIELDS)
-    return FinalResearchRankingReportPayloadV5(
+    payload_fields = dict(
         title=title,
         core_objects=("TargetVideo", "ResearchUser", "PlatformRecommendationModel"),
         target_video=FinalResearchTargetVideo.model_validate(target_video),
@@ -2221,7 +2312,7 @@ def _build_ranking_report_payload(
             batches_with_top_selection_change=_as_int(effect.get("batches_with_top_selection_change")),
             diagnostic_decision_adapter_calls=_as_int(diagnostic_summary.get("diagnostic_decision_adapter_calls")),
         ),
-        evidence_state=_ranking_v5_evidence(runtime_summary.get("evidence_state")),
+        evidence_state=runtime_summary.get("evidence_state"),
         downloads=RankingReportDownloadsV5(
             report=FINAL_RESEARCH_REPORT_ARTIFACTS["final_research_report"],
             payload=FINAL_RESEARCH_REPORT_ARTIFACTS["final_research_report_payload"],
@@ -2248,6 +2339,18 @@ def _build_ranking_report_payload(
         ],
         users=rows,
     )
+    runtime_version = runtime_summary.get("runtime_version")
+    if runtime_version == FINAL_RESEARCH_RANKING_RUNTIME_V4_VERSION:
+        return FinalResearchRankingReportPayloadV6.model_validate(
+            {
+                **payload_fields,
+                "provider_accounting": runtime_summary.get("provider_accounting"),
+                "reason_context_diagnostics": runtime_summary.get("reason_context_diagnostics"),
+            }
+        )
+    if runtime_version == FINAL_RESEARCH_RANKING_RUNTIME_V3_VERSION:
+        return FinalResearchRankingReportPayloadV5.model_validate(payload_fields)
+    raise ValueError(f"unsupported ranking report runtime version: {runtime_version!r}")
 
 
 def _ranking_round_summaries(
@@ -2430,6 +2533,71 @@ def _render_target_aggregate_engagement_reference(
     """
 
 
+def _render_v6_expanded_evidence(payload: FinalResearchRankingReportPayloadV6) -> str:
+    evidence = payload.evidence_state.decision_execution_evidence
+    accounting = payload.provider_accounting
+    diagnostics = payload.reason_context_diagnostics
+    requested_model = str(evidence.provider_metadata.get("model") or "missing")
+    observed_rows = "".join(
+        f"<tr><th><code>{escape(model)}</code></th><td>{count:,}</td></tr>"
+        for model, count in accounting.observed_model_counts.items()
+    ) or '<tr><th><code>none reported</code></th><td>0</td></tr>'
+    coverage_gap = evidence.terminal_counts.decided_users - accounting.successful_decision_count
+    usage_rows = "".join(
+        f"<tr><th><code>{escape(label)}</code></th><td>{value:,}</td></tr>"
+        for label, value in (
+            ("complete", accounting.usage_complete_response_count),
+            ("missing", accounting.usage_missing_response_count),
+            ("malformed", accounting.usage_malformed_response_count),
+        )
+    )
+    token_rows = "".join(
+        f"<tr><th><code>{escape(field_name)}</code></th><td>{'null' if value is None else f'{value:,}'}</td></tr>"
+        for field_name, value in (
+            ("input_tokens", accounting.input_tokens),
+            ("output_tokens", accounting.output_tokens),
+            ("total_tokens", accounting.total_tokens),
+            ("cached_input_tokens", accounting.cached_input_tokens),
+        )
+    )
+    reason = diagnostics.exact_reason_facts
+    peer = diagnostics.decision_visible_peer_context
+    ranking = diagnostics.selected_ranking_context
+    peer_rows = "".join(
+        f"<tr><th><code>{escape(field_name)}</code></th><td>{value:,}</td></tr>"
+        for field_name, value in sorted(peer.counter_totals.items())
+    )
+    return f"""
+      <div class="v6-evidence-grid" data-testid="v6-expanded-evidence">
+        <article data-testid="model-response-accounting">
+          <h4>Model / Response Accounting（模型与响应计数）</h4>
+          <p>Requested model（请求模型）：<code data-testid="requested-model">{escape(requested_model)}</code></p>
+          <div class="table-wrap"><table data-testid="observed-model-counts"><thead><tr><th>Observed model（返回模型）</th><th>Responses（响应数）</th></tr></thead><tbody>{observed_rows}<tr><th><code>missing</code></th><td>{accounting.observed_model_missing_response_count:,}</td></tr><tr><th><code>malformed</code></th><td>{accounting.observed_model_malformed_response_count:,}</td></tr></tbody></table></div>
+          <p data-testid="provider-counts"><code>external_request_invocations={accounting.external_request_invocations}</code> · <code>provider_response_count={accounting.provider_response_count}</code> · <code>successful_decision_count={accounting.successful_decision_count}</code> · <code>runtime_decision_coverage_gap={coverage_gap}</code></p>
+        </article>
+        <article data-testid="token-usage-evidence">
+          <h4>Token Usage Completeness（Token 使用完整性）</h4>
+          <div class="table-wrap"><table><thead><tr><th>Usage status（使用状态）</th><th>Responses（响应数）</th></tr></thead><tbody>{usage_rows}</tbody></table></div>
+          <div class="table-wrap"><table><thead><tr><th>Aggregate（聚合项）</th><th>Reported value（报告值）</th></tr></thead><tbody>{token_rows}<tr><th><code>cached_detail_response_count</code></th><td>{accounting.cached_input_tokens_reported_response_count:,}</td></tr></tbody></table></div>
+        </article>
+        <article data-testid="exact-reason-diagnostics">
+          <h4>Exact Reason Facts（精确理由事实）</h4>
+          <p><code>decision_rows={reason.decision_row_count}</code> · <code>non_empty={reason.non_empty_reason_count}</code> · <code>exact_unique={reason.exact_unique_reason_count}</code> · <code>exact_duplicate_rows={reason.exact_duplicate_row_count}</code> · <code>maximum_exact_frequency={reason.maximum_exact_reason_frequency}</code></p>
+        </article>
+        <article data-testid="peer-context-diagnostics">
+          <h4>Decision-visible PeerContext（决策可见同伴上下文）</h4>
+          <p><code>contexts={peer.context_count}</code> · <code>neutral={peer.neutral_context_count}</code> · <code>non_neutral={peer.non_neutral_context_count}</code></p>
+          <div class="table-wrap"><table><tbody>{peer_rows}</tbody></table></div>
+        </article>
+        <article data-testid="ranking-context-diagnostics">
+          <h4>Selected Ranking Context（入选排序上下文）</h4>
+          <p><code>selected={ranking.selected_candidate_count}</code> · <code>engaged_neighbor_count=0: {ranking.zero_engaged_neighbor_count}</code> · <code>positive: {ranking.positive_engaged_neighbor_count}</code> · <code>maximum={ranking.maximum_engaged_neighbor_count}</code></p>
+        </article>
+      </div>
+      <p class="target-aggregate-reference-limit" data-testid="v6-evidence-limitations">Observed model 与 token usage 只描述 Provider 返回的 allowlisted metadata，不是价格、账单或模型可用性证明；transport failure 可能没有 returned usage。Exact reason 只做原字符串相等统计，不判断语义相似、理由质量、真实性或文案多样性。Ranking context 只影响投放排序，不是 Prompt input；Validation evidence 不表示 production eligibility。</p>
+    """
+
+
 def _render_decision_execution_evidence(
     payload: FinalResearchRankingReportPayloadV3
     | FinalResearchRankingReportPayload
@@ -2466,6 +2634,7 @@ def _render_decision_execution_evidence(
     )
     metadata = escape(safe_json(evidence.provider_metadata, indent=None))
     live_label = "true（已实际发出外部请求）" if evidence.live_api_triggered else "false（本次未触发外部请求）"
+    expanded_evidence = _render_v6_expanded_evidence(payload) if isinstance(payload, FinalResearchRankingReportPayloadV6) else ""
     return f"""
     <article class="diagnostic-panel decision-execution-panel" data-testid="decision-execution-evidence">
       <div class="section-heading"><div><h3>Decision Execution Evidence（决策执行证据）</h3><p class="muted">Target Delivery Ranking（目标投放排序）只决定谁获得曝光；以下 action（动作）来自曝光后的同一次 persisted Decision rows（持久化决策行），不从 Provider configuration（服务提供方配置）或展示值推测。</p></div></div>
@@ -2480,7 +2649,7 @@ def _render_decision_execution_evidence(
         <div class="table-wrap"><table data-testid="decision-action-counts"><thead><tr><th>Action（动作）</th><th>Rows（行数）</th></tr></thead><tbody>{action_rows}</tbody></table></div>
         <div class="table-wrap"><table data-testid="decision-terminal-counts"><thead><tr><th>Terminal Fact（终态事实）</th><th>Users（用户数）</th></tr></thead><tbody>{terminal_rows}</tbody></table></div>
       </div>
-      <ul class="decision-degeneracy-flags" data-testid="decision-degeneracy-flags">{flag_rows}</ul>
+      <ul class="decision-degeneracy-flags" data-testid="decision-degeneracy-flags">{flag_rows}</ul>{expanded_evidence}
       <p class="muted"><strong>安全 Provider metadata：</strong><code>{metadata}</code></p>
       <p class="target-aggregate-reference-limit">30 个 Batch、Top{payload.run.delivery_capacity} 与最多 {payload.run.maximum_target_exposures:,} 次 Recommendation Opportunity 解释投放容量；<code>below_delivery_capacity</code> 从未曝光，不计入 exposed 或 action counts。action composition 不用于筛选、更改或美化本次运行。</p>
     </article>
@@ -2624,6 +2793,7 @@ def _render_ranking_report(
     )
     target_aggregate_reference = _render_target_aggregate_engagement_reference(payload)
     decision_execution_panel = _render_decision_execution_evidence(payload)
+    v6_report_css = _V6_RANKING_REPORT_CSS if isinstance(payload, FinalResearchRankingReportPayloadV6) else ""
     return f"""<!doctype html>
 <html lang="zh-CN">
 <head>
@@ -2631,7 +2801,7 @@ def _render_ranking_report(
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{escape(payload.title)}</title>
   <link rel="icon" href="data:,">
-  <style>{_RANKING_REPORT_CSS}</style>
+  <style>{_RANKING_REPORT_CSS}{v6_report_css}</style>
 </head>
 <body>
 <main data-testid="final-research-ranking-report" data-report-mode="mechanism">
@@ -3326,6 +3496,17 @@ code { color:var(--blue); white-space:normal; overflow-wrap:anywhere; word-break
   .section-explanation article:nth-child(n+2),.lineage-legends section + section { border-top:1px solid var(--line); }
   .chart-grid .wide { grid-column:auto; }
 }
+"""
+
+
+_V6_RANKING_REPORT_CSS = r"""
+.v6-evidence-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px; margin:16px 0; }
+.v6-evidence-grid > article { min-width:0; padding:14px; border-top:3px solid var(--blue); background:var(--paper); }
+.v6-evidence-grid > article:nth-child(even) { border-top-color:var(--green); }
+.v6-evidence-grid h4 { margin:0 0 10px; font-size:.92rem; }
+.v6-evidence-grid p { overflow-wrap:anywhere; }
+.v6-evidence-grid table { min-width:420px; }
+@media (max-width:600px) { .v6-evidence-grid { grid-template-columns:minmax(0,1fr); } }
 """
 
 
@@ -4560,6 +4741,8 @@ def _collect_ranking_rebuild_evidence(
         config_prompt_schema=_contract_value(config_provider, "prompt_version"),
         runtime_prompt_schema=_contract_value(runtime_provider, "prompt_version"),
         payload_decision_execution_mode=_contract_value(payload_decision_evidence, "decision_execution_mode"),
+        payload_evidence_schema=_contract_value(payload_evidence_state, "schema_version"),
+        payload_decision_evidence_schema=_contract_value(payload_decision_evidence, "schema_version"),
         sample_audit_artifact=sample_audit_artifact,
         sample_audit_schema=_contract_value(audit, "schema_version"),
         payload_sampling_method=_contract_value(payload_run, "sampling_method"),
@@ -4599,8 +4782,22 @@ def _ranking_rebuild_contract_mismatches(
         if actual != expected_token:
             mismatches.append(f"{name} expected {expected_token!r}, got {actual!r}")
     rule_based_v5 = (
-        contract is _SEED_FIRST_V5_REBUILD_CONTRACT and evidence.payload_decision_execution_mode == "rule_based"
+        contract in (_SEED_FIRST_V5_REBUILD_CONTRACT, _SEED_FIRST_V6_REBUILD_CONTRACT)
+        and evidence.payload_decision_execution_mode == "rule_based"
     )
+    if contract.evidence_schemas is not None and evidence.payload_evidence_schema not in contract.evidence_schemas:
+        mismatches.append(
+            f"payload_evidence_schema expected one of {contract.evidence_schemas!r}, "
+            f"got {evidence.payload_evidence_schema!r}"
+        )
+    if (
+        contract.decision_evidence_schemas is not None
+        and evidence.payload_decision_evidence_schema not in contract.decision_evidence_schemas
+    ):
+        mismatches.append(
+            "payload_decision_evidence_schema expected one of "
+            f"{contract.decision_evidence_schemas!r}, got {evidence.payload_decision_evidence_schema!r}"
+        )
     if not rule_based_v5 and evidence.runtime_prompt_schema != contract.prompt_schema:
         mismatches.append(
             f"runtime_prompt_schema expected {contract.prompt_schema!r}, got {evidence.runtime_prompt_schema!r}"
@@ -4661,6 +4858,10 @@ def _dispatch_ranking_rebuild_contract(
             _SEED_FIRST_V5_REBUILD_CONTRACT,
             _ranking_rebuild_contract_mismatches(_SEED_FIRST_V5_REBUILD_CONTRACT, evidence),
         ),
+        (
+            _SEED_FIRST_V6_REBUILD_CONTRACT,
+            _ranking_rebuild_contract_mismatches(_SEED_FIRST_V6_REBUILD_CONTRACT, evidence),
+        ),
     )
     for contract, mismatches in contract_mismatches:
         if not mismatches:
@@ -4676,14 +4877,19 @@ def _validate_ranking_documents(
 ) -> _ValidatedRankingReport:
     contract = _dispatch_ranking_rebuild_contract(run_path, manifest, payload_document)
     payload: (
-        FinalResearchRankingReportPayloadV3 | FinalResearchRankingReportPayload | FinalResearchRankingReportPayloadV5
+        FinalResearchRankingReportPayloadV3
+        | FinalResearchRankingReportPayload
+        | FinalResearchRankingReportPayloadV5
+        | FinalResearchRankingReportPayloadV6
     )
     if contract is _HISTORICAL_V3_REBUILD_CONTRACT:
         payload = FinalResearchRankingReportPayloadV3.model_validate(payload_document)
     elif contract is _SEED_FIRST_V4_REBUILD_CONTRACT:
         payload = FinalResearchRankingReportPayload.model_validate(payload_document)
-    else:
+    elif contract is _SEED_FIRST_V5_REBUILD_CONTRACT:
         payload = FinalResearchRankingReportPayloadV5.model_validate(payload_document)
+    else:
+        payload = FinalResearchRankingReportPayloadV6.model_validate(payload_document)
     _validate_ranking_rebuild_evidence(run_path, manifest, payload, contract)
     return _ValidatedRankingReport(manifest=manifest, payload=payload, contract=contract)
 
@@ -4954,19 +5160,25 @@ def _validate_ranking_rebuild_evidence(
     artifacts = _required_mapping(manifest, "artifacts", "artifact manifest")
     if dict(artifacts) != dict(contract.artifacts):  # pragma: no cover - rejected by contract dispatch
         raise ValueError("artifact manifest does not match the selected ranking rebuild contract")
-    seed_first = contract in (_SEED_FIRST_V4_REBUILD_CONTRACT, _SEED_FIRST_V5_REBUILD_CONTRACT)
+    seed_first = contract in (
+        _SEED_FIRST_V4_REBUILD_CONTRACT,
+        _SEED_FIRST_V5_REBUILD_CONTRACT,
+        _SEED_FIRST_V6_REBUILD_CONTRACT,
+    )
     sample_audit_name = contract.sample_audit_artifact
     traced_payload = (
         cast(FinalResearchRankingReportPayload | FinalResearchRankingReportPayloadV5, payload) if seed_first else None
     )
     is_v5 = contract is _SEED_FIRST_V5_REBUILD_CONTRACT
+    is_v6 = contract is _SEED_FIRST_V6_REBUILD_CONTRACT
+    is_jinjiang = is_v5 or is_v6
     v5_reference_persisted = (
-        is_v5
+        is_jinjiang
         and isinstance(payload, FinalResearchRankingReportPayloadV5)
         and payload.evidence_state.target_aggregate_engagement_reference.status == "persisted"
     )
     v5_decision_persisted = (
-        is_v5
+        is_jinjiang
         and isinstance(payload, FinalResearchRankingReportPayloadV5)
         and isinstance(payload.evidence_state.decision_execution_evidence, DecisionExecutionEvidence)
     )
@@ -5021,7 +5233,7 @@ def _validate_ranking_rebuild_evidence(
             _jinjiang_v5_field_lineage_definitions(_ranking_v5_field_lineage())
             if v5_reference_persisted
             else _jinjiang_v5_pending_field_lineage_definitions(_ranking_v5_field_lineage())
-            if is_v5
+            if is_jinjiang
             else _historical_v4_field_lineage_definitions(_ranking_field_lineage())
         )
         if traced_payload.field_lineage_catalog != expected_definitions:
@@ -5037,7 +5249,7 @@ def _validate_ranking_rebuild_evidence(
             for user_id, traces in traced_payload.user_field_trace_index.items()
         }:
             raise ValueError("user field trace artifact does not match ranking report payload")
-        source_record_model = FieldSourceRecord if is_v5 else HistoricalFieldSourceRecordV4
+        source_record_model = FieldSourceRecord if is_jinjiang else HistoricalFieldSourceRecordV4
         source_records = [
             source_record_model.model_validate(record)
             for record in _required_list(source_document, "records", "field source records")
@@ -5052,7 +5264,9 @@ def _validate_ranking_rebuild_evidence(
         base_trace_field_names = {
             definition.field_name
             for definition in (
-                _jinjiang_v5_field_lineage_definitions() if is_v5 else _historical_v4_field_lineage_definitions()
+                _jinjiang_v5_field_lineage_definitions()
+                if is_jinjiang
+                else _historical_v4_field_lineage_definitions()
             )
         }
         sample_records = _read_json_records(artifact_paths["sample_manifest_json"], "sample manifest")
@@ -5220,16 +5434,16 @@ def _validate_ranking_rebuild_evidence(
     if config_provider.get("prompt_version") != contract.prompt_schema:
         raise ValueError(f"config snapshot Prompt schema does not match {contract.lineage}")
     rule_based_v5 = (
-        is_v5
+        is_jinjiang
         and isinstance(payload, FinalResearchRankingReportPayloadV5)
         and isinstance(payload.evidence_state.decision_execution_evidence, DecisionExecutionEvidence)
         and payload.evidence_state.decision_execution_evidence.decision_execution_mode == "rule_based"
     )
     if not rule_based_v5 and runtime_provider.get("prompt_version") != contract.prompt_schema:
         raise ValueError(f"ranking runtime Prompt schema does not match {contract.lineage}")
-    if is_v5:
+    if is_jinjiang:
         if not isinstance(payload, FinalResearchRankingReportPayloadV5):  # pragma: no cover
-            raise ValueError("v5 rebuild contract requires a v5 payload")
+            raise ValueError("Jinjiang rebuild contract requires a v5-compatible payload")
         payload_evidence_state = payload.evidence_state.model_dump(mode="json")
         for evidence_name, evidence_state in (
             ("artifact manifest", manifest.get("evidence_state")),
@@ -5266,6 +5480,35 @@ def _validate_ranking_rebuild_evidence(
                     raise ValueError(f"{evidence_name} live_api_triggered does not match Decision evidence")
             if runtime_provider != decision_evidence.provider_metadata:
                 raise ValueError("ranking runtime provider metadata does not match Decision evidence")
+            if is_v6:
+                if not isinstance(payload, FinalResearchRankingReportPayloadV6) or not isinstance(
+                    decision_evidence, DecisionExecutionEvidenceV2
+                ):
+                    raise ValueError("v6 rebuild contract requires Decision execution evidence v2")
+                runtime_accounting = ProviderAccounting.model_validate(summary.get("provider_accounting"))
+                if runtime_accounting != decision_evidence.provider_accounting:
+                    raise ValueError("ranking runtime Provider accounting does not match Decision evidence")
+                if payload.provider_accounting != runtime_accounting:
+                    raise ValueError("ranking payload Provider accounting does not match runtime summary")
+                runtime_reason_context = ReasonContextDiagnostics.model_validate(
+                    summary.get("reason_context_diagnostics")
+                )
+                if payload.reason_context_diagnostics != runtime_reason_context:
+                    raise ValueError("ranking payload reason/context diagnostics do not match runtime summary")
+                if runtime_reason_context.exact_reason_facts != derive_exact_reason_facts(decision_records):
+                    raise ValueError("exact reason facts do not match persisted Decision rows")
+                if runtime_reason_context.selected_ranking_context != derive_selected_ranking_context(
+                    candidate_records
+                ):
+                    raise ValueError("selected Ranking context does not match persisted candidate rows")
+                peer_context = runtime_reason_context.decision_visible_peer_context
+                if (
+                    peer_context.context_count != decision_evidence.terminal_counts.exposed_users
+                    or peer_context.neutral_context_count != peer_context.context_count
+                    or peer_context.non_neutral_context_count != 0
+                    or any(peer_context.counter_totals.values())
+                ):
+                    raise ValueError("Decision-visible PeerContext evidence must be neutral for every exposed user")
     expected_sampling_method = payload.run.sampling_method
     expected_sampling_status = payload.run.sampling_status
     for evidence_name, evidence in (
@@ -5370,7 +5613,7 @@ def _validate_ranking_rebuild_evidence(
             raise ValueError("target aggregate engagement reference does not match source artifact")
         if source_reference.record_key.video_id != payload.target_video.video_id:
             raise ValueError("target aggregate engagement reference source artifact does not match TargetVideo")
-    elif is_v5 and (
+    elif is_jinjiang and (
         "target_aggregate_engagement_reference" in holdout_diagnostic
         or "target_aggregate_engagement_reference" in historical_diagnostic
     ):
@@ -5404,8 +5647,10 @@ def _validate_ranking_rebuild_evidence(
     if expected_diagnostics != payload.ranking_diagnostics_summary:
         raise ValueError("ranking diagnostics summary does not match report payload")
 
-    prompt_user_fields = RankingUserReportRowV5.model_fields if is_v5 else RankingUserReportRow.model_fields
-    prompt_profile_fields = JINJIANG_PROMPT_V3_PROFILE_FIELDS if is_v5 else JINJIANG_PROMPT_V2_PROFILE_FIELDS
+    prompt_user_fields = RankingUserReportRowV5.model_fields if is_jinjiang else RankingUserReportRow.model_fields
+    prompt_profile_fields = (
+        JINJIANG_PROMPT_V3_PROFILE_FIELDS if is_jinjiang else JINJIANG_PROMPT_V2_PROFILE_FIELDS
+    )
     expected_prompt_fields = {
         entry.field_name
         for entry in payload.field_lineage

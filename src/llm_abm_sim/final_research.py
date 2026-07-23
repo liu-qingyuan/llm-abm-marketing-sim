@@ -18,12 +18,13 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from .decision import EngageDecision, LLMDecisionAdapter, ProviderDecisionError
 from .field_lineage_trace import RuntimeFeedbackEvidence, RuntimeFeedbackKind
 from .final_research_decision_evidence import (
-    DecisionExecutionEvidence,
+    DecisionExecutionEvidenceV2,
     _FinalResearchDecisionEvidenceBuilder,
 )
+from .final_research_reason_context import build_reason_context_diagnostics
 from .final_research_report import (
     FINAL_RESEARCH_DYNAMIC_NETWORK_FORMULA,
-    FINAL_RESEARCH_RANKING_RUNTIME_V3_VERSION,
+    FINAL_RESEARCH_RANKING_RUNTIME_V4_VERSION,
     FINAL_RESEARCH_REPORT_ARTIFACTS,
     FINAL_RESEARCH_RUNTIME_VERSION,
     FINAL_RESEARCH_SCHEDULE_METHOD,
@@ -32,7 +33,7 @@ from .final_research_report import (
     FINAL_RESEARCH_USER_OPPORTUNITY_LIMIT,
     FinalResearchReportSource,
     FinalResearchReportWriter,
-    ranking_v5_release_evidence,
+    ranking_v6_release_evidence,
 )
 from .prompt_field_summary import PromptFieldInclusion, capture_prompt_field_inclusion
 from .ranking_diagnostics import MAIN_RANKING_WEIGHTS, RankingDiagnosticArtifacts, RankingDiagnostics
@@ -77,7 +78,7 @@ TARGET_DELIVERY_BASE_NETWORK_WEIGHT = MAIN_RANKING_WEIGHTS.base_network
 TARGET_DELIVERY_ENGAGED_NEIGHBOR_WEIGHT = MAIN_RANKING_WEIGHTS.engaged_neighbor
 TARGET_DELIVERY_TAG_AFFINITY_WEIGHT = MAIN_RANKING_WEIGHTS.tag_affinity
 TARGET_DELIVERY_CAPACITY = 20
-TARGET_DELIVERY_RUNTIME_VERSION = FINAL_RESEARCH_RANKING_RUNTIME_V3_VERSION
+TARGET_DELIVERY_RUNTIME_VERSION = FINAL_RESEARCH_RANKING_RUNTIME_V4_VERSION
 TARGET_DELIVERY_SCHEDULE_METHOD = "global_stable_reranking_top20"
 TARGET_DELIVERY_RANKING_FORMULA = (
     "0.50 * base_network_relevance + 0.30 * engaged_neighbor_signal + 0.20 * historical_tag_affinity"
@@ -1229,17 +1230,21 @@ class FinalResearchRunner:
         probability_runtime: _RuntimeArtifacts | None = None
         ranking_runtime: _RankingRuntimeArtifacts | None = None
         decision_evidence_builder: _FinalResearchDecisionEvidenceBuilder | None = None
-        decision_execution_evidence: DecisionExecutionEvidence | None = None
+        decision_execution_evidence: DecisionExecutionEvidenceV2 | None = None
         if self.config.provider.enabled:
             if model_policy.model is FinalResearchModel.TARGET_DELIVERY_RANKING_V2:
                 decision_evidence_builder = _FinalResearchDecisionEvidenceBuilder(self.decision_adapter)
+                if decision_evidence_builder.external_provider_calls_configured():
+                    raise ValueError(
+                        "Final Research v6 is Validation-only and cannot call an external Provider"
+                    )
                 adapter_classification = decision_evidence_builder.classification()
                 ranking_runtime = self._run_target_delivery_runtime(
                     prepared,
                     platform,
                     provider_metadata=adapter_classification.provider_metadata,
                 )
-                decision_execution_evidence = decision_evidence_builder.build(
+                decision_execution_evidence = decision_evidence_builder.build_v2(
                     sample_users=len(prepared.sample_user_ids),
                     decision_rows=ranking_runtime.decisions,
                     action_rows=ranking_runtime.actions,
@@ -1264,13 +1269,14 @@ class FinalResearchRunner:
                     **ranking_runtime.summary,
                     "sampling_status": sampling_status,
                     "provider_metadata": decision_execution_evidence.provider_metadata,
+                    "provider_accounting": decision_execution_evidence.provider_accounting.model_dump(mode="json"),
                     "decision_execution_mode": decision_execution_evidence.decision_execution_mode,
                     "decision_source_counts": decision_execution_evidence.decision_source_counts,
                     "action_counts": decision_execution_evidence.action_counts,
                     "terminal_counts": decision_execution_evidence.terminal_counts.model_dump(mode="json"),
                     "degeneracy_flags": decision_execution_evidence.degeneracy_flags.model_dump(mode="json"),
                     "live_api_triggered": decision_execution_evidence.live_api_triggered,
-                    "evidence_state": ranking_v5_release_evidence(decision_execution_evidence),
+                    "evidence_state": ranking_v6_release_evidence(decision_execution_evidence),
                 },
             )
         holdout_comments = holdout_evidence.comments
@@ -1674,6 +1680,7 @@ class FinalResearchRunner:
         outcomes_by_user: dict[str, dict[str, object]] = {}
         prompt_field_inclusion_by_user: dict[str, dict[str, PromptFieldInclusion]] = {}
         feedback_evidence_by_user: dict[str, RuntimeFeedbackEvidence] = {}
+        decision_peer_contexts: list[PeerContext] = []
         step_rows: list[dict[str, object]] = []
         decision_adapter_calls = 0
         schedule_position = 0
@@ -1727,11 +1734,13 @@ class FinalResearchRunner:
                     "provider_status": "",
                 }
                 profile = _runtime_user_profile(user)
+                peer_context = PeerContext()
+                decision_peer_contexts.append(peer_context)
                 attempt = _attempt_runtime_decision(
                     adapter=self.decision_adapter,
                     post=post,
                     profile=profile,
-                    peer_context=PeerContext(),
+                    peer_context=peer_context,
                     platform_context=PlatformContext(
                         time_label=f"batch-{time_step}",
                         hot_topics=list(prepared.target_video.hashtags),
@@ -1831,7 +1840,13 @@ class FinalResearchRunner:
                 next_time_step=None,
                 affected_direct_neighbor_user_ids=[],
             )
+        decision_rows = _safe_runtime_rows(decision_rows)
         outcomes = [outcomes_by_user[user_id] for user_id in prepared.sample_user_ids]
+        reason_context_diagnostics = build_reason_context_diagnostics(
+            decision_rows=decision_rows,
+            peer_contexts=decision_peer_contexts,
+            candidate_rows=candidate_rows,
+        )
         summary = {
             "runtime_version": TARGET_DELIVERY_RUNTIME_VERSION,
             "sampling_method": prepared.sampling_method,
@@ -1855,6 +1870,7 @@ class FinalResearchRunner:
             "same_batch_feedback": False,
             "decision_adapter_calls": decision_adapter_calls,
             "provider_metadata": provider_metadata,
+            "reason_context_diagnostics": reason_context_diagnostics.model_dump(mode="json"),
             "counts": {
                 "sample_users": len(prepared.sample_user_ids),
                 "seed_users": len(prepared.seed_user_ids),
@@ -2218,6 +2234,13 @@ def _sampling_status(
     if not _adapter_live_api_triggered(adapter):
         return VALIDATION_RUN_STATUS
     return PROBABILITY_FORMAL_RUN_STATUS
+
+
+def _safe_runtime_rows(rows: Sequence[Mapping[str, object]]) -> list[dict[str, object]]:
+    sanitized = safe_data(list(rows))
+    if not isinstance(sanitized, list) or not all(isinstance(row, dict) for row in sanitized):
+        raise TypeError("safe runtime rows must remain a list of objects")
+    return [dict(row) for row in sanitized]
 
 
 def _json_cell(payload: object) -> str:

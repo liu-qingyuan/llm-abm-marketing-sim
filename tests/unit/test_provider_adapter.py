@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
+from typing import Any, cast
 
 import httpx
 import pytest
@@ -13,6 +15,7 @@ from llm_abm_sim.providers import openai_compatible
 from llm_abm_sim.providers.openai_compatible import (
     OpenAICompatibleDecisionAdapter,
     ProviderConfigurationError,
+    ProviderResponseEnvelope,
     ProviderRunSkipped,
     _OpenAISDKClient,
 )
@@ -178,6 +181,69 @@ def test_mocked_provider_success_validates_engage_decision():
     assert adapter.live_api_triggered is False
 
 
+def test_falsey_injected_client_never_falls_through_to_live_client(monkeypatch):
+    class FalseyClient(FakeProviderClient):
+        def __bool__(self) -> bool:
+            return False
+
+    client = FalseyClient(
+        '{"engage": false, "probability": 0.1, "reason": "low", "confidence": 0.8, "action": "ignore"}'
+    )
+    adapter = OpenAICompatibleDecisionAdapter(ProviderLLMConfig(enabled=True), client=client)
+
+    def fail_live_client_build():
+        raise AssertionError("injected client must be used explicitly")
+
+    monkeypatch.setattr(adapter, "_build_live_client", fail_live_client_build)
+
+    decision = adapter.decide(**sample_context())
+
+    assert decision.action == "ignore"
+    assert len(client.calls) == 1
+    assert adapter.external_request_invocations == 0
+    assert adapter.provider_accounting.provider_response_count == 1
+
+
+def test_provider_envelope_accounts_returned_response_before_successful_decision():
+    client = FakeProviderClient(
+        ProviderResponseEnvelope(
+            decision_text=(
+                '{"engage": true, "probability": 0.8, "reason": "fit", '
+                '"confidence": 0.9, "action": "like"}'
+            ),
+            observed_model="observed-model",
+            observed_model_status="reported",
+            usage_status="complete",
+            input_tokens=12,
+            output_tokens=8,
+            total_tokens=20,
+            cached_input_tokens=5,
+        )
+    )
+    adapter = OpenAICompatibleDecisionAdapter(ProviderLLMConfig(enabled=True, model="requested-model"), client=client)
+
+    decision = adapter.decide(**sample_context())
+
+    assert decision.action == "like"
+    assert adapter.provider_accounting.model_dump(mode="json") == {
+        "schema_version": "provider-accounting-v1",
+        "external_request_invocations": 0,
+        "provider_response_count": 1,
+        "successful_decision_count": 1,
+        "observed_model_counts": {"observed-model": 1},
+        "observed_model_missing_response_count": 0,
+        "observed_model_malformed_response_count": 0,
+        "usage_complete_response_count": 1,
+        "usage_missing_response_count": 0,
+        "usage_malformed_response_count": 0,
+        "input_tokens": 12,
+        "output_tokens": 8,
+        "total_tokens": 20,
+        "cached_input_tokens": 5,
+        "cached_input_tokens_reported_response_count": 1,
+    }
+
+
 def test_live_sdk_client_uses_scoped_codex_auth_and_headers_without_serializing_values(monkeypatch, tmp_path):
     secret = "sub2api-header-secret"
     (tmp_path / "config.toml").write_text(
@@ -250,6 +316,239 @@ http_headers = { "x-openai-actor-authorization" = "selected-secret" }
         adapter._build_live_client()
 
 
+def test_responses_wire_normalizes_safe_model_and_usage_envelope():
+    decision_text = '{"engage": false, "probability": 0.1, "reason": "low", "confidence": 0.8, "action": "ignore"}'
+    sdk_response = SimpleNamespace(
+        output_text=decision_text,
+        model="observed-responses-model",
+        usage=SimpleNamespace(
+            input_tokens=21,
+            output_tokens=9,
+            total_tokens=30,
+            input_tokens_details=SimpleNamespace(cached_tokens=7),
+        ),
+        id="must-not-persist",
+        headers={"Authorization": "must-not-persist"},
+    )
+    sdk_client = object.__new__(_OpenAISDKClient)
+    sdk_client._wire_api = "responses"
+    sdk_client._extra_headers = None
+    sdk_client._client = cast(
+        Any,
+        SimpleNamespace(responses=SimpleNamespace(create=lambda **_kwargs: sdk_response)),
+    )
+
+    envelope = sdk_client.create_response([{"role": "user", "content": "test"}], "requested-model")
+
+    assert envelope == ProviderResponseEnvelope(
+        decision_text=decision_text,
+        observed_model="observed-responses-model",
+        observed_model_status="reported",
+        usage_status="complete",
+        input_tokens=21,
+        output_tokens=9,
+        total_tokens=30,
+        cached_input_tokens=7,
+    )
+    assert set(envelope.model_dump()) == {
+        "decision_text",
+        "observed_model",
+        "observed_model_status",
+        "usage_status",
+        "input_tokens",
+        "output_tokens",
+        "total_tokens",
+        "cached_input_tokens",
+    }
+    assert "must-not-persist" not in envelope.model_dump_json()
+
+
+def test_chat_wire_normalizes_usage_without_synthesizing_cached_tokens():
+    decision_text = '{"engage": true, "probability": 0.7, "reason": "fit", "confidence": 0.8, "action": "share"}'
+    sdk_response = SimpleNamespace(
+        choices=[SimpleNamespace(message=SimpleNamespace(content=decision_text))],
+        model="observed-chat-model",
+        usage=SimpleNamespace(prompt_tokens=14, completion_tokens=6, total_tokens=20),
+    )
+    sdk_client = object.__new__(_OpenAISDKClient)
+    sdk_client._wire_api = "chat"
+    sdk_client._extra_headers = None
+    sdk_client._client = cast(
+        Any,
+        SimpleNamespace(
+            chat=SimpleNamespace(
+                completions=SimpleNamespace(create=lambda **_kwargs: sdk_response),
+            )
+        ),
+    )
+
+    envelope = sdk_client.create_response([{"role": "user", "content": "test"}], "requested-model")
+
+    assert envelope == ProviderResponseEnvelope(
+        decision_text=decision_text,
+        observed_model="observed-chat-model",
+        observed_model_status="reported",
+        usage_status="complete",
+        input_tokens=14,
+        output_tokens=6,
+        total_tokens=20,
+        cached_input_tokens=None,
+    )
+
+
+@pytest.mark.parametrize(
+    ("usage", "expected_status"),
+    [
+        (None, "missing"),
+        (SimpleNamespace(input_tokens=4, output_tokens=2), "malformed"),
+        (SimpleNamespace(input_tokens=True, output_tokens=2, total_tokens=3), "malformed"),
+        (SimpleNamespace(input_tokens=-1, output_tokens=2, total_tokens=1), "malformed"),
+        (SimpleNamespace(input_tokens=4, output_tokens=2, total_tokens=7), "malformed"),
+        (
+            SimpleNamespace(
+                input_tokens=4,
+                output_tokens=2,
+                total_tokens=6,
+                input_tokens_details="broken",
+            ),
+            "malformed",
+        ),
+        (
+            SimpleNamespace(
+                input_tokens=4,
+                output_tokens=2,
+                total_tokens=6,
+                input_tokens_details=SimpleNamespace(cached_tokens=5),
+            ),
+            "malformed",
+        ),
+    ],
+)
+def test_responses_wire_downgrades_missing_or_malformed_usage_without_estimation(usage, expected_status):
+    sdk_response = SimpleNamespace(
+        output_text=(
+            '{"engage": false, "probability": 0.1, "reason": "low", '
+            '"confidence": 0.8, "action": "ignore"}'
+        ),
+        model="observed-model",
+        usage=usage,
+    )
+    sdk_client = object.__new__(_OpenAISDKClient)
+    sdk_client._wire_api = "responses"
+    sdk_client._extra_headers = None
+    sdk_client._client = cast(
+        Any,
+        SimpleNamespace(responses=SimpleNamespace(create=lambda **_kwargs: sdk_response)),
+    )
+
+    envelope = sdk_client.create_response([{"role": "user", "content": "test"}], "requested-model")
+
+    assert envelope.usage_status == expected_status
+    assert envelope.input_tokens is None
+    assert envelope.output_tokens is None
+    assert envelope.total_tokens is None
+    assert envelope.cached_input_tokens is None
+    assert envelope.decision_text.startswith('{"engage"')
+
+
+@pytest.mark.parametrize(
+    ("model", "expected_model", "expected_status"),
+    [
+        (None, None, "missing"),
+        ("", None, "malformed"),
+        (" ", None, "malformed"),
+        ("Bearer hidden", None, "malformed"),
+        ("sk-hidden", None, "malformed"),
+        ("sub2api-header-secret", None, "malformed"),
+        ("ghp_deadbeef", None, "malformed"),
+        ("eyJhbGciOiJIUzI1NiJ9.payload.signature", None, "malformed"),
+        (False, None, "malformed"),
+        ("observed-model", "observed-model", "reported"),
+    ],
+)
+def test_responses_wire_classifies_observed_model(model, expected_model, expected_status):
+    sdk_response = SimpleNamespace(
+        output_text=(
+            '{"engage": false, "probability": 0.1, "reason": "low", '
+            '"confidence": 0.8, "action": "ignore"}'
+        ),
+        model=model,
+        usage=None,
+    )
+    sdk_client = object.__new__(_OpenAISDKClient)
+    sdk_client._wire_api = "responses"
+    sdk_client._extra_headers = None
+    sdk_client._client = cast(
+        Any,
+        SimpleNamespace(responses=SimpleNamespace(create=lambda **_kwargs: sdk_response)),
+    )
+
+    envelope = sdk_client.create_response([{"role": "user", "content": "test"}], "requested-model")
+
+    assert envelope.observed_model == expected_model
+    assert envelope.observed_model_status == expected_status
+
+
+def test_usage_metadata_getter_failure_is_malformed_without_retrying_a_valid_decision():
+    class HostileDetails:
+        def __getattribute__(self, name: str):
+            if name in {"__dict__", "cached_tokens"}:
+                raise RuntimeError("metadata access must not escape")
+            return super().__getattribute__(name)
+
+    class HostileUsage:
+        input_tokens = 4
+        output_tokens = 2
+        total_tokens = 6
+
+        @property
+        def input_tokens_details(self):
+            raise RuntimeError("metadata access must not escape")
+
+    calls = 0
+
+    def create_response(**_kwargs):
+        nonlocal calls
+        calls += 1
+        return SimpleNamespace(
+            output_text=(
+                '{"engage": false, "probability": 0.1, "reason": "low", '
+                '"confidence": 0.8, "action": "ignore"}'
+            ),
+            model="observed-model",
+            usage=(
+                SimpleNamespace(
+                    input_tokens=4,
+                    output_tokens=2,
+                    total_tokens=6,
+                    input_tokens_details=HostileDetails(),
+                )
+                if calls == 1
+                else HostileUsage()
+            ),
+        )
+
+    sdk_client = object.__new__(_OpenAISDKClient)
+    sdk_client._wire_api = "responses"
+    sdk_client._extra_headers = None
+    sdk_client._client = cast(
+        Any,
+        SimpleNamespace(responses=SimpleNamespace(create=create_response)),
+    )
+    adapter = OpenAICompatibleDecisionAdapter(
+        ProviderLLMConfig(enabled=True, max_retries=1),
+        client=sdk_client,
+    )
+
+    decisions = [adapter.decide(**sample_context()) for _ in range(2)]
+
+    assert {decision.action for decision in decisions} == {"ignore"}
+    assert calls == 2
+    assert adapter.provider_accounting.provider_response_count == 2
+    assert adapter.provider_accounting.successful_decision_count == 2
+    assert adapter.provider_accounting.usage_malformed_response_count == 2
+
+
 def test_openai_sdk_client_sends_scoped_headers_without_synthetic_bearer(monkeypatch):
     for name in ("ALL_PROXY", "HTTP_PROXY", "HTTPS_PROXY", "all_proxy", "http_proxy", "https_proxy"):
         monkeypatch.delenv(name, raising=False)
@@ -280,7 +579,12 @@ def test_openai_sdk_client_sends_scoped_headers_without_synthetic_bearer(monkeyp
         http_client=httpx.Client(transport=httpx.MockTransport(handle)),
     )
 
-    assert client.create_response([{"role": "user", "content": "test"}], "test-model") == ""
+    envelope = client.create_response([{"role": "user", "content": "test"}], "test-model")
+
+    assert envelope.decision_text == ""
+    assert envelope.observed_model == "test-model"
+    assert envelope.observed_model_status == "reported"
+    assert envelope.usage_status == "missing"
     assert len(requests) == 1
     assert requests[0].headers["x-openai-actor-authorization"] == "test-only-secret"
     assert "authorization" not in requests[0].headers
@@ -429,6 +733,134 @@ api_key = "sk-should-not-load"
     assert "sk-should-not-load" not in serialized
 
 
+def test_malformed_decision_retry_keeps_every_returned_response_in_accounting():
+    responses = [
+        ProviderResponseEnvelope(
+            decision_text="not-json",
+            observed_model="first-model",
+            observed_model_status="reported",
+            usage_status="complete",
+            input_tokens=10,
+            output_tokens=2,
+            total_tokens=12,
+            cached_input_tokens=None,
+        ),
+        ProviderResponseEnvelope(
+            decision_text=(
+                '{"engage": true, "probability": 0.7, "reason": "retry ok", '
+                '"confidence": 0.8, "action": "share"}'
+            ),
+            observed_model="second-model",
+            observed_model_status="reported",
+            usage_status="complete",
+            input_tokens=11,
+            output_tokens=3,
+            total_tokens=14,
+            cached_input_tokens=4,
+        ),
+    ]
+
+    class SequenceClient:
+        def __init__(self):
+            self.calls = 0
+
+        def create_response(self, messages: list[dict[str, str]], model: str):
+            del messages, model
+            response = responses[self.calls]
+            self.calls += 1
+            return response
+
+    client = SequenceClient()
+    adapter = OpenAICompatibleDecisionAdapter(
+        ProviderLLMConfig(enabled=True, max_retries=1, retry_backoff_seconds=0),
+        client=client,
+        sleep=lambda _delay: None,
+    )
+
+    decision = adapter.decide(**sample_context())
+    accounting = adapter.provider_accounting
+
+    assert decision.action == "share"
+    assert client.calls == 2
+    assert accounting.provider_response_count == 2
+    assert accounting.successful_decision_count == 1
+    assert accounting.observed_model_counts == {"first-model": 1, "second-model": 1}
+    assert accounting.usage_complete_response_count == 2
+    assert accounting.input_tokens == 21
+    assert accounting.output_tokens == 5
+    assert accounting.total_tokens == 26
+    assert accounting.cached_input_tokens == 4
+    assert accounting.cached_input_tokens_reported_response_count == 1
+
+
+def test_provider_accounting_aggregates_mixed_model_and_usage_statuses_without_changing_decisions():
+    decision_text = (
+        '{"engage": false, "probability": 0.1, "reason": "low", '
+        '"confidence": 0.8, "action": "ignore"}'
+    )
+    responses = [
+        ProviderResponseEnvelope(
+            decision_text=decision_text,
+            observed_model="requested-model",
+            observed_model_status="reported",
+            usage_status="complete",
+            input_tokens=10,
+            output_tokens=2,
+            total_tokens=12,
+            cached_input_tokens=2,
+        ),
+        ProviderResponseEnvelope(
+            decision_text=decision_text,
+            observed_model="wrong-model",
+            observed_model_status="reported",
+            usage_status="complete",
+            input_tokens=10,
+            output_tokens=2,
+            total_tokens=12,
+            cached_input_tokens=None,
+        ),
+        ProviderResponseEnvelope(
+            decision_text=decision_text,
+            observed_model=None,
+            observed_model_status="missing",
+            usage_status="missing",
+        ),
+        ProviderResponseEnvelope(
+            decision_text=decision_text,
+            observed_model=None,
+            observed_model_status="malformed",
+            usage_status="malformed",
+        ),
+    ]
+
+    class SequenceClient:
+        def create_response(self, messages: list[dict[str, str]], model: str) -> ProviderResponseEnvelope:
+            del messages, model
+            return responses.pop(0)
+
+    adapter = OpenAICompatibleDecisionAdapter(
+        ProviderLLMConfig(enabled=True, model="requested-model"),
+        client=SequenceClient(),
+    )
+
+    decisions = [adapter.decide(**sample_context()) for _ in range(4)]
+    accounting = adapter.provider_accounting
+
+    assert {decision.action for decision in decisions} == {"ignore"}
+    assert accounting.provider_response_count == accounting.successful_decision_count == 4
+    assert accounting.observed_model_counts == {"requested-model": 1, "wrong-model": 1}
+    assert accounting.observed_model_missing_response_count == 1
+    assert accounting.observed_model_malformed_response_count == 1
+    assert accounting.usage_complete_response_count == 2
+    assert accounting.usage_missing_response_count == 1
+    assert accounting.usage_malformed_response_count == 1
+    assert accounting.input_tokens == 20
+    assert accounting.output_tokens == 4
+    assert accounting.total_tokens == 24
+    assert accounting.cached_input_tokens == 2
+    assert accounting.cached_input_tokens_reported_response_count == 1
+
+
 def test_provider_retries_timeout_before_success():
     class FlakyClient:
         def __init__(self):
@@ -454,6 +886,27 @@ def test_provider_retries_timeout_before_success():
     assert delays == [0.25]
     assert decision.action == "share"
     assert decision.decision_source == "provider"
+    assert adapter.provider_accounting.provider_response_count == 1
+    assert adapter.provider_accounting.successful_decision_count == 1
+    assert adapter.provider_accounting.usage_missing_response_count == 1
+
+
+def test_live_client_transport_attempts_count_invocations_without_synthesizing_responses(monkeypatch):
+    client = FakeProviderClient(None, exc=TimeoutError("temporary"))
+    adapter = OpenAICompatibleDecisionAdapter(
+        ProviderLLMConfig(enabled=True, require_live_env=False, max_retries=1, retry_backoff_seconds=0),
+        sleep=lambda _delay: None,
+    )
+    monkeypatch.setattr(adapter, "_build_live_client", lambda: client)
+
+    with pytest.raises(ProviderDecisionError, match="TimeoutError"):
+        adapter.decide(**sample_context())
+
+    assert adapter.external_request_invocations == 2
+    assert adapter.provider_accounting.external_request_invocations == 2
+    assert adapter.provider_accounting.provider_response_count == 0
+    assert adapter.provider_accounting.successful_decision_count == 0
+    assert adapter.provider_accounting.usage_complete_response_count == 0
 
 
 def test_provider_retry_backoff_is_exponential_and_capped_at_five_retries():
@@ -490,3 +943,5 @@ def test_cached_provider_adapter_avoids_duplicate_provider_calls():
     assert first == second
     assert first.decision_source == "provider"
     assert len(client.calls) == 1
+    assert provider.provider_accounting.provider_response_count == 1
+    assert provider.provider_accounting.successful_decision_count == 1
