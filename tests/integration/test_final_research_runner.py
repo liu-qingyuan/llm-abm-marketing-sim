@@ -17,6 +17,7 @@ from typing import Any, cast
 import pytest
 from pydantic import ValidationError
 
+import llm_abm_sim.final_research as final_research_module
 from llm_abm_sim import (
     FinalResearchConfig,
     FinalResearchModel,
@@ -756,6 +757,98 @@ def _sdk_wrapper_stub(client: _TargetDeliveryProviderClient) -> _OpenAISDKClient
 def _target_delivery_client(adapter: OpenAICompatibleDecisionAdapter) -> _TargetDeliveryProviderClient:
     assert isinstance(adapter.client, _TargetDeliveryProviderClient)
     return adapter.client
+
+
+def test_research_cohort_preparer_builds_target_independent_seed_first_inputs(tmp_path: Path) -> None:
+    dataset_dir = _make_processed_fixture(tmp_path)
+    cohort = final_research_module._ResearchCohortPreparer(
+        dataset_dir=dataset_dir,
+        sample_size=4,
+        random_seed=20260713,
+        model_policy=final_research_module._TARGET_DELIVERY_RANKING_POLICY,
+        holdout_video_ids=(TARGET_VIDEO_ID,),
+    ).prepare()
+    config = FinalResearchConfig(dataset_dir=dataset_dir, sample_size=4, random_seed=20260713)
+
+    consumed_rows = [
+        {
+            "user_id": user_id,
+            "sample_role": cohort.users_by_id[user_id].sample_role,
+            "latent_class": str(cohort.users_by_id[user_id].latent_attributes["latent_class"]),
+            "historical_neighbor_count": len(
+                set(cohort.comment_graph.neighbors_by_user.get(user_id, set())) & set(cohort.users_by_id)
+            ),
+        }
+        for user_id in cohort.sample_user_ids
+    ]
+    prepared = final_research_module._LegacyTargetAssembler(config).attach_target(cohort)
+
+    assert TARGET_VIDEO_ID not in cohort.historical_videos_by_id
+    assert all(comment.video_id != TARGET_VIDEO_ID for comment in cohort.historical_comments)
+    assert cohort.sample_user_ids == ["u1", "u2", "u5", "u6"]
+    assert cohort.seed_user_ids == ["u1", "u2", "u5", "u6"]
+    assert [row["user_id"] for row in consumed_rows] == cohort.sample_user_ids
+    assert {row["sample_role"] for row in consumed_rows} == {"seed"}
+    assert consumed_rows[0]["historical_neighbor_count"] == 1
+    assert {row["latent_class"] for row in consumed_rows} == {"class_1", "class_2", "class_3"}
+    assert prepared.sample_user_ids == cohort.sample_user_ids
+    assert prepared.seed_user_ids == cohort.seed_user_ids
+    assert prepared.target_video.video_id == TARGET_VIDEO_ID
+
+
+def test_probability_runtime_reveals_holdout_after_runtime_completion(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    dataset_dir = _make_processed_fixture(tmp_path)
+    config = FinalResearchConfig(
+        dataset_dir=dataset_dir,
+        sample_size=4,
+        research_model=FinalResearchModel.PROBABILITY_V1,
+        provider=ProviderLLMConfig(enabled=True, model="mock-model", require_live_env=False),
+    )
+    events: list[str] = []
+
+    class _RecordingDecisionAdapter(LLMDecisionAdapter):
+        def decide(
+            self,
+            post: PostContent,
+            profile: UserProfile,
+            peer_context: PeerContext,
+            platform_context: PlatformContext | None = None,
+            time_step: int = 0,
+        ) -> EngageDecision:
+            del post, profile, peer_context, platform_context, time_step
+            events.append("decide")
+            return EngageDecision(
+                engage=False,
+                probability=0.0,
+                reason="fixture ignore",
+                confidence=1.0,
+                action="ignore",
+            )
+
+    original_reveal_holdout = final_research_module._LegacyTargetAssembler.reveal_holdout
+
+    def _recording_reveal_holdout(
+        self: final_research_module._LegacyTargetAssembler,
+    ) -> final_research_module._TargetHoldoutEvidence:
+        events.append("reveal_holdout")
+        assert "decide" in events
+        return original_reveal_holdout(self)
+
+    monkeypatch.setattr(
+        final_research_module._LegacyTargetAssembler,
+        "reveal_holdout",
+        _recording_reveal_holdout,
+    )
+
+    output_dir = FinalResearchRunner(config, _RecordingDecisionAdapter()).run_and_write(tmp_path / "probability-run")
+
+    assert output_dir == tmp_path / "probability-run"
+    assert events.count("decide") == 4
+    assert events.count("reveal_holdout") == 1
+    assert events[-1] == "reveal_holdout"
 
 
 def test_offline_final_research_baseline_is_holdout_safe_and_deterministic(tmp_path: Path) -> None:

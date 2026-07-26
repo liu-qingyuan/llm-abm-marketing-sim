@@ -587,6 +587,41 @@ class _TargetHoldoutEvidence:
 
 
 @dataclass(frozen=True)
+class _PreparedCommentGraph:
+    weighted_degree_by_user: dict[str, int]
+    neighbors_by_user: dict[str, set[str]]
+    edge_weights: dict[tuple[str, str], int]
+    p95_weighted_degree: float
+
+
+@dataclass(frozen=True)
+class _PreparedResearchCohort:
+    users_by_id: dict[str, ResearchUser]
+    sample_user_ids: list[str]
+    base_sample_user_ids: list[str]
+    seed_user_ids: list[str]
+    network_cohort_user_ids: list[str]
+    network_cohort_added_user_ids: list[str]
+    replaced_ordinary_user_ids: list[str]
+    final_sample_user_ids: list[str]
+    historical_video_count: int
+    historical_interaction_rows: int
+    thresholds: dict[str, float]
+    historical_interaction_user_ids: set[str]
+    historical_tags_by_user: dict[str, set[str]]
+    historical_tag_evidence_by_user: dict[str, list[dict[str, object]]]
+    derived_proxy_inputs_by_user: dict[str, dict[str, int | float]]
+    source_scope_sample_counts: dict[str, int]
+    base_source_scope_sample_counts: dict[str, int]
+    final_source_scope_sample_counts: dict[str, int]
+    sampling_method: ResearchSamplingMethod
+    sample_audit: dict[str, object]
+    historical_videos_by_id: dict[str, _VideoRecord]
+    historical_comments: tuple[_CommentRecord, ...]
+    comment_graph: _PreparedCommentGraph
+
+
+@dataclass(frozen=True)
 class _PreparedInputs:
     target_video: TargetVideo
     users_by_id: dict[str, ResearchUser]
@@ -806,39 +841,95 @@ class _SeedFirstSampleModule:
         )
 
 
-class _ResearchInputBuilder:
-    def __init__(self, config: FinalResearchConfig, model_policy: _ResearchModelPolicy) -> None:
-        self.config = config
-        self.model_policy = model_policy
-
-    def prepare(self) -> _PreparedInputs:
-        videos = self._load_videos()
-        historical_comments = self._load_comments(holdout=False)
-        profile_rows = _read_csv_rows(self.config.dataset_dir / "users.csv")
-        target_record = videos[self.config.target_video_id]
-        target_video = TargetVideo(
-            video_id=target_record.video_id,
-            source_challenge_name=target_record.source_challenge_name,
-            source_challenge_rank=target_record.source_challenge_rank,
-            caption=target_record.caption,
-            hashtags=list(target_record.hashtags),
-            creator_user_id=target_record.creator_user_id,
-            video_url=target_record.video_url,
+def _load_video_records(dataset_dir: Path) -> dict[str, _VideoRecord]:
+    videos: dict[str, _VideoRecord] = {}
+    for row_number, row in enumerate(_read_csv_rows(dataset_dir / "videos.csv"), start=2):
+        video_id = _cell(row, "video_id")
+        if not video_id:
+            raise ValueError(f"videos.csv row {row_number} has an empty video_id")
+        if video_id in videos:
+            raise ValueError(f"videos.csv contains duplicate video_id: {video_id}")
+        videos[video_id] = _VideoRecord(
+            video_id=video_id,
+            source_challenge_name=_cell(row, "source_challenge_name"),
+            source_challenge_rank=_int_cell(row, "source_challenge_rank"),
+            caption=_cell(row, "caption"),
+            hashtags=tuple(_parse_list(_cell(row, "hashtags"))),
+            creator_user_id=_cell(row, "creator_user_id"),
+            video_url=_cell(row, "video_url"),
         )
-        historical_videos = {video_id: video for video_id, video in videos.items() if video_id != target_video.video_id}
+    return videos
+
+
+def _load_comment_records(dataset_dir: Path) -> list[_CommentRecord]:
+    path = dataset_dir / "all_comments.csv"
+    if not path.is_file():
+        path = dataset_dir / "comments.csv"
+    comments: list[_CommentRecord] = []
+    seen_ids: set[str] = set()
+    for row_number, row in enumerate(_read_csv_rows(path), start=2):
+        comment_id = _cell(row, "comment_id")
+        if not comment_id:
+            raise ValueError(f"{path.name} row {row_number} has an empty comment_id")
+        if comment_id in seen_ids:
+            raise ValueError(f"{path.name} contains duplicate comment_id: {comment_id}")
+        seen_ids.add(comment_id)
+        level = _cell(row, "comment_level").lower()
+        if level not in {"comment", "reply"}:
+            level = "reply" if _has_parent(_cell(row, "parent_comment_id")) else "comment"
+        comments.append(
+            _CommentRecord(
+                comment_id=comment_id,
+                video_id=_cell(row, "video_id"),
+                parent_comment_id=_cell(row, "parent_comment_id"),
+                commenter_user_id=_cell(row, "commenter_user_id"),
+                mentioned_user_ids=tuple(_parse_list(_cell(row, "mentioned_user_ids"))),
+                like_count=_int_cell(row, "like_count"),
+                comment_level=level,
+                content=_cell(row, "content"),
+            )
+        )
+    return comments
+
+
+class _ResearchCohortPreparer:
+    """Prepare a target-independent, holdout-safe research cohort from historical data only."""
+
+    def __init__(
+        self,
+        *,
+        dataset_dir: Path,
+        sample_size: int,
+        random_seed: int,
+        model_policy: _ResearchModelPolicy,
+        holdout_video_ids: Sequence[str] = (),
+    ) -> None:
+        self.dataset_dir = dataset_dir
+        self.sample_size = sample_size
+        self.random_seed = random_seed
+        self.model_policy = model_policy
+        self.holdout_video_ids = frozenset(holdout_video_ids)
+
+    def prepare(self) -> _PreparedResearchCohort:
+        videos = _load_video_records(self.dataset_dir)
+        historical_comments = tuple(
+            comment for comment in _load_comment_records(self.dataset_dir) if comment.video_id not in self.holdout_video_ids
+        )
+        profile_rows = _read_csv_rows(self.dataset_dir / "users.csv")
+        historical_videos = {
+            video_id: video for video_id, video in videos.items() if video_id not in self.holdout_video_ids
+        }
 
         all_history_degree = _weighted_degrees(historical_videos, historical_comments)
-        target_scope_video_ids = {
+        comment_graph_video_ids = {
             video_id
             for video_id, video in historical_videos.items()
             if video.source_challenge_name == TARGET_NETWORK_SCOPE
         }
-        target_scope_comments = [
-            comment for comment in historical_comments if comment.video_id in target_scope_video_ids
-        ]
-        target_scope_degree, target_scope_neighbors, target_scope_edge_weights = _weighted_graph_details(
+        comment_graph_comments = [comment for comment in historical_comments if comment.video_id in comment_graph_video_ids]
+        comment_graph_degree, comment_graph_neighbors, comment_graph_edge_weights = _weighted_graph_details(
             historical_videos,
-            target_scope_comments,
+            comment_graph_comments,
         )
         history_counts, history_likes, historical_tags_by_user = _historical_user_signals(
             historical_videos,
@@ -862,10 +953,10 @@ class _ResearchInputBuilder:
                 users_by_id=users_by_id,
                 videos=historical_videos,
                 comments=historical_comments,
-                target_scope_neighbors=target_scope_neighbors,
-                target_scope_edge_weights=target_scope_edge_weights,
-                sample_size=self.config.sample_size,
-                random_seed=self.config.random_seed,
+                target_scope_neighbors=comment_graph_neighbors,
+                target_scope_edge_weights=comment_graph_edge_weights,
+                sample_size=self.sample_size,
+                random_seed=self.random_seed,
             ).build()
             sample_user_ids = selection.sample_user_ids
             base_sample_user_ids: list[str] = []
@@ -883,8 +974,8 @@ class _ResearchInputBuilder:
                 videos=historical_videos,
                 comments=historical_comments,
                 available_user_ids=set(users_by_id),
-                sample_size=self.config.sample_size,
-                random_seed=self.config.random_seed,
+                sample_size=self.sample_size,
+                random_seed=self.random_seed,
             )
             seed_user_ids = _select_seeds(base_sample_user_ids, users_by_id)
             network_cohort_user_ids = []
@@ -912,15 +1003,20 @@ class _ResearchInputBuilder:
                     ),
                 }
             )
-        target_scope_p95_weighted_degree = round(
+        comment_graph_p95_weighted_degree = round(
             _percentile(
-                (target_scope_degree.get(user_id, 0) for user_id in users_by_id),
+                (comment_graph_degree.get(user_id, 0) for user_id in users_by_id),
                 0.95,
             ),
             6,
         )
-        return _PreparedInputs(
-            target_video=target_video,
+        comment_graph = _PreparedCommentGraph(
+            weighted_degree_by_user=comment_graph_degree,
+            neighbors_by_user=comment_graph_neighbors,
+            edge_weights=comment_graph_edge_weights,
+            p95_weighted_degree=comment_graph_p95_weighted_degree,
+        )
+        return _PreparedResearchCohort(
             users_by_id=users_by_id,
             sample_user_ids=sample_user_ids,
             base_sample_user_ids=base_sample_user_ids,
@@ -947,19 +1043,64 @@ class _ResearchInputBuilder:
                     "reply_count_p95": thresholds["reply_count"],
                     "edge_degree_p95": thresholds["edge_degree"],
                     "comment_like_sum_p95": thresholds["comment_like_sum"],
-                    "target_scope_weighted_degree": target_scope_degree.get(user_id, 0),
-                    "target_scope_p95_weighted_degree": target_scope_p95_weighted_degree,
+                    "target_scope_weighted_degree": comment_graph_degree.get(user_id, 0),
+                    "target_scope_p95_weighted_degree": comment_graph_p95_weighted_degree,
                 }
                 for user_id in users_by_id
             },
-            target_scope_weighted_degree=target_scope_degree,
-            target_scope_neighbors=target_scope_neighbors,
             source_scope_sample_counts=dict(sorted(Counter(sample_scope_by_user.values()).items())),
             base_source_scope_sample_counts=dict(sorted(Counter(base_scope_by_user.values()).items())),
             final_source_scope_sample_counts=dict(sorted(Counter(final_scope_by_user.values()).items())),
-            target_scope_p95_weighted_degree=target_scope_p95_weighted_degree,
             sampling_method=self.model_policy.sampling_method,
             sample_audit=sample_audit,
+            historical_videos_by_id=historical_videos,
+            historical_comments=historical_comments,
+            comment_graph=comment_graph,
+        )
+
+
+class _LegacyTargetAssembler:
+    """Attach the single-target runtime view and reveal target holdout on demand."""
+
+    def __init__(self, config: FinalResearchConfig) -> None:
+        self.config = config
+
+    def attach_target(self, cohort: _PreparedResearchCohort) -> _PreparedInputs:
+        target_record = _load_video_records(self.config.dataset_dir)[self.config.target_video_id]
+        target_video = TargetVideo(
+            video_id=target_record.video_id,
+            source_challenge_name=target_record.source_challenge_name,
+            source_challenge_rank=target_record.source_challenge_rank,
+            caption=target_record.caption,
+            hashtags=list(target_record.hashtags),
+            creator_user_id=target_record.creator_user_id,
+            video_url=target_record.video_url,
+        )
+        return _PreparedInputs(
+            target_video=target_video,
+            users_by_id=cohort.users_by_id,
+            sample_user_ids=cohort.sample_user_ids,
+            base_sample_user_ids=cohort.base_sample_user_ids,
+            seed_user_ids=cohort.seed_user_ids,
+            network_cohort_user_ids=cohort.network_cohort_user_ids,
+            network_cohort_added_user_ids=cohort.network_cohort_added_user_ids,
+            replaced_ordinary_user_ids=cohort.replaced_ordinary_user_ids,
+            final_sample_user_ids=cohort.final_sample_user_ids,
+            historical_video_count=cohort.historical_video_count,
+            historical_interaction_rows=cohort.historical_interaction_rows,
+            thresholds=cohort.thresholds,
+            historical_interaction_user_ids=cohort.historical_interaction_user_ids,
+            historical_tags_by_user=cohort.historical_tags_by_user,
+            historical_tag_evidence_by_user=cohort.historical_tag_evidence_by_user,
+            derived_proxy_inputs_by_user=cohort.derived_proxy_inputs_by_user,
+            target_scope_weighted_degree=cohort.comment_graph.weighted_degree_by_user,
+            target_scope_neighbors=cohort.comment_graph.neighbors_by_user,
+            source_scope_sample_counts=cohort.source_scope_sample_counts,
+            base_source_scope_sample_counts=cohort.base_source_scope_sample_counts,
+            final_source_scope_sample_counts=cohort.final_source_scope_sample_counts,
+            target_scope_p95_weighted_degree=cohort.comment_graph.p95_weighted_degree,
+            sampling_method=cohort.sampling_method,
+            sample_audit=cohort.sample_audit,
         )
 
     def reveal_holdout(self) -> _TargetHoldoutEvidence:
@@ -976,7 +1117,9 @@ class _ResearchInputBuilder:
             )
         target_row = target_rows[0]
         return _TargetHoldoutEvidence(
-            comments=tuple(self._load_comments(holdout=True)),
+            comments=tuple(
+                comment for comment in _load_comment_records(self.config.dataset_dir) if comment.video_id == self.config.target_video_id
+            ),
             target_aggregate_engagement_reference=_TargetAggregateEngagementReference(
                 source_artifact="videos.csv",
                 record_key=_TargetAggregateEngagementRecordKey(video_id=self.config.target_video_id),
@@ -991,57 +1134,26 @@ class _ResearchInputBuilder:
             ),
         )
 
-    def _load_videos(self) -> dict[str, _VideoRecord]:
-        videos: dict[str, _VideoRecord] = {}
-        for row_number, row in enumerate(_read_csv_rows(self.config.dataset_dir / "videos.csv"), start=2):
-            video_id = _cell(row, "video_id")
-            if not video_id:
-                raise ValueError(f"videos.csv row {row_number} has an empty video_id")
-            if video_id in videos:
-                raise ValueError(f"videos.csv contains duplicate video_id: {video_id}")
-            videos[video_id] = _VideoRecord(
-                video_id=video_id,
-                source_challenge_name=_cell(row, "source_challenge_name"),
-                source_challenge_rank=_int_cell(row, "source_challenge_rank"),
-                caption=_cell(row, "caption"),
-                hashtags=tuple(_parse_list(_cell(row, "hashtags"))),
-                creator_user_id=_cell(row, "creator_user_id"),
-                video_url=_cell(row, "video_url"),
-            )
-        return videos
 
-    def _load_comments(self, *, holdout: bool) -> list[_CommentRecord]:
-        path = self.config.dataset_dir / "all_comments.csv"
-        if not path.is_file():
-            path = self.config.dataset_dir / "comments.csv"
-        comments: list[_CommentRecord] = []
-        seen_ids: set[str] = set()
-        for row_number, row in enumerate(_read_csv_rows(path), start=2):
-            comment_id = _cell(row, "comment_id")
-            if not comment_id:
-                raise ValueError(f"{path.name} row {row_number} has an empty comment_id")
-            if comment_id in seen_ids:
-                raise ValueError(f"{path.name} contains duplicate comment_id: {comment_id}")
-            seen_ids.add(comment_id)
-            is_holdout = _cell(row, "video_id") == self.config.target_video_id
-            if is_holdout != holdout:
-                continue
-            level = _cell(row, "comment_level").lower()
-            if level not in {"comment", "reply"}:
-                level = "reply" if _has_parent(_cell(row, "parent_comment_id")) else "comment"
-            comments.append(
-                _CommentRecord(
-                    comment_id=comment_id,
-                    video_id=_cell(row, "video_id"),
-                    parent_comment_id=_cell(row, "parent_comment_id"),
-                    commenter_user_id=_cell(row, "commenter_user_id"),
-                    mentioned_user_ids=tuple(_parse_list(_cell(row, "mentioned_user_ids"))),
-                    like_count=_int_cell(row, "like_count"),
-                    comment_level=level,
-                    content=_cell(row, "content"),
-                )
-            )
-        return comments
+class _ResearchInputBuilder:
+    def __init__(self, config: FinalResearchConfig, model_policy: _ResearchModelPolicy) -> None:
+        self.config = config
+        self.model_policy = model_policy
+        self._cohort_preparer = _ResearchCohortPreparer(
+            dataset_dir=config.dataset_dir,
+            sample_size=config.sample_size,
+            random_seed=config.random_seed,
+            model_policy=model_policy,
+            holdout_video_ids=(config.target_video_id,),
+        )
+        self._legacy_target_assembler = _LegacyTargetAssembler(config)
+
+    def prepare(self) -> _PreparedInputs:
+        cohort = self._cohort_preparer.prepare()
+        return self._legacy_target_assembler.attach_target(cohort)
+
+    def reveal_holdout(self) -> _TargetHoldoutEvidence:
+        return self._legacy_target_assembler.reveal_holdout()
 
 
 class PlatformRecommendationModel:

@@ -112,7 +112,7 @@ Complete usage 要求 strict non-boolean non-negative integers、`total_tokens =
 
 Decision evidence 只从 canonical persisted rows 聚合，并验证 `sample_users = exposed_users + below_delivery_capacity`、`exposed_users = decided_users + provider_failed`、`decided_users = sum(action_counts)`。每个成功 Decision 必须与唯一 action row 和 outcome 一致；`decision_source_counts` 只读取 Decision rows。`all_decisions_ignore`、`single_action_only` 与 `no_engagement_feedback` 只描述退化事实，不触发重跑、补造 action 或 Formal validity 筛选。
 
-Holdout Set 在 optional runtime 全部完成后才通过 `_ResearchInputBuilder.reveal_holdout()` 一次揭示。该私有 typed return 同时携带 holdout comments 与目标 `videos.csv` 行的 raw aggregate reference；四个 count 在此之前不进入 `PreparedInputs`、`TargetVideo`、Prompt、DecisionInput、Sampling 或 Ranking evidence。揭示失败时 run 失败关闭，不写出伪造 reference。
+Holdout Set 在 optional runtime 全部完成后才通过 `_LegacyTargetAssembler.reveal_holdout()` 一次揭示。共享 `_ResearchCohortPreparer.prepare()` 只返回 Historical cohort 与 comment-derived graph，不携带 target comments 或目标 `videos.csv` 行的 aggregate counts；四个 count 在此之前不进入 `PreparedInputs`、`TargetVideo`、Prompt、DecisionInput、Sampling 或 Ranking evidence。揭示失败时 run 失败关闭，不写出伪造 reference。
 
 ## Runtime Artifacts
 

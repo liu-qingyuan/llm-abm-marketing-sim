@@ -11,7 +11,7 @@ FinalResearchRunner(config: FinalResearchConfig, decision_adapter: LLMDecisionAd
     .run_and_write(output_dir) -> Path
 ```
 
-`FinalResearchRunner` 是公开深 Module。调用方只提供经过校验的配置、现有 `LLMDecisionAdapter` 接缝上的适配器和输出目录；数据读取、Target Holdout、holdout-safe 画像投影、Seed-First sample selection、静态评分和 artifact 写出均由 Module 内部完成。
+`FinalResearchRunner` 是公开深 Module。调用方只提供经过校验的配置、现有 `LLMDecisionAdapter` 接缝上的适配器和输出目录；数据读取、Target Holdout、holdout-safe 画像投影、Seed-First sample selection、静态评分和 artifact 写出均由 Module 内部完成。内部先由 `_ResearchCohortPreparer.prepare()` 形成只含 Historical Set 的 `PreparedResearchCohort`，再由 legacy target assembler 绑定单视频 `TargetVideo`，因此共享 cohort 不携带 target answer 或 aggregate reference。
 
 离线基线保留 `decision_adapter` 参数以稳定后续 Final Research Interface，但本阶段不得调用它。artifact manifest 会显式记录 `decision_adapter_calls=0` 和 `live_api_triggered=false`。
 
@@ -41,7 +41,7 @@ Holdout Set = 目标视频的真实评论/回复答案
 Aggregate Reference = 目标 videos.csv 记录的四个 raw engagement counts
 ```
 
-实现从 Historical Set 重新构建评论派生用户图、评论数、回复数、评论获赞和 P95 reference。目标视频的互动行与视频级聚合热度不进入画像投影、用户抽样、seed 选择、推荐评分、Prompt 或 DecisionInput。`_ResearchInputBuilder.reveal_holdout()` 只在静态评分和 optional runtime 完成后一次返回 comments 与 typed aggregate reference，并把后者写入唯一 source artifact `top20_holdout_diagnostic.json`。
+实现从 Historical Set 重新构建评论派生用户图、评论数、回复数、评论获赞和 P95 reference。目标视频的互动行与视频级聚合热度不进入画像投影、用户抽样、seed 选择、推荐评分、Prompt 或 DecisionInput。`_ResearchCohortPreparer.prepare()` 只产出 target-independent 的 Historical cohort；`_LegacyTargetAssembler.reveal_holdout()` 只在静态评分和 optional runtime 完成后一次返回 comments 与 typed aggregate reference，并把后者写入唯一 source artifact `top20_holdout_diagnostic.json`。
 
 Aggregate Reference 只保留 `videos.csv`、目标 `video_id`、`like_count/comment_count/share_count/collect_count` 和不可比较标记。项目没有真实曝光分母、用户级归属或 action 互斥证据，因此不计算真实互动率，不把 `collect_count` 扩展为仿真 action，也不以该 reference 评价或校准模拟结果。
 
