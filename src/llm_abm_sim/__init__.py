@@ -1,6 +1,11 @@
 """LLM-supported ABM simulator for social-network post diffusion."""
 
 from .agent import SocialUserAgent
+from .concurrent_message_experiment import (
+    ConcurrentMessageExperimentConfig,
+    ConcurrentMessageExperimentRunner,
+    ExperimentalMessageDefinition,
+)
 from .decision import (
     CachedDecisionAdapter,
     DecisionCache,
@@ -21,6 +26,9 @@ from .runner import ExperimentRunner
 from .schemas import PlatformContext
 
 __all__ = [
+    "ConcurrentMessageExperimentConfig",
+    "ConcurrentMessageExperimentRunner",
+    "ExperimentalMessageDefinition",
     "PlatformContext",
     "CachedDecisionAdapter",
     "InMemoryDecisionCache",
