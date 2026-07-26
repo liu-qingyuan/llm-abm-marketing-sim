@@ -9,6 +9,10 @@ import pytest
 from pydantic import ValidationError
 
 from llm_abm_sim.decision import DecisionInput, ProviderDecisionError
+from llm_abm_sim.prompt_field_summary import (
+    CONCURRENT_MESSAGE_PRIMARY_PROMPT_VERSION,
+    CONCURRENT_MESSAGE_SHADOW_PROMPT_VERSION,
+)
 from llm_abm_sim.prompting import build_engagement_prompt
 from llm_abm_sim.provider_config import RuntimeCredential, redact_secrets
 from llm_abm_sim.providers import openai_compatible
@@ -160,6 +164,125 @@ def test_prompt_keeps_full_marketing_copy_without_topic_tag_expansion():
 
     assert long_text in user_content
     assert "主题标签" not in user_content
+
+
+def test_concurrent_prompt_variants_render_allowlisted_primary_and_shadow_contexts():
+    post = PostContent(post_id="message_1", text="绿色酒店营销内容", topic_tags=["eco"])
+    base_profile = {
+        "user_id": "u1",
+        "activity_score": 0.5,
+        "global_influence_score": 0.9,
+        "local_influence_score": 0.4,
+        "concurrent_environmental_consciousness_coef": 1.0,
+        "concurrent_epistemic_value_weight": 0.1,
+        "concurrent_environmental_value_weight": 0.8,
+        "concurrent_functional_value_weight": 0.4,
+        "concurrent_health_value_weight": 0.7,
+        "concurrent_emotional_value_weight": 0.2,
+        "concurrent_social_value_weight": 0.3,
+        "concurrent_hotel_class": "midscale",
+        "concurrent_travel_purpose": "leisure",
+    }
+    primary_input = DecisionInput(
+        post=post,
+        profile=UserProfile.model_validate(base_profile),
+        peer_context=PeerContext(),
+        platform_context=PlatformContext(),
+        time_step=0,
+        prompt_version=CONCURRENT_MESSAGE_PRIMARY_PROMPT_VERSION,
+    )
+    shadow_input = DecisionInput(
+        post=post,
+        profile=UserProfile.model_validate(
+            {
+                **base_profile,
+                "concurrent_gender": "female",
+                "concurrent_age": "age_26_35",
+                "concurrent_education": "bachelor",
+                "concurrent_monthly_income": "income_8001_15000",
+            }
+        ),
+        peer_context=PeerContext(),
+        platform_context=PlatformContext(),
+        time_step=0,
+        prompt_version=CONCURRENT_MESSAGE_SHADOW_PROMPT_VERSION,
+    )
+
+    primary_prompt = build_engagement_prompt(primary_input)[1]["content"]
+    shadow_prompt = build_engagement_prompt(shadow_input)[1]["content"]
+
+    assert "性别标签" not in primary_prompt
+    assert "平台热门话题" not in primary_prompt
+    assert "邻居曝光：0；邻居互动：0；互动比例：0.00" in primary_prompt
+    assert "Synthetic Experiment Labels（额外人口学对照）" in shadow_prompt
+    assert "性别标签：女性" in shadow_prompt
+    assert "年龄段标签：26-35 岁" in shadow_prompt
+
+
+def test_concurrent_prompt_dispatch_fails_closed_on_unknown_or_mismatched_prompt_version():
+    post = PostContent(post_id="message_1", text="绿色酒店营销内容")
+    primary_profile = UserProfile.model_validate(
+        {
+            "user_id": "u1",
+            "activity_score": 0.5,
+            "global_influence_score": 0.9,
+            "local_influence_score": 0.4,
+            "concurrent_environmental_consciousness_coef": 1.0,
+            "concurrent_epistemic_value_weight": 0.1,
+            "concurrent_environmental_value_weight": 0.8,
+            "concurrent_functional_value_weight": 0.4,
+            "concurrent_health_value_weight": 0.7,
+            "concurrent_emotional_value_weight": 0.2,
+            "concurrent_social_value_weight": 0.3,
+            "concurrent_hotel_class": "midscale",
+            "concurrent_travel_purpose": "leisure",
+        }
+    )
+    shadow_profile = UserProfile.model_validate(
+        {
+            **primary_profile.model_dump(mode="json"),
+            "concurrent_gender": "female",
+            "concurrent_age": "age_26_35",
+            "concurrent_education": "bachelor",
+            "concurrent_monthly_income": "income_8001_15000",
+        }
+    )
+
+    with pytest.raises(ValueError, match="unsupported prompt_version"):
+        build_engagement_prompt(
+            DecisionInput(
+                post=post,
+                profile=primary_profile,
+                peer_context=PeerContext(),
+                platform_context=PlatformContext(),
+                time_step=0,
+                prompt_version="unknown-concurrent-prompt",
+            )
+        )
+
+    with pytest.raises(ValueError, match="prompt context mismatch"):
+        build_engagement_prompt(
+            DecisionInput(
+                post=post,
+                profile=shadow_profile,
+                peer_context=PeerContext(),
+                platform_context=PlatformContext(),
+                time_step=0,
+                prompt_version=CONCURRENT_MESSAGE_PRIMARY_PROMPT_VERSION,
+            )
+        )
+
+    with pytest.raises(ValueError, match="missing concurrent_gender"):
+        build_engagement_prompt(
+            DecisionInput(
+                post=post,
+                profile=primary_profile,
+                peer_context=PeerContext(),
+                platform_context=PlatformContext(),
+                time_step=0,
+                prompt_version=CONCURRENT_MESSAGE_SHADOW_PROMPT_VERSION,
+            )
+        )
 
 
 def test_mocked_provider_success_validates_engage_decision():

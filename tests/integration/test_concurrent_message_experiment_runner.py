@@ -9,9 +9,22 @@ import pytest
 
 from llm_abm_sim import ConcurrentMessageExperimentConfig, ConcurrentMessageExperimentRunner
 from llm_abm_sim.concurrent_message_experiment import authoritative_message_definitions
-from llm_abm_sim.decision import EngageDecision, LLMDecisionAdapter, ProviderDecisionError
+from llm_abm_sim.decision import (
+    CachedDecisionAdapter,
+    DecisionInput,
+    EngageDecision,
+    InMemoryDecisionCache,
+    LLMDecisionAdapter,
+    ProviderDecisionError,
+)
 from llm_abm_sim.final_research import TARGET_VIDEO_ID
-from llm_abm_sim.schemas import PeerContext, PlatformContext, PostContent, UserProfile
+from llm_abm_sim.prompt_field_summary import (
+    CONCURRENT_MESSAGE_PRIMARY_PROMPT_VERSION,
+    CONCURRENT_MESSAGE_SHADOW_PROMPT_VERSION,
+)
+from llm_abm_sim.prompting import build_engagement_prompt
+from llm_abm_sim.providers.openai_compatible import OpenAICompatibleDecisionAdapter, ProviderResponseEnvelope
+from llm_abm_sim.schemas import PeerContext, PlatformContext, PostContent, ProviderLLMConfig, UserProfile
 
 LATENT_COLUMNS = [
     "latent_attribute_spec_id",
@@ -39,13 +52,24 @@ class _ScriptedConcurrentAdapter(LLMDecisionAdapter):
         self,
         *,
         name: str,
+        prompt_version: str,
         positive_user_ids: set[str],
         fail_pairs: set[tuple[int, str, str]],
+        model: str = "capture-model",
     ) -> None:
         self.name = name
+        self.prompt_version = prompt_version
         self.positive_user_ids = positive_user_ids
         self.fail_pairs = fail_pairs
-        self.safe_metadata = {"adapter": name}
+        self.request_invocations = 0
+        self.safe_metadata = {
+            "adapter": "scripted_concurrent",
+            "provider": "mocked_concurrent",
+            "model": model,
+            "timeout_seconds": 0.1,
+            "max_retries": 0,
+            "prompt_version": prompt_version,
+        }
         self.calls: list[dict[str, object]] = []
 
     def decide(
@@ -56,6 +80,16 @@ class _ScriptedConcurrentAdapter(LLMDecisionAdapter):
         platform_context: PlatformContext | None = None,
         time_step: int = 0,
     ) -> EngageDecision:
+        self.request_invocations += 1
+        decision_input = DecisionInput(
+            post=post,
+            profile=profile,
+            peer_context=peer_context,
+            platform_context=platform_context or PlatformContext(),
+            time_step=time_step,
+            prompt_version=self.prompt_version,
+        )
+        prompt_messages = build_engagement_prompt(decision_input)
         self.calls.append(
             {
                 "time_step": time_step,
@@ -63,6 +97,10 @@ class _ScriptedConcurrentAdapter(LLMDecisionAdapter):
                 "user_id": profile.user_id,
                 "peer_context": peer_context,
                 "platform_context": platform_context,
+                "cache_key": decision_input.cache_key(),
+                "prompt_messages": prompt_messages,
+                "prompt_text": "\n".join(message["content"] for message in prompt_messages),
+                "profile_payload": profile.model_dump(mode="json"),
             }
         )
         if (time_step, post.post_id, profile.user_id) in self.fail_pairs:
@@ -75,7 +113,11 @@ class _ScriptedConcurrentAdapter(LLMDecisionAdapter):
                 confidence=0.88,
                 action="like",
                 decision_source=f"{self.name}_deterministic",
-                provider_metadata={"adapter": self.name, "user_id": profile.user_id},
+                provider_metadata={
+                    "adapter": "scripted_concurrent",
+                    "model": self.safe_metadata["model"],
+                    "prompt_version": self.prompt_version,
+                },
             )
         return EngageDecision(
             engage=False,
@@ -84,8 +126,25 @@ class _ScriptedConcurrentAdapter(LLMDecisionAdapter):
             confidence=0.88,
             action="ignore",
             decision_source=f"{self.name}_deterministic",
-            provider_metadata={"adapter": self.name, "user_id": profile.user_id},
+            provider_metadata={
+                "adapter": "scripted_concurrent",
+                "model": self.safe_metadata["model"],
+                "prompt_version": self.prompt_version,
+            },
         )
+
+
+class _SequencedEnvelopeClient:
+    def __init__(self, responses: list[ProviderResponseEnvelope | Exception]) -> None:
+        self.responses = list(responses)
+        self.calls: list[tuple[list[dict[str, str]], str]] = []
+
+    def create_response(self, messages: list[dict[str, str]], model: str) -> ProviderResponseEnvelope:
+        self.calls.append((messages, model))
+        response = self.responses.pop(0)
+        if isinstance(response, Exception):
+            raise response
+        return response
 
 
 def _write_csv(path: Path, fieldnames: list[str], rows: list[dict[str, Any]]) -> None:
@@ -158,7 +217,7 @@ def _latent_class_for_user(user_number: int) -> str:
     return "class_3"
 
 
-def _make_concurrent_fixture(tmp_path: Path, *, user_count: int = 30) -> Path:
+def _make_concurrent_fixture(tmp_path: Path, *, user_count: int = 30, seed_user_count: int = 10) -> Path:
     dataset_dir = tmp_path / "processed" / "latent-v1"
     _write_csv(
         dataset_dir / "videos.csv",
@@ -214,19 +273,20 @@ def _make_concurrent_fixture(tmp_path: Path, *, user_count: int = 30) -> Path:
             "like_count": 100,
             "comment_level": "comment",
         }
-        for number in range(1, 11)
+        for number in range(1, min(user_count, seed_user_count) + 1)
     ]
-    history_rows.append(
-        {
-            "comment_id": "candidate-u11",
-            "video_id": "history-jinjiang",
-            "parent_comment_id": "0",
-            "commenter_user_id": "u11",
-            "mentioned_user_ids": json.dumps(["u1", "u2"]),
-            "like_count": 0,
-            "comment_level": "comment",
-        }
-    )
+    if user_count >= 11:
+        history_rows.append(
+            {
+                "comment_id": "candidate-u11",
+                "video_id": "history-jinjiang",
+                "parent_comment_id": "0",
+                "commenter_user_id": "u11",
+                "mentioned_user_ids": json.dumps(["u1", "u2"]),
+                "like_count": 0,
+                "comment_level": "comment",
+            }
+        )
     history_rows.append(
         {
             "comment_id": "holdout-comment",
@@ -281,15 +341,65 @@ def _make_concurrent_fixture(tmp_path: Path, *, user_count: int = 30) -> Path:
     return dataset_dir
 
 
+def _concurrent_prompt_profile(*, user_id: str, shadow: bool) -> UserProfile:
+    payload: dict[str, object] = {
+        "user_id": user_id,
+        "activity_score": 0.5,
+        "global_influence_score": 0.9,
+        "local_influence_score": 0.4,
+        "concurrent_environmental_consciousness_coef": 1.0,
+        "concurrent_epistemic_value_weight": 0.1,
+        "concurrent_environmental_value_weight": 0.8,
+        "concurrent_functional_value_weight": 0.4,
+        "concurrent_health_value_weight": 0.7,
+        "concurrent_emotional_value_weight": 0.2,
+        "concurrent_social_value_weight": 0.3,
+        "concurrent_hotel_class": "midscale",
+        "concurrent_travel_purpose": "leisure",
+    }
+    if shadow:
+        payload.update(
+            {
+                "concurrent_gender": "female",
+                "concurrent_age": "age_26_35",
+                "concurrent_education": "bachelor",
+                "concurrent_monthly_income": "income_8001_15000",
+            }
+        )
+    return UserProfile.model_validate(payload)
+
+
+def _provider_response(
+    decision_text: str,
+    *,
+    observed_model: str = "shared-requested-model",
+    usage_status: str = "complete",
+    input_usage: int = 12,
+    output_usage: int = 6,
+) -> ProviderResponseEnvelope:
+    return ProviderResponseEnvelope(
+        decision_text=decision_text,
+        observed_model=observed_model,
+        observed_model_status="reported",
+        usage_status=usage_status,
+        input_tokens=input_usage if usage_status == "complete" else None,
+        output_tokens=output_usage if usage_status == "complete" else None,
+        total_tokens=(input_usage + output_usage) if usage_status == "complete" else None,
+        cached_input_tokens=3 if usage_status == "complete" else None,
+    )
+
+
 def test_concurrent_message_runner_writes_validation_runtime_artifacts(tmp_path: Path) -> None:
     dataset_dir = _make_concurrent_fixture(tmp_path)
     primary_adapter = _ScriptedConcurrentAdapter(
         name="primary",
+        prompt_version=CONCURRENT_MESSAGE_PRIMARY_PROMPT_VERSION,
         positive_user_ids={"u1"},
         fail_pairs={(0, "message_3", "u4")},
     )
     shadow_adapter = _ScriptedConcurrentAdapter(
         name="shadow",
+        prompt_version=CONCURRENT_MESSAGE_SHADOW_PROMPT_VERSION,
         positive_user_ids={"u2"},
         fail_pairs={(0, "message_2", "u3")},
     )
@@ -320,8 +430,15 @@ def test_concurrent_message_runner_writes_validation_runtime_artifacts(tmp_path:
     assert validation["per_message"]["message_1"]["exposures"] == 20
     assert validation["per_message"]["message_2"]["exposures"] == 20
     assert validation["per_message"]["message_3"]["exposures"] == 20
+    assert validation["prompt_contract"]["primary"]["prompt_version"] == CONCURRENT_MESSAGE_PRIMARY_PROMPT_VERSION
+    assert validation["prompt_contract"]["shadow"]["prompt_version"] == CONCURRENT_MESSAGE_SHADOW_PROMPT_VERSION
+    assert validation["variant_provider_accounting"]["primary"]["invocations"] == 60
+    assert validation["variant_provider_accounting"]["shadow"]["invocations"] == 60
+    assert validation["variant_provider_accounting"]["total"]["responses"] == 118
     assert "validation-only" in report_html
     assert "cannot be deployed" in report_html
+    assert "Prompt Contract" in report_html
+    assert "Provider Accounting" in report_html
 
     assert len(pair_rows) == 60
     assert len({row["pair_id"] for row in pair_rows}) == 60
@@ -370,7 +487,265 @@ def test_concurrent_message_runner_writes_validation_runtime_artifacts(tmp_path:
 
     assert len(primary_adapter.calls) == 60
     assert len(shadow_adapter.calls) == 60
+    primary_prompt = primary_adapter.calls[0]["prompt_text"]
+    shadow_prompt = shadow_adapter.calls[0]["prompt_text"]
+    assert "Synthetic Experiment Labels（额外人口学对照）" not in primary_prompt
+    assert "User 1" not in primary_prompt
+    assert "Bio 1" not in primary_prompt
+    assert "性别标签" not in primary_prompt
+    assert "平台热门话题" not in primary_prompt
+    assert "邻居曝光：0；邻居互动：0；互动比例：0.00" in primary_prompt
+    assert "Synthetic Experiment Labels（额外人口学对照）" in shadow_prompt
+    assert "性别标签：女性" in shadow_prompt
+    assert "不得据此推断人格" in shadow_prompt
 
+    first_pair_id = pair_rows[0]["pair_id"]
+    primary_terminal = next(row for row in terminal_rows if row["pair_id"] == first_pair_id and row["decision_variant"] == "primary")
+    shadow_terminal = next(row for row in terminal_rows if row["pair_id"] == first_pair_id and row["decision_variant"] == "shadow")
+    assert primary_terminal["prompt_version"] == CONCURRENT_MESSAGE_PRIMARY_PROMPT_VERSION
+    assert shadow_terminal["prompt_version"] == CONCURRENT_MESSAGE_SHADOW_PROMPT_VERSION
+    assert primary_terminal["cache_key"] != shadow_terminal["cache_key"]
+    primary_profile_payload = json.loads(primary_terminal["context_profile_payload"])
+    shadow_profile_payload = json.loads(shadow_terminal["context_profile_payload"])
+    for forbidden in ("nickname", "bio", "signature", "follower_count", "concurrent_gender"):
+        assert forbidden not in primary_profile_payload
+    for included in ("concurrent_gender", "concurrent_age", "concurrent_education", "concurrent_monthly_income"):
+        assert included in shadow_profile_payload
+    primary_inclusion = json.loads(primary_terminal["prompt_field_inclusion"])
+    shadow_inclusion = json.loads(shadow_terminal["prompt_field_inclusion"])
+    assert "concurrent_gender" not in primary_inclusion
+    assert shadow_inclusion["concurrent_gender"] == "included"
+    assert json.loads(primary_terminal["peer_context_payload"]) == {
+        "engaged_neighbors": 0,
+        "exposed_neighbors": 0,
+        "influential_engaged_neighbors": 0,
+        "visible_likes": 0,
+        "visible_comments": 0,
+        "visible_shares": 0,
+    }
+
+
+def test_concurrent_cached_variants_do_not_cross_hit_between_prompt_tokens() -> None:
+    post = authoritative_message_definitions()[0].as_post()
+    primary_leaf = _ScriptedConcurrentAdapter(
+        name="primary",
+        prompt_version=CONCURRENT_MESSAGE_PRIMARY_PROMPT_VERSION,
+        positive_user_ids=set(),
+        fail_pairs=set(),
+    )
+    shadow_leaf = _ScriptedConcurrentAdapter(
+        name="shadow",
+        prompt_version=CONCURRENT_MESSAGE_SHADOW_PROMPT_VERSION,
+        positive_user_ids=set(),
+        fail_pairs=set(),
+    )
+    primary = CachedDecisionAdapter(
+        primary_leaf,
+        InMemoryDecisionCache(),
+        prompt_version=CONCURRENT_MESSAGE_PRIMARY_PROMPT_VERSION,
+    )
+    shadow = CachedDecisionAdapter(
+        shadow_leaf,
+        InMemoryDecisionCache(),
+        prompt_version=CONCURRENT_MESSAGE_SHADOW_PROMPT_VERSION,
+    )
+
+    for _ in range(2):
+        primary.decide(post, _concurrent_prompt_profile(user_id="u1", shadow=False), PeerContext(), PlatformContext(), 0)
+        shadow.decide(post, _concurrent_prompt_profile(user_id="u1", shadow=True), PeerContext(), PlatformContext(), 0)
+
+    assert len(primary_leaf.calls) == 1
+    assert len(shadow_leaf.calls) == 1
+    assert set(primary.cache.decisions) != set(shadow.cache.decisions)
+
+
+def test_concurrent_message_runner_rejects_mismatched_adapter_contracts(tmp_path: Path) -> None:
+    dataset_dir = _make_concurrent_fixture(tmp_path)
+    config = ConcurrentMessageExperimentConfig(
+        dataset_dir=dataset_dir,
+        sample_size=30,
+        horizon=2,
+        delivery_capacity=10,
+        configuration_profile="validation",
+    )
+
+    with pytest.raises(ValueError, match="provider/model/timeout/retry/sampling"):
+        ConcurrentMessageExperimentRunner(
+            config,
+            _ScriptedConcurrentAdapter(
+                name="primary",
+                prompt_version=CONCURRENT_MESSAGE_PRIMARY_PROMPT_VERSION,
+                positive_user_ids=set(),
+                fail_pairs=set(),
+                model="model-a",
+            ),
+            _ScriptedConcurrentAdapter(
+                name="shadow",
+                prompt_version=CONCURRENT_MESSAGE_SHADOW_PROMPT_VERSION,
+                positive_user_ids=set(),
+                fail_pairs=set(),
+                model="model-b",
+            ),
+        )
+
+    with pytest.raises(ValueError, match="primary adapter prompt_version"):
+        ConcurrentMessageExperimentRunner(
+            config,
+            _ScriptedConcurrentAdapter(
+                name="primary",
+                prompt_version=CONCURRENT_MESSAGE_SHADOW_PROMPT_VERSION,
+                positive_user_ids=set(),
+                fail_pairs=set(),
+            ),
+            _ScriptedConcurrentAdapter(
+                name="shadow",
+                prompt_version=CONCURRENT_MESSAGE_SHADOW_PROMPT_VERSION,
+                positive_user_ids=set(),
+                fail_pairs=set(),
+            ),
+        )
+
+
+def test_concurrent_message_runner_fails_closed_on_observed_model_mismatch(tmp_path: Path) -> None:
+    dataset_dir = _make_concurrent_fixture(tmp_path, user_count=3, seed_user_count=1)
+    config = ConcurrentMessageExperimentConfig(
+        dataset_dir=dataset_dir,
+        sample_size=3,
+        horizon=1,
+        delivery_capacity=1,
+        configuration_profile="validation",
+    )
+    primary_client = _SequencedEnvelopeClient(
+        [
+            _provider_response('{"engage": false, "probability": 0.1, "reason": "mismatch", "confidence": 0.9, "action": "ignore"}', observed_model="other-observed-model"),
+            _provider_response('{"engage": false, "probability": 0.1, "reason": "mismatch", "confidence": 0.9, "action": "ignore"}', observed_model="other-observed-model"),
+            _provider_response('{"engage": false, "probability": 0.1, "reason": "mismatch", "confidence": 0.9, "action": "ignore"}', observed_model="other-observed-model"),
+        ]
+    )
+    shadow_client = _SequencedEnvelopeClient(
+        [
+            _provider_response('{"engage": false, "probability": 0.1, "reason": "shadow", "confidence": 0.9, "action": "ignore"}', observed_model="shared-requested-model"),
+            _provider_response('{"engage": false, "probability": 0.1, "reason": "shadow", "confidence": 0.9, "action": "ignore"}', observed_model="shared-requested-model"),
+            _provider_response('{"engage": false, "probability": 0.1, "reason": "shadow", "confidence": 0.9, "action": "ignore"}', observed_model="shared-requested-model"),
+        ]
+    )
+    primary_provider = OpenAICompatibleDecisionAdapter(
+        ProviderLLMConfig(
+            enabled=True,
+            provider="mocked_openai_compatible",
+            model="shared-requested-model",
+            require_live_env=False,
+            prompt_version=CONCURRENT_MESSAGE_PRIMARY_PROMPT_VERSION,
+        ),
+        client=primary_client,
+        sleep=lambda _delay: None,
+    )
+    shadow_provider = OpenAICompatibleDecisionAdapter(
+        ProviderLLMConfig(
+            enabled=True,
+            provider="mocked_openai_compatible",
+            model="shared-requested-model",
+            require_live_env=False,
+            prompt_version=CONCURRENT_MESSAGE_SHADOW_PROMPT_VERSION,
+        ),
+        client=shadow_client,
+        sleep=lambda _delay: None,
+    )
+
+    run_dir = tmp_path / "observed-model-mismatch"
+    with pytest.raises(ValueError, match="observed model mismatch"):
+        ConcurrentMessageExperimentRunner(config, primary_provider, shadow_provider).run_and_write(run_dir)
+
+    assert run_dir.exists()
+    assert not any(run_dir.iterdir())
+
+
+def test_concurrent_message_runner_accounts_provider_retries_without_estimating_missing_usage(tmp_path: Path) -> None:
+    dataset_dir = _make_concurrent_fixture(tmp_path, user_count=3, seed_user_count=1)
+    config = ConcurrentMessageExperimentConfig(
+        dataset_dir=dataset_dir,
+        sample_size=3,
+        horizon=1,
+        delivery_capacity=1,
+        configuration_profile="validation",
+    )
+    primary_client = _SequencedEnvelopeClient(
+        [
+            _provider_response('{"unexpected": true}', usage_status="missing"),
+            _provider_response('{"engage": false, "probability": 0.2, "reason": "retry success", "confidence": 0.9, "action": "ignore"}', input_usage=10, output_usage=5),
+            _provider_response('{"engage": false, "probability": 0.1, "reason": "steady", "confidence": 0.9, "action": "ignore"}', input_usage=9, output_usage=4),
+            _provider_response('{"engage": false, "probability": 0.1, "reason": "steady", "confidence": 0.9, "action": "ignore"}', input_usage=8, output_usage=4),
+        ]
+    )
+    shadow_client = _SequencedEnvelopeClient(
+        [
+            _provider_response('{"engage": false, "probability": 0.1, "reason": "shadow", "confidence": 0.9, "action": "ignore"}', input_usage=7, output_usage=3),
+            _provider_response('{"engage": false, "probability": 0.1, "reason": "shadow", "confidence": 0.9, "action": "ignore"}', input_usage=7, output_usage=3),
+            _provider_response('{"engage": false, "probability": 0.1, "reason": "shadow", "confidence": 0.9, "action": "ignore"}', input_usage=7, output_usage=3),
+        ]
+    )
+    primary_provider = OpenAICompatibleDecisionAdapter(
+        ProviderLLMConfig(
+            enabled=True,
+            provider="mocked_openai_compatible",
+            model="shared-requested-model",
+            require_live_env=False,
+            prompt_version=CONCURRENT_MESSAGE_PRIMARY_PROMPT_VERSION,
+            max_retries=1,
+        ),
+        client=primary_client,
+        sleep=lambda _delay: None,
+    )
+    shadow_provider = OpenAICompatibleDecisionAdapter(
+        ProviderLLMConfig(
+            enabled=True,
+            provider="mocked_openai_compatible",
+            model="shared-requested-model",
+            require_live_env=False,
+            prompt_version=CONCURRENT_MESSAGE_SHADOW_PROMPT_VERSION,
+            max_retries=1,
+        ),
+        client=shadow_client,
+        sleep=lambda _delay: None,
+    )
+
+    output_dir = ConcurrentMessageExperimentRunner(config, primary_provider, shadow_provider).run_and_write(
+        tmp_path / "concurrent-provider-run"
+    )
+
+    validation = json.loads((output_dir / "concurrent_validation.json").read_text(encoding="utf-8"))
+    terminal_rows = _read_csv(output_dir / "concurrent_runtime_terminal_rows.csv")
+
+    primary_accounting = validation["variant_provider_accounting"]["primary"]
+    shadow_accounting = validation["variant_provider_accounting"]["shadow"]
+    total_accounting = validation["variant_provider_accounting"]["total"]
+    assert primary_accounting["invocations"] == 4
+    assert primary_accounting["responses"] == 4
+    assert primary_accounting["successful_decisions"] == 3
+    assert primary_accounting["usage_complete_attempts"] == 2
+    assert primary_accounting["usage_incomplete_attempts"] == 1
+    assert primary_accounting["input_usage"] == 17
+    assert primary_accounting["output_usage"] == 8
+    assert primary_accounting["total_usage"] == 25
+    assert shadow_accounting["invocations"] == 3
+    assert shadow_accounting["responses"] == 3
+    assert shadow_accounting["successful_decisions"] == 3
+    assert shadow_accounting["usage_complete_attempts"] == 3
+    assert total_accounting["invocations"] == 7
+    assert total_accounting["responses"] == 7
+    assert total_accounting["successful_decisions"] == 6
+
+    first_primary_row = next(
+        row
+        for row in terminal_rows
+        if row["decision_variant"] == "primary" and row["message_id"] == "message_1"
+    )
+    assert first_primary_row["request_invocations"] == "2"
+    assert first_primary_row["provider_response_count"] == "2"
+    assert first_primary_row["successful_decision_count"] == "1"
+    assert first_primary_row["usage_complete"] == "false"
+    assert first_primary_row["input_usage"] == ""
+    assert first_primary_row["total_usage"] == ""
 
 def test_concurrent_message_config_rejects_non_production_shape_on_default_profile(tmp_path: Path) -> None:
     dataset_dir = _make_concurrent_fixture(tmp_path)

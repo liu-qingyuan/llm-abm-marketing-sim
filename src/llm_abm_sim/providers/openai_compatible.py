@@ -82,6 +82,7 @@ class OpenAICompatibleDecisionAdapter(LLMDecisionAdapter):
         self.client = client
         self._sleep = sleep
         self.external_request_invocations = 0
+        self.request_invocations = 0
         self._provider_accounting = ProviderAccountingTracker()
 
     @property
@@ -128,6 +129,7 @@ class OpenAICompatibleDecisionAdapter(LLMDecisionAdapter):
             try:
                 if uses_external_sdk:
                     self.external_request_invocations += 1
+                self.request_invocations += 1
                 raw = client.create_response(messages, cast(str, self.model))
                 response = coerce_provider_response_envelope(raw)
                 self._provider_accounting.record_response(response)

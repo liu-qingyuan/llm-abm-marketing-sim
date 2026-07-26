@@ -13,6 +13,32 @@ MAX_INTEREST_TAGS = 6
 MAX_INTEREST_TAG_LENGTH = 24
 MAX_TEXT_LENGTH = 240
 
+JINJIANG_PROMPT_V3 = "jinjiang-green-marketing-prompt-v3"
+LEGACY_PROVIDER_PROMPT_V1 = "engage-provider-v1"
+LEGACY_DECISION_PROMPT_V1 = "engage-v1"
+CONCURRENT_MESSAGE_PRIMARY_PROMPT_VERSION = "jinjiang-concurrent-message-primary-prompt-v1"
+CONCURRENT_MESSAGE_SHADOW_PROMPT_VERSION = "jinjiang-concurrent-message-demographic-shadow-prompt-v1"
+JINJIANG_PROMPT_V3_TOKENS = frozenset({JINJIANG_PROMPT_V3, LEGACY_PROVIDER_PROMPT_V1, LEGACY_DECISION_PROMPT_V1})
+CONCURRENT_MESSAGE_PROMPT_TOKENS = frozenset(
+    {CONCURRENT_MESSAGE_PRIMARY_PROMPT_VERSION, CONCURRENT_MESSAGE_SHADOW_PROMPT_VERSION}
+)
+CONCURRENT_PRIMARY_PROFILE_FIELDS: tuple[str, ...] = (
+    "activity_score",
+    "global_influence_score",
+    "local_influence_score",
+    "concurrent_environmental_consciousness_coef",
+    *(f"concurrent_{dimension}_value_weight" for dimension in LATENT_VALUE_DIMENSIONS),
+    "concurrent_hotel_class",
+    "concurrent_travel_purpose",
+)
+CONCURRENT_SHADOW_PROFILE_FIELDS: tuple[str, ...] = (
+    *CONCURRENT_PRIMARY_PROFILE_FIELDS,
+    "concurrent_gender",
+    "concurrent_age",
+    "concurrent_education",
+    "concurrent_monthly_income",
+)
+
 OBSERVED_SCORE_FIELDS: tuple[tuple[str, str], ...] = (
     ("activity_score", "活跃度"),
     ("global_influence_score", "全平台影响力"),
@@ -53,6 +79,34 @@ TRAVEL_PURPOSE_LABELS: dict[str, str] = {
     "leisure": "休闲旅游",
 }
 
+GENDER_LABELS: dict[str, str] = {
+    "female": "女性",
+    "male": "男性",
+}
+
+AGE_LABELS: dict[str, str] = {
+    "age_18_25": "18-25 岁",
+    "age_26_35": "26-35 岁",
+    "age_36_45": "36-45 岁",
+    "age_46_55": "46-55 岁",
+    "age_56_plus": "56 岁以上",
+}
+
+EDUCATION_LABELS: dict[str, str] = {
+    "high_school_or_below": "高中及以下",
+    "community_college": "大专",
+    "bachelor": "本科",
+    "master_or_above": "硕士及以上",
+}
+
+MONTHLY_INCOME_LABELS: dict[str, str] = {
+    "income_8000_or_less": "8000 元及以下",
+    "income_8001_15000": "8001-15000 元",
+    "income_15001_25000": "15001-25000 元",
+    "income_25001_40000": "25001-40000 元",
+    "income_40001_or_more": "40001 元及以上",
+}
+
 PromptFieldInclusion = Literal["included", "empty_omitted"]
 
 
@@ -82,19 +136,51 @@ def capture_prompt_field_inclusion() -> Iterator[PromptFieldInclusionCapture]:
 def build_prompt_field_summary(decision_input: DecisionInput) -> dict[str, str]:
     """Convert provider-visible decision context into stable Chinese summaries."""
 
-    summaries = {
-        "post_summary": summarize_post_fields(decision_input.post),
-        "marketing_content_summary": summarize_marketing_content_fields(decision_input.post),
-        "post_value_summary": summarize_post_value_fields(decision_input.post),
-        "observed_profile_summary": summarize_observed_prompt_fields(decision_input.profile),
-        "consumption_preference_summary": summarize_consumption_preference_fields(decision_input.profile),
-        "individual_preference_summary": summarize_prompt_fields(decision_input.profile),
-        "peer_influence_summary": summarize_peer_fields(decision_input.peer_context),
-        "platform_context_summary": summarize_platform_fields(decision_input.platform_context),
-    }
+    prompt_version = decision_input.prompt_version
+    if prompt_version in JINJIANG_PROMPT_V3_TOKENS:
+        summaries = {
+            "post_summary": summarize_post_fields(decision_input.post),
+            "marketing_content_summary": summarize_marketing_content_fields(decision_input.post),
+            "post_value_summary": summarize_post_value_fields(decision_input.post),
+            "observed_profile_summary": summarize_observed_prompt_fields(decision_input.profile),
+            "consumption_preference_summary": summarize_consumption_preference_fields(decision_input.profile),
+            "individual_preference_summary": summarize_prompt_fields(decision_input.profile),
+            "peer_influence_summary": summarize_peer_fields(decision_input.peer_context),
+            "platform_context_summary": summarize_platform_fields(decision_input.platform_context),
+        }
+        inclusion = profile_prompt_field_inclusion(decision_input.profile)
+    elif prompt_version == CONCURRENT_MESSAGE_PRIMARY_PROMPT_VERSION:
+        summaries = {
+            "post_summary": summarize_post_fields(decision_input.post),
+            "marketing_content_summary": summarize_marketing_content_fields(decision_input.post),
+            "post_value_summary": summarize_post_value_fields(decision_input.post),
+            "observed_profile_summary": summarize_concurrent_observed_prompt_fields(decision_input.profile),
+            "consumption_preference_summary": summarize_concurrent_primary_labels(decision_input.profile),
+            "individual_preference_summary": summarize_concurrent_prompt_fields(decision_input.profile),
+            "peer_influence_summary": summarize_peer_fields(decision_input.peer_context),
+            "platform_context_summary": "",
+            "synthetic_demographic_summary": "",
+        }
+        inclusion = concurrent_profile_prompt_field_inclusion(decision_input.profile, decision_input.prompt_version)
+    elif prompt_version == CONCURRENT_MESSAGE_SHADOW_PROMPT_VERSION:
+        summaries = {
+            "post_summary": summarize_post_fields(decision_input.post),
+            "marketing_content_summary": summarize_marketing_content_fields(decision_input.post),
+            "post_value_summary": summarize_post_value_fields(decision_input.post),
+            "observed_profile_summary": summarize_concurrent_observed_prompt_fields(decision_input.profile),
+            "consumption_preference_summary": summarize_concurrent_primary_labels(decision_input.profile, allow_shadow_demographics=True),
+            "individual_preference_summary": summarize_concurrent_prompt_fields(decision_input.profile, allow_shadow_demographics=True),
+            "peer_influence_summary": summarize_peer_fields(decision_input.peer_context),
+            "platform_context_summary": "",
+            "synthetic_demographic_summary": summarize_concurrent_shadow_labels(decision_input.profile),
+        }
+        inclusion = concurrent_profile_prompt_field_inclusion(decision_input.profile, decision_input.prompt_version)
+    else:
+        raise ValueError(f"unsupported prompt_version: {prompt_version}")
+
     capture = _PROMPT_FIELD_INCLUSION_CAPTURE.get()
     if capture is not None:
-        capture.by_user[decision_input.profile.user_id] = profile_prompt_field_inclusion(decision_input.profile)
+        capture.by_user[decision_input.profile.user_id] = inclusion
     return summaries
 
 
@@ -132,6 +218,21 @@ def profile_prompt_field_inclusion(profile: UserProfile) -> dict[str, PromptFiel
     }
 
 
+def concurrent_profile_prompt_field_inclusion(
+    profile: UserProfile,
+    prompt_version: str,
+) -> dict[str, PromptFieldInclusion]:
+    fields = (
+        CONCURRENT_PRIMARY_PROFILE_FIELDS
+        if prompt_version == CONCURRENT_MESSAGE_PRIMARY_PROMPT_VERSION
+        else CONCURRENT_SHADOW_PROFILE_FIELDS
+    )
+    return {
+        field_name: "included" if _concurrent_profile_value(profile, field_name) is not None else "empty_omitted"
+        for field_name in fields
+    }
+
+
 def summarize_observed_prompt_fields(profile: UserProfile) -> str:
     """Return observed profile fields that may be shown to provider prompts."""
 
@@ -143,6 +244,10 @@ def summarize_observed_prompt_fields(profile: UserProfile) -> str:
             parts.append(_score_summary(label, score))
 
     return "；".join(parts)
+
+
+def summarize_concurrent_observed_prompt_fields(profile: UserProfile) -> str:
+    return summarize_observed_prompt_fields(profile)
 
 
 def summarize_consumption_preference_fields(profile: UserProfile) -> str:
@@ -162,6 +267,51 @@ def summarize_consumption_preference_fields(profile: UserProfile) -> str:
     parts.append(f"最近一次入住锦江旗下酒店类型：{HOTEL_CLASS_LABELS[attributes.profile_labels.hotel_class]}")
     parts.append(f"最近一次入住锦江旗下酒店目的：{TRAVEL_PURPOSE_LABELS[attributes.profile_labels.travel_purpose]}")
     return "；".join(parts)
+
+
+def summarize_concurrent_primary_labels(profile: UserProfile, *, allow_shadow_demographics: bool = False) -> str:
+    _require_concurrent_profile_fields(profile, CONCURRENT_PRIMARY_PROFILE_FIELDS)
+    if not allow_shadow_demographics:
+        _reject_concurrent_profile_fields(
+            profile,
+            ("concurrent_gender", "concurrent_age", "concurrent_education", "concurrent_monthly_income"),
+            prompt_label=CONCURRENT_MESSAGE_PRIMARY_PROMPT_VERSION,
+        )
+    environmental = _concurrent_required_float(profile, "concurrent_environmental_consciousness_coef")
+    value_weights = {
+        dimension: _concurrent_required_float(profile, f"concurrent_{dimension}_value_weight")
+        for dimension in LATENT_VALUE_DIMENSIONS
+    }
+    hotel_class = _concurrent_required_label(profile, "concurrent_hotel_class", HOTEL_CLASS_LABELS)
+    travel_purpose = _concurrent_required_label(profile, "concurrent_travel_purpose", TRAVEL_PURPOSE_LABELS)
+    parts = ["以下 Synthetic Experiment Labels 仅用于受控实验，不代表真实身份、心理画像或价值判断"]
+    parts.append(f"环保意识倾向：{_environmental_consciousness_level(environmental)}（{environmental:.2f}）")
+    parts.append(_top_value_weights_summary(_DictValueWeights(value_weights)))
+    parts.append(f"最近一次入住锦江旗下酒店类型：{hotel_class}")
+    parts.append(f"最近一次入住锦江旗下酒店目的：{travel_purpose}")
+    return "；".join(parts)
+
+
+def summarize_concurrent_shadow_labels(profile: UserProfile) -> str:
+    _require_concurrent_profile_fields(profile, CONCURRENT_SHADOW_PROFILE_FIELDS)
+    return "；".join(
+        [
+            "以下 Synthetic Experiment Labels 仅用于受控对照，不代表真实身份，不得据此推断人格、能力、价值高低或行为必然性",
+            f"性别标签：{_concurrent_required_label(profile, 'concurrent_gender', GENDER_LABELS)}",
+            f"年龄段标签：{_concurrent_required_label(profile, 'concurrent_age', AGE_LABELS)}",
+            f"教育程度标签：{_concurrent_required_label(profile, 'concurrent_education', EDUCATION_LABELS)}",
+            f"月收入区间标签：{_concurrent_required_label(profile, 'concurrent_monthly_income', MONTHLY_INCOME_LABELS)}",
+        ]
+    )
+
+
+def summarize_concurrent_prompt_fields(profile: UserProfile, *, allow_shadow_demographics: bool = False) -> str:
+    return "；".join(
+        [
+            summarize_concurrent_observed_prompt_fields(profile),
+            summarize_concurrent_primary_labels(profile, allow_shadow_demographics=allow_shadow_demographics),
+        ]
+    )
 
 
 def summarize_post_fields(post: PostContent) -> str:
@@ -227,6 +377,55 @@ def summarize_platform_fields(platform_context: PlatformContext) -> str:
     parts.append(f"Feed 排序权重：{platform_context.feed_ranking_weight:.2f}")
     parts.append(f"痕迹可见度：{platform_context.trace_visibility:.2f}")
     return "；".join(parts)
+
+
+@dataclass(frozen=True)
+class _DictValueWeights:
+    values: dict[str, float]
+
+    def __getattr__(self, name: str) -> float:
+        try:
+            return self.values[name]
+        except KeyError as exc:  # pragma: no cover - defensive only.
+            raise AttributeError(name) from exc
+
+
+def _concurrent_profile_value(profile: UserProfile, field_name: str) -> Any:
+    extra = profile.model_extra or {}
+    if field_name == "activity_score":
+        return profile.activity_score
+    return extra.get(field_name)
+
+
+def _require_concurrent_profile_fields(profile: UserProfile, fields: tuple[str, ...]) -> None:
+    missing = [field_name for field_name in fields if _concurrent_profile_value(profile, field_name) is None]
+    if missing:
+        raise ValueError(f"prompt context mismatch for {fields[0].split('_')[0]} variant: missing {', '.join(missing)}")
+
+
+def _reject_concurrent_profile_fields(
+    profile: UserProfile,
+    fields: tuple[str, ...],
+    *,
+    prompt_label: str,
+) -> None:
+    present = [field_name for field_name in fields if _concurrent_profile_value(profile, field_name) is not None]
+    if present:
+        raise ValueError(f"prompt context mismatch for {prompt_label}: unexpected {', '.join(present)}")
+
+
+def _concurrent_required_float(profile: UserProfile, field_name: str) -> float:
+    value = _optional_float(_concurrent_profile_value(profile, field_name))
+    if value is None:
+        raise ValueError(f"prompt context mismatch: missing {field_name}")
+    return value
+
+
+def _concurrent_required_label(profile: UserProfile, field_name: str, labels: dict[str, str]) -> str:
+    raw = _concurrent_profile_value(profile, field_name)
+    if not isinstance(raw, str) or raw not in labels:
+        raise ValueError(f"prompt context mismatch: invalid {field_name}")
+    return labels[raw]
 
 
 def _clean_interest_tags(raw_tags: list[str]) -> list[str]:

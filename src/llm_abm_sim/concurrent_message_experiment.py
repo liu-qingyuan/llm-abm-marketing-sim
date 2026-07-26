@@ -11,7 +11,7 @@ from typing import Literal, TypedDict, cast
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from .decision import EngageDecision, LLMDecisionAdapter
+from .decision import DecisionInput, EngageDecision, LLMDecisionAdapter, decision_profile_payload
 from .final_research import (
     _TARGET_DELIVERY_RANKING_POLICY,
     REQUIRED_DATASET_FILES,
@@ -27,12 +27,18 @@ from .final_research import (
     _log_p95_score,
     _PreparedResearchCohort,
     _ResearchCohortPreparer,
-    _runtime_user_profile,
     _RuntimeDecisionAttempt,
     _safe_runtime_rows,
     _write_csv,
     _write_json,
 )
+from .prompt_field_summary import (
+    CONCURRENT_MESSAGE_PRIMARY_PROMPT_VERSION,
+    CONCURRENT_MESSAGE_SHADOW_PROMPT_VERSION,
+    CONCURRENT_PRIMARY_PROFILE_FIELDS,
+    CONCURRENT_SHADOW_PROFILE_FIELDS,
+)
+from .provider_accounting import ProviderAccounting, empty_provider_accounting, provider_accounting_delta
 from .schemas import (
     LATENT_VALUE_DIMENSIONS,
     PeerContext,
@@ -67,6 +73,36 @@ CONCURRENT_MESSAGE_RANKING_FORMULA = (
 )
 CONCURRENT_MESSAGE_HISTORY_AFFINITY = 0.0
 CONCURRENT_MESSAGE_POSITIVE_ACTIONS = {"like", "comment", "share"}
+CONCURRENT_MESSAGE_SHADOW_ADDITIONAL_PROFILE_FIELDS = (
+    "concurrent_gender",
+    "concurrent_age",
+    "concurrent_education",
+    "concurrent_monthly_income",
+)
+CONCURRENT_MESSAGE_PRIMARY_EXCLUDED_CONTEXT_FIELDS = (
+    "nickname",
+    "bio",
+    "signature",
+    "follower_count",
+    "following_count",
+    "video_count",
+    "latent_class",
+    "interest_tags",
+    "historical_tags",
+    "intended_audience_segment",
+    "message_vector",
+    "raw_message_user_fit",
+    "normalized_message_user_fit",
+    "personalized_delivery_score",
+    "ranking_position",
+    "base_network_relevance",
+    "campaign_engaged_neighbor_count",
+    "campaign_engaged_neighbor_signal",
+    "historical_tag_affinity",
+    "sample_holdout_video_id",
+    "platform_context",
+    "other_message_history",
+)
 CONCURRENT_MESSAGE_CANDIDATE_FIELDS = (
     "time_step",
     "message_id",
@@ -107,6 +143,7 @@ CONCURRENT_MESSAGE_PAIR_FIELDS = (
     "primary_confidence",
     "primary_reason",
     "primary_decision_source",
+    "primary_prompt_version",
     "primary_provider_metadata",
     "shadow_status",
     "shadow_action",
@@ -114,6 +151,7 @@ CONCURRENT_MESSAGE_PAIR_FIELDS = (
     "shadow_confidence",
     "shadow_reason",
     "shadow_decision_source",
+    "shadow_prompt_version",
     "shadow_provider_metadata",
     "campaign_feedback_committed",
     "pair_terminal_coverage",
@@ -127,8 +165,28 @@ CONCURRENT_MESSAGE_TERMINAL_FIELDS = (
     "message_id",
     "user_id",
     "decision_variant",
+    "prompt_version",
+    "context_source_key",
+    "cache_key",
+    "context_profile_payload",
+    "peer_context_payload",
+    "prompt_field_inclusion",
     "terminal_status",
     "provider_status",
+    "request_invocations",
+    "provider_response_count",
+    "successful_decision_count",
+    "observed_model_counts",
+    "observed_model_missing_response_count",
+    "observed_model_malformed_response_count",
+    "usage_complete",
+    "usage_complete_response_count",
+    "usage_missing_response_count",
+    "usage_malformed_response_count",
+    "input_usage",
+    "output_usage",
+    "total_usage",
+    "cached_input_usage",
     "engage",
     "probability",
     "confidence",
@@ -450,6 +508,322 @@ def _select_batch_candidates(
     return selected, selection_reason_by_user
 
 
+@dataclass(frozen=True)
+class _VariantDecisionContext:
+    decision_variant: Literal["primary", "shadow"]
+    prompt_token: str
+    post: PostContent
+    profile: UserProfile
+    peer_context: PeerContext
+    platform_context: PlatformContext
+
+    def decision_input(self, *, time_step: int) -> DecisionInput:
+        return DecisionInput(
+            post=self.post,
+            profile=self.profile,
+            peer_context=self.peer_context,
+            platform_context=self.platform_context,
+            time_step=time_step,
+            prompt_version=self.prompt_token,
+        )
+
+
+@dataclass(frozen=True)
+class _AdapterRuntimeBaseline:
+    request_invocations: int
+    provider_accounting: ProviderAccounting
+    has_provider_accounting: bool
+
+
+@dataclass(frozen=True)
+class _VariantAttemptAccounting:
+    request_invocations: int
+    provider_response_count: int
+    successful_decision_count: int
+    observed_model_counts: dict[str, int]
+    observed_model_missing_response_count: int
+    observed_model_malformed_response_count: int
+    usage_complete: bool
+    usage_complete_response_count: int
+    usage_missing_response_count: int
+    usage_malformed_response_count: int
+    input_usage: int | None
+    output_usage: int | None
+    total_usage: int | None
+    cached_input_usage: int | None
+
+
+def _shared_variant_profile_payload(user: ResearchUser) -> dict[str, object]:
+    latent = user.latent_attributes
+    return {
+        "user_id": user.user_id,
+        "activity_score": user.activity_score,
+        "global_influence_score": user.global_influence_score,
+        "local_influence_score": user.local_influence_score,
+        "concurrent_environmental_consciousness_coef": latent["latent_environmental_consciousness_coef"],
+        **{
+            f"concurrent_{dimension}_value_weight": latent[f"latent_{dimension}_value_weight"]
+            for dimension in LATENT_VALUE_DIMENSIONS
+        },
+        "concurrent_hotel_class": latent["latent_hotel_class"],
+        "concurrent_travel_purpose": latent["latent_travel_purpose"],
+    }
+
+
+def _primary_variant_profile(user: ResearchUser) -> UserProfile:
+    return UserProfile.model_validate(_shared_variant_profile_payload(user))
+
+
+def _shadow_variant_profile(user: ResearchUser) -> UserProfile:
+    latent = user.latent_attributes
+    return UserProfile.model_validate(
+        {
+            **_shared_variant_profile_payload(user),
+            "concurrent_gender": latent["latent_gender"],
+            "concurrent_age": latent["latent_age"],
+            "concurrent_education": latent["latent_education"],
+            "concurrent_monthly_income": latent["latent_monthly_income"],
+        }
+    )
+
+
+def _primary_variant_context(plan: _PairExecutionPlan) -> _VariantDecisionContext:
+    return _VariantDecisionContext(
+        decision_variant="primary",
+        prompt_token=CONCURRENT_MESSAGE_PRIMARY_PROMPT_VERSION,
+        post=plan.message.as_post(),
+        profile=_primary_variant_profile(plan.user),
+        peer_context=PeerContext(),
+        platform_context=PlatformContext(),
+    )
+
+
+def _shadow_variant_context(plan: _PairExecutionPlan) -> _VariantDecisionContext:
+    return _VariantDecisionContext(
+        decision_variant="shadow",
+        prompt_token=CONCURRENT_MESSAGE_SHADOW_PROMPT_VERSION,
+        post=plan.message.as_post(),
+        profile=_shadow_variant_profile(plan.user),
+        peer_context=PeerContext(),
+        platform_context=PlatformContext(),
+    )
+
+
+def _unwrap_adapter(adapter: LLMDecisionAdapter) -> tuple[LLMDecisionAdapter, list[object]]:
+    current = adapter
+    caches: list[object] = []
+    seen: set[int] = set()
+    while True:
+        if id(current) in seen:
+            raise ValueError("decision adapter wrapper chain contains a cycle")
+        seen.add(id(current))
+        cache = getattr(current, "cache", None)
+        if cache is not None:
+            caches.append(cache)
+        wrapped = getattr(current, "wrapped", None)
+        if not isinstance(wrapped, LLMDecisionAdapter):
+            return current, caches
+        current = wrapped
+
+
+def _adapter_prompt_version(adapter: LLMDecisionAdapter) -> str:
+    prompt_version = getattr(adapter, "prompt_version", None)
+    if isinstance(prompt_version, str) and prompt_version:
+        return prompt_version
+    leaf, _ = _unwrap_adapter(adapter)
+    prompt_version = getattr(leaf, "prompt_version", None)
+    if isinstance(prompt_version, str) and prompt_version:
+        return prompt_version
+    raise ValueError(f"adapter {type(adapter).__qualname__} must expose a prompt_version")
+
+
+def _adapter_runtime_baseline(adapter: LLMDecisionAdapter) -> _AdapterRuntimeBaseline:
+    leaf, _ = _unwrap_adapter(adapter)
+    request_invocations = getattr(leaf, "request_invocations", 0)
+    if not isinstance(request_invocations, int) or request_invocations < 0:
+        raise TypeError("adapter request_invocations must be a non-negative int")
+    accounting = getattr(leaf, "provider_accounting", None)
+    if isinstance(accounting, ProviderAccounting):
+        return _AdapterRuntimeBaseline(
+            request_invocations=request_invocations,
+            provider_accounting=accounting,
+            has_provider_accounting=True,
+        )
+    return _AdapterRuntimeBaseline(
+        request_invocations=request_invocations,
+        provider_accounting=empty_provider_accounting(),
+        has_provider_accounting=False,
+    )
+
+
+def _attempt_observed_model(
+    attempt: _RuntimeDecisionAttempt,
+    default_provider_metadata: Mapping[str, object],
+) -> str | None:
+    decision = attempt.decision
+    if isinstance(decision, EngageDecision) and isinstance(decision.provider_metadata, Mapping):
+        model = decision.provider_metadata.get("model")
+        if isinstance(model, str) and model.strip():
+            return model
+    model = default_provider_metadata.get("model")
+    if isinstance(model, str) and model.strip():
+        return model
+    return None
+
+
+def _variant_attempt_accounting(
+    *,
+    adapter: LLMDecisionAdapter,
+    baseline: _AdapterRuntimeBaseline,
+    attempt: _RuntimeDecisionAttempt,
+    default_provider_metadata: Mapping[str, object],
+) -> _VariantAttemptAccounting:
+    after = _adapter_runtime_baseline(adapter)
+    request_delta = after.request_invocations - baseline.request_invocations
+    if request_delta < 0:
+        raise ValueError("adapter request_invocations moved backwards")
+    logical_attempted = attempt.decision is not None or attempt.provider_failure is not None
+    minimum_requests = 1 if logical_attempted else 0
+
+    if baseline.has_provider_accounting and after.has_provider_accounting:
+        delta = provider_accounting_delta(after.provider_accounting, baseline.provider_accounting)
+        usage_complete = (
+            delta.provider_response_count > 0
+            and delta.usage_complete_response_count == delta.provider_response_count
+        )
+        return _VariantAttemptAccounting(
+            request_invocations=max(request_delta, delta.provider_response_count, 1 if attempt.provider_failure is not None else 0),
+            provider_response_count=delta.provider_response_count,
+            successful_decision_count=delta.successful_decision_count,
+            observed_model_counts=dict(delta.observed_model_counts),
+            observed_model_missing_response_count=delta.observed_model_missing_response_count,
+            observed_model_malformed_response_count=delta.observed_model_malformed_response_count,
+            usage_complete=usage_complete,
+            usage_complete_response_count=delta.usage_complete_response_count,
+            usage_missing_response_count=delta.usage_missing_response_count,
+            usage_malformed_response_count=delta.usage_malformed_response_count,
+            input_usage=delta.input_tokens if usage_complete else None,
+            output_usage=delta.output_tokens if usage_complete else None,
+            total_usage=delta.total_tokens if usage_complete else None,
+            cached_input_usage=delta.cached_input_tokens if usage_complete else None,
+        )
+
+    response_count = 0 if attempt.provider_failure is not None else 1
+    observed_model = _attempt_observed_model(attempt, default_provider_metadata)
+    observed_model_counts = {observed_model: response_count} if observed_model and response_count > 0 else {}
+    return _VariantAttemptAccounting(
+        request_invocations=max(request_delta, minimum_requests),
+        provider_response_count=response_count,
+        successful_decision_count=1 if attempt.decision is not None else 0,
+        observed_model_counts=observed_model_counts,
+        observed_model_missing_response_count=0,
+        observed_model_malformed_response_count=0,
+        usage_complete=False,
+        usage_complete_response_count=0,
+        usage_missing_response_count=response_count,
+        usage_malformed_response_count=0,
+        input_usage=None,
+        output_usage=None,
+        total_usage=None,
+        cached_input_usage=None,
+    )
+
+
+def _validate_observed_model_match(
+    accounting: _VariantAttemptAccounting,
+    default_provider_metadata: Mapping[str, object],
+) -> None:
+    requested_model = default_provider_metadata.get("model")
+    if not isinstance(requested_model, str) or not requested_model.strip():
+        return
+    mismatched = sorted(model for model in accounting.observed_model_counts if model != requested_model)
+    if mismatched:
+        raise ValueError(
+            f"observed model mismatch: requested {requested_model}, observed {', '.join(mismatched)}"
+        )
+
+
+def _aggregate_variant_evidence(rows: Sequence[Mapping[str, object]]) -> dict[str, object]:
+    observed_model_counts: Counter[str] = Counter()
+    request_invocations = 0
+    provider_responses = 0
+    successful_decisions = 0
+    observed_model_missing_response_count = 0
+    observed_model_malformed_response_count = 0
+    usage_complete_response_count = 0
+    usage_missing_response_count = 0
+    usage_malformed_response_count = 0
+    usage_complete_attempts = 0
+    usage_incomplete_attempts = 0
+    input_usage = 0
+    output_usage = 0
+    total_usage = 0
+    cached_input_usage = 0
+    cached_reported = False
+    for row in rows:
+        request_invocations += int(row["request_invocations"])
+        provider_responses += int(row["provider_response_count"])
+        successful_decisions += int(row["successful_decision_count"])
+        observed_model_missing_response_count += int(row["observed_model_missing_response_count"])
+        observed_model_malformed_response_count += int(row["observed_model_malformed_response_count"])
+        usage_complete_response_count += int(row["usage_complete_response_count"])
+        usage_missing_response_count += int(row["usage_missing_response_count"])
+        usage_malformed_response_count += int(row["usage_malformed_response_count"])
+        if bool(row["usage_complete"]):
+            usage_complete_attempts += 1
+        elif int(row["request_invocations"]) > 0:
+            usage_incomplete_attempts += 1
+        for model, count in cast(dict[str, int], row["observed_model_counts"]).items():
+            observed_model_counts[model] += count
+        if row["input_usage"] is not None:
+            input_usage += int(cast(int, row["input_usage"]))
+            output_usage += int(cast(int, row["output_usage"]))
+            total_usage += int(cast(int, row["total_usage"]))
+        if row["cached_input_usage"] is not None:
+            cached_input_usage += int(cast(int, row["cached_input_usage"]))
+            cached_reported = True
+    if not (request_invocations >= provider_responses >= successful_decisions):
+        raise ValueError("variant accounting invariant failed: invocations >= responses >= successful decisions")
+    return {
+        "invocations": request_invocations,
+        "responses": provider_responses,
+        "successful_decisions": successful_decisions,
+        "observed_model_counts": dict(sorted(observed_model_counts.items())),
+        "observed_model_missing_response_count": observed_model_missing_response_count,
+        "observed_model_malformed_response_count": observed_model_malformed_response_count,
+        "usage_complete_attempts": usage_complete_attempts,
+        "usage_incomplete_attempts": usage_incomplete_attempts,
+        "usage_complete_response_count": usage_complete_response_count,
+        "usage_missing_response_count": usage_missing_response_count,
+        "usage_malformed_response_count": usage_malformed_response_count,
+        "input_usage": input_usage if usage_complete_attempts > 0 else None,
+        "output_usage": output_usage if usage_complete_attempts > 0 else None,
+        "total_usage": total_usage if usage_complete_attempts > 0 else None,
+        "cached_input_usage": cached_input_usage if cached_reported else None,
+    }
+
+
+def _variant_prompt_contract_summary() -> dict[str, object]:
+    return {
+        "primary": {
+            "prompt_version": CONCURRENT_MESSAGE_PRIMARY_PROMPT_VERSION,
+            "allowed_profile_fields": list(CONCURRENT_PRIMARY_PROFILE_FIELDS),
+            "excluded_context_fields": list(CONCURRENT_MESSAGE_PRIMARY_EXCLUDED_CONTEXT_FIELDS),
+            "peer_context": PeerContext().model_dump(mode="json"),
+        },
+        "shadow": {
+            "prompt_version": CONCURRENT_MESSAGE_SHADOW_PROMPT_VERSION,
+            "allowed_profile_fields": list(CONCURRENT_SHADOW_PROFILE_FIELDS),
+            "additional_shadow_fields": list(CONCURRENT_MESSAGE_SHADOW_ADDITIONAL_PROFILE_FIELDS),
+            "excluded_context_fields": list(CONCURRENT_MESSAGE_PRIMARY_EXCLUDED_CONTEXT_FIELDS),
+            "peer_context": PeerContext().model_dump(mode="json"),
+            "anti_stereotyping_constraint": (
+                "Synthetic Experiment Labels 只用于受控对照，不代表真实身份，不得据此推断人格、价值高低、消费能力优劣或行为必然性。"
+            ),
+        },
+    }
+
+
 class ConcurrentMessageExperimentRunner:
     """Run the runtime-only concurrent-message tracer and write validation artifacts."""
 
@@ -462,6 +836,35 @@ class ConcurrentMessageExperimentRunner:
         self.config = config
         self.primary_adapter = primary_adapter
         self.shadow_adapter = shadow_adapter
+        self._validate_adapter_contracts()
+
+    def _validate_adapter_contracts(self) -> None:
+        primary_leaf, primary_caches = _unwrap_adapter(self.primary_adapter)
+        shadow_leaf, shadow_caches = _unwrap_adapter(self.shadow_adapter)
+        if self.primary_adapter is self.shadow_adapter or primary_leaf is shadow_leaf:
+            raise ValueError("primary and shadow adapters must be distinct instances")
+        if type(primary_leaf) is not type(shadow_leaf):
+            raise ValueError("primary and shadow adapter leaf types must match")
+        if {id(cache) for cache in primary_caches} & {id(cache) for cache in shadow_caches}:
+            raise ValueError("primary and shadow adapters must not share a cache instance")
+        primary_prompt = _adapter_prompt_version(self.primary_adapter)
+        shadow_prompt = _adapter_prompt_version(self.shadow_adapter)
+        if primary_prompt != CONCURRENT_MESSAGE_PRIMARY_PROMPT_VERSION:
+            raise ValueError(
+                f"primary adapter prompt_version must be {CONCURRENT_MESSAGE_PRIMARY_PROMPT_VERSION}, got {primary_prompt}"
+            )
+        if shadow_prompt != CONCURRENT_MESSAGE_SHADOW_PROMPT_VERSION:
+            raise ValueError(
+                f"shadow adapter prompt_version must be {CONCURRENT_MESSAGE_SHADOW_PROMPT_VERSION}, got {shadow_prompt}"
+            )
+        primary_metadata = dict(_adapter_safe_metadata(self.primary_adapter, ProviderLLMConfig()))
+        shadow_metadata = dict(_adapter_safe_metadata(self.shadow_adapter, ProviderLLMConfig()))
+        primary_metadata.pop("prompt_version", None)
+        shadow_metadata.pop("prompt_version", None)
+        if primary_metadata != shadow_metadata:
+            raise ValueError(
+                "primary and shadow adapters must match on provider/model/timeout/retry/sampling metadata"
+            )
 
     def run_and_write(self, output_dir: str | Path) -> Path:
         output_path = Path(output_dir)
@@ -486,25 +889,6 @@ class ConcurrentMessageExperimentRunner:
             )
 
         sample_users = [cohort.users_by_id[user_id] for user_id in cohort.sample_user_ids]
-        _write_json(output_path / CONCURRENT_MESSAGE_CONFIG_JSON, self.config.snapshot())
-        _write_json(
-            output_path / CONCURRENT_MESSAGE_MESSAGE_JSON,
-            [message.model_dump(mode="json") for message in self.config.messages],
-        )
-        _write_json(
-            output_path / CONCURRENT_MESSAGE_SAMPLE_JSON,
-            [user.model_dump(mode="json") for user in sample_users],
-            preserve_user_text=True,
-        )
-        _write_csv(
-            output_path / CONCURRENT_MESSAGE_SAMPLE_CSV,
-            list(SAMPLE_CSV_FIELDS),
-            [user.sample_row() for user in sample_users],
-            preserve_user_text=True,
-        )
-        if cohort.sample_audit:
-            _write_json(output_path / CONCURRENT_MESSAGE_SEED_AUDIT_JSON, cohort.sample_audit)
-
         base_network_by_user = {
             user_id: _log_p95_score(
                 cohort.comment_graph.weighted_degree_by_user.get(user_id, 0),
@@ -519,6 +903,7 @@ class ConcurrentMessageExperimentRunner:
         candidate_rows: list[dict[str, object]] = []
         pair_rows: list[dict[str, object]] = []
         terminal_rows: list[dict[str, object]] = []
+        variant_evidence_rows: list[dict[str, object]] = []
         step_rows: list[_BatchStepSummary] = []
         pair_schedule_position = 0
         primary_provider_metadata = _adapter_safe_metadata(self.primary_adapter, ProviderLLMConfig())
@@ -598,7 +983,7 @@ class ConcurrentMessageExperimentRunner:
                             time_step=time_step,
                             message=message,
                             user=user,
-                            profile=_runtime_user_profile(user),
+                            profile=_primary_variant_profile(user),
                             ranking_position=ranking_position_by_user[user.user_id],
                             selection_reason=selection_reason_by_user[user.user_id],
                             score=score,
@@ -613,6 +998,7 @@ class ConcurrentMessageExperimentRunner:
                     shadow_provider_metadata=shadow_provider_metadata,
                 )
                 terminal_rows.extend(cast(list[dict[str, object]], pair_row.pop("_terminal_rows")))
+                variant_evidence_rows.extend(cast(list[dict[str, object]], pair_row.pop("_variant_evidence")))
                 pair_rows.append(pair_row)
                 if primary_positive_event is not None:
                     batch_primary_positive_events.append(primary_positive_event)
@@ -643,9 +1029,35 @@ class ConcurrentMessageExperimentRunner:
                 }
             )
 
+        validation_summary = self._validation_summary(
+            cohort=cohort,
+            pair_rows=pair_rows,
+            terminal_rows=terminal_rows,
+            variant_evidence_rows=variant_evidence_rows,
+            step_rows=step_rows,
+        )
+
         safe_candidate_rows = _safe_runtime_rows(candidate_rows)
         safe_pair_rows = _safe_runtime_rows(pair_rows)
         safe_terminal_rows = _safe_runtime_rows(terminal_rows)
+        _write_json(output_path / CONCURRENT_MESSAGE_CONFIG_JSON, self.config.snapshot())
+        _write_json(
+            output_path / CONCURRENT_MESSAGE_MESSAGE_JSON,
+            [message.model_dump(mode="json") for message in self.config.messages],
+        )
+        _write_json(
+            output_path / CONCURRENT_MESSAGE_SAMPLE_JSON,
+            [user.model_dump(mode="json") for user in sample_users],
+            preserve_user_text=True,
+        )
+        _write_csv(
+            output_path / CONCURRENT_MESSAGE_SAMPLE_CSV,
+            list(SAMPLE_CSV_FIELDS),
+            [user.sample_row() for user in sample_users],
+            preserve_user_text=True,
+        )
+        if cohort.sample_audit:
+            _write_json(output_path / CONCURRENT_MESSAGE_SEED_AUDIT_JSON, cohort.sample_audit)
         _write_csv(output_path / CONCURRENT_MESSAGE_CANDIDATE_CSV, list(CONCURRENT_MESSAGE_CANDIDATE_FIELDS), safe_candidate_rows)
         _write_csv(output_path / CONCURRENT_MESSAGE_PAIR_CSV, list(CONCURRENT_MESSAGE_PAIR_FIELDS), safe_pair_rows)
         _write_csv(
@@ -654,19 +1066,43 @@ class ConcurrentMessageExperimentRunner:
             safe_terminal_rows,
         )
         _write_json(output_path / CONCURRENT_MESSAGE_STEP_JSON, step_rows)
-
-        validation_summary = self._validation_summary(
-            cohort=cohort,
-            pair_rows=safe_pair_rows,
-            terminal_rows=safe_terminal_rows,
-            step_rows=step_rows,
-        )
         _write_json(output_path / CONCURRENT_MESSAGE_VALIDATION_JSON, validation_summary)
         (output_path / CONCURRENT_MESSAGE_REPORT_HTML).write_text(
             self._render_report(validation_summary=validation_summary, pair_rows=safe_pair_rows, step_rows=step_rows),
             encoding="utf-8",
         )
         return output_path
+
+    def _execute_variant(
+        self,
+        *,
+        adapter: LLMDecisionAdapter,
+        context: _VariantDecisionContext,
+        pair_schedule_position: int,
+        time_step: int,
+        message_id: str,
+        default_provider_metadata: Mapping[str, object],
+    ) -> tuple[_RuntimeDecisionAttempt, _VariantAttemptAccounting]:
+        baseline = _adapter_runtime_baseline(adapter)
+        attempt = _attempt_runtime_decision(
+            adapter=adapter,
+            post=context.post,
+            profile=context.profile,
+            peer_context=context.peer_context,
+            platform_context=context.platform_context,
+            time_step=time_step,
+            schedule_position=pair_schedule_position,
+            video_id=message_id,
+            provider_metadata=default_provider_metadata,
+        )
+        accounting = _variant_attempt_accounting(
+            adapter=adapter,
+            baseline=baseline,
+            attempt=attempt,
+            default_provider_metadata=default_provider_metadata,
+        )
+        _validate_observed_model_match(accounting, default_provider_metadata)
+        return attempt, accounting
 
     def _execute_pair(
         self,
@@ -675,46 +1111,44 @@ class ConcurrentMessageExperimentRunner:
         primary_provider_metadata: Mapping[str, object],
         shadow_provider_metadata: Mapping[str, object],
     ) -> tuple[dict[str, object], dict[str, str] | None]:
-        primary_attempt = _attempt_runtime_decision(
+        primary_context = _primary_variant_context(plan)
+        shadow_context = _shadow_variant_context(plan)
+        primary_attempt, primary_accounting = self._execute_variant(
             adapter=self.primary_adapter,
-            post=plan.message.as_post(),
-            profile=plan.profile,
-            peer_context=PeerContext(),
-            platform_context=PlatformContext(),
-            time_step=plan.time_step,
-            schedule_position=plan.pair_schedule_position,
-            video_id=plan.message.message_id,
-            provider_metadata=primary_provider_metadata,
-        )
-        shadow_attempt = _attempt_runtime_decision(
-            adapter=self.shadow_adapter,
-            post=plan.message.as_post(),
-            profile=plan.profile,
-            peer_context=PeerContext(),
-            platform_context=PlatformContext(),
-            time_step=plan.time_step,
-            schedule_position=plan.pair_schedule_position,
-            video_id=plan.message.message_id,
-            provider_metadata=shadow_provider_metadata,
-        )
-        primary_terminal_row, primary_positive_event = self._terminal_row(
-            pair_id=plan.pair_id,
+            context=primary_context,
             pair_schedule_position=plan.pair_schedule_position,
             time_step=plan.time_step,
             message_id=plan.message.message_id,
-            user_id=plan.user.user_id,
-            decision_variant="primary",
-            attempt=primary_attempt,
             default_provider_metadata=primary_provider_metadata,
         )
-        shadow_terminal_row, _ = self._terminal_row(
+        shadow_attempt, shadow_accounting = self._execute_variant(
+            adapter=self.shadow_adapter,
+            context=shadow_context,
+            pair_schedule_position=plan.pair_schedule_position,
+            time_step=plan.time_step,
+            message_id=plan.message.message_id,
+            default_provider_metadata=shadow_provider_metadata,
+        )
+        primary_terminal_row, primary_positive_event, primary_variant_evidence = self._terminal_row(
             pair_id=plan.pair_id,
             pair_schedule_position=plan.pair_schedule_position,
             time_step=plan.time_step,
             message_id=plan.message.message_id,
             user_id=plan.user.user_id,
-            decision_variant="shadow",
+            context=primary_context,
+            attempt=primary_attempt,
+            accounting=primary_accounting,
+            default_provider_metadata=primary_provider_metadata,
+        )
+        shadow_terminal_row, _, shadow_variant_evidence = self._terminal_row(
+            pair_id=plan.pair_id,
+            pair_schedule_position=plan.pair_schedule_position,
+            time_step=plan.time_step,
+            message_id=plan.message.message_id,
+            user_id=plan.user.user_id,
+            context=shadow_context,
             attempt=shadow_attempt,
+            accounting=shadow_accounting,
             default_provider_metadata=shadow_provider_metadata,
         )
         pair_row = {
@@ -741,6 +1175,7 @@ class ConcurrentMessageExperimentRunner:
             "primary_confidence": primary_terminal_row["confidence"],
             "primary_reason": primary_terminal_row["reason"],
             "primary_decision_source": primary_terminal_row["decision_source"],
+            "primary_prompt_version": primary_terminal_row["prompt_version"],
             "primary_provider_metadata": primary_terminal_row["provider_metadata"],
             "shadow_status": shadow_terminal_row["terminal_status"],
             "shadow_action": shadow_terminal_row["action"],
@@ -748,6 +1183,7 @@ class ConcurrentMessageExperimentRunner:
             "shadow_confidence": shadow_terminal_row["confidence"],
             "shadow_reason": shadow_terminal_row["reason"],
             "shadow_decision_source": shadow_terminal_row["decision_source"],
+            "shadow_prompt_version": shadow_terminal_row["prompt_version"],
             "shadow_provider_metadata": shadow_terminal_row["provider_metadata"],
             "campaign_feedback_committed": "false",
             "pair_terminal_coverage": _csv_bool(True),
@@ -756,6 +1192,7 @@ class ConcurrentMessageExperimentRunner:
                 and shadow_terminal_row["terminal_status"] == "succeeded"
             ),
             "_terminal_rows": [primary_terminal_row, shadow_terminal_row],
+            "_variant_evidence": [primary_variant_evidence, shadow_variant_evidence],
         }
         return pair_row, primary_positive_event
 
@@ -767,10 +1204,66 @@ class ConcurrentMessageExperimentRunner:
         time_step: int,
         message_id: str,
         user_id: str,
-        decision_variant: Literal["primary", "shadow"],
+        context: _VariantDecisionContext,
         attempt: _RuntimeDecisionAttempt,
+        accounting: _VariantAttemptAccounting,
         default_provider_metadata: Mapping[str, object],
-    ) -> tuple[dict[str, object], dict[str, str] | None]:
+    ) -> tuple[dict[str, object], dict[str, str] | None, dict[str, object]]:
+        decision_variant = context.decision_variant
+        decision_input = context.decision_input(time_step=time_step)
+        context_source_key = f"{pair_id}:{decision_variant}"
+        prompt_field_inclusion = attempt.prompt_field_inclusion or {}
+        profile_payload = decision_profile_payload(context.profile)
+        peer_context_payload = context.peer_context.model_dump(mode="json")
+        variant_evidence = {
+            "terminal_row_id": f"{pair_id}:{decision_variant}",
+            "pair_id": pair_id,
+            "message_id": message_id,
+            "user_id": user_id,
+            "decision_variant": decision_variant,
+            "prompt_version": context.prompt_token,
+            "context_source_key": context_source_key,
+            "cache_key": decision_input.cache_key(),
+            "profile_payload": profile_payload,
+            "peer_context_payload": peer_context_payload,
+            "prompt_field_inclusion": prompt_field_inclusion,
+            "request_invocations": accounting.request_invocations,
+            "provider_response_count": accounting.provider_response_count,
+            "successful_decision_count": accounting.successful_decision_count,
+            "observed_model_counts": accounting.observed_model_counts,
+            "observed_model_missing_response_count": accounting.observed_model_missing_response_count,
+            "observed_model_malformed_response_count": accounting.observed_model_malformed_response_count,
+            "usage_complete": accounting.usage_complete,
+            "usage_complete_response_count": accounting.usage_complete_response_count,
+            "usage_missing_response_count": accounting.usage_missing_response_count,
+            "usage_malformed_response_count": accounting.usage_malformed_response_count,
+            "input_usage": accounting.input_usage,
+            "output_usage": accounting.output_usage,
+            "total_usage": accounting.total_usage,
+            "cached_input_usage": accounting.cached_input_usage,
+        }
+        shared_row_fields = {
+            "prompt_version": context.prompt_token,
+            "context_source_key": context_source_key,
+            "cache_key": decision_input.cache_key(),
+            "context_profile_payload": _json_cell(profile_payload),
+            "peer_context_payload": _json_cell(peer_context_payload),
+            "prompt_field_inclusion": _json_cell(prompt_field_inclusion),
+            "request_invocations": accounting.request_invocations,
+            "provider_response_count": accounting.provider_response_count,
+            "successful_decision_count": accounting.successful_decision_count,
+            "observed_model_counts": _json_cell(accounting.observed_model_counts),
+            "observed_model_missing_response_count": accounting.observed_model_missing_response_count,
+            "observed_model_malformed_response_count": accounting.observed_model_malformed_response_count,
+            "usage_complete": _csv_bool(accounting.usage_complete),
+            "usage_complete_response_count": accounting.usage_complete_response_count,
+            "usage_missing_response_count": accounting.usage_missing_response_count,
+            "usage_malformed_response_count": accounting.usage_malformed_response_count,
+            "input_usage": "" if accounting.input_usage is None else accounting.input_usage,
+            "output_usage": "" if accounting.output_usage is None else accounting.output_usage,
+            "total_usage": "" if accounting.total_usage is None else accounting.total_usage,
+            "cached_input_usage": "" if accounting.cached_input_usage is None else accounting.cached_input_usage,
+        }
         provider_failure = attempt.provider_failure
         decision = attempt.decision
         if provider_failure is not None:
@@ -782,6 +1275,7 @@ class ConcurrentMessageExperimentRunner:
                 "message_id": message_id,
                 "user_id": user_id,
                 "decision_variant": decision_variant,
+                **shared_row_fields,
                 "terminal_status": "provider_failed",
                 "provider_status": "provider_failed",
                 "engage": "",
@@ -793,7 +1287,9 @@ class ConcurrentMessageExperimentRunner:
                 "failure_type": provider_failure["failure_type"],
                 "provider_metadata": provider_failure["provider_metadata"],
             }
-            return terminal_row, None
+            variant_evidence["terminal_status"] = "provider_failed"
+            variant_evidence["provider_status"] = "provider_failed"
+            return terminal_row, None, variant_evidence
 
         assert isinstance(decision, EngageDecision)
         terminal_row = {
@@ -804,6 +1300,7 @@ class ConcurrentMessageExperimentRunner:
             "message_id": message_id,
             "user_id": user_id,
             "decision_variant": decision_variant,
+            **shared_row_fields,
             "terminal_status": "succeeded",
             "provider_status": "succeeded",
             "engage": _csv_bool(decision.engage),
@@ -817,12 +1314,20 @@ class ConcurrentMessageExperimentRunner:
                 decision.provider_metadata if decision.provider_metadata is not None else default_provider_metadata
             ),
         }
+        variant_evidence.update(
+            {
+                "terminal_status": "succeeded",
+                "provider_status": "succeeded",
+                "action": decision.action,
+                "decision_source": decision.decision_source,
+            }
+        )
         positive_event = (
             {"message_id": message_id, "user_id": user_id, "action": decision.action}
             if decision_variant == "primary" and decision.action in CONCURRENT_MESSAGE_POSITIVE_ACTIONS
             else None
         )
-        return terminal_row, positive_event
+        return terminal_row, positive_event, variant_evidence
 
     def _validation_summary(
         self,
@@ -830,6 +1335,7 @@ class ConcurrentMessageExperimentRunner:
         cohort: _PreparedResearchCohort,
         pair_rows: Sequence[Mapping[str, object]],
         terminal_rows: Sequence[Mapping[str, object]],
+        variant_evidence_rows: Sequence[Mapping[str, object]],
         step_rows: Sequence[_BatchStepSummary],
     ) -> dict[str, object]:
         sample_user_ids = list(cohort.sample_user_ids)
@@ -857,6 +1363,13 @@ class ConcurrentMessageExperimentRunner:
             sum(str(row["user_id"]) == user_id for row in pair_rows)
             for user_id in sample_user_ids
         )
+        primary_variant_rows = [row for row in variant_evidence_rows if row["decision_variant"] == "primary"]
+        shadow_variant_rows = [row for row in variant_evidence_rows if row["decision_variant"] == "shadow"]
+        provider_accounting = {
+            "primary": _aggregate_variant_evidence(primary_variant_rows),
+            "shadow": _aggregate_variant_evidence(shadow_variant_rows),
+            "total": _aggregate_variant_evidence(variant_evidence_rows),
+        }
         return {
             "schema_version": CONCURRENT_MESSAGE_VALIDATION_VERSION,
             "runtime_version": CONCURRENT_MESSAGE_RUNTIME_VERSION,
@@ -867,6 +1380,8 @@ class ConcurrentMessageExperimentRunner:
             "production_deploy_eligible": False,
             "configuration": self.config.snapshot(),
             "messages": [message.model_dump(mode="json") for message in self.config.messages],
+            "prompt_contract": _variant_prompt_contract_summary(),
+            "variant_provider_accounting": provider_accounting,
             "counts": {
                 "sample_users": len(sample_user_ids),
                 "messages": len(self.config.messages),
@@ -902,6 +1417,10 @@ class ConcurrentMessageExperimentRunner:
         assert isinstance(counts, Mapping)
         per_message = validation_summary["per_message"]
         assert isinstance(per_message, Mapping)
+        prompt_contract = validation_summary["prompt_contract"]
+        assert isinstance(prompt_contract, Mapping)
+        provider_accounting = validation_summary["variant_provider_accounting"]
+        assert isinstance(provider_accounting, Mapping)
         summary_items = [
             ("Research sample", str(counts["sample_users"])),
             ("Eligible user-message pairs", str(counts["eligible_user_message_pairs"])),
@@ -926,6 +1445,31 @@ class ConcurrentMessageExperimentRunner:
             "</tr>"
             for message_id, message_payload in per_message.items()
         )
+        prompt_contract_rows_html = "".join(
+            "<tr>"
+            f"<td>{html.escape(str(variant))}</td>"
+            f"<td>{html.escape(str(payload['prompt_version']))}</td>"
+            f"<td>{html.escape(', '.join(cast(list[str], payload['allowed_profile_fields'])))}</td>"
+            f"<td>{html.escape(', '.join(cast(list[str], payload['excluded_context_fields'])))}</td>"
+            f"<td>{html.escape(_json_cell(payload['peer_context']))}</td>"
+            "</tr>"
+            for variant, payload in prompt_contract.items()
+        )
+        accounting_rows_html = "".join(
+            "<tr>"
+            f"<td>{html.escape(str(variant))}</td>"
+            f"<td>{payload['invocations']}</td>"
+            f"<td>{payload['responses']}</td>"
+            f"<td>{payload['successful_decisions']}</td>"
+            f"<td>{payload['usage_complete_attempts']}</td>"
+            f"<td>{payload['usage_incomplete_attempts']}</td>"
+            f"<td>{html.escape(_json_cell(payload['observed_model_counts']))}</td>"
+            f"<td>{payload['input_usage'] if payload['input_usage'] is not None else ''}</td>"
+            f"<td>{payload['output_usage'] if payload['output_usage'] is not None else ''}</td>"
+            f"<td>{payload['total_usage'] if payload['total_usage'] is not None else ''}</td>"
+            "</tr>"
+            for variant, payload in provider_accounting.items()
+        )
         pair_rows_html = "".join(
             "<tr>"
             f"<td>{row['time_step']}</td>"
@@ -937,8 +1481,10 @@ class ConcurrentMessageExperimentRunner:
             f"<td>{row['personalized_delivery_score']}</td>"
             f"<td>{row['primary_status']}</td>"
             f"<td>{html.escape(str(row['primary_action']))}</td>"
+            f"<td>{html.escape(str(row['primary_prompt_version']))}</td>"
             f"<td>{row['shadow_status']}</td>"
             f"<td>{html.escape(str(row['shadow_action']))}</td>"
+            f"<td>{html.escape(str(row['shadow_prompt_version']))}</td>"
             f"<td>{row['campaign_feedback_committed']}</td>"
             "</tr>"
             for row in pair_rows
@@ -956,11 +1502,11 @@ class ConcurrentMessageExperimentRunner:
             f"<div class=\"metric\"><span>{html.escape(label)}</span><strong>{html.escape(value)}</strong></div>"
             for label, value in summary_items
         )
-        return f"""<!doctype html>
-<html lang=\"en\">
+        return f'''<!doctype html>
+<html lang="en">
 <head>
-  <meta charset=\"utf-8\">
-  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{html.escape(self.config.report.title)}</title>
   <style>
     :root {{ color-scheme: light; }}
@@ -983,15 +1529,37 @@ class ConcurrentMessageExperimentRunner:
 </head>
 <body>
   <main>
-    <div class=\"banner\">
+    <div class="banner">
       <h1>{html.escape(self.config.report.title)}</h1>
       <p>This tracer is validation-only, descriptive, and non-causal. It is not a formal release artifact and cannot be deployed.</p>
-      <p class=\"muted\">The runner freezes three message queues batch-by-batch, records paired Primary/Shadow terminal rows, and keeps production_deploy_eligible=false.</p>
+      <p class="muted">The runner freezes three message queues batch-by-batch, records paired Primary/Shadow terminal rows, and keeps production_deploy_eligible=false.</p>
     </div>
-    <div class=\"metrics\">{summary_html}</div>
+    <div class="metrics">{summary_html}</div>
+    <section>
+      <h2>Prompt Contract</h2>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr><th>Variant</th><th>Prompt token</th><th>Allowed profile fields</th><th>Excluded context fields</th><th>Neutral PeerContext</th></tr>
+          </thead>
+          <tbody>{prompt_contract_rows_html}</tbody>
+        </table>
+      </div>
+    </section>
+    <section>
+      <h2>Provider Accounting</h2>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr><th>Variant</th><th>Invocations</th><th>Responses</th><th>Successful decisions</th><th>Usage-complete attempts</th><th>Usage-incomplete attempts</th><th>Observed models</th><th>Input tokens</th><th>Output tokens</th><th>Total tokens</th></tr>
+          </thead>
+          <tbody>{accounting_rows_html}</tbody>
+        </table>
+      </div>
+    </section>
     <section>
       <h2>Message Summary</h2>
-      <div class=\"table-wrap\">
+      <div class="table-wrap">
         <table>
           <thead>
             <tr><th>Message ID</th><th>Title</th><th>Segment</th><th>Exposures</th><th>Primary success</th><th>Primary fail</th><th>Shadow success</th><th>Shadow fail</th><th>Below capacity</th></tr>
@@ -1002,7 +1570,7 @@ class ConcurrentMessageExperimentRunner:
     </section>
     <section>
       <h2>Batch Freeze</h2>
-      <div class=\"table-wrap\">
+      <div class="table-wrap">
         <table>
           <thead>
             <tr><th>Batch</th><th>Frozen engaged users</th><th>Committed Primary positive users</th><th>Selected pairs per message</th></tr>
@@ -1013,10 +1581,10 @@ class ConcurrentMessageExperimentRunner:
     </section>
     <section>
       <h2>Exposure Pairs</h2>
-      <div class=\"table-wrap\">
+      <div class="table-wrap">
         <table>
           <thead>
-            <tr><th>Batch</th><th>Message</th><th>User</th><th>Class</th><th>Rank</th><th>Selection</th><th>Score</th><th>Primary status</th><th>Primary action</th><th>Shadow status</th><th>Shadow action</th><th>Feedback committed</th></tr>
+            <tr><th>Batch</th><th>Message</th><th>User</th><th>Class</th><th>Rank</th><th>Selection</th><th>Score</th><th>Primary status</th><th>Primary action</th><th>Primary prompt</th><th>Shadow status</th><th>Shadow action</th><th>Shadow prompt</th><th>Feedback committed</th></tr>
           </thead>
           <tbody>{pair_rows_html}</tbody>
         </table>
@@ -1025,7 +1593,7 @@ class ConcurrentMessageExperimentRunner:
   </main>
 </body>
 </html>
-"""
+'''
 
 
 def _step_message_summary(message_summary: _BatchMessageSummary) -> str:
