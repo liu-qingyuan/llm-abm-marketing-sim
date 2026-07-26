@@ -6,6 +6,7 @@ from .concurrent_message_experiment import (
     ConcurrentMessageExperimentRunner,
     ExperimentalMessageDefinition,
 )
+from .concurrent_message_report import rebuild_concurrent_message_report
 from .decision import (
     CachedDecisionAdapter,
     DecisionCache,
@@ -42,6 +43,7 @@ __all__ = [
     "FinalResearchConfig",
     "FinalResearchModel",
     "FinalResearchRunner",
+    "rebuild_concurrent_message_report",
     "rebuild_final_research_report",
     "LLMDecisionAdapter",
     "ProviderDecisionError",

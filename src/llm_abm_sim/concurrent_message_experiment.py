@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import csv
 import html
+import json
 import math
 from collections import Counter
 from collections.abc import Mapping, Sequence
@@ -12,11 +13,11 @@ from typing import Literal, TypedDict, cast
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from .concurrent_campaign_diagnostics import ConcurrentCampaignDiagnosticArtifacts, ConcurrentCampaignDiagnostics
+from .concurrent_message_report import write_concurrent_message_report_artifacts
 from .decision import DecisionInput, EngageDecision, LLMDecisionAdapter, decision_profile_payload
 from .final_research import (
     _TARGET_DELIVERY_RANKING_POLICY,
     REQUIRED_DATASET_FILES,
-    SAMPLE_CSV_FIELDS,
     SEED_FIRST_SAMPLING_METHOD,
     TARGET_VIDEO_ID,
     VALIDATION_RUN_STATUS,
@@ -30,8 +31,6 @@ from .final_research import (
     _ResearchCohortPreparer,
     _RuntimeDecisionAttempt,
     _safe_runtime_rows,
-    _write_csv,
-    _write_json,
 )
 from .prompt_field_summary import (
     CONCURRENT_MESSAGE_PRIMARY_PROMPT_VERSION,
@@ -40,6 +39,7 @@ from .prompt_field_summary import (
     CONCURRENT_SHADOW_PROFILE_FIELDS,
 )
 from .provider_accounting import ProviderAccounting, empty_provider_accounting, provider_accounting_delta
+from .provider_evidence import allowlisted_provider_evidence
 from .schemas import (
     LATENT_VALUE_DIMENSIONS,
     PeerContext,
@@ -1070,42 +1070,19 @@ class ConcurrentMessageExperimentRunner:
             step_rows=step_rows,
             diagnostics=campaign_diagnostics,
         )
-        _write_json(output_path / CONCURRENT_MESSAGE_CONFIG_JSON, self.config.snapshot())
-        _write_json(
-            output_path / CONCURRENT_MESSAGE_MESSAGE_JSON,
-            [message.model_dump(mode="json") for message in self.config.messages],
-        )
-        _write_json(
-            output_path / CONCURRENT_MESSAGE_SAMPLE_JSON,
-            [user.model_dump(mode="json") for user in sample_users],
-            preserve_user_text=True,
-        )
-        _write_csv(
-            output_path / CONCURRENT_MESSAGE_SAMPLE_CSV,
-            list(SAMPLE_CSV_FIELDS),
-            [user.sample_row() for user in sample_users],
-            preserve_user_text=True,
-        )
-        if cohort.sample_audit:
-            _write_json(output_path / CONCURRENT_MESSAGE_SEED_AUDIT_JSON, cohort.sample_audit)
-        _write_csv(output_path / CONCURRENT_MESSAGE_CANDIDATE_CSV, list(CONCURRENT_MESSAGE_CANDIDATE_FIELDS), safe_candidate_rows)
-        _write_csv(output_path / CONCURRENT_MESSAGE_PAIR_CSV, list(CONCURRENT_MESSAGE_PAIR_FIELDS), safe_pair_rows)
-        _write_csv(
-            output_path / CONCURRENT_MESSAGE_TERMINAL_CSV,
-            list(CONCURRENT_MESSAGE_TERMINAL_FIELDS),
-            safe_terminal_rows,
-        )
-        _write_json(output_path / CONCURRENT_MESSAGE_STEP_JSON, step_rows)
-        _write_json(output_path / CONCURRENT_MESSAGE_VALIDATION_JSON, validation_summary)
-        _write_json(output_path / CONCURRENT_MESSAGE_CAMPAIGN_DIAGNOSTICS_JSON, campaign_diagnostics.payload)
-        (output_path / CONCURRENT_MESSAGE_REPORT_HTML).write_text(
-            self._render_report(
-                validation_summary=validation_summary,
-                pair_rows=safe_pair_rows,
-                step_rows=step_rows,
-                diagnostics=campaign_diagnostics.payload,
-            ),
-            encoding="utf-8",
+        write_concurrent_message_report_artifacts(
+            output_path,
+            title=self.config.report.title,
+            config_snapshot=self.config.snapshot(),
+            message_snapshot=[message.model_dump(mode="json") for message in self.config.messages],
+            sample_users=[user.model_dump(mode="json") for user in sample_users],
+            sample_audit=cohort.sample_audit,
+            candidate_rows=safe_candidate_rows,
+            pair_rows=safe_pair_rows,
+            terminal_rows=safe_terminal_rows,
+            step_rows=list(step_rows),
+            validation_summary=validation_summary,
+            campaign_diagnostics=campaign_diagnostics.payload,
         )
         return output_path
 
@@ -1336,7 +1313,9 @@ class ConcurrentMessageExperimentRunner:
                 "reason": "",
                 "decision_source": "",
                 "failure_type": provider_failure["failure_type"],
-                "provider_metadata": provider_failure["provider_metadata"],
+                "provider_metadata": _json_cell(
+                    allowlisted_provider_evidence(json.loads(cast(str, provider_failure["provider_metadata"])))
+                ),
             }
             variant_evidence["terminal_status"] = "provider_failed"
             variant_evidence["provider_status"] = "provider_failed"
@@ -1362,7 +1341,9 @@ class ConcurrentMessageExperimentRunner:
             "decision_source": decision.decision_source,
             "failure_type": "",
             "provider_metadata": _json_cell(
-                decision.provider_metadata if decision.provider_metadata is not None else default_provider_metadata
+                allowlisted_provider_evidence(
+                    decision.provider_metadata if decision.provider_metadata is not None else default_provider_metadata
+                )
             ),
         }
         variant_evidence.update(

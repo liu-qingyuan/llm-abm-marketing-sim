@@ -1,13 +1,18 @@
 from __future__ import annotations
 
 import csv
+import hashlib
 import json
 from pathlib import Path
 from typing import Any, Literal, cast
 
 import pytest
 
-from llm_abm_sim import ConcurrentMessageExperimentConfig, ConcurrentMessageExperimentRunner
+from llm_abm_sim import (
+    ConcurrentMessageExperimentConfig,
+    ConcurrentMessageExperimentRunner,
+    rebuild_concurrent_message_report,
+)
 from llm_abm_sim.concurrent_campaign_diagnostics import validate_concurrent_validation_summary
 from llm_abm_sim.concurrent_message_experiment import authoritative_message_definitions
 from llm_abm_sim.decision import (
@@ -159,6 +164,23 @@ def _write_csv(path: Path, fieldnames: list[str], rows: list[dict[str, Any]]) ->
 def _read_csv(path: Path) -> list[dict[str, str]]:
     with path.open(encoding="utf-8", newline="") as handle:
         return list(csv.DictReader(handle))
+
+
+def _read_json(path: Path) -> Any:
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _rewrite_manifest_hashes(run_dir: Path, *artifact_keys: str) -> None:
+    manifest_path = run_dir / "artifact_manifest.json"
+    manifest = _read_json(manifest_path)
+    for artifact_key in artifact_keys:
+        relative_path = manifest["artifacts"][artifact_key]
+        manifest["sha256"][artifact_key] = _sha256(run_dir / relative_path)
+    manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, sort_keys=True) + "\n", encoding="utf-8")
 
 
 def _latent_row(latent_class: str) -> dict[str, object]:
@@ -423,6 +445,14 @@ def test_concurrent_message_runner_writes_validation_runtime_artifacts(tmp_path:
     candidate_rows = _read_csv(output_dir / "concurrent_runtime_candidates.csv")
     step_rows = json.loads((output_dir / "concurrent_runtime_steps.json").read_text(encoding="utf-8"))
     report_html = (output_dir / "report.html").read_text(encoding="utf-8")
+    report_payload = _read_json(output_dir / "concurrent_message_report_payload.json")
+    users_document = _read_json(output_dir / "concurrent_message_users.json")
+    decision_trace_document = _read_json(output_dir / "concurrent_message_decision_trace.json")
+    runtime_document = _read_json(output_dir / "concurrent_message_runtime.json")
+    diagnostics_document = _read_json(output_dir / "concurrent_message_diagnostics.json")
+    field_lineage_document = _read_json(output_dir / "concurrent_message_field_lineage.json")
+    sample_manifest = _read_json(output_dir / "sample_manifest.json")
+    manifest = _read_json(output_dir / "artifact_manifest.json")
 
     assert validation["production_deploy_eligible"] is False
     assert validation["counts"]["actual_exposures"] == 60
@@ -444,15 +474,39 @@ def test_concurrent_message_runner_writes_validation_runtime_artifacts(tmp_path:
     assert diagnostics["campaign_feedback_effect"]["calls_decision_adapter"] is False
     assert diagnostics["demographic_decision_sensitivity"]["reason_screening"]["flagged_pair_count"] == 0
     validate_concurrent_validation_summary(validation, diagnostics)
+    assert report_payload["schema_version"] == "concurrent-message-report-payload-v1"
+    assert users_document["schema_version"] == "concurrent-message-users-v1"
+    assert decision_trace_document["schema_version"] == "concurrent-message-decision-trace-v1"
+    assert runtime_document["schema_version"] == "concurrent-message-runtime-v1"
+    assert diagnostics_document["schema_version"] == "concurrent-message-diagnostics-v1"
+    assert field_lineage_document["schema_version"] == "concurrent-message-field-lineage-v1"
+    assert manifest["schema_version"] == "concurrent-message-artifact-manifest-v1"
+    assert manifest["primary_prompt_token"] == CONCURRENT_MESSAGE_PRIMARY_PROMPT_VERSION
+    assert manifest["shadow_prompt_token"] == CONCURRENT_MESSAGE_SHADOW_PROMPT_VERSION
+    assert report_payload["downloads"]["manifest"] == "artifact_manifest.json"
+    assert report_payload["run"]["prompt_tokens"] == {
+        "primary": CONCURRENT_MESSAGE_PRIMARY_PROMPT_VERSION,
+        "shadow": CONCURRENT_MESSAGE_SHADOW_PROMPT_VERSION,
+    }
     assert "validation-only" in report_html
-    assert "cannot be deployed" in report_html
+    assert "Validation only" in report_html
     assert "Campaign Funnel" in report_html
     assert "Message Allocation" in report_html
     assert "Primary Audience Response" in report_html
     assert "Campaign Feedback Effect" in report_html
     assert "Demographic Decision Sensitivity" in report_html
-    assert "Prompt Contract" in report_html
-    assert "Provider Accounting" in report_html
+    assert "Exposure trace table" in report_html
+    assert "Safe downloads" in report_html
+    assert all("nickname" not in row and "bio" not in row and "signature" not in row for row in sample_manifest)
+    assert all("nickname" not in row and "bio" not in row and "signature" not in row for row in users_document["rows"])
+    first_trace = decision_trace_document["rows"][0]
+    assert first_trace["primary_prompt_version"] == CONCURRENT_MESSAGE_PRIMARY_PROMPT_VERSION
+    assert first_trace["shadow_prompt_version"] == CONCURRENT_MESSAGE_SHADOW_PROMPT_VERSION
+    assert "nickname" not in first_trace["primary_context"]
+    assert "bio" not in first_trace["primary_context"]
+    original_html = report_html
+    assert rebuild_concurrent_message_report(output_dir) == output_dir / "report.html"
+    assert (output_dir / "report.html").read_text(encoding="utf-8") == original_html
 
     assert len(pair_rows) == 60
     assert len({row["pair_id"] for row in pair_rows}) == 60
@@ -545,6 +599,144 @@ def test_concurrent_message_runner_writes_validation_runtime_artifacts(tmp_path:
         "visible_comments": 0,
         "visible_shares": 0,
     }
+
+
+def test_concurrent_message_report_rebuild_rejects_crossed_prompt_token(tmp_path: Path) -> None:
+    dataset_dir = _make_concurrent_fixture(tmp_path)
+    config = ConcurrentMessageExperimentConfig(
+        dataset_dir=dataset_dir,
+        sample_size=30,
+        horizon=2,
+        delivery_capacity=10,
+        configuration_profile="validation",
+    )
+    output_dir = ConcurrentMessageExperimentRunner(
+        config,
+        _ScriptedConcurrentAdapter(
+            name="primary",
+            prompt_version=CONCURRENT_MESSAGE_PRIMARY_PROMPT_VERSION,
+            positive_user_ids={"u1"},
+            fail_pairs={(0, "message_3", "u4")},
+        ),
+        _ScriptedConcurrentAdapter(
+            name="shadow",
+            prompt_version=CONCURRENT_MESSAGE_SHADOW_PROMPT_VERSION,
+            positive_user_ids={"u2"},
+            fail_pairs={(0, "message_2", "u3")},
+        ),
+    ).run_and_write(tmp_path / "crossed-token-run")
+
+    original_html = (output_dir / "report.html").read_text(encoding="utf-8")
+    trace_path = output_dir / "concurrent_message_decision_trace.json"
+    trace = _read_json(trace_path)
+    trace["primary_prompt_token"] = CONCURRENT_MESSAGE_SHADOW_PROMPT_VERSION
+    trace["rows"][0]["primary_prompt_version"] = CONCURRENT_MESSAGE_SHADOW_PROMPT_VERSION
+    trace_path.write_text(json.dumps(trace, ensure_ascii=False, sort_keys=True) + "\n", encoding="utf-8")
+    _rewrite_manifest_hashes(output_dir, "decision_trace_json")
+
+    with pytest.raises(ValueError, match="crossed or unsupported Primary prompt token"):
+        rebuild_concurrent_message_report(output_dir)
+    assert (output_dir / "report.html").read_text(encoding="utf-8") == original_html
+
+
+def test_concurrent_message_report_rebuild_rejects_extra_file_and_path_escape(tmp_path: Path) -> None:
+    dataset_dir = _make_concurrent_fixture(tmp_path)
+    config = ConcurrentMessageExperimentConfig(
+        dataset_dir=dataset_dir,
+        sample_size=30,
+        horizon=2,
+        delivery_capacity=10,
+        configuration_profile="validation",
+    )
+    output_dir = ConcurrentMessageExperimentRunner(
+        config,
+        _ScriptedConcurrentAdapter(
+            name="primary",
+            prompt_version=CONCURRENT_MESSAGE_PRIMARY_PROMPT_VERSION,
+            positive_user_ids={"u1"},
+            fail_pairs={(0, "message_3", "u4")},
+        ),
+        _ScriptedConcurrentAdapter(
+            name="shadow",
+            prompt_version=CONCURRENT_MESSAGE_SHADOW_PROMPT_VERSION,
+            positive_user_ids={"u2"},
+            fail_pairs={(0, "message_2", "u3")},
+        ),
+    ).run_and_write(tmp_path / "extra-file-run")
+
+    (output_dir / "unexpected.txt").write_text("unexpected", encoding="utf-8")
+    with pytest.raises(ValueError, match="unlisted artifacts"):
+        rebuild_concurrent_message_report(output_dir)
+    (output_dir / "unexpected.txt").unlink()
+
+    manifest_path = output_dir / "artifact_manifest.json"
+    manifest = _read_json(manifest_path)
+    manifest["artifacts"]["users_json"] = "../escape.json"
+    manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, sort_keys=True) + "\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="escapes the run directory"):
+        rebuild_concurrent_message_report(output_dir)
+
+
+def test_concurrent_message_report_rebuild_rejects_payload_and_duplicate_identity_tamper(tmp_path: Path) -> None:
+    dataset_dir = _make_concurrent_fixture(tmp_path)
+    config = ConcurrentMessageExperimentConfig(
+        dataset_dir=dataset_dir,
+        sample_size=30,
+        horizon=2,
+        delivery_capacity=10,
+        configuration_profile="validation",
+    )
+    output_dir = ConcurrentMessageExperimentRunner(
+        config,
+        _ScriptedConcurrentAdapter(
+            name="primary",
+            prompt_version=CONCURRENT_MESSAGE_PRIMARY_PROMPT_VERSION,
+            positive_user_ids={"u1"},
+            fail_pairs={(0, "message_3", "u4")},
+        ),
+        _ScriptedConcurrentAdapter(
+            name="shadow",
+            prompt_version=CONCURRENT_MESSAGE_SHADOW_PROMPT_VERSION,
+            positive_user_ids={"u2"},
+            fail_pairs={(0, "message_2", "u3")},
+        ),
+    ).run_and_write(tmp_path / "tamper-run")
+
+    original_html = (output_dir / "report.html").read_text(encoding="utf-8")
+    payload_path = output_dir / "concurrent_message_report_payload.json"
+    payload = _read_json(payload_path)
+    payload["run"]["sample_size"] = 999
+    payload_path.write_text(json.dumps(payload, ensure_ascii=False, sort_keys=True) + "\n", encoding="utf-8")
+    _rewrite_manifest_hashes(output_dir, "report_payload")
+    with pytest.raises(ValueError, match="report payload does not close"):
+        rebuild_concurrent_message_report(output_dir)
+    assert (output_dir / "report.html").read_text(encoding="utf-8") == original_html
+
+    output_dir = ConcurrentMessageExperimentRunner(
+        config,
+        _ScriptedConcurrentAdapter(
+            name="primary",
+            prompt_version=CONCURRENT_MESSAGE_PRIMARY_PROMPT_VERSION,
+            positive_user_ids={"u1"},
+            fail_pairs={(0, "message_3", "u4")},
+        ),
+        _ScriptedConcurrentAdapter(
+            name="shadow",
+            prompt_version=CONCURRENT_MESSAGE_SHADOW_PROMPT_VERSION,
+            positive_user_ids={"u2"},
+            fail_pairs={(0, "message_2", "u3")},
+        ),
+    ).run_and_write(tmp_path / "duplicate-run")
+    pair_rows = _read_csv(output_dir / "concurrent_runtime_pairs.csv")
+    pair_rows.append(dict(pair_rows[0]))
+    duplicate_csv_path = output_dir / "concurrent_runtime_pairs.csv"
+    with duplicate_csv_path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=list(pair_rows[0].keys()))
+        writer.writeheader()
+        writer.writerows(pair_rows)
+    _rewrite_manifest_hashes(output_dir, "exposures_csv")
+    with pytest.raises(ValueError, match="duplicate exposure identity"):
+        rebuild_concurrent_message_report(output_dir)
 
 
 def test_concurrent_cached_variants_do_not_cross_hit_between_prompt_tokens() -> None:
