@@ -29,6 +29,8 @@ PROVIDER_METADATA_ALLOWLIST = {
     "use_codex_provider_config",
     "wire_api",
     "time_step",
+    "timeout_seconds",
+    "max_retries",
     "user_id",
     "action",
     "probability",

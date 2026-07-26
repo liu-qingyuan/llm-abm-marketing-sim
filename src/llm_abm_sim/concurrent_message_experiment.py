@@ -17,6 +17,7 @@ from .concurrent_message_report import write_concurrent_message_report_artifacts
 from .decision import DecisionInput, EngageDecision, LLMDecisionAdapter, decision_profile_payload
 from .final_research import (
     _TARGET_DELIVERY_RANKING_POLICY,
+    FORMAL_RUN_STATUS,
     REQUIRED_DATASET_FILES,
     SEED_FIRST_SAMPLING_METHOD,
     TARGET_VIDEO_ID,
@@ -69,6 +70,22 @@ CONCURRENT_MESSAGE_HOLDOUT_VIDEO_ID = TARGET_VIDEO_ID
 CONCURRENT_MESSAGE_PRODUCTION_SAMPLE_SIZE = 1000
 CONCURRENT_MESSAGE_PRODUCTION_HORIZON = 30
 CONCURRENT_MESSAGE_PRODUCTION_DELIVERY_CAPACITY = 20
+CONCURRENT_MESSAGE_FORMAL_PROVIDER = "openai_compatible"
+CONCURRENT_MESSAGE_FORMAL_WIRE_API = "responses"
+CONCURRENT_MESSAGE_FORMAL_REQUESTED_MODEL = "gpt-5.4-mini"
+CONCURRENT_MESSAGE_FORMAL_OBSERVED_MODEL = "gpt-5.4-mini-2026-03-17"
+CONCURRENT_MESSAGE_FORMAL_TIMEOUT_SECONDS = 30.0
+CONCURRENT_MESSAGE_FORMAL_MAX_RETRIES = 2
+CONCURRENT_MESSAGE_FORMAL_EXPOSURES_PER_MESSAGE = 600
+CONCURRENT_MESSAGE_FORMAL_BELOW_CAPACITY_PER_MESSAGE = 400
+CONCURRENT_MESSAGE_FORMAL_PRIMARY_DECISIONS = 1800
+CONCURRENT_MESSAGE_FORMAL_SHADOW_DECISIONS = 1800
+CONCURRENT_MESSAGE_FORMAL_TOTAL_LOGICAL_DECISIONS = 3600
+CONCURRENT_MESSAGE_FORMAL_EXPOSURES = 1800
+CONCURRENT_MESSAGE_FORMAL_BELOW_CAPACITY_PAIRS = 1200
+CONCURRENT_MESSAGE_FORMAL_ELIGIBLE_PAIRS = 3000
+CONCURRENT_MESSAGE_FORMAL_TERMINAL_ROWS = 3600
+CONCURRENT_MESSAGE_FORMAL_INVOCATION_CEILING = 10800
 CONCURRENT_MESSAGE_ENGAGED_NEIGHBOR_FORMULA = "min(1, engaged_neighbor_count / 3)"
 CONCURRENT_MESSAGE_RANKING_FORMULA = (
     "0.50 * base_network_relevance + 0.30 * campaign_engaged_neighbor_signal + 0.20 * normalized_message_user_fit"
@@ -376,7 +393,12 @@ class ConcurrentMessageExperimentConfig(BaseModel):
         self.dataset_dir = dataset_dir
         return self
 
-    def snapshot(self) -> dict[str, object]:
+    def snapshot(
+        self,
+        *,
+        sampling_status: str = VALIDATION_RUN_STATUS,
+        production_deploy_eligible: bool = False,
+    ) -> dict[str, object]:
         return {
             "dataset_dir": str(self.dataset_dir),
             "sample_size": self.sample_size,
@@ -389,8 +411,8 @@ class ConcurrentMessageExperimentConfig(BaseModel):
             "engaged_neighbor_formula": CONCURRENT_MESSAGE_ENGAGED_NEIGHBOR_FORMULA,
             "historical_tag_affinity": CONCURRENT_MESSAGE_HISTORY_AFFINITY,
             "sampling_method": SEED_FIRST_SAMPLING_METHOD,
-            "sampling_status": VALIDATION_RUN_STATUS,
-            "production_deploy_eligible": False,
+            "sampling_status": sampling_status,
+            "production_deploy_eligible": production_deploy_eligible,
             "messages": [message.model_dump(mode="json") for message in self.messages],
             "report": self.report.model_dump(mode="json"),
         }
@@ -655,6 +677,36 @@ def _adapter_prompt_version(adapter: LLMDecisionAdapter) -> str:
     raise ValueError(f"adapter {type(adapter).__qualname__} must expose a prompt_version")
 
 
+def _adapter_external_request_invocations(adapter: LLMDecisionAdapter) -> int:
+    leaf, _ = _unwrap_adapter(adapter)
+    external_request_invocations = getattr(leaf, "external_request_invocations", 0)
+    if not isinstance(external_request_invocations, int) or external_request_invocations < 0:
+        raise TypeError("adapter external_request_invocations must be a non-negative int")
+    return external_request_invocations
+
+
+def _adapter_live_api_triggered(adapter: LLMDecisionAdapter, *, baseline: int = 0) -> bool:
+    current = _adapter_external_request_invocations(adapter)
+    if current < baseline:
+        raise ValueError("adapter external_request_invocations moved backwards")
+    return current > baseline
+
+
+def _concurrent_sampling_status(
+    primary_adapter: LLMDecisionAdapter,
+    shadow_adapter: LLMDecisionAdapter,
+    *,
+    primary_live_baseline: int,
+    shadow_live_baseline: int,
+) -> str:
+    if not (
+        _adapter_live_api_triggered(primary_adapter, baseline=primary_live_baseline)
+        and _adapter_live_api_triggered(shadow_adapter, baseline=shadow_live_baseline)
+    ):
+        return VALIDATION_RUN_STATUS
+    return FORMAL_RUN_STATUS
+
+
 def _adapter_runtime_baseline(adapter: LLMDecisionAdapter) -> _AdapterRuntimeBaseline:
     leaf, _ = _unwrap_adapter(adapter)
     request_invocations = getattr(leaf, "request_invocations", 0)
@@ -818,6 +870,210 @@ def _aggregate_variant_evidence(rows: Sequence[Mapping[str, object]]) -> dict[st
     }
 
 
+def _provider_metadata_matches_formal_contract(metadata: Mapping[str, object]) -> bool:
+    return (
+        metadata.get("adapter") == CONCURRENT_MESSAGE_FORMAL_PROVIDER
+        and metadata.get("enabled") is True
+        and metadata.get("provider") == CONCURRENT_MESSAGE_FORMAL_PROVIDER
+        and metadata.get("model") == CONCURRENT_MESSAGE_FORMAL_REQUESTED_MODEL
+        and metadata.get("wire_api") == CONCURRENT_MESSAGE_FORMAL_WIRE_API
+        and metadata.get("require_live_env") is True
+        and metadata.get("timeout_seconds") == CONCURRENT_MESSAGE_FORMAL_TIMEOUT_SECONDS
+        and metadata.get("max_retries") == CONCURRENT_MESSAGE_FORMAL_MAX_RETRIES
+        and metadata.get("fail_closed_action") == "raise"
+    )
+
+
+def _variant_accounting_is_formal_eligible(accounting: Mapping[str, object], *, expected_successes: int) -> bool:
+    invocations = accounting.get("invocations")
+    responses = accounting.get("responses")
+    if not isinstance(invocations, int) or not isinstance(responses, int):
+        return False
+    if accounting.get("successful_decisions") != expected_successes or responses != expected_successes:
+        return False
+    if invocations < responses:
+        return False
+    if invocations > expected_successes * (CONCURRENT_MESSAGE_FORMAL_MAX_RETRIES + 1):
+        return False
+    if accounting.get("observed_model_counts") != {CONCURRENT_MESSAGE_FORMAL_OBSERVED_MODEL: responses}:
+        return False
+    if accounting.get("observed_model_missing_response_count") != 0:
+        return False
+    if accounting.get("observed_model_malformed_response_count") != 0:
+        return False
+    if accounting.get("usage_complete_attempts") != expected_successes:
+        return False
+    if accounting.get("usage_incomplete_attempts") != 0:
+        return False
+    if accounting.get("usage_complete_response_count") != responses:
+        return False
+    if accounting.get("usage_missing_response_count") != 0:
+        return False
+    if accounting.get("usage_malformed_response_count") != 0:
+        return False
+    return (
+        accounting.get("input_usage") is not None
+        and accounting.get("output_usage") is not None
+        and accounting.get("total_usage") is not None
+    )
+
+
+def _concurrent_production_deploy_eligible(
+    validation_summary: Mapping[str, object],
+    *,
+    sampling_status: str,
+    primary_provider_metadata: Mapping[str, object],
+    shadow_provider_metadata: Mapping[str, object],
+) -> bool:
+    if sampling_status != FORMAL_RUN_STATUS:
+        return False
+    normalized_primary_metadata = dict(primary_provider_metadata)
+    normalized_shadow_metadata = dict(shadow_provider_metadata)
+    normalized_primary_metadata.pop("prompt_version", None)
+    normalized_shadow_metadata.pop("prompt_version", None)
+    if normalized_primary_metadata != normalized_shadow_metadata:
+        return False
+    if not _provider_metadata_matches_formal_contract(normalized_primary_metadata):
+        return False
+
+    counts = validation_summary.get("counts")
+    per_message = validation_summary.get("per_message")
+    provider_accounting = validation_summary.get("variant_provider_accounting")
+    if not isinstance(counts, Mapping) or not isinstance(per_message, Mapping) or not isinstance(provider_accounting, Mapping):
+        return False
+
+    expected_counts = {
+        "sample_users": CONCURRENT_MESSAGE_PRODUCTION_SAMPLE_SIZE,
+        "messages": len(authoritative_message_definitions()),
+        "eligible_user_message_pairs": CONCURRENT_MESSAGE_FORMAL_ELIGIBLE_PAIRS,
+        "actual_exposures": CONCURRENT_MESSAGE_FORMAL_EXPOSURES,
+        "primary_attempted": CONCURRENT_MESSAGE_FORMAL_PRIMARY_DECISIONS,
+        "primary_successes": CONCURRENT_MESSAGE_FORMAL_PRIMARY_DECISIONS,
+        "primary_failures": 0,
+        "shadow_attempted": CONCURRENT_MESSAGE_FORMAL_SHADOW_DECISIONS,
+        "shadow_successes": CONCURRENT_MESSAGE_FORMAL_SHADOW_DECISIONS,
+        "shadow_failures": 0,
+        "terminal_rows": CONCURRENT_MESSAGE_FORMAL_TERMINAL_ROWS,
+        "pair_terminal_coverage": 1.0,
+        "paired_decision_coverage": 1.0,
+    }
+    for field_name, expected_value in expected_counts.items():
+        if counts.get(field_name) != expected_value:
+            return False
+
+    for message in authoritative_message_definitions():
+        message_counts = per_message.get(message.message_id)
+        if not isinstance(message_counts, Mapping):
+            return False
+        if message_counts.get("message_title") != message.title:
+            return False
+        if message_counts.get("intended_audience_segment") != message.intended_audience_segment:
+            return False
+        if message_counts.get("exposures") != CONCURRENT_MESSAGE_FORMAL_EXPOSURES_PER_MESSAGE:
+            return False
+        if message_counts.get("primary_successes") != CONCURRENT_MESSAGE_FORMAL_EXPOSURES_PER_MESSAGE:
+            return False
+        if message_counts.get("primary_failures") != 0:
+            return False
+        if message_counts.get("shadow_successes") != CONCURRENT_MESSAGE_FORMAL_EXPOSURES_PER_MESSAGE:
+            return False
+        if message_counts.get("shadow_failures") != 0:
+            return False
+        if message_counts.get("below_delivery_capacity") != CONCURRENT_MESSAGE_FORMAL_BELOW_CAPACITY_PER_MESSAGE:
+            return False
+
+    primary = provider_accounting.get("primary")
+    shadow = provider_accounting.get("shadow")
+    total = provider_accounting.get("total")
+    if not isinstance(primary, Mapping) or not isinstance(shadow, Mapping) or not isinstance(total, Mapping):
+        return False
+    if not _variant_accounting_is_formal_eligible(primary, expected_successes=CONCURRENT_MESSAGE_FORMAL_PRIMARY_DECISIONS):
+        return False
+    if not _variant_accounting_is_formal_eligible(shadow, expected_successes=CONCURRENT_MESSAGE_FORMAL_SHADOW_DECISIONS):
+        return False
+
+    primary_input_usage = primary.get("input_usage")
+    shadow_input_usage = shadow.get("input_usage")
+    primary_output_usage = primary.get("output_usage")
+    shadow_output_usage = shadow.get("output_usage")
+    primary_total_usage = primary.get("total_usage")
+    shadow_total_usage = shadow.get("total_usage")
+    total_input_usage = total.get("input_usage")
+    total_output_usage = total.get("output_usage")
+    total_total_usage = total.get("total_usage")
+    total_invocations = total.get("invocations")
+    total_responses = total.get("responses")
+    primary_responses = primary.get("responses")
+    shadow_responses = shadow.get("responses")
+    primary_invocations = primary.get("invocations")
+    shadow_invocations = shadow.get("invocations")
+    numeric_values = (
+        primary_input_usage,
+        shadow_input_usage,
+        primary_output_usage,
+        shadow_output_usage,
+        primary_total_usage,
+        shadow_total_usage,
+        total_input_usage,
+        total_output_usage,
+        total_total_usage,
+        total_invocations,
+        total_responses,
+        primary_responses,
+        shadow_responses,
+        primary_invocations,
+        shadow_invocations,
+    )
+    if not all(isinstance(value, int) for value in numeric_values):
+        return False
+    primary_input_usage = cast(int, primary_input_usage)
+    shadow_input_usage = cast(int, shadow_input_usage)
+    primary_output_usage = cast(int, primary_output_usage)
+    shadow_output_usage = cast(int, shadow_output_usage)
+    primary_total_usage = cast(int, primary_total_usage)
+    shadow_total_usage = cast(int, shadow_total_usage)
+    total_input_usage = cast(int, total_input_usage)
+    total_output_usage = cast(int, total_output_usage)
+    total_total_usage = cast(int, total_total_usage)
+    total_invocations = cast(int, total_invocations)
+    total_responses = cast(int, total_responses)
+    primary_responses = cast(int, primary_responses)
+    shadow_responses = cast(int, shadow_responses)
+    primary_invocations = cast(int, primary_invocations)
+    shadow_invocations = cast(int, shadow_invocations)
+    if total.get("successful_decisions") != CONCURRENT_MESSAGE_FORMAL_TOTAL_LOGICAL_DECISIONS:
+        return False
+    if total_responses != primary_responses + shadow_responses:
+        return False
+    if total_invocations != primary_invocations + shadow_invocations:
+        return False
+    if total_invocations > CONCURRENT_MESSAGE_FORMAL_INVOCATION_CEILING:
+        return False
+    if total.get("observed_model_counts") != {CONCURRENT_MESSAGE_FORMAL_OBSERVED_MODEL: total_responses}:
+        return False
+    if total.get("observed_model_missing_response_count") != 0:
+        return False
+    if total.get("observed_model_malformed_response_count") != 0:
+        return False
+    if total.get("usage_complete_attempts") != CONCURRENT_MESSAGE_FORMAL_TOTAL_LOGICAL_DECISIONS:
+        return False
+    if total.get("usage_incomplete_attempts") != 0:
+        return False
+    if total.get("usage_complete_response_count") != total_responses:
+        return False
+    if total.get("usage_missing_response_count") != 0:
+        return False
+    if total.get("usage_malformed_response_count") != 0:
+        return False
+    if total_input_usage != primary_input_usage + shadow_input_usage:
+        return False
+    if total_output_usage != primary_output_usage + shadow_output_usage:
+        return False
+    if total_total_usage != primary_total_usage + shadow_total_usage:
+        return False
+    return True
+
+
 def _variant_prompt_contract_summary() -> dict[str, object]:
     return {
         "primary": {
@@ -840,7 +1096,7 @@ def _variant_prompt_contract_summary() -> dict[str, object]:
 
 
 class ConcurrentMessageExperimentRunner:
-    """Run the runtime-only concurrent-message tracer and write validation artifacts."""
+    """Run the runtime-only concurrent-message tracer and write persisted artifacts."""
 
     def __init__(
         self,
@@ -921,6 +1177,8 @@ class ConcurrentMessageExperimentRunner:
         pair_schedule_position = 0
         primary_provider_metadata = _adapter_safe_metadata(self.primary_adapter, ProviderLLMConfig())
         shadow_provider_metadata = _adapter_safe_metadata(self.shadow_adapter, ProviderLLMConfig())
+        primary_live_baseline = _adapter_external_request_invocations(self.primary_adapter)
+        shadow_live_baseline = _adapter_external_request_invocations(self.shadow_adapter)
 
         for time_step in range(self.config.horizon):
             frozen_campaign_engaged_user_ids = sorted(campaign_engaged_user_ids)
@@ -1065,6 +1323,12 @@ class ConcurrentMessageExperimentRunner:
         campaign_diagnostics = ConcurrentCampaignDiagnostics(delivery_capacity=self.config.delivery_capacity).build(
             candidate_rows=safe_candidate_rows, pair_rows=safe_pair_rows
         )
+        sampling_status = _concurrent_sampling_status(
+            self.primary_adapter,
+            self.shadow_adapter,
+            primary_live_baseline=primary_live_baseline,
+            shadow_live_baseline=shadow_live_baseline,
+        )
         validation_summary = self._validation_summary(
             cohort=cohort,
             pair_rows=pair_rows,
@@ -1072,14 +1336,39 @@ class ConcurrentMessageExperimentRunner:
             variant_evidence_rows=variant_evidence_rows,
             step_rows=step_rows,
             diagnostics=campaign_diagnostics,
+            sampling_status=sampling_status,
+            production_deploy_eligible=False,
         )
+        production_deploy_eligible = _concurrent_production_deploy_eligible(
+            validation_summary,
+            sampling_status=sampling_status,
+            primary_provider_metadata=primary_provider_metadata,
+            shadow_provider_metadata=shadow_provider_metadata,
+        )
+        if production_deploy_eligible:
+            validation_summary = self._validation_summary(
+                cohort=cohort,
+                pair_rows=pair_rows,
+                terminal_rows=terminal_rows,
+                variant_evidence_rows=variant_evidence_rows,
+                step_rows=step_rows,
+                diagnostics=campaign_diagnostics,
+                sampling_status=sampling_status,
+                production_deploy_eligible=production_deploy_eligible,
+            )
+        config_snapshot = self.config.snapshot(
+            sampling_status=sampling_status,
+            production_deploy_eligible=production_deploy_eligible,
+        )
+        sample_audit = dict(cohort.sample_audit)
+        sample_audit["sampling_status"] = sampling_status
         write_concurrent_message_report_artifacts(
             output_path,
             title=self.config.report.title,
-            config_snapshot=self.config.snapshot(),
+            config_snapshot=config_snapshot,
             message_snapshot=[message.model_dump(mode="json") for message in self.config.messages],
             sample_users=[user.model_dump(mode="json") for user in sample_users],
-            sample_audit=cohort.sample_audit,
+            sample_audit=sample_audit,
             candidate_rows=safe_candidate_rows,
             pair_rows=safe_pair_rows,
             terminal_rows=safe_terminal_rows,
@@ -1367,6 +1656,8 @@ class ConcurrentMessageExperimentRunner:
         variant_evidence_rows: Sequence[Mapping[str, object]],
         step_rows: Sequence[_BatchStepSummary],
         diagnostics: ConcurrentCampaignDiagnosticArtifacts,
+        sampling_status: str,
+        production_deploy_eligible: bool,
     ) -> dict[str, object]:
         del cohort, pair_rows
         funnel = diagnostics.payload["campaign_funnel"]
@@ -1389,15 +1680,19 @@ class ConcurrentMessageExperimentRunner:
             "shadow": _aggregate_variant_evidence(shadow_variant_rows),
             "total": _aggregate_variant_evidence(variant_evidence_rows),
         }
+        config_snapshot = self.config.snapshot(
+            sampling_status=sampling_status,
+            production_deploy_eligible=production_deploy_eligible,
+        )
         return {
             "schema_version": CONCURRENT_MESSAGE_VALIDATION_VERSION,
             "runtime_version": CONCURRENT_MESSAGE_RUNTIME_VERSION,
             "sampling_method": SEED_FIRST_SAMPLING_METHOD,
-            "sampling_status": VALIDATION_RUN_STATUS,
+            "sampling_status": sampling_status,
             "descriptive_only": True,
             "non_causal": True,
-            "production_deploy_eligible": False,
-            "configuration": self.config.snapshot(),
+            "production_deploy_eligible": production_deploy_eligible,
+            "configuration": config_snapshot,
             "messages": [message.model_dump(mode="json") for message in self.config.messages],
             "prompt_contract": _variant_prompt_contract_summary(),
             "variant_provider_accounting": provider_accounting,

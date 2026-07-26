@@ -375,8 +375,12 @@ class _ReleaseContractV4(BaseModel):
     shadow_prompt_token: Literal["jinjiang-concurrent-message-demographic-shadow-prompt-v1"]
     production_deploy_eligible: Literal[True]
     provider: Literal["openai_compatible"]
-    requested_model: str = Field(min_length=1)
-    observed_model: str = Field(min_length=1)
+    requested_model: Literal["gpt-5.4-mini"]
+    observed_model: Literal["gpt-5.4-mini-2026-03-17"]
+    wire_api: Literal["responses"]
+    timeout_seconds: float
+    max_retries: Literal[2]
+    fail_closed_action: Literal["raise"]
     logical_primary_decision_opportunities: Literal[1800]
     logical_shadow_decision_opportunities: Literal[1800]
     logical_decision_opportunities: Literal[3600]
@@ -392,6 +396,8 @@ class _ReleaseContractV4(BaseModel):
         authoritative_by_id = {message.message_id: message for message in authoritative_messages}
         if set(self.per_message) != set(authoritative_by_id):
             raise ValueError("per_message must cover the exact authoritative three-message contract")
+        if self.timeout_seconds != 30.0:
+            raise ValueError("timeout_seconds must remain the approved 30.0 seconds contract")
         if set(self.variant_provider_accounting) != {"primary", "shadow", "total"}:
             raise ValueError("variant_provider_accounting must contain primary/shadow/total exactly once")
         if self.logical_primary_decision_opportunities != self.counts.primary_attempted:
@@ -1326,6 +1332,14 @@ def _validate_v4(
             raise ReleaseValidationError("v4 Formal provider metadata requires enabled=true and require_live_env=true")
         if provider_metadata.get("model") != contract.requested_model:
             raise ReleaseValidationError("v4 requested model does not match persisted Provider metadata")
+        if provider_metadata.get("wire_api") != contract.wire_api:
+            raise ReleaseValidationError("v4 wire_api does not match persisted Provider metadata")
+        if provider_metadata.get("timeout_seconds") != contract.timeout_seconds:
+            raise ReleaseValidationError("v4 timeout_seconds does not match persisted Provider metadata")
+        if provider_metadata.get("max_retries") != contract.max_retries:
+            raise ReleaseValidationError("v4 max_retries does not match persisted Provider metadata")
+        if provider_metadata.get("fail_closed_action") != contract.fail_closed_action:
+            raise ReleaseValidationError("v4 fail_closed_action does not match persisted Provider metadata")
         if provider_metadata.get("prompt_version") != expected_prompt:
             raise ReleaseValidationError("v4 terminal row provider metadata crossed the prompt token contract")
         if row.get("input_usage") in (None, "") or row.get("output_usage") in (None, "") or row.get("total_usage") in (None, ""):

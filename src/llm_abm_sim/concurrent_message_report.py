@@ -1267,7 +1267,7 @@ def _render_report_html(payload: ConcurrentMessageReportPayload) -> str:
             for latent_message in payload.messages
         )
         + "</tr>"
-        for latent_class, values in class_matrix.items()
+        for latent_class, values in sorted(class_matrix.items())
     )
     response_rows = "".join(
         "<tr>"
@@ -1281,7 +1281,9 @@ def _render_report_html(payload: ConcurrentMessageReportPayload) -> str:
         f"<td>{html.escape(_rate_label(message_payload['exposure_engagement_rate']))}</td>"
         f"<td>{html.escape(_rate_label(message_payload['decision_engagement_rate']))}</td>"
         "</tr>"
-        for message_id, message_payload in _required_mapping(response, "per_message", "primary audience response").items()
+        for message_id, message_payload in sorted(
+            _required_mapping(response, "per_message", "primary audience response").items()
+        )
     )
     feedback_rows = "".join(
         "<tr>"
@@ -1292,7 +1294,9 @@ def _render_report_html(payload: ConcurrentMessageReportPayload) -> str:
         f"<td>{html.escape(', '.join(batch['feedback_added_user_ids']))}</td>"
         f"<td>{html.escape(', '.join(batch['feedback_removed_user_ids']))}</td>"
         "</tr>"
-        for message_id, message_payload in _required_mapping(feedback, "per_message", "feedback per_message").items()
+        for message_id, message_payload in sorted(
+            _required_mapping(feedback, "per_message", "feedback per_message").items()
+        )
         for batch in _required_list(message_payload.get("batches"), "feedback batches")
     )
     transition_rows = "".join(
@@ -1300,7 +1304,9 @@ def _render_report_html(payload: ConcurrentMessageReportPayload) -> str:
         f"<td>{html.escape(transition)}</td>"
         f"<td>{html.escape(str(count))}</td>"
         "</tr>"
-        for transition, count in _required_mapping(sensitivity, "action_transition_counts", "sensitivity").items()
+        for transition, count in sorted(
+            _required_mapping(sensitivity, "action_transition_counts", "sensitivity").items()
+        )
     )
     sensitivity_rows = "".join(
         "<tr>"

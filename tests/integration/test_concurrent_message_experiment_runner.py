@@ -29,7 +29,11 @@ from llm_abm_sim.prompt_field_summary import (
     CONCURRENT_MESSAGE_SHADOW_PROMPT_VERSION,
 )
 from llm_abm_sim.prompting import build_engagement_prompt
-from llm_abm_sim.providers.openai_compatible import OpenAICompatibleDecisionAdapter, ProviderResponseEnvelope
+from llm_abm_sim.providers.openai_compatible import (
+    OpenAICompatibleDecisionAdapter,
+    ProviderResponseEnvelope,
+    _OpenAISDKClient,
+)
 from llm_abm_sim.schemas import PeerContext, PlatformContext, PostContent, ProviderLLMConfig, UserProfile
 
 LATENT_COLUMNS = [
@@ -151,6 +155,12 @@ class _SequencedEnvelopeClient:
         if isinstance(response, Exception):
             raise response
         return response
+
+
+def _sdk_wrapper_stub(client: _SequencedEnvelopeClient) -> _OpenAISDKClient:
+    sdk_client = object.__new__(_OpenAISDKClient)
+    cast(Any, sdk_client).create_response = client.create_response
+    return sdk_client
 
 
 def _write_csv(path: Path, fieldnames: list[str], rows: list[dict[str, Any]]) -> None:
@@ -905,6 +915,90 @@ def test_concurrent_message_runner_preserves_requested_and_observed_model_split(
     assert validation["variant_provider_accounting"]["total"]["observed_model_counts"] == {observed_model: 6}
     assert all(json.loads(row["provider_metadata"])["model"] == requested_model for row in terminal_rows)
     assert all(json.loads(row["observed_model_counts"]) == {observed_model: 1} for row in terminal_rows)
+
+
+def test_concurrent_message_runner_marks_sdk_wrapper_path_as_formal_but_deploy_blocked_on_validation_shape(
+    tmp_path: Path,
+) -> None:
+    dataset_dir = _make_concurrent_fixture(tmp_path, user_count=3, seed_user_count=1)
+    config = ConcurrentMessageExperimentConfig(
+        dataset_dir=dataset_dir,
+        sample_size=3,
+        horizon=1,
+        delivery_capacity=1,
+        configuration_profile="validation",
+    )
+    requested_model = "gpt-5.4-mini"
+    observed_model = "gpt-5.4-mini-2026-03-17"
+    primary_client = _SequencedEnvelopeClient(
+        [
+            _provider_response(
+                '{"engage": false, "probability": 0.1, "reason": "primary formal", "confidence": 0.9, "action": "ignore"}',
+                observed_model=observed_model,
+                input_usage=9,
+                output_usage=4,
+            )
+            for _ in range(3)
+        ]
+    )
+    shadow_client = _SequencedEnvelopeClient(
+        [
+            _provider_response(
+                '{"engage": false, "probability": 0.1, "reason": "shadow formal", "confidence": 0.9, "action": "ignore"}',
+                observed_model=observed_model,
+                input_usage=8,
+                output_usage=3,
+            )
+            for _ in range(3)
+        ]
+    )
+    primary_provider = OpenAICompatibleDecisionAdapter(
+        ProviderLLMConfig(
+            enabled=True,
+            provider="openai_compatible",
+            model=requested_model,
+            require_live_env=True,
+            prompt_version=CONCURRENT_MESSAGE_PRIMARY_PROMPT_VERSION,
+            max_retries=2,
+        ),
+        sleep=lambda _delay: None,
+    )
+    shadow_provider = OpenAICompatibleDecisionAdapter(
+        ProviderLLMConfig(
+            enabled=True,
+            provider="openai_compatible",
+            model=requested_model,
+            require_live_env=True,
+            prompt_version=CONCURRENT_MESSAGE_SHADOW_PROMPT_VERSION,
+            max_retries=2,
+        ),
+        sleep=lambda _delay: None,
+    )
+    primary_provider._build_live_client = lambda: _sdk_wrapper_stub(primary_client)  # type: ignore[method-assign]
+    shadow_provider._build_live_client = lambda: _sdk_wrapper_stub(shadow_client)  # type: ignore[method-assign]
+
+    output_dir = ConcurrentMessageExperimentRunner(config, primary_provider, shadow_provider).run_and_write(
+        tmp_path / "concurrent-formal-validation-shape"
+    )
+
+    validation = json.loads((output_dir / "concurrent_validation.json").read_text(encoding="utf-8"))
+    config_snapshot = json.loads((output_dir / "config_snapshot.json").read_text(encoding="utf-8"))
+    payload = json.loads((output_dir / "concurrent_message_report_payload.json").read_text(encoding="utf-8"))
+    report_html = (output_dir / "report.html").read_text(encoding="utf-8")
+
+    assert validation["sampling_status"] == "persisted_seed_first_formal_run"
+    assert validation["production_deploy_eligible"] is False
+    assert config_snapshot["sampling_status"] == "persisted_seed_first_formal_run"
+    assert config_snapshot["production_deploy_eligible"] is False
+    assert payload["run"]["sampling_status"] == "persisted_seed_first_formal_run"
+    assert payload["run"]["production_deploy_eligible"] is False
+    assert validation["variant_provider_accounting"]["primary"]["invocations"] == 3
+    assert validation["variant_provider_accounting"]["shadow"]["invocations"] == 3
+    assert validation["variant_provider_accounting"]["total"]["invocations"] == 6
+    assert len(primary_client.calls) == 3
+    assert len(shadow_client.calls) == 3
+    assert "Persisted Seed-First Formal Run" in report_html
+    assert "deploy blocked" in report_html
 
 
 def test_concurrent_message_runner_accounts_provider_retries_without_estimating_missing_usage(tmp_path: Path) -> None:

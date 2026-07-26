@@ -5,6 +5,12 @@ import json
 from pathlib import Path
 
 from llm_abm_sim import ConcurrentMessageExperimentConfig, ConcurrentMessageExperimentRunner
+from llm_abm_sim.concurrent_message_experiment import (
+    CONCURRENT_MESSAGE_FORMAL_MAX_RETRIES,
+    CONCURRENT_MESSAGE_FORMAL_OBSERVED_MODEL,
+    CONCURRENT_MESSAGE_FORMAL_REQUESTED_MODEL,
+    CONCURRENT_MESSAGE_FORMAL_TIMEOUT_SECONDS,
+)
 from llm_abm_sim.prompt_field_summary import (
     CONCURRENT_MESSAGE_PRIMARY_PROMPT_VERSION,
     CONCURRENT_MESSAGE_SHADOW_PROMPT_VERSION,
@@ -13,8 +19,8 @@ from llm_abm_sim.provider_accounting import ProviderResponseEnvelope
 from llm_abm_sim.providers.openai_compatible import OpenAICompatibleDecisionAdapter
 from llm_abm_sim.schemas import ProviderLLMConfig, ReportConfig
 
-DEFAULT_REQUESTED_MODEL = "gpt-5.4-mini"
-DEFAULT_OBSERVED_MODEL = "gpt-5.4-mini-2026-03-17"
+DEFAULT_REQUESTED_MODEL = CONCURRENT_MESSAGE_FORMAL_REQUESTED_MODEL
+DEFAULT_OBSERVED_MODEL = CONCURRENT_MESSAGE_FORMAL_OBSERVED_MODEL
 DEFAULT_PRIMARY_INPUT_TOKENS = 9
 DEFAULT_PRIMARY_OUTPUT_TOKENS = 4
 DEFAULT_SHADOW_INPUT_TOKENS = 8
@@ -112,9 +118,17 @@ def _parse_args() -> argparse.Namespace:
         "--observed-model", default=DEFAULT_OBSERVED_MODEL, help="Observed model recorded in mocked response envelopes"
     )
     parser.add_argument(
-        "--timeout-seconds", type=float, default=30.0, help="Provider timeout metadata recorded in the artifact"
+        "--timeout-seconds",
+        type=float,
+        default=CONCURRENT_MESSAGE_FORMAL_TIMEOUT_SECONDS,
+        help="Provider timeout metadata recorded in the artifact",
     )
-    parser.add_argument("--max-retries", type=int, default=2, help="Adapter retry count recorded in provider metadata")
+    parser.add_argument(
+        "--max-retries",
+        type=int,
+        default=CONCURRENT_MESSAGE_FORMAL_MAX_RETRIES,
+        help="Adapter retry count recorded in provider metadata",
+    )
     parser.add_argument("--primary-input-tokens", type=int, default=DEFAULT_PRIMARY_INPUT_TOKENS)
     parser.add_argument("--primary-output-tokens", type=int, default=DEFAULT_PRIMARY_OUTPUT_TOKENS)
     parser.add_argument("--shadow-input-tokens", type=int, default=DEFAULT_SHADOW_INPUT_TOKENS)

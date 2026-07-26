@@ -18,7 +18,7 @@ from llm_abm_sim.prompt_field_summary import (
     CONCURRENT_MESSAGE_PRIMARY_PROMPT_VERSION,
     CONCURRENT_MESSAGE_SHADOW_PROMPT_VERSION,
 )
-from llm_abm_sim.providers.openai_compatible import OpenAICompatibleDecisionAdapter
+from llm_abm_sim.providers.openai_compatible import OpenAICompatibleDecisionAdapter, _OpenAISDKClient
 from llm_abm_sim.schemas import ProviderLLMConfig, ReportConfig
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -34,6 +34,12 @@ _CONCURRENT_HELPERS_SPEC.loader.exec_module(_CONCURRENT_HELPERS)
 _SequencedEnvelopeClient = _CONCURRENT_HELPERS._SequencedEnvelopeClient
 _make_concurrent_fixture = _CONCURRENT_HELPERS._make_concurrent_fixture
 _provider_response = _CONCURRENT_HELPERS._provider_response
+
+
+def _sdk_wrapper_stub(client: _SequencedEnvelopeClient) -> _OpenAISDKClient:
+    sdk_client = object.__new__(_OpenAISDKClient)
+    sdk_client.create_response = client.create_response  # type: ignore[attr-defined]
+    return sdk_client
 
 
 def _write_json(path: Path, value: object) -> None:
@@ -157,7 +163,7 @@ def _validate(tmp_path: Path, source: Path, contract: Path) -> subprocess.Comple
 
 
 CONCURRENT_FORMAL_REQUESTED_MODEL = "gpt-5.4-mini"
-CONCURRENT_FORMAL_OBSERVED_MODEL = CONCURRENT_FORMAL_REQUESTED_MODEL
+CONCURRENT_FORMAL_OBSERVED_MODEL = "gpt-5.4-mini-2026-03-17"
 CONCURRENT_FORMAL_STATUS = "persisted_seed_first_formal_run"
 CONCURRENT_FORMAL_TITLE = "Concurrent Message Experiment Formal Report"
 
@@ -225,6 +231,10 @@ def _write_v4_release_contract(repo_root: Path, run_dir: Path, contract_path: Pa
         "provider": "openai_compatible",
         "requested_model": CONCURRENT_FORMAL_REQUESTED_MODEL,
         "observed_model": CONCURRENT_FORMAL_OBSERVED_MODEL,
+        "wire_api": "responses",
+        "timeout_seconds": 30.0,
+        "max_retries": 2,
+        "fail_closed_action": "raise",
         "logical_primary_decision_opportunities": 1800,
         "logical_shadow_decision_opportunities": 1800,
         "logical_decision_opportunities": 3600,
@@ -294,6 +304,28 @@ def _rewrite_concurrent_release_artifacts(
 
 def _make_concurrent_v4_release(repo_root: Path, work_dir: Path) -> tuple[Path, Path]:
     dataset_dir = _make_concurrent_fixture(work_dir, user_count=1000, seed_user_count=20)
+    primary_client = _SequencedEnvelopeClient(
+        [
+            _provider_response(
+                '{"engage": false, "probability": 0.1, "reason": "primary formal", "confidence": 0.9, "action": "ignore"}',
+                observed_model=CONCURRENT_FORMAL_OBSERVED_MODEL,
+                input_usage=9,
+                output_usage=4,
+            )
+            for _ in range(1800)
+        ]
+    )
+    shadow_client = _SequencedEnvelopeClient(
+        [
+            _provider_response(
+                '{"engage": false, "probability": 0.1, "reason": "shadow formal", "confidence": 0.9, "action": "ignore"}',
+                observed_model=CONCURRENT_FORMAL_OBSERVED_MODEL,
+                input_usage=8,
+                output_usage=3,
+            )
+            for _ in range(1800)
+        ]
+    )
     primary_provider = OpenAICompatibleDecisionAdapter(
         ProviderLLMConfig(
             enabled=True,
@@ -301,17 +333,7 @@ def _make_concurrent_v4_release(repo_root: Path, work_dir: Path) -> tuple[Path, 
             model=CONCURRENT_FORMAL_REQUESTED_MODEL,
             require_live_env=True,
             prompt_version=CONCURRENT_MESSAGE_PRIMARY_PROMPT_VERSION,
-        ),
-        client=_SequencedEnvelopeClient(
-            [
-                _provider_response(
-                    '{"engage": false, "probability": 0.1, "reason": "primary formal", "confidence": 0.9, "action": "ignore"}',
-                    observed_model=CONCURRENT_FORMAL_OBSERVED_MODEL,
-                    input_usage=9,
-                    output_usage=4,
-                )
-                for _ in range(1800)
-            ]
+            max_retries=2,
         ),
         sleep=lambda _delay: None,
     )
@@ -322,20 +344,13 @@ def _make_concurrent_v4_release(repo_root: Path, work_dir: Path) -> tuple[Path, 
             model=CONCURRENT_FORMAL_REQUESTED_MODEL,
             require_live_env=True,
             prompt_version=CONCURRENT_MESSAGE_SHADOW_PROMPT_VERSION,
-        ),
-        client=_SequencedEnvelopeClient(
-            [
-                _provider_response(
-                    '{"engage": false, "probability": 0.1, "reason": "shadow formal", "confidence": 0.9, "action": "ignore"}',
-                    observed_model=CONCURRENT_FORMAL_OBSERVED_MODEL,
-                    input_usage=8,
-                    output_usage=3,
-                )
-                for _ in range(1800)
-            ]
+            max_retries=2,
         ),
         sleep=lambda _delay: None,
     )
+    primary_provider._build_live_client = lambda: _sdk_wrapper_stub(primary_client)  # type: ignore[method-assign]
+    shadow_provider._build_live_client = lambda: _sdk_wrapper_stub(shadow_client)  # type: ignore[method-assign]
+
     output_dir = ConcurrentMessageExperimentRunner(
         ConcurrentMessageExperimentConfig(
             dataset_dir=dataset_dir,
@@ -344,7 +359,6 @@ def _make_concurrent_v4_release(repo_root: Path, work_dir: Path) -> tuple[Path, 
         primary_provider,
         shadow_provider,
     ).run_and_write(work_dir / "runs" / "synthetic-concurrent-v4-formal-fixture")
-    _promote_concurrent_output_to_formal_release(output_dir)
     contract_path = work_dir / "synthetic-concurrent-v4-formal-fixture.json"
     return output_dir, _write_v4_release_contract(repo_root, output_dir, contract_path)
 
