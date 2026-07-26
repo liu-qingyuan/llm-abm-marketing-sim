@@ -32,6 +32,30 @@ Agent-Based Modeling 仿真过程。系统在社交网络上按时间步推进�
 
 在只有一条 Target Marketing Video 的基础研究版本中，平台按 Platform Recommendation Score 对尚未处理的 eligible users 排序，并把目标视频投放给每批 Top K 用户。它是单条营销内容的用户定向排序，不是对多个视频为每个用户执行排序的完整 Feed Ranking。
 
+### Per-Message Personalized Top20
+
+Concurrent Message Competition Experiment 中，每条 Experimental Message Video 都对尚未看过该 message 的 eligible users 维护独立个性化 Ranking，并在每批选择自己的 Top20。候选单位是 `user × message`；最终使用 `0.50 * base_network_relevance + 0.30 * campaign_engaged_neighbor_signal + 0.20 * normalized_message_user_fit`，同一用户可以同时出现在多条 message 的队列中。
+
+### Per-Message Delivery Capacity
+
+每条 Experimental Message Video 在每个推荐批次各自拥有 Top20 曝光容量。当前 1,000 人验证中，三个 message 每批合计最多形成 60 个 `user × message` exposures，30 批后每条 message 各 600 次、总计 1,800 次；该容量不要求三个受众集合互斥。
+
+### Shared Seed Launch
+
+Batch 0 将同一个 Full-Pool Influence Seed Union 强制曝光给三条 Experimental Message Videos。若 seed union 少于某条 message 的 Top20 容量，该 message 再按自己的 Personalized Delivery Score 独立补足；因此三条 message 的 seeds 相同，只有补足用户可能不同。Batch 0 的全部 Primary Decisions 完成后，成功互动用户按 campaign 去重再传播。
+
+### Message-Level Single Exposure
+
+同一用户对同一 Experimental Message Video 最多曝光一次；该 pair 一旦曝光，无论 Primary Decision 或 provider 结果如何，都退出该 message 的后续候选集合。用户仍可进入其他 message 的 Ranking，因此整个 campaign 最多接收三条不同 message。
+
+### Campaign Exposure Coverage
+
+用户在三个 Experimental Message Videos 中实际获得曝光的 distinct message 数，取值为 0、1、2 或 3。它用于区分完全未覆盖、部分覆盖和三 message 全覆盖，不把多个 user-message exposures 误写成多个 distinct users。
+
+### Message-Level Below Delivery Capacity
+
+某个 `user × message` pair 在全部推荐批次结束后仍未获得该 message 曝光的最终状态。它表示该 pair 从未进入对应 message 的 Per-Message Delivery Capacity，不等同于用户看过该 message 后选择 `ignore`；同一用户对其他 message 可以已有曝光和 Decision。
+
 ### Delivery Capacity
 
 Target Delivery Ranking 在一个推荐批次中最多可以投放目标视频的用户数量。锦江单目标视频研究使用固定 `Top20`：Batch 0 强制曝光 20 个 seeds，Batch 1–29 每轮最多向 20 个 non-seed eligible users 投放，总曝光上限为 600。
@@ -47,6 +71,10 @@ Target Delivery Ranking 在一个推荐批次中最多可以投放目标视频�
 ### Dynamic Network Ranking Signal
 
 平台根据已经对 Target Marketing Video 产生 `like/comment/share` 的用户，计算其 Comment-Derived User Interaction Graph 直接邻居的动态排序信号：`engaged_neighbor_signal = min(1, engaged_neighbor_count / 3)`。该信号只影响下一轮 Target Delivery Ranking，不作为用户可见同伴行为传入 Final Research LLM Prompt，避免同一网络证据同时放大曝光和互动决策。它不声称用户真实看到了邻居的点赞或评论。
+
+### Campaign Engagement Ranking Signal
+
+Concurrent Message Competition Experiment 中，平台根据此前批次对任意 Experimental Message Video 产生 `like/comment/share` 的去重用户集合，计算候选用户在历史评论图中的直接邻居互动信号。该信号在 Batch 0 固定为 0，之后只影响三条 message 的个性化 Ranking，不进入 LLM-Visible Decision Context；同一用户对多条 message 的成功互动在 campaign engaged-user 集合中只计一次，`ignore` 和 `provider_failed` 不传播。
 
 ### Below Delivery Capacity
 
@@ -86,7 +114,35 @@ processed 数据中可用于构建历史信号的视频集合。对于单目标�
 
 ### Target Marketing Video
 
-从 processed Video Catalog 中选定的一条真实采集锦江营销视频。它是 runtime、真实 LLM 决策和最终研究报告的唯一视频入口；研究运行不创建合成替代视频。
+从 processed Video Catalog 中选定的一条真实采集锦江营销视频。它是当前单视频 runtime、真实 LLM 决策和最终研究报告的唯一视频入口；研究运行不创建合成替代视频。
+
+### Experimental Message Video
+
+由研究者设计的一条营销 message 原文，在仿真中作为独立发布的视频内容对象。当前多 message 研究包含三个 Experimental Message Videos；它们不暗示存在实际视频、图片、音频或历史互动数据。
+
+### Concurrent Message Competition Experiment
+
+三个 Experimental Message Videos 从 Batch 0 起同时运行独立的 Per-Message Personalized Top20，并在同一 1,000 用户池中形成允许重叠的个性化受众。每条 message 固定每批 Top20、30 批共 600 次曝光；“competition”表示三条并行 campaign 面向同一用户池并产生可比较的受众响应，不表示争抢同一个 20-slot message quota。实验不提供真实世界文案效果的因果排名。
+
+### Multi-Message Formal Contract
+
+Concurrent Message Competition Experiment 独立使用的 additive persisted/release contract。它为三 message、Primary/Shadow Decisions、逐曝光 traces、五组指标和新报告 UI 声明一致的 schema tuple；历史 Final Research v3-v6 contracts、artifacts 和 readers 保持冻结，任何新旧 token 交叉都失败关闭。
+
+### Intended Audience Segment
+
+某条 Experimental Message Video 在设计上对应的 `Class 1/2/3` 分群，表示文案主要回应哪类用户的价值关注。它是设计来源和分析维度，不是硬性曝光资格、直接 Class 相等加分或 LLM 可见标签。
+
+### Message Content Profile
+
+某条 Experimental Message Video 在“认知、环境、功能、健康、情感、社会”六类消费价值维度上的 Ranking-only `0/1` 向量：旧文案设计声明强调的维度为 `1`，其余为 `0`。它不改写 message 原文、不直接复制 Intended Audience Segment，也不进入 LLM-Visible Decision Context。
+
+### Message-User Fit
+
+Message Content Profile 与用户原始六维价值系数之间的余弦相似度，保留 raw `[-1,1]` 值，并以 `(cosine_similarity + 1) / 2` 映射为 Ranking 使用的 `[0,1]` signal。它不使用 Class 相等规则或旧 clipped dot-product，也不表示曝光概率、互动概率或 LLM Decision。
+
+### Personalized Delivery Score
+
+Concurrent Message Competition Experiment 中每个 eligible `user × message` pair 的最终排序分数：`0.50 * base_network_relevance + 0.30 * campaign_engaged_neighbor_signal + 0.20 * normalized_message_user_fit`。三项使用完整精度，完全同分时按 `user_id` 升序；`historical_tag_affinity` 因新 message 无历史证据而固定记录为 0，但不占最终分数。
 
 ### Background Video
 
@@ -123,6 +179,30 @@ processed 数据中能够关联到具体用户与视频的历史互动证据，�
 ### Decision
 
 用户代理在一次观察后的结构化输出。核心含义是是否互动、互动概率、动作、置信度和简短理由；它是仿真事件和指标的输入，而不是自由文本解释。
+
+### LLM-Visible Decision Context
+
+LLM 在一次具体 User-Video Interaction 获得曝光后实际可见的 allowlisted 语义输入。message 一侧只提供当前视频原文，不提供 Intended Audience Segment 或内部六维 `0/1` 向量；Primary 用户侧只提供三个可观测代理指标、环保意识、全部六个有符号价值系数、入住酒店类型和出行目的，不提供 `latent_class`。Primary 与 Demographic Shadow 的 PeerContext 均保持全 0，PlatformContext 全部留在 runtime/trace；Ranking、holdout、campaign feedback 和竞争视频分数不属于该上下文。
+
+### Primary Campaign Decision
+
+实际曝光后产生、且唯一能够写入 action、指标和后续 Campaign Engagement Ranking Signal 的结构化 Decision。它不向 LLM 暴露性别、年龄、教育或收入等 demographic labels。
+
+### Demographic Shadow Decision
+
+与同一次实际曝光的 Primary Campaign Decision 成对执行的 report-only Decision。它使用相同的 `user × message × exposure context`、provider、model 和参数，只额外暴露性别、年龄段、教育程度和月收入区间四个 Synthetic Experiment Labels；它不影响 action、Ranking、传播反馈或 ABM 状态，只用于衡量 demographic prompt sensitivity。
+
+### Descriptive Message Response
+
+Experimental Message Video 在其实际获配受众中的曝光后 action 和互动率。`exposure_engagement_rate = positive actions / actual exposures`，`decision_engagement_rate = positive actions / successful Primary Campaign Decisions`；两者都不构成 message 文案效果的因果排名，必须在报告 UI 中连同分母和 provider failures 展示。
+
+### Demographic Decision Sensitivity
+
+同一次实际曝光的 Primary Campaign Decision 与 Demographic Shadow Decision 之间的配对差异，包括 pair coverage、engage disagreement、action transition 和 probability delta。它只衡量 Prompt 对 Synthetic Demographic Labels 的敏感性，不代表真实人口群体行为差异。
+
+### LLM Decision Trace
+
+把一次具体 `user × message × exposure context` 的 LLM-Visible Decision Context 与其结构化 Decision 配对的研究证据。它必须标明 Primary Campaign Decision 或 Demographic Shadow Decision，不是 raw Provider Prompt 或 Provider Payload，并且必须区分实际持久化输入、重建上下文和聚合证据。
 
 ### Observed Profile Attributes
 
