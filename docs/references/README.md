@@ -19,6 +19,7 @@
 - [锦江 Target Delivery Ranking 正式研究验收记录](jinjiang-target-delivery-ranking-final-validation-20260715.md)：#43 的 1,000 用户、30 批次、600 次真实 Provider 排序运行、网络配对消融、artifact reconciliation 和真实网页验收。
 - [锦江 Runtime、Decision 与 diagnostics 字段追溯离线验证记录](jinjiang-runtime-field-trace-validation-20260720.md)：#68 的完整 report lineage、逐用户 runtime trace、复合 locator、传播语义和同源 diagnostics 验收。
 - [锦江 Seed-First 完整离线报告验收记录](jinjiang-seed-first-complete-offline-report-validation-20260720.md)：#69 的 1,000 用户完整报告、同源 artifacts、桌面交互、deterministic rebuild 和发布输入 hashes 验收。
+- [锦江 Concurrent Message 完整离线验证记录](jinjiang-concurrent-message-complete-offline-validation-20260726.md)：#98 的 1,000 用户 / 3,000 pair / 1,800 exposure mocked `openai_compatible` validation、deterministic rerun、v4 rejection preflight 和 #99 operational handoff。
 - [锦江用户潜在属性研究先验整理](jinjiang-user-latent-attributes-reference-zh.md)：latent class、价值权重、Table 11 成员画像分布和使用边界，只作为外部研究先验，不代表当前代码实现状态。
 
 `../04-开发验证/` 只保留迁移索引；迁移后的 Reference 文档必须保留 lineage、旧文件名和聚合口径说明。

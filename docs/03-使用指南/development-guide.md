@@ -63,6 +63,28 @@ python -m llm_abm_sim.run --config configs/fixtures/realistic_marketing_dataset.
 
 该样例使用可提交的真实感社交网络数据：有向加权边、关系/触点元数据、社群、种子用户、平台上下文、时间设置和营销内容。替换为本地私密数据时，请把清洗后的文件放在被忽略的 `data/raw/` 或 `data/processed/`，并在本地配置中更新 `dataset.edge_list_path` / `dataset.profile_path`。不要提交原始导出、handle、email、token、cookie、API key 或 secret-bearing headers。
 
+## Concurrent Message Validation run
+
+对 1,000-user / 30-batch / 3-message additive runtime 执行完整离线 validation 时，使用固定 mocked `openai_compatible` provider 入口：
+
+```bash
+. .venv/bin/activate
+python scripts/run_concurrent_message_validation.py \
+  --dataset-dir data/processed/jinjiang_douyin/<latent-v1-run> \
+  --output-dir runs/jinjiang-concurrent-message-mock-validation-<UTC>
+```
+
+该脚本固定写出 `configuration_profile=production` 的 1,000-user contract，但保持 `sampling_status=validation_run`、`production_deploy_eligible=false` 和 `live_api_triggered=false`。它只用于完整 offline/mock evidence，不授权真实 Provider、SSH 或 deploy。默认 metadata 与 #99 的 human-approved contract 对齐：requested `gpt-5.4-mini`、observed `gpt-5.4-mini-2026-03-17`、timeout `30s`、adapter retry `2`、wire `responses`；如需改变这些字段，必须在独立 operational Ticket 中重新授权。
+
+对已持久化的 concurrent-message report 做桌面/移动端本地验收时，可直接把 run 目录交给 Playwright：
+
+```bash
+CONCURRENT_MESSAGE_REPORT_DIR=runs/jinjiang-concurrent-message-mock-validation-<UTC> \
+  npx playwright test tests/playwright/concurrent-message-report.spec.ts
+```
+
+这会复用既有 report smoke，在 `1440x1000` 与 `390x844` 视口验证五组 UI、trace drawer、downloads 和无水平溢出/文字重叠。
+
 ## Final Research release validation 与部署
 
 本地 release evidence 验证使用唯一入口：
@@ -88,7 +110,7 @@ scripts/deploy_abm_report.sh \
 
 部署脚本先复制随机本地 snapshot，在任何 `ssh`、上传或远程配置前对该 snapshot 完成 formal-only validation；后续 hash 与 tar upload 继续读取同一只读 snapshot，原 source 的并发变化不会进入上传。v1、`validation_run`、rule-based、mock-provider、`live_api_triggered=false`、v3 model/accounting mismatch、v4 prompt/accounting/path mismatch 或 source/contract 不匹配都不会进入远程阶段。通过 preflight 后仍沿用 candidate health check、宿主检查、原子 `current` 切换、失败回退和按 contract 选择的 public acceptance（Final Research 或 Concurrent Message）流程。
 
-实现代码、离线 runner candidate、synthetic persisted Formal fixture 和 `ready-for-agent` 状态均不授权真实 Provider 或 production deployment。后续 operational Ticket 必须单独记录 Provider、模型、预算上限、独立输出目录和 canonical deployment 授权。不要用 fake Adapter 写出 live 事实，也不要把测试 fixture 描述为真实研究运行。
+实现代码、离线 runner candidate、synthetic persisted Formal fixture 和 `ready-for-agent` 状态均不授权真实 Provider 或 production deployment。后续 operational Ticket 必须单独记录 Provider、模型、adapter retry / SDK retry、调用或费用预算、独立 output directory、release ID 和 canonical deployment 授权。不要用 fake Adapter 写出 live 事实，也不要把测试 fixture 描述为真实研究运行；Concurrent Message Validation artifact 只能作为 #99 的离线 preflight evidence，不能直接生成或替代 `abm-report-release-contract-v4` Formal release。
 
 ## 质量门禁
 

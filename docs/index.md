@@ -83,9 +83,10 @@ docs/
 17. [锦江酒店 Douyin 最终数据集审计](references/jinjiang-final-dataset-audit-20260624.md)
 18. [Final Research 离线基线](architecture/final-research-offline-baseline.md)
 19. [Final Research 30 批次 Runtime 与报告合同](architecture/final-research-runtime.md)
-20. [源码结构分析](architecture/source-tree-and-entrypoints.md)
-21. [组件清单](architecture/runtime-component-inventory.md)
-22. [测试策略](architecture/testing-strategy.md)
+20. [锦江 Concurrent Message 完整离线验证记录](references/jinjiang-concurrent-message-complete-offline-validation-20260726.md)
+21. [源码结构分析](architecture/source-tree-and-entrypoints.md)
+22. [组件清单](architecture/runtime-component-inventory.md)
+23. [测试策略](architecture/testing-strategy.md)
 
 ## 快速命令
 

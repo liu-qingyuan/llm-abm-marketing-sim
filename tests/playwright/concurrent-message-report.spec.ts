@@ -4,6 +4,8 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { expect, test, type Page } from '@playwright/test';
 
+const existingConcurrentReportDir = process.env.CONCURRENT_MESSAGE_REPORT_DIR;
+
 type ConcurrentTraceRow = {
   message_id: string;
   latent_class: string;
@@ -18,6 +20,14 @@ type ConcurrentPayload = {
 };
 
 function generateConcurrentReport(testInfo: { outputDir: string }): { outputDir: string; payload: ConcurrentPayload } {
+  if (existingConcurrentReportDir) {
+    const outputDir = path.resolve(existingConcurrentReportDir);
+    const payload = JSON.parse(
+      readFileSync(path.join(outputDir, 'concurrent_message_report_payload.json'), 'utf8'),
+    ) as ConcurrentPayload;
+    return { outputDir, payload };
+  }
+
   const outputDir = path.join(testInfo.outputDir, 'concurrent-run');
   const command = `
 set -euo pipefail

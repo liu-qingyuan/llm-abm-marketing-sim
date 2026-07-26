@@ -37,6 +37,7 @@ llm-abm-marketing-sim/
 ├── playwright.config.ts              # 浏览器冒烟配置
 ├── pyproject.toml                    # Python 包、依赖、ruff、mypy、pytest marker
 ├── scripts/
+│   ├── run_concurrent_message_validation.py # 1,000-user mocked concurrent-message validation runner
 │   ├── validate_abm_report_release.py # v1/v2/v3/v4 persisted release evidence validator
 │   └── deploy_abm_report.sh           # formal-only production deploy Interface
 ├── src/
@@ -136,16 +137,22 @@ runner = ExperimentRunner.from_config_file("configs/default.yaml")
 result = runner.run()
 ```
 
-- Final Research 离线基线与显式 provider runtime：
+- Final Research 离线基线、Concurrent Message validation baseline 与显式 provider runtime：
 
 ```python
+from llm_abm_sim import ConcurrentMessageExperimentConfig, ConcurrentMessageExperimentRunner
 from llm_abm_sim import FinalResearchConfig, FinalResearchRunner
 
-config = FinalResearchConfig(dataset_dir="data/processed/jinjiang_douyin/<latent-v1-run>")
-output_dir = FinalResearchRunner(config, decision_adapter).run_and_write("runs/final-research")
+concurrent_config = ConcurrentMessageExperimentConfig(dataset_dir="data/processed/jinjiang_douyin/<latent-v1-run>")
+concurrent_output = ConcurrentMessageExperimentRunner(concurrent_config, primary_adapter, shadow_adapter).run_and_write(
+    "runs/concurrent-message-validation"
+)
+
+final_research_config = FinalResearchConfig(dataset_dir="data/processed/jinjiang_douyin/<latent-v1-run>")
+final_research_output = FinalResearchRunner(final_research_config, decision_adapter).run_and_write("runs/final-research")
 ```
 
-该路径保留现有 `LLMDecisionAdapter` 接缝。离线基线不调用适配器；显式启用 provider 后才运行 30 批次，并由 live gate 决定是否允许真实 API。
+Concurrent Message validation 的 CLI glue 位于 `scripts/run_concurrent_message_validation.py`，默认写出 1,000-user / 30-batch / 3-message mocked `openai_compatible` validation artifact；离线基线不调用真实 Provider，显式启用 provider 后才运行 Formal path，并由 live gate 决定是否允许真实 API。
 
 - Release validation 与 formal-only production deploy：
 

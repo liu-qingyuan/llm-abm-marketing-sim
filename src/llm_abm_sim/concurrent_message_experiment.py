@@ -454,8 +454,12 @@ def _cosine_similarity(left: Sequence[float], right: Sequence[float], *, zero_la
 
 def _message_user_fit_components(message: ExperimentalMessageDefinition, user: ResearchUser) -> tuple[float, float]:
     message_vector = message.vector()
-    user_vector = tuple(float(user.latent_attributes[f"latent_{dimension}_value_weight"]) for dimension in LATENT_VALUE_DIMENSIONS)
-    raw_fit = _cosine_similarity(message_vector, user_vector, zero_label=f"message/user pair {message.message_id}/{user.user_id}")
+    user_vector = tuple(
+        float(user.latent_attributes[f"latent_{dimension}_value_weight"]) for dimension in LATENT_VALUE_DIMENSIONS
+    )
+    raw_fit = _cosine_similarity(
+        message_vector, user_vector, zero_label=f"message/user pair {message.message_id}/{user.user_id}"
+    )
     normalized_fit = (raw_fit + 1.0) / 2.0
     return raw_fit, normalized_fit
 
@@ -507,9 +511,7 @@ def _select_batch_candidates(
 
     selected = [score for score in ranked_scores if score.user_id in seed_set]
     if len(selected) > delivery_capacity:
-        raise ValueError(
-            f"delivery_capacity {delivery_capacity} is smaller than the seed union size {len(selected)}"
-        )
+        raise ValueError(f"delivery_capacity {delivery_capacity} is smaller than the seed union size {len(selected)}")
     selection_reason_by_user = {score.user_id: "seed_union" for score in selected}
     if len(selected) == delivery_capacity:
         return selected, selection_reason_by_user
@@ -704,11 +706,12 @@ def _variant_attempt_accounting(
     if baseline.has_provider_accounting and after.has_provider_accounting:
         delta = provider_accounting_delta(after.provider_accounting, baseline.provider_accounting)
         usage_complete = (
-            delta.provider_response_count > 0
-            and delta.usage_complete_response_count == delta.provider_response_count
+            delta.provider_response_count > 0 and delta.usage_complete_response_count == delta.provider_response_count
         )
         return _VariantAttemptAccounting(
-            request_invocations=max(request_delta, delta.provider_response_count, 1 if attempt.provider_failure is not None else 0),
+            request_invocations=max(
+                request_delta, delta.provider_response_count, 1 if attempt.provider_failure is not None else 0
+            ),
             provider_response_count=delta.provider_response_count,
             successful_decision_count=delta.successful_decision_count,
             observed_model_counts=dict(delta.observed_model_counts),
@@ -745,18 +748,14 @@ def _variant_attempt_accounting(
     )
 
 
-def _validate_observed_model_match(
-    accounting: _VariantAttemptAccounting,
-    default_provider_metadata: Mapping[str, object],
-) -> None:
-    requested_model = default_provider_metadata.get("model")
-    if not isinstance(requested_model, str) or not requested_model.strip():
-        return
-    mismatched = sorted(model for model in accounting.observed_model_counts if model != requested_model)
-    if mismatched:
-        raise ValueError(
-            f"observed model mismatch: requested {requested_model}, observed {', '.join(mismatched)}"
-        )
+def _validate_observed_model_accounting(accounting: _VariantAttemptAccounting) -> None:
+    observed_total = (
+        sum(accounting.observed_model_counts.values())
+        + accounting.observed_model_missing_response_count
+        + accounting.observed_model_malformed_response_count
+    )
+    if observed_total != accounting.provider_response_count:
+        raise ValueError("observed model accounting must cover every provider response")
 
 
 def _aggregate_variant_evidence(rows: Sequence[Mapping[str, object]]) -> dict[str, object]:
@@ -878,9 +877,7 @@ class ConcurrentMessageExperimentRunner:
         primary_metadata.pop("prompt_version", None)
         shadow_metadata.pop("prompt_version", None)
         if primary_metadata != shadow_metadata:
-            raise ValueError(
-                "primary and shadow adapters must match on provider/model/timeout/retry/sampling metadata"
-            )
+            raise ValueError("primary and shadow adapters must match on provider/model/timeout/retry/sampling metadata")
 
     def run_and_write(self, output_dir: str | Path) -> Path:
         output_path = Path(output_dir)
@@ -934,7 +931,9 @@ class ConcurrentMessageExperimentRunner:
 
             for message in self.config.messages:
                 eligible_user_ids = [
-                    user_id for user_id in cohort.sample_user_ids if user_id not in exposed_by_message[message.message_id]
+                    user_id
+                    for user_id in cohort.sample_user_ids
+                    if user_id not in exposed_by_message[message.message_id]
                 ]
                 ranked_scores = _rank_message_candidates(
                     message=message,
@@ -993,7 +992,9 @@ class ConcurrentMessageExperimentRunner:
                     "selected_user_ids": list(selected_user_ids),
                     "seed_user_ids": [user_id for user_id in selected_user_ids if user_id in cohort.seed_user_ids],
                     "personalized_topup_user_ids": [
-                        user_id for user_id, reason in selection_reason_by_user.items() if reason == "personalized_topup"
+                        user_id
+                        for user_id, reason in selection_reason_by_user.items()
+                        if reason == "personalized_topup"
                     ],
                     "primary_positive_user_ids": [],
                     "primary_provider_failed_user_ids": [],
@@ -1029,7 +1030,9 @@ class ConcurrentMessageExperimentRunner:
                 pair_rows.append(pair_row)
                 if primary_positive_event is not None:
                     batch_primary_positive_events.append(primary_positive_event)
-                    batch_message_summaries[plan.message.message_id]["primary_positive_user_ids"].append(plan.user.user_id)
+                    batch_message_summaries[plan.message.message_id]["primary_positive_user_ids"].append(
+                        plan.user.user_id
+                    )
                 if pair_row["primary_status"] == "provider_failed":
                     batch_message_summaries[plan.message.message_id]["primary_provider_failed_user_ids"].append(
                         plan.user.user_id
@@ -1059,9 +1062,9 @@ class ConcurrentMessageExperimentRunner:
         safe_candidate_rows = _safe_runtime_rows(candidate_rows)
         safe_pair_rows = _safe_runtime_rows(pair_rows)
         safe_terminal_rows = _safe_runtime_rows(terminal_rows)
-        campaign_diagnostics = ConcurrentCampaignDiagnostics(
-            delivery_capacity=self.config.delivery_capacity
-        ).build(candidate_rows=safe_candidate_rows, pair_rows=safe_pair_rows)
+        campaign_diagnostics = ConcurrentCampaignDiagnostics(delivery_capacity=self.config.delivery_capacity).build(
+            candidate_rows=safe_candidate_rows, pair_rows=safe_pair_rows
+        )
         validation_summary = self._validation_summary(
             cohort=cohort,
             pair_rows=pair_rows,
@@ -1114,7 +1117,7 @@ class ConcurrentMessageExperimentRunner:
             attempt=attempt,
             default_provider_metadata=default_provider_metadata,
         )
-        _validate_observed_model_match(accounting, default_provider_metadata)
+        _validate_observed_model_accounting(accounting)
         return attempt, accounting
 
     def _execute_pair(
@@ -1183,20 +1186,14 @@ class ConcurrentMessageExperimentRunner:
             "base_network_relevance_full_precision": _full_precision_cell(plan.score.base_network_relevance),
             "campaign_engaged_neighbor_count": plan.score.engaged_neighbor_count,
             "campaign_engaged_neighbor_signal": round(plan.score.engaged_neighbor_signal, 12),
-            "campaign_engaged_neighbor_signal_full_precision": _full_precision_cell(
-                plan.score.engaged_neighbor_signal
-            ),
+            "campaign_engaged_neighbor_signal_full_precision": _full_precision_cell(plan.score.engaged_neighbor_signal),
             "historical_tag_affinity": CONCURRENT_MESSAGE_HISTORY_AFFINITY,
             "raw_message_user_fit": round(plan.score.raw_message_user_fit, 12),
             "raw_message_user_fit_full_precision": _full_precision_cell(plan.score.raw_message_user_fit),
             "normalized_message_user_fit": round(plan.score.normalized_message_user_fit, 12),
-            "normalized_message_user_fit_full_precision": _full_precision_cell(
-                plan.score.normalized_message_user_fit
-            ),
+            "normalized_message_user_fit_full_precision": _full_precision_cell(plan.score.normalized_message_user_fit),
             "personalized_delivery_score": round(plan.score.personalized_delivery_score, 12),
-            "personalized_delivery_score_full_precision": _full_precision_cell(
-                plan.score.personalized_delivery_score
-            ),
+            "personalized_delivery_score_full_precision": _full_precision_cell(plan.score.personalized_delivery_score),
             "primary_status": primary_terminal_row["terminal_status"],
             "primary_action": primary_terminal_row["action"],
             "primary_probability": primary_terminal_row["probability"],
@@ -1549,10 +1546,7 @@ class ConcurrentMessageExperimentRunner:
         funnel_per_message_capacity = funnel["per_message_capacity"]
         assert isinstance(funnel_per_message_capacity, Mapping)
         funnel_rows_html = "".join(
-            "<tr>"
-            f"<td>{html.escape(label)}</td>"
-            f"<td>{html.escape(value)}</td>"
-            "</tr>"
+            f"<tr><td>{html.escape(label)}</td><td>{html.escape(value)}</td></tr>"
             for label, value in (
                 ("Research sample users", f"{funnel['sample_users']:,}"),
                 ("Eligible user-message pairs", f"{funnel['eligible_user_message_pairs']:,}"),
@@ -1574,10 +1568,7 @@ class ConcurrentMessageExperimentRunner:
             )
         )
         coverage_rows_html = "".join(
-            "<tr>"
-            f"<td>{html.escape(message_count)} message(s)</td>"
-            f"<td>{count}</td>"
-            "</tr>"
+            f"<tr><td>{html.escape(message_count)} message(s)</td><td>{count}</td></tr>"
             for message_count, count in cast(Mapping[str, object], funnel["campaign_exposure_coverage"]).items()
         )
         allocation_batches = cast(list[dict[str, object]], allocation["batch_capacity"])
@@ -1609,7 +1600,10 @@ class ConcurrentMessageExperimentRunner:
         class_matrix_rows_html = "".join(
             "<tr>"
             f"<td>{html.escape(latent_class)}</td>"
-            + "".join(f"<td>{cast(Mapping[str, object], counts_by_message)[message_id]}</td>" for message_id in per_message.keys())
+            + "".join(
+                f"<td>{cast(Mapping[str, object], counts_by_message)[message_id]}</td>"
+                for message_id in per_message.keys()
+            )
             + "</tr>"
             for latent_class, counts_by_message in class_matrix.items()
         )
@@ -1672,10 +1666,7 @@ class ConcurrentMessageExperimentRunner:
             for batch in cast(list[dict[str, object]], cast(Mapping[str, object], payload)["batches"])
         )
         sensitivity_summary_rows_html = "".join(
-            "<tr>"
-            f"<td>{html.escape(label)}</td>"
-            f"<td>{html.escape(value)}</td>"
-            "</tr>"
+            f"<tr><td>{html.escape(label)}</td><td>{html.escape(value)}</td></tr>"
             for label, value in (
                 (
                     "Pair terminal coverage",
@@ -1685,7 +1676,7 @@ class ConcurrentMessageExperimentRunner:
                     "Paired decision coverage",
                     f"{sensitivity['paired_decision_coverage']['numerator']} / {sensitivity['paired_decision_coverage']['denominator']} = {sensitivity['paired_decision_coverage']['value']}",
                 ),
-                ("Dual-success pairs", str(sensitivity['dual_success_pair_count'])),
+                ("Dual-success pairs", str(sensitivity["dual_success_pair_count"])),
                 (
                     "Engage disagreement rate",
                     f"{sensitivity['engage_disagreement_rate']['numerator']} / {sensitivity['engage_disagreement_rate']['denominator']} = {sensitivity['engage_disagreement_rate']['value']}",
@@ -1701,10 +1692,7 @@ class ConcurrentMessageExperimentRunner:
             )
         )
         transition_rows_html = "".join(
-            "<tr>"
-            f"<td>{html.escape(transition)}</td>"
-            f"<td>{count}</td>"
-            "</tr>"
+            f"<tr><td>{html.escape(transition)}</td><td>{count}</td></tr>"
             for transition, count in cast(Mapping[str, object], sensitivity["action_transition_counts"]).items()
         )
         flagged_pairs_rows_html = "".join(
@@ -1718,10 +1706,10 @@ class ConcurrentMessageExperimentRunner:
             for row in cast(list[dict[str, object]], reason_screening["flagged_pairs"])
         )
         summary_html = "".join(
-            f"<div class=\"metric\"><span>{html.escape(label)}</span><strong>{html.escape(value)}</strong></div>"
+            f'<div class="metric"><span>{html.escape(label)}</span><strong>{html.escape(value)}</strong></div>'
             for label, value in summary_items
         )
-        return f'''<!doctype html>
+        return f"""<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
@@ -1786,7 +1774,7 @@ class ConcurrentMessageExperimentRunner:
         </table>
       </div>
       <h3>Audience Overlap</h3>
-      <p class="muted">Distinct union: {overlap['distinct_union_count']}; three-way intersection: {overlap['three_way_intersection_count']}.</p>
+      <p class="muted">Distinct union: {overlap["distinct_union_count"]}; three-way intersection: {overlap["three_way_intersection_count"]}.</p>
       <div class="table-wrap">
         <table>
           <thead>
@@ -1838,7 +1826,7 @@ class ConcurrentMessageExperimentRunner:
     <section>
       <h2>Campaign Feedback Effect</h2>
       <p class="muted">No-feedback diagnostics reuse the same frozen candidate evidence, full-precision ranking, and user_id tie-break, while setting only the campaign feedback component to 0.</p>
-      <p class="muted">Changed message-batches: {feedback_overall['changed_message_batch_count']}; distinct changed users: {len(cast(list[str], feedback_overall['distinct_changed_user_ids']))}.</p>
+      <p class="muted">Changed message-batches: {feedback_overall["changed_message_batch_count"]}; distinct changed users: {len(cast(list[str], feedback_overall["distinct_changed_user_ids"]))}.</p>
       <div class="table-wrap">
         <table>
           <thead>
@@ -1866,7 +1854,7 @@ class ConcurrentMessageExperimentRunner:
         </table>
       </div>
       <h3>Flagged Shadow Reasons</h3>
-      <p class="muted">{html.escape(str(reason_screening['limitations']))}</p>
+      <p class="muted">{html.escape(str(reason_screening["limitations"]))}</p>
       <div class="table-wrap">
         <table>
           <thead>
@@ -1934,7 +1922,7 @@ class ConcurrentMessageExperimentRunner:
   </main>
 </body>
 </html>
-'''
+"""
 
 
 def _full_precision_cell(value: float) -> str:

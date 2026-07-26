@@ -526,15 +526,14 @@ def test_concurrent_message_runner_writes_validation_runtime_artifacts(tmp_path:
     assert [message["message_id"] for message in step_rows[0]["messages"]] == ["message_1", "message_2", "message_3"]
 
     second_batch_message_summaries = {message["message_id"]: message for message in step_rows[1]["messages"]}
-    assert second_batch_message_summaries["message_1"]["selected_user_ids"] != second_batch_message_summaries["message_3"]["selected_user_ids"]
+    assert (
+        second_batch_message_summaries["message_1"]["selected_user_ids"]
+        != second_batch_message_summaries["message_3"]["selected_user_ids"]
+    )
     assert "u23" in second_batch_message_summaries["message_3"]["selected_user_ids"]
     assert "u12" in second_batch_message_summaries["message_1"]["selected_user_ids"]
 
-    u11_second_batch_rows = [
-        row
-        for row in candidate_rows
-        if row["time_step"] == "1" and row["user_id"] == "u11"
-    ]
+    u11_second_batch_rows = [row for row in candidate_rows if row["time_step"] == "1" and row["user_id"] == "u11"]
     assert u11_second_batch_rows
     assert all(int(row["campaign_engaged_neighbor_count"]) == 1 for row in u11_second_batch_rows)
 
@@ -576,8 +575,12 @@ def test_concurrent_message_runner_writes_validation_runtime_artifacts(tmp_path:
     assert "不得据此推断人格" in shadow_prompt
 
     first_pair_id = pair_rows[0]["pair_id"]
-    primary_terminal = next(row for row in terminal_rows if row["pair_id"] == first_pair_id and row["decision_variant"] == "primary")
-    shadow_terminal = next(row for row in terminal_rows if row["pair_id"] == first_pair_id and row["decision_variant"] == "shadow")
+    primary_terminal = next(
+        row for row in terminal_rows if row["pair_id"] == first_pair_id and row["decision_variant"] == "primary"
+    )
+    shadow_terminal = next(
+        row for row in terminal_rows if row["pair_id"] == first_pair_id and row["decision_variant"] == "shadow"
+    )
     assert primary_terminal["prompt_version"] == CONCURRENT_MESSAGE_PRIMARY_PROMPT_VERSION
     assert shadow_terminal["prompt_version"] == CONCURRENT_MESSAGE_SHADOW_PROMPT_VERSION
     assert primary_terminal["cache_key"] != shadow_terminal["cache_key"]
@@ -765,12 +768,16 @@ def test_concurrent_cached_variants_do_not_cross_hit_between_prompt_tokens() -> 
     )
 
     for _ in range(2):
-        primary.decide(post, _concurrent_prompt_profile(user_id="u1", shadow=False), PeerContext(), PlatformContext(), 0)
+        primary.decide(
+            post, _concurrent_prompt_profile(user_id="u1", shadow=False), PeerContext(), PlatformContext(), 0
+        )
         shadow.decide(post, _concurrent_prompt_profile(user_id="u1", shadow=True), PeerContext(), PlatformContext(), 0)
 
     assert len(primary_leaf.calls) == 1
     assert len(shadow_leaf.calls) == 1
-    assert set(cast(InMemoryDecisionCache, primary.cache).decisions) != set(cast(InMemoryDecisionCache, shadow.cache).decisions)
+    assert set(cast(InMemoryDecisionCache, primary.cache).decisions) != set(
+        cast(InMemoryDecisionCache, shadow.cache).decisions
+    )
 
 
 def test_concurrent_message_runner_rejects_mismatched_adapter_contracts(tmp_path: Path) -> None:
@@ -820,7 +827,7 @@ def test_concurrent_message_runner_rejects_mismatched_adapter_contracts(tmp_path
         )
 
 
-def test_concurrent_message_runner_fails_closed_on_observed_model_mismatch(tmp_path: Path) -> None:
+def test_concurrent_message_runner_preserves_requested_and_observed_model_split(tmp_path: Path) -> None:
     dataset_dir = _make_concurrent_fixture(tmp_path, user_count=3, seed_user_count=1)
     config = ConcurrentMessageExperimentConfig(
         dataset_dir=dataset_dir,
@@ -829,25 +836,45 @@ def test_concurrent_message_runner_fails_closed_on_observed_model_mismatch(tmp_p
         delivery_capacity=1,
         configuration_profile="validation",
     )
+    requested_model = "gpt-5.4-mini"
+    observed_model = "gpt-5.4-mini-2026-03-17"
     primary_client = _SequencedEnvelopeClient(
         [
-            _provider_response('{"engage": false, "probability": 0.1, "reason": "mismatch", "confidence": 0.9, "action": "ignore"}', observed_model="other-observed-model"),
-            _provider_response('{"engage": false, "probability": 0.1, "reason": "mismatch", "confidence": 0.9, "action": "ignore"}', observed_model="other-observed-model"),
-            _provider_response('{"engage": false, "probability": 0.1, "reason": "mismatch", "confidence": 0.9, "action": "ignore"}', observed_model="other-observed-model"),
+            _provider_response(
+                '{"engage": false, "probability": 0.1, "reason": "primary", "confidence": 0.9, "action": "ignore"}',
+                observed_model=observed_model,
+            ),
+            _provider_response(
+                '{"engage": false, "probability": 0.1, "reason": "primary", "confidence": 0.9, "action": "ignore"}',
+                observed_model=observed_model,
+            ),
+            _provider_response(
+                '{"engage": false, "probability": 0.1, "reason": "primary", "confidence": 0.9, "action": "ignore"}',
+                observed_model=observed_model,
+            ),
         ]
     )
     shadow_client = _SequencedEnvelopeClient(
         [
-            _provider_response('{"engage": false, "probability": 0.1, "reason": "shadow", "confidence": 0.9, "action": "ignore"}', observed_model="shared-requested-model"),
-            _provider_response('{"engage": false, "probability": 0.1, "reason": "shadow", "confidence": 0.9, "action": "ignore"}', observed_model="shared-requested-model"),
-            _provider_response('{"engage": false, "probability": 0.1, "reason": "shadow", "confidence": 0.9, "action": "ignore"}', observed_model="shared-requested-model"),
+            _provider_response(
+                '{"engage": false, "probability": 0.1, "reason": "shadow", "confidence": 0.9, "action": "ignore"}',
+                observed_model=observed_model,
+            ),
+            _provider_response(
+                '{"engage": false, "probability": 0.1, "reason": "shadow", "confidence": 0.9, "action": "ignore"}',
+                observed_model=observed_model,
+            ),
+            _provider_response(
+                '{"engage": false, "probability": 0.1, "reason": "shadow", "confidence": 0.9, "action": "ignore"}',
+                observed_model=observed_model,
+            ),
         ]
     )
     primary_provider = OpenAICompatibleDecisionAdapter(
         ProviderLLMConfig(
             enabled=True,
             provider="mocked_openai_compatible",
-            model="shared-requested-model",
+            model=requested_model,
             require_live_env=False,
             prompt_version=CONCURRENT_MESSAGE_PRIMARY_PROMPT_VERSION,
         ),
@@ -858,7 +885,7 @@ def test_concurrent_message_runner_fails_closed_on_observed_model_mismatch(tmp_p
         ProviderLLMConfig(
             enabled=True,
             provider="mocked_openai_compatible",
-            model="shared-requested-model",
+            model=requested_model,
             require_live_env=False,
             prompt_version=CONCURRENT_MESSAGE_SHADOW_PROMPT_VERSION,
         ),
@@ -866,12 +893,18 @@ def test_concurrent_message_runner_fails_closed_on_observed_model_mismatch(tmp_p
         sleep=lambda _delay: None,
     )
 
-    run_dir = tmp_path / "observed-model-mismatch"
-    with pytest.raises(ValueError, match="observed model mismatch"):
-        ConcurrentMessageExperimentRunner(config, primary_provider, shadow_provider).run_and_write(run_dir)
+    run_dir = ConcurrentMessageExperimentRunner(config, primary_provider, shadow_provider).run_and_write(
+        tmp_path / "requested-observed-model-split"
+    )
 
-    assert run_dir.exists()
-    assert not any(run_dir.iterdir())
+    validation = _read_json(run_dir / "concurrent_validation.json")
+    terminal_rows = _read_csv(run_dir / "concurrent_runtime_terminal_rows.csv")
+
+    assert validation["variant_provider_accounting"]["primary"]["observed_model_counts"] == {observed_model: 3}
+    assert validation["variant_provider_accounting"]["shadow"]["observed_model_counts"] == {observed_model: 3}
+    assert validation["variant_provider_accounting"]["total"]["observed_model_counts"] == {observed_model: 6}
+    assert all(json.loads(row["provider_metadata"])["model"] == requested_model for row in terminal_rows)
+    assert all(json.loads(row["observed_model_counts"]) == {observed_model: 1} for row in terminal_rows)
 
 
 def test_concurrent_message_runner_accounts_provider_retries_without_estimating_missing_usage(tmp_path: Path) -> None:
@@ -886,16 +919,40 @@ def test_concurrent_message_runner_accounts_provider_retries_without_estimating_
     primary_client = _SequencedEnvelopeClient(
         [
             _provider_response('{"unexpected": true}', usage_status="missing"),
-            _provider_response('{"engage": false, "probability": 0.2, "reason": "retry success", "confidence": 0.9, "action": "ignore"}', input_usage=10, output_usage=5),
-            _provider_response('{"engage": false, "probability": 0.1, "reason": "steady", "confidence": 0.9, "action": "ignore"}', input_usage=9, output_usage=4),
-            _provider_response('{"engage": false, "probability": 0.1, "reason": "steady", "confidence": 0.9, "action": "ignore"}', input_usage=8, output_usage=4),
+            _provider_response(
+                '{"engage": false, "probability": 0.2, "reason": "retry success", "confidence": 0.9, "action": "ignore"}',
+                input_usage=10,
+                output_usage=5,
+            ),
+            _provider_response(
+                '{"engage": false, "probability": 0.1, "reason": "steady", "confidence": 0.9, "action": "ignore"}',
+                input_usage=9,
+                output_usage=4,
+            ),
+            _provider_response(
+                '{"engage": false, "probability": 0.1, "reason": "steady", "confidence": 0.9, "action": "ignore"}',
+                input_usage=8,
+                output_usage=4,
+            ),
         ]
     )
     shadow_client = _SequencedEnvelopeClient(
         [
-            _provider_response('{"engage": false, "probability": 0.1, "reason": "shadow", "confidence": 0.9, "action": "ignore"}', input_usage=7, output_usage=3),
-            _provider_response('{"engage": false, "probability": 0.1, "reason": "shadow", "confidence": 0.9, "action": "ignore"}', input_usage=7, output_usage=3),
-            _provider_response('{"engage": false, "probability": 0.1, "reason": "shadow", "confidence": 0.9, "action": "ignore"}', input_usage=7, output_usage=3),
+            _provider_response(
+                '{"engage": false, "probability": 0.1, "reason": "shadow", "confidence": 0.9, "action": "ignore"}',
+                input_usage=7,
+                output_usage=3,
+            ),
+            _provider_response(
+                '{"engage": false, "probability": 0.1, "reason": "shadow", "confidence": 0.9, "action": "ignore"}',
+                input_usage=7,
+                output_usage=3,
+            ),
+            _provider_response(
+                '{"engage": false, "probability": 0.1, "reason": "shadow", "confidence": 0.9, "action": "ignore"}',
+                input_usage=7,
+                output_usage=3,
+            ),
         ]
     )
     primary_provider = OpenAICompatibleDecisionAdapter(
@@ -950,9 +1007,7 @@ def test_concurrent_message_runner_accounts_provider_retries_without_estimating_
     assert total_accounting["successful_decisions"] == 6
 
     first_primary_row = next(
-        row
-        for row in terminal_rows
-        if row["decision_variant"] == "primary" and row["message_id"] == "message_1"
+        row for row in terminal_rows if row["decision_variant"] == "primary" and row["message_id"] == "message_1"
     )
     assert first_primary_row["request_invocations"] == "2"
     assert first_primary_row["provider_response_count"] == "2"
@@ -960,6 +1015,7 @@ def test_concurrent_message_runner_accounts_provider_retries_without_estimating_
     assert first_primary_row["usage_complete"] == "false"
     assert first_primary_row["input_usage"] == ""
     assert first_primary_row["total_usage"] == ""
+
 
 def test_concurrent_message_config_rejects_non_production_shape_on_default_profile(tmp_path: Path) -> None:
     dataset_dir = _make_concurrent_fixture(tmp_path)
