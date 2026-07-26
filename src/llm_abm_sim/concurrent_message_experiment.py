@@ -11,6 +11,7 @@ from typing import Literal, TypedDict, cast
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from .concurrent_campaign_diagnostics import ConcurrentCampaignDiagnosticArtifacts, ConcurrentCampaignDiagnostics
 from .decision import DecisionInput, EngageDecision, LLMDecisionAdapter, decision_profile_payload
 from .final_research import (
     _TARGET_DELIVERY_RANKING_POLICY,
@@ -57,6 +58,7 @@ CONCURRENT_MESSAGE_CANDIDATE_CSV = "concurrent_runtime_candidates.csv"
 CONCURRENT_MESSAGE_PAIR_CSV = "concurrent_runtime_pairs.csv"
 CONCURRENT_MESSAGE_TERMINAL_CSV = "concurrent_runtime_terminal_rows.csv"
 CONCURRENT_MESSAGE_VALIDATION_JSON = "concurrent_validation.json"
+CONCURRENT_MESSAGE_CAMPAIGN_DIAGNOSTICS_JSON = "concurrent_campaign_diagnostics.json"
 CONCURRENT_MESSAGE_REPORT_HTML = "report.html"
 CONCURRENT_MESSAGE_MESSAGE_JSON = "message_snapshot.json"
 CONCURRENT_MESSAGE_SAMPLE_JSON = "sample_manifest.json"
@@ -112,12 +114,17 @@ CONCURRENT_MESSAGE_CANDIDATE_FIELDS = (
     "selection_reason",
     "ranking_position",
     "base_network_relevance",
+    "base_network_relevance_full_precision",
     "campaign_engaged_neighbor_count",
     "campaign_engaged_neighbor_signal",
+    "campaign_engaged_neighbor_signal_full_precision",
     "historical_tag_affinity",
     "raw_message_user_fit",
+    "raw_message_user_fit_full_precision",
     "normalized_message_user_fit",
+    "normalized_message_user_fit_full_precision",
     "personalized_delivery_score",
+    "personalized_delivery_score_full_precision",
 )
 CONCURRENT_MESSAGE_PAIR_FIELDS = (
     "pair_id",
@@ -127,16 +134,25 @@ CONCURRENT_MESSAGE_PAIR_FIELDS = (
     "message_title",
     "user_id",
     "latent_class",
+    "shadow_gender",
+    "shadow_age",
+    "shadow_education",
+    "shadow_monthly_income",
     "is_seed",
     "selection_reason",
     "ranking_position",
     "base_network_relevance",
+    "base_network_relevance_full_precision",
     "campaign_engaged_neighbor_count",
     "campaign_engaged_neighbor_signal",
+    "campaign_engaged_neighbor_signal_full_precision",
     "historical_tag_affinity",
     "raw_message_user_fit",
+    "raw_message_user_fit_full_precision",
     "normalized_message_user_fit",
+    "normalized_message_user_fit_full_precision",
     "personalized_delivery_score",
+    "personalized_delivery_score_full_precision",
     "primary_status",
     "primary_action",
     "primary_probability",
@@ -761,17 +777,17 @@ def _aggregate_variant_evidence(rows: Sequence[Mapping[str, object]]) -> dict[st
     cached_input_usage = 0
     cached_reported = False
     for row in rows:
-        request_invocations += int(row["request_invocations"])
-        provider_responses += int(row["provider_response_count"])
-        successful_decisions += int(row["successful_decision_count"])
-        observed_model_missing_response_count += int(row["observed_model_missing_response_count"])
-        observed_model_malformed_response_count += int(row["observed_model_malformed_response_count"])
-        usage_complete_response_count += int(row["usage_complete_response_count"])
-        usage_missing_response_count += int(row["usage_missing_response_count"])
-        usage_malformed_response_count += int(row["usage_malformed_response_count"])
-        if bool(row["usage_complete"]):
+        request_invocations += int(cast(int | str, row["request_invocations"]))
+        provider_responses += int(cast(int | str, row["provider_response_count"]))
+        successful_decisions += int(cast(int | str, row["successful_decision_count"]))
+        observed_model_missing_response_count += int(cast(int | str, row["observed_model_missing_response_count"]))
+        observed_model_malformed_response_count += int(cast(int | str, row["observed_model_malformed_response_count"]))
+        usage_complete_response_count += int(cast(int | str, row["usage_complete_response_count"]))
+        usage_missing_response_count += int(cast(int | str, row["usage_missing_response_count"]))
+        usage_malformed_response_count += int(cast(int | str, row["usage_malformed_response_count"]))
+        if cast(bool, row["usage_complete"]):
             usage_complete_attempts += 1
-        elif int(row["request_invocations"]) > 0:
+        elif int(cast(int | str, row["request_invocations"])) > 0:
             usage_incomplete_attempts += 1
         for model, count in cast(dict[str, int], row["observed_model_counts"]).items():
             observed_model_counts[model] += count
@@ -950,12 +966,23 @@ class ConcurrentMessageExperimentRunner:
                             "selection_reason": selection_reason_by_user.get(score.user_id, ""),
                             "ranking_position": ranking_position,
                             "base_network_relevance": round(score.base_network_relevance, 12),
+                            "base_network_relevance_full_precision": _full_precision_cell(score.base_network_relevance),
                             "campaign_engaged_neighbor_count": score.engaged_neighbor_count,
                             "campaign_engaged_neighbor_signal": round(score.engaged_neighbor_signal, 12),
+                            "campaign_engaged_neighbor_signal_full_precision": _full_precision_cell(
+                                score.engaged_neighbor_signal
+                            ),
                             "historical_tag_affinity": CONCURRENT_MESSAGE_HISTORY_AFFINITY,
                             "raw_message_user_fit": round(score.raw_message_user_fit, 12),
+                            "raw_message_user_fit_full_precision": _full_precision_cell(score.raw_message_user_fit),
                             "normalized_message_user_fit": round(score.normalized_message_user_fit, 12),
+                            "normalized_message_user_fit_full_precision": _full_precision_cell(
+                                score.normalized_message_user_fit
+                            ),
                             "personalized_delivery_score": round(score.personalized_delivery_score, 12),
+                            "personalized_delivery_score_full_precision": _full_precision_cell(
+                                score.personalized_delivery_score
+                            ),
                         }
                     )
                 batch_message_summaries[message.message_id] = {
@@ -1029,17 +1056,20 @@ class ConcurrentMessageExperimentRunner:
                 }
             )
 
+        safe_candidate_rows = _safe_runtime_rows(candidate_rows)
+        safe_pair_rows = _safe_runtime_rows(pair_rows)
+        safe_terminal_rows = _safe_runtime_rows(terminal_rows)
+        campaign_diagnostics = ConcurrentCampaignDiagnostics(
+            delivery_capacity=self.config.delivery_capacity
+        ).build(candidate_rows=safe_candidate_rows, pair_rows=safe_pair_rows)
         validation_summary = self._validation_summary(
             cohort=cohort,
             pair_rows=pair_rows,
             terminal_rows=terminal_rows,
             variant_evidence_rows=variant_evidence_rows,
             step_rows=step_rows,
+            diagnostics=campaign_diagnostics,
         )
-
-        safe_candidate_rows = _safe_runtime_rows(candidate_rows)
-        safe_pair_rows = _safe_runtime_rows(pair_rows)
-        safe_terminal_rows = _safe_runtime_rows(terminal_rows)
         _write_json(output_path / CONCURRENT_MESSAGE_CONFIG_JSON, self.config.snapshot())
         _write_json(
             output_path / CONCURRENT_MESSAGE_MESSAGE_JSON,
@@ -1067,8 +1097,14 @@ class ConcurrentMessageExperimentRunner:
         )
         _write_json(output_path / CONCURRENT_MESSAGE_STEP_JSON, step_rows)
         _write_json(output_path / CONCURRENT_MESSAGE_VALIDATION_JSON, validation_summary)
+        _write_json(output_path / CONCURRENT_MESSAGE_CAMPAIGN_DIAGNOSTICS_JSON, campaign_diagnostics.payload)
         (output_path / CONCURRENT_MESSAGE_REPORT_HTML).write_text(
-            self._render_report(validation_summary=validation_summary, pair_rows=safe_pair_rows, step_rows=step_rows),
+            self._render_report(
+                validation_summary=validation_summary,
+                pair_rows=safe_pair_rows,
+                step_rows=step_rows,
+                diagnostics=campaign_diagnostics.payload,
+            ),
             encoding="utf-8",
         )
         return output_path
@@ -1159,16 +1195,31 @@ class ConcurrentMessageExperimentRunner:
             "message_title": plan.message.title,
             "user_id": plan.user.user_id,
             "latent_class": str(plan.user.latent_attributes["latent_class"]),
+            "shadow_gender": str(plan.user.latent_attributes["latent_gender"]),
+            "shadow_age": str(plan.user.latent_attributes["latent_age"]),
+            "shadow_education": str(plan.user.latent_attributes["latent_education"]),
+            "shadow_monthly_income": str(plan.user.latent_attributes["latent_monthly_income"]),
             "is_seed": _csv_bool(plan.user.is_seed),
             "selection_reason": plan.selection_reason,
             "ranking_position": plan.ranking_position,
             "base_network_relevance": round(plan.score.base_network_relevance, 12),
+            "base_network_relevance_full_precision": _full_precision_cell(plan.score.base_network_relevance),
             "campaign_engaged_neighbor_count": plan.score.engaged_neighbor_count,
             "campaign_engaged_neighbor_signal": round(plan.score.engaged_neighbor_signal, 12),
+            "campaign_engaged_neighbor_signal_full_precision": _full_precision_cell(
+                plan.score.engaged_neighbor_signal
+            ),
             "historical_tag_affinity": CONCURRENT_MESSAGE_HISTORY_AFFINITY,
             "raw_message_user_fit": round(plan.score.raw_message_user_fit, 12),
+            "raw_message_user_fit_full_precision": _full_precision_cell(plan.score.raw_message_user_fit),
             "normalized_message_user_fit": round(plan.score.normalized_message_user_fit, 12),
+            "normalized_message_user_fit_full_precision": _full_precision_cell(
+                plan.score.normalized_message_user_fit
+            ),
             "personalized_delivery_score": round(plan.score.personalized_delivery_score, 12),
+            "personalized_delivery_score_full_precision": _full_precision_cell(
+                plan.score.personalized_delivery_score
+            ),
             "primary_status": primary_terminal_row["terminal_status"],
             "primary_action": primary_terminal_row["action"],
             "primary_probability": primary_terminal_row["probability"],
@@ -1337,32 +1388,22 @@ class ConcurrentMessageExperimentRunner:
         terminal_rows: Sequence[Mapping[str, object]],
         variant_evidence_rows: Sequence[Mapping[str, object]],
         step_rows: Sequence[_BatchStepSummary],
+        diagnostics: ConcurrentCampaignDiagnosticArtifacts,
     ) -> dict[str, object]:
-        sample_user_ids = list(cohort.sample_user_ids)
-        exposures = len(pair_rows)
-        primary_successes = sum(row["primary_status"] == "succeeded" for row in pair_rows)
-        primary_failures = sum(row["primary_status"] == "provider_failed" for row in pair_rows)
-        shadow_successes = sum(row["shadow_status"] == "succeeded" for row in pair_rows)
-        shadow_failures = sum(row["shadow_status"] == "provider_failed" for row in pair_rows)
-        paired_successes = sum(row["paired_decision_coverage"] == "true" for row in pair_rows)
-        per_message_counts: dict[str, dict[str, object]] = {}
-        for message in self.config.messages:
-            message_rows = [row for row in pair_rows if row["message_id"] == message.message_id]
-            per_message_counts[message.message_id] = {
-                "message_title": message.title,
-                "intended_audience_segment": message.intended_audience_segment,
-                "exposures": len(message_rows),
-                "primary_successes": sum(row["primary_status"] == "succeeded" for row in message_rows),
-                "primary_failures": sum(row["primary_status"] == "provider_failed" for row in message_rows),
-                "shadow_successes": sum(row["shadow_status"] == "succeeded" for row in message_rows),
-                "shadow_failures": sum(row["shadow_status"] == "provider_failed" for row in message_rows),
-                "below_delivery_capacity": len(set(sample_user_ids) - {str(row["user_id"]) for row in message_rows}),
-            }
-        distinct_exposed_users = len({str(row["user_id"]) for row in pair_rows})
-        coverage_counts = Counter(
-            sum(str(row["user_id"]) == user_id for row in pair_rows)
-            for user_id in sample_user_ids
-        )
+        del cohort, pair_rows
+        funnel = diagnostics.payload["campaign_funnel"]
+        sensitivity = diagnostics.payload["demographic_decision_sensitivity"]
+        assert isinstance(funnel, Mapping)
+        assert isinstance(sensitivity, Mapping)
+        funnel_primary = funnel["primary"]
+        funnel_shadow = funnel["shadow"]
+        funnel_per_message = funnel["per_message"]
+        assert isinstance(funnel_primary, Mapping)
+        assert isinstance(funnel_shadow, Mapping)
+        assert isinstance(funnel_per_message, Mapping)
+        per_message_segments = {
+            message.message_id: message.intended_audience_segment for message in self.config.messages
+        }
         primary_variant_rows = [row for row in variant_evidence_rows if row["decision_variant"] == "primary"]
         shadow_variant_rows = [row for row in variant_evidence_rows if row["decision_variant"] == "shadow"]
         provider_accounting = {
@@ -1382,27 +1423,38 @@ class ConcurrentMessageExperimentRunner:
             "messages": [message.model_dump(mode="json") for message in self.config.messages],
             "prompt_contract": _variant_prompt_contract_summary(),
             "variant_provider_accounting": provider_accounting,
+            "campaign_diagnostics_schema_version": diagnostics.payload["schema_version"],
+            "campaign_diagnostics_summary": diagnostics.summary,
             "counts": {
-                "sample_users": len(sample_user_ids),
-                "messages": len(self.config.messages),
-                "eligible_user_message_pairs": len(sample_user_ids) * len(self.config.messages),
-                "actual_exposures": exposures,
-                "distinct_exposed_users": distinct_exposed_users,
-                "primary_attempted": exposures,
-                "primary_successes": primary_successes,
-                "primary_failures": primary_failures,
-                "shadow_attempted": exposures,
-                "shadow_successes": shadow_successes,
-                "shadow_failures": shadow_failures,
+                "sample_users": funnel["sample_users"],
+                "messages": funnel["message_count"],
+                "eligible_user_message_pairs": funnel["eligible_user_message_pairs"],
+                "actual_exposures": funnel["actual_exposures"],
+                "distinct_exposed_users": funnel["distinct_exposed_users"],
+                "primary_attempted": funnel_primary["attempted"],
+                "primary_successes": funnel_primary["succeeded"],
+                "primary_failures": funnel_primary["provider_failed"],
+                "shadow_attempted": funnel_shadow["attempted"],
+                "shadow_successes": funnel_shadow["succeeded"],
+                "shadow_failures": funnel_shadow["provider_failed"],
                 "terminal_rows": len(terminal_rows),
-                "pair_terminal_coverage": 1.0 if exposures == 0 else len(terminal_rows) / (exposures * 2),
-                "paired_decision_coverage": 0.0 if exposures == 0 else paired_successes / exposures,
+                "pair_terminal_coverage": sensitivity["pair_terminal_coverage"]["value"],
+                "paired_decision_coverage": sensitivity["paired_decision_coverage"]["value"],
             },
-            "campaign_exposure_coverage": {
-                str(message_count): coverage_counts.get(message_count, 0)
-                for message_count in range(len(self.config.messages) + 1)
+            "campaign_exposure_coverage": funnel["campaign_exposure_coverage"],
+            "per_message": {
+                message_id: {
+                    "message_title": message_payload["message_title"],
+                    "intended_audience_segment": per_message_segments[message_id],
+                    "exposures": message_payload["exposures"],
+                    "primary_successes": message_payload["primary_successes"],
+                    "primary_failures": message_payload["primary_failures"],
+                    "shadow_successes": message_payload["shadow_successes"],
+                    "shadow_failures": message_payload["shadow_failures"],
+                    "below_delivery_capacity": message_payload["below_delivery_capacity"],
+                }
+                for message_id, message_payload in funnel_per_message.items()
             },
-            "per_message": per_message_counts,
             "steps": list(step_rows),
         }
 
@@ -1412,6 +1464,7 @@ class ConcurrentMessageExperimentRunner:
         validation_summary: Mapping[str, object],
         pair_rows: Sequence[Mapping[str, object]],
         step_rows: Sequence[_BatchStepSummary],
+        diagnostics: Mapping[str, object],
     ) -> str:
         counts = validation_summary["counts"]
         assert isinstance(counts, Mapping)
@@ -1421,15 +1474,29 @@ class ConcurrentMessageExperimentRunner:
         assert isinstance(prompt_contract, Mapping)
         provider_accounting = validation_summary["variant_provider_accounting"]
         assert isinstance(provider_accounting, Mapping)
+        funnel = diagnostics["campaign_funnel"]
+        allocation = diagnostics["message_allocation"]
+        response = diagnostics["primary_audience_response"]
+        feedback = diagnostics["campaign_feedback_effect"]
+        sensitivity = diagnostics["demographic_decision_sensitivity"]
+        assert isinstance(funnel, Mapping)
+        assert isinstance(allocation, Mapping)
+        assert isinstance(response, Mapping)
+        assert isinstance(feedback, Mapping)
+        assert isinstance(sensitivity, Mapping)
+        feedback_overall = feedback["overall"]
+        assert isinstance(feedback_overall, Mapping)
+        reason_screening = sensitivity["reason_screening"]
+        assert isinstance(reason_screening, Mapping)
         summary_items = [
             ("Research sample", str(counts["sample_users"])),
             ("Eligible user-message pairs", str(counts["eligible_user_message_pairs"])),
             ("Actual exposures", str(counts["actual_exposures"])),
             ("Primary success / fail", f"{counts['primary_successes']} / {counts['primary_failures']}"),
             ("Shadow success / fail", f"{counts['shadow_successes']} / {counts['shadow_failures']}"),
+            ("Changed message-batches", str(feedback_overall["changed_message_batch_count"])),
             ("Pair terminal coverage", f"{float(counts['pair_terminal_coverage']):.2f}"),
             ("Paired decision coverage", f"{float(counts['paired_decision_coverage']):.2f}"),
-            ("Production deploy eligible", "false"),
         ]
         message_rows_html = "".join(
             "<tr>"
@@ -1477,8 +1544,8 @@ class ConcurrentMessageExperimentRunner:
             f"<td>{html.escape(str(row['user_id']))}</td>"
             f"<td>{html.escape(str(row['latent_class']))}</td>"
             f"<td>{row['ranking_position']}</td>"
-            f"<td>{row['selection_reason']}</td>"
-            f"<td>{row['personalized_delivery_score']}</td>"
+            f"<td>{html.escape(str(row['selection_reason']))}</td>"
+            f"<td>{html.escape(str(row['personalized_delivery_score_full_precision']))}</td>"
             f"<td>{row['primary_status']}</td>"
             f"<td>{html.escape(str(row['primary_action']))}</td>"
             f"<td>{html.escape(str(row['primary_prompt_version']))}</td>"
@@ -1498,6 +1565,177 @@ class ConcurrentMessageExperimentRunner:
             "</tr>"
             for step in step_rows
         )
+        funnel_per_message_capacity = funnel["per_message_capacity"]
+        assert isinstance(funnel_per_message_capacity, Mapping)
+        funnel_rows_html = "".join(
+            "<tr>"
+            f"<td>{html.escape(label)}</td>"
+            f"<td>{html.escape(value)}</td>"
+            "</tr>"
+            for label, value in (
+                ("Research sample users", f"{funnel['sample_users']:,}"),
+                ("Eligible user-message pairs", f"{funnel['eligible_user_message_pairs']:,}"),
+                ("Actual exposures", f"{funnel['actual_exposures']:,}"),
+                (
+                    "Per-message capacity",
+                    f"{funnel_per_message_capacity['per_batch']} per batch x {funnel_per_message_capacity['batches']} batches = {funnel_per_message_capacity['per_message_total']}",
+                ),
+                ("Distinct exposed users", f"{funnel['distinct_exposed_users']:,}"),
+                (
+                    "Primary attempted / succeeded / failed",
+                    f"{funnel['primary']['attempted']} / {funnel['primary']['succeeded']} / {funnel['primary']['provider_failed']}",
+                ),
+                (
+                    "Shadow attempted / succeeded / failed",
+                    f"{funnel['shadow']['attempted']} / {funnel['shadow']['succeeded']} / {funnel['shadow']['provider_failed']}",
+                ),
+                ("Below-delivery-capacity pairs", f"{funnel['below_delivery_capacity_pairs']:,}"),
+            )
+        )
+        coverage_rows_html = "".join(
+            "<tr>"
+            f"<td>{html.escape(message_count)} message(s)</td>"
+            f"<td>{count}</td>"
+            "</tr>"
+            for message_count, count in cast(Mapping[str, object], funnel["campaign_exposure_coverage"]).items()
+        )
+        allocation_batches = cast(list[dict[str, object]], allocation["batch_capacity"])
+        allocation_rows_html = "".join(
+            "<tr>"
+            f"<td>{html.escape(str(row['message_id']))}</td>"
+            f"<td>{row['time_step']}</td>"
+            f"<td>{row['configured_capacity']}</td>"
+            f"<td>{row['eligible_users']}</td>"
+            f"<td>{row['selected_pairs']}</td>"
+            f"<td>{row['cumulative_pairs']}</td>"
+            f"<td>{row['below_delivery_capacity']}</td>"
+            f"<td>{html.escape(', '.join(cast(list[str], row['actual_selected_user_ids'])))}</td>"
+            "</tr>"
+            for row in allocation_batches
+        )
+        overlap = cast(Mapping[str, object], allocation["overlap"])
+        overlap_rows_html = "".join(
+            "<tr>"
+            f"<td>{html.escape(str(row['left_message_id']))}</td>"
+            f"<td>{html.escape(str(row['right_message_id']))}</td>"
+            f"<td>{row['overlap_count']}</td>"
+            f"<td>{html.escape(', '.join(cast(list[str], row['overlap_user_ids'])))}</td>"
+            "</tr>"
+            for row in cast(list[dict[str, object]], overlap["pairwise"])
+        )
+        class_matrix = cast(Mapping[str, object], allocation["class_message_matrix"])
+        class_matrix_headers = "".join(f"<th>{html.escape(message_id)}</th>" for message_id in per_message.keys())
+        class_matrix_rows_html = "".join(
+            "<tr>"
+            f"<td>{html.escape(latent_class)}</td>"
+            + "".join(f"<td>{cast(Mapping[str, object], counts_by_message)[message_id]}</td>" for message_id in per_message.keys())
+            + "</tr>"
+            for latent_class, counts_by_message in class_matrix.items()
+        )
+        fit_distribution = cast(Mapping[str, Mapping[str, object]], allocation["fit_distribution_by_message"])
+        fit_rows_html = "".join(
+            "<tr>"
+            f"<td>{html.escape(message_id)}</td>"
+            f"<td>{html.escape(str(payload['message_title']))}</td>"
+            f"<td>{payload['selected_pairs']}</td>"
+            f"<td>{cast(Mapping[str, object], payload['raw_message_user_fit'])['min']}</td>"
+            f"<td>{cast(Mapping[str, object], payload['raw_message_user_fit'])['mean']}</td>"
+            f"<td>{cast(Mapping[str, object], payload['raw_message_user_fit'])['max']}</td>"
+            f"<td>{cast(Mapping[str, object], payload['normalized_message_user_fit'])['min']}</td>"
+            f"<td>{cast(Mapping[str, object], payload['normalized_message_user_fit'])['mean']}</td>"
+            f"<td>{cast(Mapping[str, object], payload['normalized_message_user_fit'])['max']}</td>"
+            "</tr>"
+            for message_id, payload in fit_distribution.items()
+        )
+        selected_pair_rows_html = "".join(
+            "<tr>"
+            f"<td>{row['time_step']}</td>"
+            f"<td>{html.escape(str(row['message_id']))}</td>"
+            f"<td>{html.escape(str(row['user_id']))}</td>"
+            f"<td>{html.escape(str(row['latent_class']))}</td>"
+            f"<td>{html.escape(str(row['selection_reason']))}</td>"
+            f"<td>{row['ranking_position']}</td>"
+            f"<td>{html.escape(str(row['base_network_component_full_precision']))}</td>"
+            f"<td>{html.escape(str(row['campaign_feedback_component_full_precision']))}</td>"
+            f"<td>{html.escape(str(row['message_user_fit_component_full_precision']))}</td>"
+            f"<td>{html.escape(str(row['personalized_delivery_score_full_precision']))}</td>"
+            "</tr>"
+            for row in cast(list[dict[str, object]], allocation["selected_pair_details"])
+        )
+        response_rows_html = "".join(
+            "<tr>"
+            f"<td>{html.escape(message_id)}</td>"
+            f"<td>{html.escape(str(payload['message_title']))}</td>"
+            f"<td>{cast(Mapping[str, object], payload['action_counts'])['like']}</td>"
+            f"<td>{cast(Mapping[str, object], payload['action_counts'])['comment']}</td>"
+            f"<td>{cast(Mapping[str, object], payload['action_counts'])['share']}</td>"
+            f"<td>{cast(Mapping[str, object], payload['action_counts'])['ignore']}</td>"
+            f"<td>{cast(Mapping[str, object], payload['action_counts'])['provider_failed']}</td>"
+            f"<td>{cast(Mapping[str, object], payload['exposure_engagement_rate'])['numerator']} / {cast(Mapping[str, object], payload['exposure_engagement_rate'])['denominator']} = {cast(Mapping[str, object], payload['exposure_engagement_rate'])['value']}</td>"
+            f"<td>{cast(Mapping[str, object], payload['decision_engagement_rate'])['numerator']} / {cast(Mapping[str, object], payload['decision_engagement_rate'])['denominator']} = {cast(Mapping[str, object], payload['decision_engagement_rate'])['value']}</td>"
+            "</tr>"
+            for message_id, payload in cast(Mapping[str, Mapping[str, object]], response["per_message"]).items()
+        )
+        feedback_rows_html = "".join(
+            "<tr>"
+            f"<td>{html.escape(message_id)}</td>"
+            f"<td>{batch['time_step']}</td>"
+            f"<td>{batch['eligible_users']}</td>"
+            f"<td>{batch['top_count']}</td>"
+            f"<td>{batch['top_overlap_count']}</td>"
+            f"<td>{html.escape(', '.join(cast(list[str], batch['feedback_added_user_ids'])))}</td>"
+            f"<td>{html.escape(', '.join(cast(list[str], batch['feedback_removed_user_ids'])))}</td>"
+            f"<td>{'true' if batch['top_selection_changed'] else 'false'}</td>"
+            "</tr>"
+            for message_id, payload in cast(Mapping[str, object], feedback["per_message"]).items()
+            for batch in cast(list[dict[str, object]], cast(Mapping[str, object], payload)["batches"])
+        )
+        sensitivity_summary_rows_html = "".join(
+            "<tr>"
+            f"<td>{html.escape(label)}</td>"
+            f"<td>{html.escape(value)}</td>"
+            "</tr>"
+            for label, value in (
+                (
+                    "Pair terminal coverage",
+                    f"{sensitivity['pair_terminal_coverage']['numerator']} / {sensitivity['pair_terminal_coverage']['denominator']} = {sensitivity['pair_terminal_coverage']['value']}",
+                ),
+                (
+                    "Paired decision coverage",
+                    f"{sensitivity['paired_decision_coverage']['numerator']} / {sensitivity['paired_decision_coverage']['denominator']} = {sensitivity['paired_decision_coverage']['value']}",
+                ),
+                ("Dual-success pairs", str(sensitivity['dual_success_pair_count'])),
+                (
+                    "Engage disagreement rate",
+                    f"{sensitivity['engage_disagreement_rate']['numerator']} / {sensitivity['engage_disagreement_rate']['denominator']} = {sensitivity['engage_disagreement_rate']['value']}",
+                ),
+                (
+                    "Mean absolute probability delta",
+                    f"{sensitivity['mean_absolute_probability_delta']['absolute_delta_sum']} / {sensitivity['mean_absolute_probability_delta']['denominator']} = {sensitivity['mean_absolute_probability_delta']['value']}",
+                ),
+                (
+                    "Flagged shadow reasons",
+                    f"{reason_screening['flagged_pair_count']} / {reason_screening['screened_non_empty_shadow_reasons']}",
+                ),
+            )
+        )
+        transition_rows_html = "".join(
+            "<tr>"
+            f"<td>{html.escape(transition)}</td>"
+            f"<td>{count}</td>"
+            "</tr>"
+            for transition, count in cast(Mapping[str, object], sensitivity["action_transition_counts"]).items()
+        )
+        flagged_pairs_rows_html = "".join(
+            "<tr>"
+            f"<td>{html.escape(str(row['pair_id']))}</td>"
+            f"<td>{html.escape(str(row['message_id']))}</td>"
+            f"<td>{html.escape(str(row['user_id']))}</td>"
+            f"<td>{html.escape(str(row['shadow_reason']))}</td>"
+            f"<td>{html.escape(_json_cell(row['matched_spans']))}</td>"
+            "</tr>"
+            for row in cast(list[dict[str, object]], reason_screening["flagged_pairs"])
+        )
         summary_html = "".join(
             f"<div class=\"metric\"><span>{html.escape(label)}</span><strong>{html.escape(value)}</strong></div>"
             for label, value in summary_items
@@ -1513,6 +1751,7 @@ class ConcurrentMessageExperimentRunner:
     body {{ margin: 0; font: 14px/1.5 -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; color: #102033; background: #f6f8fb; }}
     main {{ max-width: 1360px; margin: 0 auto; padding: 32px 20px 48px; }}
     h1, h2 {{ margin: 0 0 12px; }}
+    h3 {{ margin: 18px 0 8px; font-size: 15px; }}
     p {{ margin: 0 0 12px; }}
     .banner {{ padding: 18px 20px; border: 1px solid #d8e1ee; background: #fff; border-radius: 8px; }}
     .metrics {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; margin: 20px 0 28px; }}
@@ -1532,9 +1771,130 @@ class ConcurrentMessageExperimentRunner:
     <div class="banner">
       <h1>{html.escape(self.config.report.title)}</h1>
       <p>This tracer is validation-only, descriptive, and non-causal. It is not a formal release artifact and cannot be deployed.</p>
-      <p class="muted">The runner freezes three message queues batch-by-batch, records paired Primary/Shadow terminal rows, and keeps production_deploy_eligible=false.</p>
+      <p class="muted">The diagnostics below are rebuilt from persisted candidate and pair rows. They do not call the adapter, do not advance runtime state, and do not claim a causal winner.</p>
     </div>
     <div class="metrics">{summary_html}</div>
+    <section>
+      <h2>Campaign Funnel</h2>
+      <p class="muted">Counts are rebuilt from runtime candidate/pair rows rather than handwritten aggregates.</p>
+      <div class="table-wrap">
+        <table>
+          <tbody>{funnel_rows_html}</tbody>
+        </table>
+      </div>
+      <h3>Exposure Coverage</h3>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr><th>Coverage</th><th>User count</th></tr>
+          </thead>
+          <tbody>{coverage_rows_html}</tbody>
+        </table>
+      </div>
+    </section>
+    <section>
+      <h2>Message Allocation</h2>
+      <p class="muted">Allocation comparisons are descriptive only. Overlaps and fit summaries reflect deterministic queue assignment, not causal content effectiveness.</p>
+      <h3>Batch Capacity</h3>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr><th>Message</th><th>Batch</th><th>Configured capacity</th><th>Eligible users</th><th>Selected pairs</th><th>Cumulative pairs</th><th>Below capacity</th><th>Actual selected users</th></tr>
+          </thead>
+          <tbody>{allocation_rows_html}</tbody>
+        </table>
+      </div>
+      <h3>Audience Overlap</h3>
+      <p class="muted">Distinct union: {overlap['distinct_union_count']}; three-way intersection: {overlap['three_way_intersection_count']}.</p>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr><th>Left message</th><th>Right message</th><th>Overlap count</th><th>User IDs</th></tr>
+          </thead>
+          <tbody>{overlap_rows_html}</tbody>
+        </table>
+      </div>
+      <h3>Class x Message Exposure Matrix</h3>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr><th>Latent class</th>{class_matrix_headers}</tr>
+          </thead>
+          <tbody>{class_matrix_rows_html}</tbody>
+        </table>
+      </div>
+      <h3>Fit Distribution</h3>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr><th>Message</th><th>Title</th><th>Selected pairs</th><th>Raw fit min</th><th>Raw fit mean</th><th>Raw fit max</th><th>Normalized fit min</th><th>Normalized fit mean</th><th>Normalized fit max</th></tr>
+          </thead>
+          <tbody>{fit_rows_html}</tbody>
+        </table>
+      </div>
+      <h3>Selected Pair Score Components</h3>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr><th>Batch</th><th>Message</th><th>User</th><th>Class</th><th>Selection</th><th>Rank</th><th>Base component</th><th>Feedback component</th><th>Fit component</th><th>Full score</th></tr>
+          </thead>
+          <tbody>{selected_pair_rows_html}</tbody>
+        </table>
+      </div>
+    </section>
+    <section>
+      <h2>Primary Audience Response</h2>
+      <p class="muted">Per-message action counts and rates are descriptive only. They do not rank messages as winners.</p>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr><th>Message</th><th>Title</th><th>Like</th><th>Comment</th><th>Share</th><th>Ignore</th><th>Provider failed</th><th>Positive actions / exposures</th><th>Positive actions / successful Primary decisions</th></tr>
+          </thead>
+          <tbody>{response_rows_html}</tbody>
+        </table>
+      </div>
+    </section>
+    <section>
+      <h2>Campaign Feedback Effect</h2>
+      <p class="muted">No-feedback diagnostics reuse the same frozen candidate evidence, full-precision ranking, and user_id tie-break, while setting only the campaign feedback component to 0.</p>
+      <p class="muted">Changed message-batches: {feedback_overall['changed_message_batch_count']}; distinct changed users: {len(cast(list[str], feedback_overall['distinct_changed_user_ids']))}.</p>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr><th>Message</th><th>Batch</th><th>Eligible users</th><th>Top count</th><th>Top overlap</th><th>Feedback-added users</th><th>Feedback-removed users</th><th>Changed</th></tr>
+          </thead>
+          <tbody>{feedback_rows_html}</tbody>
+        </table>
+      </div>
+    </section>
+    <section>
+      <h2>Demographic Decision Sensitivity</h2>
+      <p class="muted">Paired decision comparisons use only Primary/Shadow dual-success rows. Reason screening is lexical evidence only and not a full semantic bias classifier.</p>
+      <div class="table-wrap">
+        <table>
+          <tbody>{sensitivity_summary_rows_html}</tbody>
+        </table>
+      </div>
+      <h3>Action Transitions</h3>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr><th>Transition</th><th>Count</th></tr>
+          </thead>
+          <tbody>{transition_rows_html}</tbody>
+        </table>
+      </div>
+      <h3>Flagged Shadow Reasons</h3>
+      <p class="muted">{html.escape(str(reason_screening['limitations']))}</p>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr><th>Pair</th><th>Message</th><th>User</th><th>Shadow reason</th><th>Matched spans</th></tr>
+          </thead>
+          <tbody>{flagged_pairs_rows_html}</tbody>
+        </table>
+      </div>
+    </section>
     <section>
       <h2>Prompt Contract</h2>
       <div class="table-wrap">
@@ -1584,7 +1944,7 @@ class ConcurrentMessageExperimentRunner:
       <div class="table-wrap">
         <table>
           <thead>
-            <tr><th>Batch</th><th>Message</th><th>User</th><th>Class</th><th>Rank</th><th>Selection</th><th>Score</th><th>Primary status</th><th>Primary action</th><th>Primary prompt</th><th>Shadow status</th><th>Shadow action</th><th>Shadow prompt</th><th>Feedback committed</th></tr>
+            <tr><th>Batch</th><th>Message</th><th>User</th><th>Class</th><th>Rank</th><th>Selection</th><th>Full score</th><th>Primary status</th><th>Primary action</th><th>Primary prompt</th><th>Shadow status</th><th>Shadow action</th><th>Shadow prompt</th><th>Feedback committed</th></tr>
           </thead>
           <tbody>{pair_rows_html}</tbody>
         </table>
@@ -1594,6 +1954,10 @@ class ConcurrentMessageExperimentRunner:
 </body>
 </html>
 '''
+
+
+def _full_precision_cell(value: float) -> str:
+    return format(value, ".17g")
 
 
 def _step_message_summary(message_summary: _BatchMessageSummary) -> str:

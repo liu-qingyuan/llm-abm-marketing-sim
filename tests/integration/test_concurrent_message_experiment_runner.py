@@ -3,11 +3,12 @@ from __future__ import annotations
 import csv
 import json
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal, cast
 
 import pytest
 
 from llm_abm_sim import ConcurrentMessageExperimentConfig, ConcurrentMessageExperimentRunner
+from llm_abm_sim.concurrent_campaign_diagnostics import validate_concurrent_validation_summary
 from llm_abm_sim.concurrent_message_experiment import authoritative_message_definitions
 from llm_abm_sim.decision import (
     CachedDecisionAdapter,
@@ -373,7 +374,7 @@ def _provider_response(
     decision_text: str,
     *,
     observed_model: str = "shared-requested-model",
-    usage_status: str = "complete",
+    usage_status: Literal["complete", "missing", "malformed"] = "complete",
     input_usage: int = 12,
     output_usage: int = 6,
 ) -> ProviderResponseEnvelope:
@@ -416,6 +417,7 @@ def test_concurrent_message_runner_writes_validation_runtime_artifacts(tmp_path:
     )
 
     validation = json.loads((output_dir / "concurrent_validation.json").read_text(encoding="utf-8"))
+    diagnostics = json.loads((output_dir / "concurrent_campaign_diagnostics.json").read_text(encoding="utf-8"))
     pair_rows = _read_csv(output_dir / "concurrent_runtime_pairs.csv")
     terminal_rows = _read_csv(output_dir / "concurrent_runtime_terminal_rows.csv")
     candidate_rows = _read_csv(output_dir / "concurrent_runtime_candidates.csv")
@@ -435,8 +437,20 @@ def test_concurrent_message_runner_writes_validation_runtime_artifacts(tmp_path:
     assert validation["variant_provider_accounting"]["primary"]["invocations"] == 60
     assert validation["variant_provider_accounting"]["shadow"]["invocations"] == 60
     assert validation["variant_provider_accounting"]["total"]["responses"] == 118
+    assert diagnostics["schema_version"] == "concurrent-campaign-diagnostics-v1"
+    assert diagnostics["campaign_funnel"]["actual_exposures"] == 60
+    assert diagnostics["campaign_funnel"]["below_delivery_capacity_pairs"] == 30
+    assert diagnostics["campaign_feedback_effect"]["overall"]["message_batch_count"] == 6
+    assert diagnostics["campaign_feedback_effect"]["calls_decision_adapter"] is False
+    assert diagnostics["demographic_decision_sensitivity"]["reason_screening"]["flagged_pair_count"] == 0
+    validate_concurrent_validation_summary(validation, diagnostics)
     assert "validation-only" in report_html
     assert "cannot be deployed" in report_html
+    assert "Campaign Funnel" in report_html
+    assert "Message Allocation" in report_html
+    assert "Primary Audience Response" in report_html
+    assert "Campaign Feedback Effect" in report_html
+    assert "Demographic Decision Sensitivity" in report_html
     assert "Prompt Contract" in report_html
     assert "Provider Accounting" in report_html
 
@@ -451,6 +465,8 @@ def test_concurrent_message_runner_writes_validation_runtime_artifacts(tmp_path:
     first_batch_candidates = [row for row in candidate_rows if row["time_step"] == "0"]
     assert first_batch_candidates
     assert all(int(row["campaign_engaged_neighbor_count"]) == 0 for row in first_batch_candidates)
+    assert all(row["personalized_delivery_score_full_precision"] for row in first_batch_candidates)
+    assert all(row["base_network_relevance_full_precision"] for row in first_batch_candidates)
 
     assert step_rows[0]["deduplicated_committed_primary_positive_user_ids"] == ["u1"]
     assert [message["message_id"] for message in step_rows[0]["messages"]] == ["message_1", "message_2", "message_3"]
@@ -480,15 +496,21 @@ def test_concurrent_message_runner_writes_validation_runtime_artifacts(tmp_path:
     primary_failure_pair = next(row for row in pair_rows if row["message_id"] == "message_3" and row["user_id"] == "u4")
     assert primary_failure_pair["primary_status"] == "provider_failed"
     assert primary_failure_pair["shadow_status"] == "succeeded"
+    assert primary_failure_pair["shadow_gender"] == "female"
 
     shadow_failure_pair = next(row for row in pair_rows if row["message_id"] == "message_2" and row["user_id"] == "u3")
     assert shadow_failure_pair["primary_status"] == "succeeded"
     assert shadow_failure_pair["shadow_status"] == "provider_failed"
 
+    validation_tampered = json.loads(json.dumps(validation))
+    validation_tampered["counts"]["actual_exposures"] = 59
+    with pytest.raises(ValueError, match="counts.actual_exposures"):
+        validate_concurrent_validation_summary(validation_tampered, diagnostics)
+
     assert len(primary_adapter.calls) == 60
     assert len(shadow_adapter.calls) == 60
-    primary_prompt = primary_adapter.calls[0]["prompt_text"]
-    shadow_prompt = shadow_adapter.calls[0]["prompt_text"]
+    primary_prompt = cast(str, primary_adapter.calls[0]["prompt_text"])
+    shadow_prompt = cast(str, shadow_adapter.calls[0]["prompt_text"])
     assert "Synthetic Experiment Labels（额外人口学对照）" not in primary_prompt
     assert "User 1" not in primary_prompt
     assert "Bio 1" not in primary_prompt
@@ -556,7 +578,7 @@ def test_concurrent_cached_variants_do_not_cross_hit_between_prompt_tokens() -> 
 
     assert len(primary_leaf.calls) == 1
     assert len(shadow_leaf.calls) == 1
-    assert set(primary.cache.decisions) != set(shadow.cache.decisions)
+    assert set(cast(InMemoryDecisionCache, primary.cache).decisions) != set(cast(InMemoryDecisionCache, shadow.cache).decisions)
 
 
 def test_concurrent_message_runner_rejects_mismatched_adapter_contracts(tmp_path: Path) -> None:
