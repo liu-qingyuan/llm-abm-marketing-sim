@@ -75,9 +75,9 @@ python scripts/validate_abm_report_release.py \
   --source-dir runs/<persisted-run>
 ```
 
-该命令支持历史 `abm-report-release-contract-v1` 的本地证据验证、当前历史基线 `abm-report-release-contract-v2` Formal 验证，以及 `abm-report-release-contract-v3` Formal 验证。v2/v3 contract 必须位于仓库内且不经过 symlink，固定 `release_purpose=formal_research`；v3 额外绑定 bare Adapter、exact requested `gpt-5.4-mini`、独立 exact observed `gpt-5.4-mini-2026-03-17`、完整 returned-response usage、run-local counts、reason/context 和 v6 tuple。该 mapping 来自 #87 qualification；任一 snapshot 变化都必须新建 Ticket 并重新 qualification，不能静默 fallback 或按 family/prefix 接受。source directory 不允许绝对/父级 artifact path、symlink、FIFO/socket/device 等非 regular entry、未声明文件、缺失下载或 hash 不一致。
+该命令支持历史 `abm-report-release-contract-v1` 的本地证据验证、当前历史基线 `abm-report-release-contract-v2` Formal 验证、`abm-report-release-contract-v3` Final Research v6 Formal 验证，以及 `abm-report-release-contract-v4` Concurrent Message Formal 验证。v2/v3/v4 contract 必须位于仓库内且不经过 symlink，固定 `release_purpose=formal_research`；v3 额外绑定 bare Adapter、exact requested `gpt-5.4-mini`、独立 exact observed `gpt-5.4-mini-2026-03-17`、完整 returned-response usage、run-local counts、reason/context 和 v6 tuple。v4 绑定冻结的三 message contract、Primary/Shadow prompt tokens、1,000-user / 3,000-pair / 1,800-exposure Formal counts、pair coverage 和完整 variant/total Provider accounting，并继续拒绝 path escape、crossed token、cache-only、rule-based、mock/live gate crossing 与 usage/model mismatch。source directory 不允许绝对/父级 artifact path、symlink、FIFO/socket/device 等非 regular entry、未声明文件、缺失下载或 hash 不一致。
 
-production deploy 只能显式提供通过本地 gate 的 v2 或 v3 Formal contract：
+production deploy 只能显式提供通过本地 gate 的 v2、v3 或 v4 Formal contract：
 
 ```bash
 scripts/deploy_abm_report.sh \
@@ -86,7 +86,7 @@ scripts/deploy_abm_report.sh \
   --release-id <release-id>
 ```
 
-部署脚本先复制随机本地 snapshot，在任何 `ssh`、上传或远程配置前对该 snapshot 完成 formal-only validation；后续 hash 与 tar upload 继续读取同一只读 snapshot，原 source 的并发变化不会进入上传。v1、`validation_run`、rule-based、mock-provider、`live_api_triggered=false`、v3 model/accounting mismatch 或 source/contract 不匹配都不会进入远程阶段。通过 preflight 后仍沿用 candidate health check、宿主检查、原子 `current` 切换和失败回退。
+部署脚本先复制随机本地 snapshot，在任何 `ssh`、上传或远程配置前对该 snapshot 完成 formal-only validation；后续 hash 与 tar upload 继续读取同一只读 snapshot，原 source 的并发变化不会进入上传。v1、`validation_run`、rule-based、mock-provider、`live_api_triggered=false`、v3 model/accounting mismatch、v4 prompt/accounting/path mismatch 或 source/contract 不匹配都不会进入远程阶段。通过 preflight 后仍沿用 candidate health check、宿主检查、原子 `current` 切换、失败回退和按 contract 选择的 public acceptance（Final Research 或 Concurrent Message）流程。
 
 实现代码、离线 runner candidate、synthetic persisted Formal fixture 和 `ready-for-agent` 状态均不授权真实 Provider 或 production deployment。后续 operational Ticket 必须单独记录 Provider、模型、预算上限、独立输出目录和 canonical deployment 授权。不要用 fake Adapter 写出 live 事实，也不要把测试 fixture 描述为真实研究运行。
 

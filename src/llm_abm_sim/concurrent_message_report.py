@@ -1164,6 +1164,28 @@ def _render_report_html(payload: ConcurrentMessageReportPayload) -> str:
     response = payload.primary_audience_response
     feedback = payload.campaign_feedback_effect
     sensitivity = payload.demographic_decision_sensitivity
+    formal_seed_first_run = payload.run.get("sampling_status") == "persisted_seed_first_formal_run"
+    deploy_eligible = _as_bool(payload.run.get("production_deploy_eligible"))
+    if formal_seed_first_run and deploy_eligible:
+        hero_copy = (
+            "This additive Multi-Message v1 report is a persisted Seed-First Formal artifact. "
+            "It is rebuilt from the approved tuple, remains descriptive and non-causal, and "
+            "does not call a provider during report regeneration."
+        )
+        status_label = "Persisted Seed-First Formal Run · deploy eligible"
+    elif formal_seed_first_run:
+        hero_copy = (
+            "This additive Multi-Message v1 report is a persisted Seed-First Formal artifact with a blocked deploy gate. "
+            "It is rebuilt from the approved tuple, remains descriptive and non-causal, and does not call a provider "
+            "during report regeneration."
+        )
+        status_label = "Persisted Seed-First Formal Run · deploy blocked"
+    else:
+        hero_copy = (
+            "This additive Multi-Message v1 report is validation-only, descriptive, and non-causal. "
+            "It is rebuilt from the persisted tuple and does not call a provider during report regeneration."
+        )
+        status_label = "Validation only · no deploy"
     summary_cards = [
         ("Research sample", f"{_as_int(counts.get('sample_users')):,}"),
         ("Actual exposures", f"{_as_int(counts.get('actual_exposures')):,}"),
@@ -1388,9 +1410,9 @@ def _render_report_html(payload: ConcurrentMessageReportPayload) -> str:
       <div class="hero-head">
         <div>
           <h1>{html.escape(payload.title)}</h1>
-          <p class="hero-copy">This additive Multi-Message v1 report is validation-only, descriptive, and non-causal. It is rebuilt from the persisted tuple and does not call a provider during report regeneration.</p>
+          <p class="hero-copy">{html.escape(hero_copy)}</p>
         </div>
-        <span class="status-badge" data-testid="validation-status">Validation only · no deploy</span>
+        <span class="status-badge" data-testid="validation-status">{html.escape(status_label)}</span>
       </div>
       <div class="summary-grid">{summary_html}</div>
       <ul class="note-list" data-testid="shadow-boundary-notes">{''.join(f'<li>{html.escape(note)}</li>' for note in payload.notes)}</ul>
@@ -1723,6 +1745,8 @@ renderTable();
         template.replace("{{", "{")
         .replace("}}", "}")
         .replace("{html.escape(payload.title)}", html.escape(payload.title))
+        .replace("{html.escape(hero_copy)}", html.escape(hero_copy))
+        .replace("{html.escape(status_label)}", html.escape(status_label))
         .replace("{summary_html}", summary_html)
         .replace("{''.join(f'<li>{html.escape(note)}</li>' for note in payload.notes)}", "".join(f"<li>{html.escape(note)}</li>" for note in payload.notes))
         .replace("{message_rows}", message_rows)

@@ -9,10 +9,33 @@ import stat
 import sys
 from collections import Counter
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, TypedDict
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
+from llm_abm_sim.concurrent_campaign_diagnostics import (
+    ConcurrentCampaignDiagnostics,
+    validate_concurrent_validation_summary,
+)
+from llm_abm_sim.concurrent_message_experiment import authoritative_message_definitions
+from llm_abm_sim.concurrent_message_report import (
+    ConcurrentMessageArtifactManifest,
+    ConcurrentMessageDecisionTraceDocument,
+    ConcurrentMessageDiagnosticsDocument,
+    ConcurrentMessageFieldLineageDocument,
+    ConcurrentMessageReportPayload,
+    ConcurrentMessageRuntimeDocument,
+    ConcurrentMessageUsersDocument,
+    _artifact_path,
+    _build_report_bundle,
+    _ensure_no_unexpected_root_files,
+    _read_csv_rows,
+    _read_json_object,
+    _read_json_records,
+    _sha256_text,
+    _validate_documents_against_build,
+    _validate_input_hashes,
+)
 from llm_abm_sim.final_research_reason_context import ReasonContextDiagnostics
 from llm_abm_sim.final_research_report import (
     FinalResearchRankingReportPayloadV5,
@@ -217,6 +240,260 @@ class _ReleaseContractV3(BaseModel):
         if diagnostics.selected_ranking_context.selected_candidate_count != counts.exposed_users:
             raise ValueError("selected Ranking context denominator must equal exposed_users")
         return self
+
+
+class _ConcurrentVariantProviderAccounting(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    invocations: int = Field(ge=0)
+    responses: int = Field(ge=0)
+    successful_decisions: int = Field(ge=0)
+    observed_model_counts: dict[str, int]
+    observed_model_missing_response_count: int = Field(ge=0)
+    observed_model_malformed_response_count: int = Field(ge=0)
+    usage_complete_attempts: int = Field(ge=0)
+    usage_incomplete_attempts: int = Field(ge=0)
+    usage_complete_response_count: int = Field(ge=0)
+    usage_missing_response_count: int = Field(ge=0)
+    usage_malformed_response_count: int = Field(ge=0)
+    input_usage: int | None = Field(default=None, ge=0)
+    output_usage: int | None = Field(default=None, ge=0)
+    total_usage: int | None = Field(default=None, ge=0)
+    cached_input_usage: int | None = Field(default=None, ge=0)
+
+    @model_validator(mode="after")
+    def _validate_accounting(self) -> _ConcurrentVariantProviderAccounting:
+        if self.invocations < self.responses or self.responses < self.successful_decisions:
+            raise ValueError("variant accounting requires invocations >= responses >= successful_decisions")
+        if any(type(count) is not int or count < 0 for count in self.observed_model_counts.values()):
+            raise ValueError("observed_model_counts must contain non-negative strict integers")
+        if any(not isinstance(model, str) or not model.strip() for model in self.observed_model_counts):
+            raise ValueError("observed_model_counts keys must be non-empty strings")
+        observed_total = (
+            sum(self.observed_model_counts.values())
+            + self.observed_model_missing_response_count
+            + self.observed_model_malformed_response_count
+        )
+        if observed_total != self.responses:
+            raise ValueError("observed model accounting must cover every Provider response")
+        usage_total = (
+            self.usage_complete_response_count
+            + self.usage_missing_response_count
+            + self.usage_malformed_response_count
+        )
+        if usage_total != self.responses:
+            raise ValueError("usage accounting must cover every Provider response")
+        if self.usage_complete_attempts + self.usage_incomplete_attempts < self.successful_decisions:
+            raise ValueError("usage attempt accounting cannot undercount successful Decisions")
+        if self.usage_complete_response_count == 0:
+            if any(
+                value is not None
+                for value in (self.input_usage, self.output_usage, self.total_usage, self.cached_input_usage)
+            ):
+                raise ValueError("token aggregates must be null when no response has complete usage")
+            return self
+        if self.input_usage is None or self.output_usage is None or self.total_usage is None:
+            raise ValueError("complete usage requires input_usage, output_usage, and total_usage")
+        if self.total_usage != self.input_usage + self.output_usage:
+            raise ValueError("total_usage must equal input_usage + output_usage")
+        if self.cached_input_usage is not None and self.cached_input_usage > self.input_usage:
+            raise ValueError("cached_input_usage cannot exceed input_usage")
+        return self
+
+
+class _ConcurrentFormalCounts(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    sample_users: Literal[1000]
+    messages: Literal[3]
+    eligible_user_message_pairs: Literal[3000]
+    actual_exposures: Literal[1800]
+    distinct_exposed_users: int = Field(ge=0, le=1000)
+    primary_attempted: Literal[1800]
+    primary_successes: Literal[1800]
+    primary_failures: Literal[0]
+    shadow_attempted: Literal[1800]
+    shadow_successes: Literal[1800]
+    shadow_failures: Literal[0]
+    terminal_rows: Literal[3600]
+    pair_terminal_coverage: float
+    paired_decision_coverage: float
+
+    @model_validator(mode="after")
+    def _validate_counts(self) -> _ConcurrentFormalCounts:
+        if self.actual_exposures != self.primary_attempted or self.actual_exposures != self.shadow_attempted:
+            raise ValueError("actual_exposures must equal both primary_attempted and shadow_attempted")
+        if self.primary_successes != self.primary_attempted or self.shadow_successes != self.shadow_attempted:
+            raise ValueError("Formal counts require every attempted Decision to succeed")
+        if self.terminal_rows != self.actual_exposures * 2:
+            raise ValueError("terminal_rows must equal two terminal rows per actual exposure")
+        if self.pair_terminal_coverage != 1.0 or self.paired_decision_coverage != 1.0:
+            raise ValueError("Formal counts require 100% pair terminal and paired Decision coverage")
+        return self
+
+
+class _ConcurrentPerMessageContract(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    message_title: str = Field(min_length=1)
+    intended_audience_segment: Literal["class_1", "class_2", "class_3"]
+    exposures: Literal[600]
+    primary_successes: Literal[600]
+    primary_failures: Literal[0]
+    shadow_successes: Literal[600]
+    shadow_failures: Literal[0]
+    below_delivery_capacity: Literal[400]
+
+    @model_validator(mode="after")
+    def _validate_message_counts(self) -> _ConcurrentPerMessageContract:
+        if self.exposures != self.primary_successes + self.primary_failures:
+            raise ValueError("Primary per-message counts must close to exposures")
+        if self.exposures != self.shadow_successes + self.shadow_failures:
+            raise ValueError("Shadow per-message counts must close to exposures")
+        return self
+
+
+class _ReleaseContractV4(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    schema_version: Literal["abm-report-release-contract-v4"]
+    release_purpose: Literal["formal_research"]
+    source_directory: str = Field(min_length=1)
+    artifact_manifest_schema_version: Literal["concurrent-message-artifact-manifest-v1"]
+    payload_schema_version: Literal["concurrent-message-report-payload-v1"]
+    users_schema_version: Literal["concurrent-message-users-v1"]
+    runtime_schema_version: Literal["concurrent-message-runtime-v1"]
+    diagnostics_schema_version: Literal["concurrent-message-diagnostics-v1"]
+    decision_trace_schema_version: Literal["concurrent-message-decision-trace-v1"]
+    field_lineage_schema_version: Literal["concurrent-message-field-lineage-v1"]
+    validation_schema_version: Literal["concurrent-message-validation-v1"]
+    campaign_diagnostics_schema_version: Literal["concurrent-campaign-diagnostics-v1"]
+    sampling_method: Literal["seed_first_research_sample_v1"]
+    sampling_status: Literal["persisted_seed_first_formal_run"]
+    configuration_profile: Literal["production"]
+    primary_prompt_token: Literal["jinjiang-concurrent-message-primary-prompt-v1"]
+    shadow_prompt_token: Literal["jinjiang-concurrent-message-demographic-shadow-prompt-v1"]
+    production_deploy_eligible: Literal[True]
+    provider: Literal["openai_compatible"]
+    requested_model: str = Field(min_length=1)
+    observed_model: str = Field(min_length=1)
+    logical_primary_decision_opportunities: Literal[1800]
+    logical_shadow_decision_opportunities: Literal[1800]
+    logical_decision_opportunities: Literal[3600]
+    below_delivery_capacity_pairs: Literal[1200]
+    counts: _ConcurrentFormalCounts
+    per_message: dict[str, _ConcurrentPerMessageContract]
+    variant_provider_accounting: dict[str, _ConcurrentVariantProviderAccounting]
+    artifact_sha256: dict[str, str]
+
+    @model_validator(mode="after")
+    def _validate_formal_contract(self) -> _ReleaseContractV4:
+        authoritative_messages = authoritative_message_definitions()
+        authoritative_by_id = {message.message_id: message for message in authoritative_messages}
+        if set(self.per_message) != set(authoritative_by_id):
+            raise ValueError("per_message must cover the exact authoritative three-message contract")
+        if set(self.variant_provider_accounting) != {"primary", "shadow", "total"}:
+            raise ValueError("variant_provider_accounting must contain primary/shadow/total exactly once")
+        if self.logical_primary_decision_opportunities != self.counts.primary_attempted:
+            raise ValueError("logical_primary_decision_opportunities must equal counts.primary_attempted")
+        if self.logical_shadow_decision_opportunities != self.counts.shadow_attempted:
+            raise ValueError("logical_shadow_decision_opportunities must equal counts.shadow_attempted")
+        if self.logical_decision_opportunities != (
+            self.logical_primary_decision_opportunities + self.logical_shadow_decision_opportunities
+        ):
+            raise ValueError("logical_decision_opportunities must equal primary + shadow logical opportunities")
+
+        per_message_exposures = 0
+        per_message_below_capacity = 0
+        for message_id, contract_payload in self.per_message.items():
+            authoritative = authoritative_by_id[message_id]
+            if contract_payload.message_title != authoritative.title:
+                raise ValueError(f"per_message[{message_id}] title does not match the authoritative contract")
+            if contract_payload.intended_audience_segment != authoritative.intended_audience_segment:
+                raise ValueError(f"per_message[{message_id}] audience segment does not match the authoritative contract")
+            per_message_exposures += contract_payload.exposures
+            per_message_below_capacity += contract_payload.below_delivery_capacity
+        if per_message_exposures != self.counts.actual_exposures:
+            raise ValueError("per_message exposures must sum to counts.actual_exposures")
+        if per_message_below_capacity != self.below_delivery_capacity_pairs:
+            raise ValueError("per_message below_delivery_capacity must sum to below_delivery_capacity_pairs")
+        if self.counts.eligible_user_message_pairs != self.counts.actual_exposures + self.below_delivery_capacity_pairs:
+            raise ValueError("eligible_user_message_pairs must equal actual_exposures + below_delivery_capacity_pairs")
+
+        primary = self.variant_provider_accounting["primary"]
+        shadow = self.variant_provider_accounting["shadow"]
+        total = self.variant_provider_accounting["total"]
+        for variant_name, accounting, expected_successes in (
+            ("primary", primary, self.counts.primary_successes),
+            ("shadow", shadow, self.counts.shadow_successes),
+        ):
+            if accounting.successful_decisions != expected_successes:
+                raise ValueError(f"{variant_name} successful_decisions must equal Formal successes")
+            if accounting.responses != expected_successes:
+                raise ValueError(f"{variant_name} responses must equal Formal successes")
+            if accounting.invocations < accounting.responses:
+                raise ValueError(f"{variant_name} invocations cannot be lower than responses")
+            if accounting.observed_model_counts != {self.observed_model: accounting.responses}:
+                raise ValueError(f"{variant_name} observed_model_counts must report only the exact observed_model")
+            if accounting.observed_model_missing_response_count or accounting.observed_model_malformed_response_count:
+                raise ValueError(f"{variant_name} observed_model accounting must be complete")
+            if accounting.usage_complete_attempts != expected_successes or accounting.usage_incomplete_attempts != 0:
+                raise ValueError(f"{variant_name} usage attempt accounting must cover only complete successful attempts")
+            if (
+                accounting.usage_complete_response_count != accounting.responses
+                or accounting.usage_missing_response_count
+                or accounting.usage_malformed_response_count
+            ):
+                raise ValueError(f"{variant_name} usage accounting must be complete for every response")
+            if accounting.input_usage is None or accounting.output_usage is None or accounting.total_usage is None:
+                raise ValueError(f"{variant_name} Formal accounting requires complete usage aggregates")
+
+        if total.successful_decisions != self.logical_decision_opportunities:
+            raise ValueError("total successful_decisions must equal logical_decision_opportunities")
+        if total.responses != primary.responses + shadow.responses:
+            raise ValueError("total responses must equal primary + shadow responses")
+        if total.invocations != primary.invocations + shadow.invocations:
+            raise ValueError("total invocations must equal primary + shadow invocations")
+        if total.observed_model_counts != {self.observed_model: total.responses}:
+            raise ValueError("total observed_model_counts must report only the exact observed_model")
+        if total.observed_model_missing_response_count or total.observed_model_malformed_response_count:
+            raise ValueError("total observed model accounting must be complete")
+        if total.usage_complete_attempts != self.logical_decision_opportunities or total.usage_incomplete_attempts != 0:
+            raise ValueError("total usage attempt accounting must equal logical_decision_opportunities")
+        if (
+            total.usage_complete_response_count != total.responses
+            or total.usage_missing_response_count
+            or total.usage_malformed_response_count
+        ):
+            raise ValueError("total usage accounting must be complete for every response")
+        if total.input_usage is None or total.output_usage is None or total.total_usage is None:
+            raise ValueError("total Formal accounting requires complete usage aggregates")
+        if total.input_usage != (primary.input_usage or 0) + (shadow.input_usage or 0):
+            raise ValueError("total input_usage must equal primary + shadow input_usage")
+        if total.output_usage != (primary.output_usage or 0) + (shadow.output_usage or 0):
+            raise ValueError("total output_usage must equal primary + shadow output_usage")
+        if total.total_usage != (primary.total_usage or 0) + (shadow.total_usage or 0):
+            raise ValueError("total total_usage must equal primary + shadow total_usage")
+        return self
+
+
+class _ConcurrentTerminalAccountingBucket(TypedDict):
+    invocations: int
+    responses: int
+    successful_decisions: int
+    observed_model_counts: dict[str, int]
+    observed_model_missing_response_count: int
+    observed_model_malformed_response_count: int
+    usage_complete_attempts: int
+    usage_incomplete_attempts: int
+    usage_complete_response_count: int
+    usage_missing_response_count: int
+    usage_malformed_response_count: int
+    input_usage_total: int
+    output_usage_total: int
+    total_usage_total: int
+    cached_input_usage_total: int
+    has_cached_input_usage: bool
 
 
 def _load_json(path: Path) -> Any:
@@ -717,6 +994,450 @@ def _validate_v3(
     }
 
 
+def _validate_v4(
+    *,
+    repo_root: Path,
+    contract_document: dict[str, object],
+    source_dir: Path,
+    snapshot_dir: Path | None = None,
+) -> dict[str, object]:
+    try:
+        contract = _ReleaseContractV4.model_validate(contract_document)
+    except ValidationError as exc:
+        raise ReleaseValidationError(f"invalid v4 release contract: {exc}") from exc
+    raw_expected_source, source_dir = _validated_source_directory(
+        repo_root=repo_root,
+        raw_expected_source=contract.source_directory,
+        source_dir=source_dir,
+    )
+    evidence_dir = source_dir
+    if snapshot_dir is not None:
+        if snapshot_dir.is_symlink() or not snapshot_dir.is_dir():
+            raise ReleaseValidationError("release snapshot must be a non-symlink directory")
+        _reject_symlinks(snapshot_dir)
+        evidence_dir = snapshot_dir.resolve()
+
+    try:
+        manifest = ConcurrentMessageArtifactManifest.model_validate(
+            _read_json_object(_safe_artifact(evidence_dir, "artifact_manifest.json", "v4 artifact manifest"))
+        )
+    except (OSError, ValueError, ValidationError) as exc:
+        raise ReleaseValidationError(f"persisted concurrent message manifest is invalid: {exc}") from exc
+    _expect_equal(manifest.schema_version, contract.artifact_manifest_schema_version, "v4 artifact manifest schema")
+    _expect_equal(manifest.report_schema, contract.payload_schema_version, "v4 report payload schema")
+    _expect_equal(manifest.users_schema, contract.users_schema_version, "v4 users schema")
+    _expect_equal(manifest.runtime_schema, contract.runtime_schema_version, "v4 runtime schema")
+    _expect_equal(manifest.diagnostics_schema, contract.diagnostics_schema_version, "v4 diagnostics schema")
+    _expect_equal(manifest.decision_trace_schema, contract.decision_trace_schema_version, "v4 decision trace schema")
+    _expect_equal(manifest.validation_schema, contract.validation_schema_version, "v4 validation schema")
+    _expect_equal(manifest.primary_prompt_token, contract.primary_prompt_token, "v4 primary prompt token")
+    _expect_equal(manifest.shadow_prompt_token, contract.shadow_prompt_token, "v4 shadow prompt token")
+    if "sample_audit" not in manifest.artifacts:
+        raise ReleaseValidationError("v4 artifact manifest must include sample_audit")
+    try:
+        artifacts = {
+            name: _artifact_path(evidence_dir, relative_path, name)
+            for name, relative_path in manifest.artifacts.items()
+        }
+        _ensure_no_unexpected_root_files(evidence_dir, manifest)
+        _validate_input_hashes(manifest, artifacts)
+    except (FileNotFoundError, ValueError) as exc:
+        raise ReleaseValidationError(f"persisted concurrent message artifacts are invalid: {exc}") from exc
+
+    required_hash_paths = {*manifest.artifacts.values(), "artifact_manifest.json"}
+    source_files = {path.relative_to(evidence_dir).as_posix() for path in evidence_dir.rglob("*") if path.is_file()}
+    if source_files != required_hash_paths:
+        raise ReleaseValidationError(
+            "source directory contains files outside the v4 artifact manifest or omits declared files; "
+            f"missing={sorted(required_hash_paths - source_files)}, "
+            f"extra={sorted(source_files - required_hash_paths)}"
+        )
+    actual_hash_paths = set(contract.artifact_sha256)
+    if actual_hash_paths != required_hash_paths:
+        raise ReleaseValidationError(
+            "v4 artifact_sha256 must cover the exact manifest artifacts and artifact_manifest.json; "
+            f"missing={sorted(required_hash_paths - actual_hash_paths)}, "
+            f"extra={sorted(actual_hash_paths - required_hash_paths)}"
+        )
+    manifest_hashes_by_path = {"artifact_manifest.json": _sha256(evidence_dir / "artifact_manifest.json")}
+    for name, relative_path in manifest.artifacts.items():
+        manifest_hashes_by_path[relative_path] = manifest.sha256[name]
+    for raw_path, expected_hash in contract.artifact_sha256.items():
+        if len(expected_hash) != 64 or any(character not in "0123456789abcdef" for character in expected_hash):
+            raise ReleaseValidationError(f"v4 SHA-256 for {raw_path} must be 64 lowercase hexadecimal characters")
+        artifact = _safe_artifact(evidence_dir, raw_path, f"v4 hashed artifact {raw_path}")
+        _expect_equal(_sha256(artifact), expected_hash, f"SHA-256 for {raw_path}")
+        _expect_equal(manifest_hashes_by_path[raw_path], expected_hash, f"v4 manifest SHA-256 for {raw_path}")
+
+    try:
+        config_snapshot = _read_json_object(artifacts["config_snapshot"])
+        message_snapshot = _read_json_records(artifacts["message_snapshot"], "message snapshot")
+        sample_manifest_rows = _read_json_records(artifacts["sample_manifest_json"], "sample manifest")
+        candidate_rows = _read_csv_rows(artifacts["rankings_csv"])
+        pair_rows = _read_csv_rows(artifacts["exposures_csv"])
+        terminal_rows = _read_csv_rows(artifacts["terminals_csv"])
+        step_rows = _read_json_records(artifacts["runtime_steps_json"], "runtime steps")
+        validation_summary = _read_json_object(artifacts["validation_evidence"])
+        campaign_diagnostics = _read_json_object(artifacts["campaign_diagnostics_json"])
+        sample_audit = _load_json(artifacts["sample_audit"])
+        users_document = ConcurrentMessageUsersDocument.model_validate(_read_json_object(artifacts["users_json"]))
+        decision_trace_document = ConcurrentMessageDecisionTraceDocument.model_validate(
+            _read_json_object(artifacts["decision_trace_json"])
+        )
+        runtime_document = ConcurrentMessageRuntimeDocument.model_validate(_read_json_object(artifacts["runtime_contract"]))
+        diagnostics_document = ConcurrentMessageDiagnosticsDocument.model_validate(
+            _read_json_object(artifacts["diagnostics_contract"])
+        )
+        field_lineage_document = ConcurrentMessageFieldLineageDocument.model_validate(
+            _read_json_object(artifacts["field_lineage"])
+        )
+        payload = ConcurrentMessageReportPayload.model_validate(_read_json_object(artifacts["report_payload"]))
+        primary_actions_rows = _read_csv_rows(artifacts["primary_actions_csv"])
+        provider_failure_rows = _read_csv_rows(artifacts["provider_failures_csv"])
+    except (OSError, ValueError, ValidationError) as exc:
+        raise ReleaseValidationError(f"persisted concurrent message evidence is invalid: {exc}") from exc
+    if not isinstance(sample_audit, dict):
+        raise ReleaseValidationError("v4 sample_audit must be a JSON object")
+
+    authoritative_messages = [message.model_dump(mode="json") for message in authoritative_message_definitions()]
+    _expect_equal(message_snapshot, authoritative_messages, "v4 message snapshot")
+    _expect_equal(config_snapshot.get("messages"), authoritative_messages, "v4 config message contract")
+    _expect_equal(validation_summary.get("messages"), authoritative_messages, "v4 validation message contract")
+    _expect_equal(config_snapshot, runtime_document.configuration, "v4 config snapshot")
+
+    try:
+        rebuilt_diagnostics = ConcurrentCampaignDiagnostics(
+            delivery_capacity=int(config_snapshot.get("delivery_capacity", 0))
+        ).build(candidate_rows=candidate_rows, pair_rows=pair_rows)
+        validate_concurrent_validation_summary(validation_summary, rebuilt_diagnostics)
+    except ValueError as exc:
+        raise ReleaseValidationError(f"v4 concurrent campaign diagnostics do not close to source rows: {exc}") from exc
+    _expect_equal(campaign_diagnostics, rebuilt_diagnostics.payload, "v4 campaign diagnostics")
+    _expect_equal(
+        validation_summary.get("campaign_diagnostics_summary"),
+        rebuilt_diagnostics.summary,
+        "v4 campaign diagnostics summary",
+    )
+    _expect_equal(
+        validation_summary.get("campaign_diagnostics_schema_version"),
+        contract.campaign_diagnostics_schema_version,
+        "v4 campaign diagnostics schema",
+    )
+    _expect_equal(campaign_diagnostics.get("schema_version"), contract.campaign_diagnostics_schema_version, "v4 campaign diagnostics artifact schema")
+
+    prompt_contract = validation_summary.get("prompt_contract")
+    if not isinstance(prompt_contract, dict):
+        raise ReleaseValidationError("v4 validation prompt_contract must be an object")
+    primary_prompt = prompt_contract.get("primary")
+    shadow_prompt = prompt_contract.get("shadow")
+    if not isinstance(primary_prompt, dict) or not isinstance(shadow_prompt, dict):
+        raise ReleaseValidationError("v4 prompt_contract must contain primary and shadow objects")
+    _expect_equal(primary_prompt.get("prompt_version"), contract.primary_prompt_token, "v4 primary prompt contract token")
+    _expect_equal(shadow_prompt.get("prompt_version"), contract.shadow_prompt_token, "v4 shadow prompt contract token")
+
+    _expect_equal(payload.schema_version, contract.payload_schema_version, "v4 payload schema")
+    _expect_equal(users_document.schema_version, contract.users_schema_version, "v4 users schema")
+    _expect_equal(runtime_document.schema_version, contract.runtime_schema_version, "v4 runtime schema")
+    _expect_equal(diagnostics_document.schema_version, contract.diagnostics_schema_version, "v4 diagnostics schema")
+    _expect_equal(decision_trace_document.schema_version, contract.decision_trace_schema_version, "v4 decision trace schema")
+    _expect_equal(field_lineage_document.schema_version, contract.field_lineage_schema_version, "v4 field lineage schema")
+    _expect_equal(validation_summary.get("schema_version"), contract.validation_schema_version, "v4 validation schema")
+
+    _expect_equal(validation_summary.get("sampling_method"), contract.sampling_method, "v4 validation sampling_method")
+    _expect_equal(validation_summary.get("sampling_status"), contract.sampling_status, "v4 validation sampling_status")
+    _expect_equal(config_snapshot.get("sampling_method"), contract.sampling_method, "v4 config sampling_method")
+    _expect_equal(config_snapshot.get("sampling_status"), contract.sampling_status, "v4 config sampling_status")
+    _expect_equal(runtime_document.configuration.get("sampling_method"), contract.sampling_method, "v4 runtime sampling_method")
+    _expect_equal(runtime_document.configuration.get("sampling_status"), contract.sampling_status, "v4 runtime sampling_status")
+    _expect_equal(payload.run.get("sampling_method"), contract.sampling_method, "v4 payload sampling_method")
+    _expect_equal(payload.run.get("sampling_status"), contract.sampling_status, "v4 payload sampling_status")
+    _expect_equal(sample_audit.get("sampling_method"), contract.sampling_method, "v4 sample audit sampling_method")
+    _expect_equal(sample_audit.get("sampling_status"), contract.sampling_status, "v4 sample audit sampling_status")
+
+    _expect_equal(validation_summary.get("production_deploy_eligible"), contract.production_deploy_eligible, "v4 validation production_deploy_eligible")
+    _expect_equal(config_snapshot.get("production_deploy_eligible"), contract.production_deploy_eligible, "v4 config production_deploy_eligible")
+    _expect_equal(runtime_document.configuration.get("production_deploy_eligible"), contract.production_deploy_eligible, "v4 runtime production_deploy_eligible")
+    _expect_equal(payload.run.get("production_deploy_eligible"), contract.production_deploy_eligible, "v4 payload production_deploy_eligible")
+
+    _expect_equal(config_snapshot.get("configuration_profile"), contract.configuration_profile, "v4 config configuration_profile")
+    _expect_equal(validation_summary.get("configuration", {}).get("configuration_profile") if isinstance(validation_summary.get("configuration"), dict) else None, contract.configuration_profile, "v4 validation configuration_profile")
+    _expect_equal(config_snapshot.get("sample_size"), contract.counts.sample_users, "v4 config sample_size")
+    _expect_equal(config_snapshot.get("horizon"), 30, "v4 config horizon")
+    _expect_equal(config_snapshot.get("delivery_capacity"), 20, "v4 config delivery_capacity")
+
+    _expect_equal(runtime_document.prompt_tokens.get("primary"), contract.primary_prompt_token, "v4 runtime primary prompt token")
+    _expect_equal(runtime_document.prompt_tokens.get("shadow"), contract.shadow_prompt_token, "v4 runtime shadow prompt token")
+    _expect_equal(payload.run.get("prompt_tokens"), {"primary": contract.primary_prompt_token, "shadow": contract.shadow_prompt_token}, "v4 payload prompt tokens")
+    _expect_equal(decision_trace_document.primary_prompt_token, contract.primary_prompt_token, "v4 decision trace primary prompt token")
+    _expect_equal(decision_trace_document.shadow_prompt_token, contract.shadow_prompt_token, "v4 decision trace shadow prompt token")
+
+    expected_counts = contract.counts.model_dump(mode="json")
+    expected_per_message = {message_id: payload.model_dump(mode="json") for message_id, payload in contract.per_message.items()}
+    expected_provider_accounting = {
+        name: accounting.model_dump(mode="json")
+        for name, accounting in contract.variant_provider_accounting.items()
+    }
+    _expect_equal(validation_summary.get("counts"), expected_counts, "v4 counts")
+    _expect_equal(runtime_document.counts, expected_counts, "v4 runtime counts")
+    _expect_equal(validation_summary.get("per_message"), expected_per_message, "v4 per_message counts")
+    _expect_equal(validation_summary.get("variant_provider_accounting"), expected_provider_accounting, "v4 variant provider accounting")
+
+    if len(users_document.rows) != contract.counts.sample_users:
+        raise ReleaseValidationError("v4 users document must contain exactly 1,000 users")
+    if len({row.user_id for row in users_document.rows}) != len(users_document.rows):
+        raise ReleaseValidationError("v4 users document must keep stable unique user_id values")
+
+    coverage = validation_summary.get("campaign_exposure_coverage")
+    if not isinstance(coverage, dict):
+        raise ReleaseValidationError("v4 campaign_exposure_coverage must be an object")
+    try:
+        normalized_coverage = {int(key): int(value) for key, value in coverage.items()}
+    except (TypeError, ValueError) as exc:
+        raise ReleaseValidationError(f"v4 campaign_exposure_coverage must contain integer keys and values: {exc}") from exc
+    if set(normalized_coverage) != {0, 1, 2, 3}:
+        raise ReleaseValidationError("v4 campaign_exposure_coverage must record 0/1/2/3-message coverage exactly")
+    if sum(normalized_coverage.values()) != contract.counts.sample_users:
+        raise ReleaseValidationError("v4 campaign_exposure_coverage must sum to sample_users")
+    if normalized_coverage[1] + normalized_coverage[2] + normalized_coverage[3] != contract.counts.distinct_exposed_users:
+        raise ReleaseValidationError("v4 distinct_exposed_users must equal 1/2/3-message coverage total")
+
+    if len(pair_rows) != contract.counts.actual_exposures:
+        raise ReleaseValidationError("v4 pair row count must equal actual_exposures")
+    pair_ids: set[str] = set()
+    pair_message_keys: set[tuple[str, str]] = set()
+    pair_counts_by_message: Counter[str] = Counter()
+    for row in pair_rows:
+        pair_id = str(row.get("pair_id", "") or "")
+        message_id = str(row.get("message_id", "") or "")
+        user_id = str(row.get("user_id", "") or "")
+        if not pair_id or not message_id or not user_id:
+            raise ReleaseValidationError("v4 pair rows require non-empty pair_id, message_id, and user_id")
+        if pair_id in pair_ids:
+            raise ReleaseValidationError(f"duplicate pair_id in v4 pair rows: {pair_id}")
+        pair_ids.add(pair_id)
+        message_key = (message_id, user_id)
+        if message_key in pair_message_keys:
+            raise ReleaseValidationError(f"duplicate user/message identity in v4 pair rows: {message_id}/{user_id}")
+        pair_message_keys.add(message_key)
+        pair_counts_by_message[message_id] += 1
+        if row.get("primary_status") != "succeeded" or row.get("shadow_status") != "succeeded":
+            raise ReleaseValidationError("v4 Formal pair rows cannot contain provider_failed status")
+        if row.get("primary_decision_source") != "provider" or row.get("shadow_decision_source") != "provider":
+            raise ReleaseValidationError("v4 Formal pair rows require provider Decisions for both variants")
+        if row.get("primary_prompt_version") != contract.primary_prompt_token:
+            raise ReleaseValidationError("v4 pair rows crossed or changed the Primary prompt token")
+        if row.get("shadow_prompt_version") != contract.shadow_prompt_token:
+            raise ReleaseValidationError("v4 pair rows crossed or changed the Shadow prompt token")
+        if str(row.get("pair_terminal_coverage", "")).lower() != "true":
+            raise ReleaseValidationError("v4 pair rows require pair_terminal_coverage=true")
+        if str(row.get("paired_decision_coverage", "")).lower() != "true":
+            raise ReleaseValidationError("v4 pair rows require paired_decision_coverage=true")
+    for message_id, expected in contract.per_message.items():
+        if pair_counts_by_message[message_id] != expected.exposures:
+            raise ReleaseValidationError(f"v4 pair rows for {message_id} must equal the contracted exposures")
+
+    if len(decision_trace_document.rows) != contract.counts.actual_exposures:
+        raise ReleaseValidationError("v4 decision trace row count must equal actual_exposures")
+    trace_ids = {row.trace_id for row in decision_trace_document.rows}
+    if len(trace_ids) != len(decision_trace_document.rows):
+        raise ReleaseValidationError("v4 decision trace rows must keep stable unique trace_id values")
+    if {row.pair_id for row in decision_trace_document.rows} != pair_ids:
+        raise ReleaseValidationError("v4 decision trace rows must cover the exact pair_id set")
+
+    if provider_failure_rows:
+        raise ReleaseValidationError("v4 Formal artifacts cannot contain provider failure rows")
+    if len(primary_actions_rows) != contract.counts.primary_successes:
+        raise ReleaseValidationError("v4 primary_actions_csv must contain one row per Primary success")
+
+    if len(terminal_rows) != contract.counts.terminal_rows:
+        raise ReleaseValidationError("v4 terminal row count must equal counts.terminal_rows")
+    terminal_by_pair_variant: set[tuple[str, str]] = set()
+    terminal_accounting: dict[str, _ConcurrentTerminalAccountingBucket] = {
+        name: {
+            "invocations": 0,
+            "responses": 0,
+            "successful_decisions": 0,
+            "observed_model_counts": {},
+            "observed_model_missing_response_count": 0,
+            "observed_model_malformed_response_count": 0,
+            "usage_complete_attempts": 0,
+            "usage_incomplete_attempts": 0,
+            "usage_complete_response_count": 0,
+            "usage_missing_response_count": 0,
+            "usage_malformed_response_count": 0,
+            "input_usage_total": 0,
+            "output_usage_total": 0,
+            "total_usage_total": 0,
+            "cached_input_usage_total": 0,
+            "has_cached_input_usage": False,
+        }
+        for name in ("primary", "shadow", "total")
+    }
+    for row in terminal_rows:
+        pair_id = str(row.get("pair_id", "") or "")
+        variant = str(row.get("decision_variant", "") or "")
+        key = (pair_id, variant)
+        if key in terminal_by_pair_variant:
+            raise ReleaseValidationError(f"duplicate v4 terminal row identity: {pair_id}/{variant}")
+        terminal_by_pair_variant.add(key)
+        if variant not in {"primary", "shadow"}:
+            raise ReleaseValidationError(f"unsupported v4 decision_variant: {variant!r}")
+        expected_prompt = contract.primary_prompt_token if variant == "primary" else contract.shadow_prompt_token
+        if row.get("prompt_version") != expected_prompt:
+            raise ReleaseValidationError(f"v4 terminal rows crossed or changed the {variant} prompt token")
+        if row.get("terminal_status") != "succeeded" or row.get("provider_status") != "succeeded":
+            raise ReleaseValidationError("v4 Formal terminal rows cannot contain provider failures")
+        if row.get("decision_source") != "provider":
+            raise ReleaseValidationError("v4 Formal terminal rows require provider Decisions")
+        try:
+            request_invocations = int(str(row.get("request_invocations", "0") or "0"))
+            provider_responses = int(str(row.get("provider_response_count", "0") or "0"))
+            successful_decisions = int(str(row.get("successful_decision_count", "0") or "0"))
+            observed_model_missing = int(str(row.get("observed_model_missing_response_count", "0") or "0"))
+            observed_model_malformed = int(str(row.get("observed_model_malformed_response_count", "0") or "0"))
+            usage_complete_response_count = int(str(row.get("usage_complete_response_count", "0") or "0"))
+            usage_missing_response_count = int(str(row.get("usage_missing_response_count", "0") or "0"))
+            usage_malformed_response_count = int(str(row.get("usage_malformed_response_count", "0") or "0"))
+        except ValueError as exc:
+            raise ReleaseValidationError(f"v4 terminal row counters must be integers: {exc}") from exc
+        if request_invocations < provider_responses or provider_responses < successful_decisions:
+            raise ReleaseValidationError("v4 terminal rows require invocations >= responses >= successful Decisions")
+        if successful_decisions != 1:
+            raise ReleaseValidationError("v4 Formal terminal rows must represent exactly one successful Decision")
+        if observed_model_missing or observed_model_malformed:
+            raise ReleaseValidationError("v4 Formal terminal rows cannot contain missing or malformed observed models")
+        if usage_complete_response_count != provider_responses or usage_missing_response_count or usage_malformed_response_count:
+            raise ReleaseValidationError("v4 Formal terminal rows require complete usage for every response")
+        usage_complete = str(row.get("usage_complete", "")).lower() == "true"
+        if not usage_complete:
+            raise ReleaseValidationError("v4 Formal terminal rows require usage_complete=true")
+        try:
+            observed_model_counts = json.loads(str(row.get("observed_model_counts", "{}") or "{}"))
+            provider_metadata = json.loads(str(row.get("provider_metadata", "{}") or "{}"))
+        except json.JSONDecodeError as exc:
+            raise ReleaseValidationError(f"v4 terminal row JSON payload is invalid: {exc}") from exc
+        if observed_model_counts != {contract.observed_model: provider_responses}:
+            raise ReleaseValidationError("v4 terminal rows must report only the exact observed_model for every response")
+        if not isinstance(provider_metadata, dict):
+            raise ReleaseValidationError("v4 terminal row provider_metadata must decode to an object")
+        if provider_metadata.get("adapter") != contract.provider or provider_metadata.get("provider") != contract.provider:
+            raise ReleaseValidationError("v4 Formal provider metadata must stay on the bare registered live provider path")
+        if provider_metadata.get("enabled") is not True or provider_metadata.get("require_live_env") is not True:
+            raise ReleaseValidationError("v4 Formal provider metadata requires enabled=true and require_live_env=true")
+        if provider_metadata.get("model") != contract.requested_model:
+            raise ReleaseValidationError("v4 requested model does not match persisted Provider metadata")
+        if provider_metadata.get("prompt_version") != expected_prompt:
+            raise ReleaseValidationError("v4 terminal row provider metadata crossed the prompt token contract")
+        if row.get("input_usage") in (None, "") or row.get("output_usage") in (None, "") or row.get("total_usage") in (None, ""):
+            raise ReleaseValidationError("v4 Formal terminal rows require complete token usage aggregates")
+        try:
+            input_usage = int(str(row.get("input_usage", "0") or "0"))
+            output_usage = int(str(row.get("output_usage", "0") or "0"))
+            total_usage = int(str(row.get("total_usage", "0") or "0"))
+            cached_input_usage = (
+                None if row.get("cached_input_usage") in (None, "") else int(str(row.get("cached_input_usage", "0") or "0"))
+            )
+        except ValueError as exc:
+            raise ReleaseValidationError(f"v4 terminal row token counters must be integers: {exc}") from exc
+        for bucket_name in (variant, "total"):
+            bucket = terminal_accounting[bucket_name]
+            bucket["invocations"] = int(bucket["invocations"]) + request_invocations
+            bucket["responses"] = int(bucket["responses"]) + provider_responses
+            bucket["successful_decisions"] = int(bucket["successful_decisions"]) + successful_decisions
+            bucket["observed_model_missing_response_count"] = int(bucket["observed_model_missing_response_count"]) + observed_model_missing
+            bucket["observed_model_malformed_response_count"] = int(bucket["observed_model_malformed_response_count"]) + observed_model_malformed
+            bucket["usage_complete_attempts"] = int(bucket["usage_complete_attempts"]) + (1 if usage_complete else 0)
+            bucket["usage_incomplete_attempts"] = int(bucket["usage_incomplete_attempts"]) + (0 if usage_complete or request_invocations == 0 else 1)
+            bucket["usage_complete_response_count"] = int(bucket["usage_complete_response_count"]) + usage_complete_response_count
+            bucket["usage_missing_response_count"] = int(bucket["usage_missing_response_count"]) + usage_missing_response_count
+            bucket["usage_malformed_response_count"] = int(bucket["usage_malformed_response_count"]) + usage_malformed_response_count
+            bucket["input_usage_total"] = int(bucket["input_usage_total"]) + input_usage
+            bucket["output_usage_total"] = int(bucket["output_usage_total"]) + output_usage
+            bucket["total_usage_total"] = int(bucket["total_usage_total"]) + total_usage
+            if cached_input_usage is not None:
+                bucket["cached_input_usage_total"] = int(bucket["cached_input_usage_total"]) + cached_input_usage
+                bucket["has_cached_input_usage"] = True
+            observed_counts = bucket["observed_model_counts"]
+            if not isinstance(observed_counts, dict):
+                raise ReleaseValidationError("v4 internal terminal accounting bucket is invalid")
+            for model_name, count in observed_model_counts.items():
+                observed_counts[model_name] = int(observed_counts.get(model_name, 0)) + int(count)
+    for pair_id in pair_ids:
+        if (pair_id, "primary") not in terminal_by_pair_variant or (pair_id, "shadow") not in terminal_by_pair_variant:
+            raise ReleaseValidationError(f"v4 terminal rows must contain both primary and shadow entries for pair_id={pair_id}")
+    for variant_name in ("primary", "shadow", "total"):
+        bucket = terminal_accounting[variant_name]
+        observed_counts = bucket["observed_model_counts"]
+        if not isinstance(observed_counts, dict):
+            raise ReleaseValidationError("v4 internal terminal accounting bucket is invalid")
+        terminal_provider_accounting = {
+            "invocations": int(bucket["invocations"]),
+            "responses": int(bucket["responses"]),
+            "successful_decisions": int(bucket["successful_decisions"]),
+            "observed_model_counts": dict(sorted((str(key), int(value)) for key, value in observed_counts.items())),
+            "observed_model_missing_response_count": int(bucket["observed_model_missing_response_count"]),
+            "observed_model_malformed_response_count": int(bucket["observed_model_malformed_response_count"]),
+            "usage_complete_attempts": int(bucket["usage_complete_attempts"]),
+            "usage_incomplete_attempts": int(bucket["usage_incomplete_attempts"]),
+            "usage_complete_response_count": int(bucket["usage_complete_response_count"]),
+            "usage_missing_response_count": int(bucket["usage_missing_response_count"]),
+            "usage_malformed_response_count": int(bucket["usage_malformed_response_count"]),
+            "input_usage": int(bucket["input_usage_total"]),
+            "output_usage": int(bucket["output_usage_total"]),
+            "total_usage": int(bucket["total_usage_total"]),
+            "cached_input_usage": int(bucket["cached_input_usage_total"]) if bool(bucket["has_cached_input_usage"]) else None,
+        }
+        _expect_equal(
+            terminal_provider_accounting,
+            expected_provider_accounting[variant_name],
+            f"v4 terminal provider accounting {variant_name}",
+        )
+
+    try:
+        build = _build_report_bundle(
+            title=payload.title,
+            config_snapshot=config_snapshot,
+            message_snapshot=message_snapshot,
+            sample_users=sample_manifest_rows,
+            candidate_rows=candidate_rows,
+            pair_rows=pair_rows,
+            terminal_rows=terminal_rows,
+            step_rows=step_rows,
+            validation_summary=validation_summary,
+            campaign_diagnostics=campaign_diagnostics,
+        )
+        _validate_documents_against_build(
+            manifest=manifest,
+            payload=payload,
+            users_document=users_document,
+            decision_trace_document=decision_trace_document,
+            runtime_document=runtime_document,
+            diagnostics_document=diagnostics_document,
+            field_lineage_document=field_lineage_document,
+            primary_actions_rows=primary_actions_rows,
+            provider_failure_rows=provider_failure_rows,
+            build=build,
+        )
+    except ValueError as exc:
+        raise ReleaseValidationError(f"v4 concurrent report tuple does not close to source rows: {exc}") from exc
+    _expect_equal(_sha256_text(build.report_html), manifest.sha256["report_html"], "v4 rebuilt report_html SHA-256")
+
+    return {
+        "schema_version": contract.schema_version,
+        "release_purpose": contract.release_purpose,
+        "source_directory": raw_expected_source,
+        "sampling_method": contract.sampling_method,
+        "sampling_status": contract.sampling_status,
+        "decision_execution_mode": "live_provider",
+        "requested_model": contract.requested_model,
+        "observed_model": contract.observed_model,
+        "live_api_triggered": True,
+        "artifact_count": len(manifest.artifacts),
+        "report_sha256": contract.artifact_sha256["report.html"],
+        "production_deploy_eligible": contract.production_deploy_eligible,
+    }
+
+
 def validate_release(
     *,
     repo_root: Path,
@@ -748,6 +1469,14 @@ def validate_release(
             source_dir=source_dir,
             snapshot_dir=snapshot_dir,
         )
+    if schema_version == "abm-report-release-contract-v4":
+        _safe_contract_file(repo_root, contract_path)
+        return _validate_v4(
+            repo_root=repo_root,
+            contract_document=contract,
+            source_dir=source_dir,
+            snapshot_dir=snapshot_dir,
+        )
     raise ReleaseValidationError(f"unsupported release contract schema_version: {schema_version!r}")
 
 
@@ -764,7 +1493,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--require-formal-production",
         action="store_true",
-        help="Reject validated evidence unless it is a deploy-eligible v2 or v3 formal research release",
+        help="Reject validated evidence unless it is a deploy-eligible v2, v3, or v4 formal research release",
     )
     return parser.parse_args()
 
@@ -779,13 +1508,18 @@ def main() -> int:
             snapshot_dir=args.snapshot_dir,
         )
         if args.require_formal_production and (
-            result.get("schema_version") not in {"abm-report-release-contract-v2", "abm-report-release-contract-v3"}
+            result.get("schema_version")
+            not in {
+                "abm-report-release-contract-v2",
+                "abm-report-release-contract-v3",
+                "abm-report-release-contract-v4",
+            }
             or result.get("release_purpose") != "formal_research"
             or result.get("production_deploy_eligible") is not True
         ):
             raise ReleaseValidationError(
-                "formal production deployment requires abm-report-release-contract-v2 or "
-                "abm-report-release-contract-v3 formal_research evidence"
+                "formal production deployment requires abm-report-release-contract-v2, "
+                "abm-report-release-contract-v3, or abm-report-release-contract-v4 formal_research evidence"
             )
     except ReleaseValidationError as exc:
         print(f"release validation error: {exc}", file=sys.stderr)

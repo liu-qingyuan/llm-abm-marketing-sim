@@ -37,7 +37,7 @@ llm-abm-marketing-sim/
 ├── playwright.config.ts              # 浏览器冒烟配置
 ├── pyproject.toml                    # Python 包、依赖、ruff、mypy、pytest marker
 ├── scripts/
-│   ├── validate_abm_report_release.py # v1/v2/v3 persisted release evidence validator
+│   ├── validate_abm_report_release.py # v1/v2/v3/v4 persisted release evidence validator
 │   └── deploy_abm_report.sh           # formal-only production deploy Interface
 ├── src/
 │   └── llm_abm_sim/                  # 核心包
@@ -161,7 +161,7 @@ scripts/deploy_abm_report.sh \
   --release-id <release-id>
 ```
 
-`validate_release(...)` 是唯一 release-validation Interface，按 exact schema additive dispatch v1/v2/v3。deploy 只接受通过本地 gate 的 v2 或 v3 Formal contract，并在任何 SSH/上传前拒绝 Validation、model/accounting、artifact 或 source mismatch；代码实现和 synthetic fixture 不构成 live/production 授权。
+`validate_release(...)` 是唯一 release-validation Interface，按 exact schema additive dispatch v1/v2/v3/v4。deploy 只接受通过本地 gate 的 v2、v3 或 v4 Formal contract，并在任何 SSH/上传前拒绝 Validation、model/accounting、artifact、prompt-token 或 source mismatch；代码实现和 synthetic fixture 不构成 live/production 授权。
 
 - Browser smoke：
 

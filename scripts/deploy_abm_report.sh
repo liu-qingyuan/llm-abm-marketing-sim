@@ -89,6 +89,48 @@ COPYFILE_DISABLE=1 cp -R "${CANONICAL_SOURCE_DIR}/." "${LOCAL_SNAPSHOT_DIR}/"
   --source-dir "${SOURCE_DIR}" \
   --snapshot-dir "${LOCAL_SNAPSHOT_DIR}" \
   --require-formal-production
+PUBLIC_ACCEPTANCE_REPORT_KIND="$("${PYTHON}" - "${RELEASE_CONTRACT}" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+contract = json.loads(Path(sys.argv[1]).read_text(encoding='utf-8'))
+schema_version = contract.get('schema_version')
+if schema_version in {'abm-report-release-contract-v2', 'abm-report-release-contract-v3'}:
+    print('final-research')
+elif schema_version == 'abm-report-release-contract-v4':
+    print('concurrent-message')
+else:
+    raise SystemExit(f'unsupported public acceptance contract schema_version: {schema_version!r}')
+PY
+)" || fail "cannot derive public acceptance report kind from ${RELEASE_CONTRACT}"
+PUBLIC_ACCEPTANCE_ARTIFACTS_JSON="$("${PYTHON}" - "${RELEASE_CONTRACT}" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+contract = json.loads(Path(sys.argv[1]).read_text(encoding='utf-8'))
+artifacts = sorted(contract.get('artifact_sha256', {}).keys())
+if not artifacts:
+    raise SystemExit('release contract must declare artifact_sha256')
+print(json.dumps(artifacts, ensure_ascii=False))
+PY
+)" || fail "cannot derive public acceptance artifacts from ${RELEASE_CONTRACT}"
+PUBLIC_ACCEPTANCE_ARTIFACTS=()
+while IFS= read -r artifact; do
+  [[ -n "${artifact}" ]] || continue
+  PUBLIC_ACCEPTANCE_ARTIFACTS+=("${artifact}")
+done < <("${PYTHON}" - "${RELEASE_CONTRACT}" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+contract = json.loads(Path(sys.argv[1]).read_text(encoding='utf-8'))
+for artifact in sorted(contract.get('artifact_sha256', {})):
+    print(artifact)
+PY
+)
+(( ${#PUBLIC_ACCEPTANCE_ARTIFACTS[@]} > 0 )) || fail "cannot derive public acceptance artifact list from ${RELEASE_CONTRACT}"
 SOURCE_DIR="${LOCAL_SNAPSHOT_DIR}"
 find "${SOURCE_DIR}" -type d -exec chmod a-w {} +
 find "${SOURCE_DIR}" -type f -exec chmod a-w {} +
@@ -495,18 +537,14 @@ curl -fsSL --max-time 30 \
 REMOTE_MANIFEST_SHA="$(shasum -a 256 "${PUBLIC_MANIFEST}" | awk '{print $1}')"
 [[ "${REMOTE_MANIFEST_SHA}" == "${LOCAL_MANIFEST_SHA}" ]] || fail "public manifest checksum mismatch"
 
-for artifact in \
-  artifact_manifest.json \
-  final_research_report_payload.json \
-  final_research_users.csv \
-  seed_first_sample_audit.json \
-  field_lineage_catalog.json \
-  user_field_trace.json; do
+for artifact in "${PUBLIC_ACCEPTANCE_ARTIFACTS[@]}"; do
   curl -fsSIL --max-time 30 "https://${DOMAIN}/${artifact}" >/dev/null || \
     fail "public artifact check failed: ${artifact}"
 done
 
 ABM_DEPLOY_PUBLIC_URL="https://${DOMAIN}" \
+ABM_DEPLOY_REPORT_KIND="${PUBLIC_ACCEPTANCE_REPORT_KIND}" \
+ABM_DEPLOY_PUBLIC_ARTIFACTS="${PUBLIC_ACCEPTANCE_ARTIFACTS_JSON}" \
   npx playwright test tests/playwright/deployed-abm-report.spec.ts
 
 cleanup_public_artifacts
@@ -514,6 +552,8 @@ cleanup_local_snapshot
 trap - EXIT
 printf 'Deployment complete\n'
 printf 'Report: https://%s/\n' "${DOMAIN}"
-printf 'Network feedback: https://%s/#network-feedback\n' "${DOMAIN}"
+if [[ "${PUBLIC_ACCEPTANCE_REPORT_KIND}" == "final-research" ]]; then
+  printf 'Network feedback: https://%s/#network-feedback\n' "${DOMAIN}"
+fi
 printf 'Release: %s\n' "${RELEASE_ID}"
 printf 'Report SHA-256: %s\n' "${LOCAL_REPORT_SHA}"

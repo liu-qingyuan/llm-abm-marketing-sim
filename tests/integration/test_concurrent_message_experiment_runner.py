@@ -488,8 +488,8 @@ def test_concurrent_message_runner_writes_validation_runtime_artifacts(tmp_path:
         "primary": CONCURRENT_MESSAGE_PRIMARY_PROMPT_VERSION,
         "shadow": CONCURRENT_MESSAGE_SHADOW_PROMPT_VERSION,
     }
-    assert "validation-only" in report_html
-    assert "Validation only" in report_html
+    assert "Validation only · no deploy" in report_html
+    assert 'data-testid="validation-status"' in report_html
     assert "Campaign Funnel" in report_html
     assert "Message Allocation" in report_html
     assert "Primary Audience Response" in report_html
