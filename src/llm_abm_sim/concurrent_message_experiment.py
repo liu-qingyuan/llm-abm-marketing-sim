@@ -4,11 +4,12 @@ import csv
 import html
 import json
 import math
+import shutil
 from collections import Counter
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal, TypedDict, cast
+from typing import Any, Literal, TypedDict, cast
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -16,10 +17,19 @@ from .concurrent_campaign_diagnostics import ConcurrentCampaignDiagnosticArtifac
 from .concurrent_execution_journal import (
     CONCURRENT_MESSAGE_EXECUTION_SNAPSHOT_SCHEMA,
     ConcurrentExecutionJournal,
+    _as_int,
+    _as_str,
+    _require_mapping,
+    _sha256_file,
     build_concurrent_execution_run_identity,
+    derive_concurrent_execution_publish_staging_dir,
     derive_concurrent_execution_workspace,
 )
-from .concurrent_message_report import write_concurrent_message_report_artifacts
+from .concurrent_message_report import (
+    CONCURRENT_MESSAGE_ARTIFACT_MANIFEST_JSON,
+    rebuild_concurrent_message_report,
+    write_concurrent_message_report_artifacts,
+)
 from .decision import DecisionInput, EngageDecision, LLMDecisionAdapter, decision_profile_payload
 from .final_research import (
     _TARGET_DELIVERY_RANKING_POLICY,
@@ -47,6 +57,7 @@ from .prompt_field_summary import (
 )
 from .provider_accounting import ProviderAccounting, empty_provider_accounting, provider_accounting_delta
 from .provider_evidence import allowlisted_provider_evidence
+from .safe_serialization import safe_data
 from .schemas import (
     LATENT_VALUE_DIMENSIONS,
     PeerContext,
@@ -433,6 +444,11 @@ class _MessageScore:
     raw_message_user_fit: float
     normalized_message_user_fit: float
     personalized_delivery_score: float
+    base_network_relevance_full_precision: str | None = None
+    engaged_neighbor_signal_full_precision: str | None = None
+    raw_message_user_fit_full_precision: str | None = None
+    normalized_message_user_fit_full_precision: str | None = None
+    personalized_delivery_score_full_precision: str | None = None
 
 
 @dataclass(frozen=True)
@@ -1141,7 +1157,10 @@ class ConcurrentMessageExperimentRunner:
         if primary_metadata != shadow_metadata:
             raise ValueError("primary and shadow adapters must match on provider/model/timeout/retry/sampling metadata")
 
-    def run_and_write(self, output_dir: str | Path) -> Path:
+    def run_and_write(self, output_dir: str | Path, mode: Literal["new", "resume"] = "new") -> Path:
+        if mode == "resume":
+            return self._run_and_write_resume(output_dir)
+
         output_path = Path(output_dir)
         dataset_path = self.config.dataset_dir.resolve()
         if output_path.resolve().is_relative_to(dataset_path):
@@ -1478,34 +1497,599 @@ class ConcurrentMessageExperimentRunner:
         )
         sample_audit = dict(cohort.sample_audit)
         sample_audit["sampling_status"] = sampling_status
-        write_concurrent_message_report_artifacts(
-            output_path,
-            title=self.config.report.title,
+        return self._finalize_concurrent_message_output(
+            output_path=output_path,
+            journal=journal,
+            sample_users=sample_users,
             config_snapshot=config_snapshot,
             message_snapshot=message_snapshot,
-            sample_users=[user.model_dump(mode="json") for user in sample_users],
             sample_audit=sample_audit,
             candidate_rows=safe_candidate_rows,
             pair_rows=safe_pair_rows,
             terminal_rows=safe_terminal_rows,
             step_rows=list(step_rows),
             validation_summary=validation_summary,
-            campaign_diagnostics=campaign_diagnostics.payload,
+            campaign_diagnostics=campaign_diagnostics,
+            sampling_status=sampling_status,
         )
-        journal.append(
-            event_type="run_finalized",
-            event_identity={"run_id": journal.run_id, "output_target": str(output_path)},
-            payload={
+
+    def _run_and_write_resume(self, output_dir: str | Path) -> Path:
+        output_path = Path(output_dir)
+        dataset_path = self.config.dataset_dir.resolve()
+        if output_path.resolve().is_relative_to(dataset_path):
+            raise ValueError("output_dir must be outside dataset_dir")
+
+        cohort = _ResearchCohortPreparer(
+            dataset_dir=self.config.dataset_dir,
+            sample_size=self.config.sample_size,
+            random_seed=self.config.random_seed,
+            model_policy=_TARGET_DELIVERY_RANKING_POLICY,
+            holdout_video_ids=(self.config.sample_holdout_video_id,),
+        ).prepare()
+        if len(cohort.seed_user_ids) > self.config.delivery_capacity:
+            raise ValueError(
+                f"delivery_capacity {self.config.delivery_capacity} is smaller than the prepared seed union {len(cohort.seed_user_ids)}"
+            )
+
+        sample_users = [cohort.users_by_id[user_id] for user_id in cohort.sample_user_ids]
+        base_network_by_user = {
+            user_id: _log_p95_score(
+                cohort.comment_graph.weighted_degree_by_user.get(user_id, 0),
+                cohort.comment_graph.p95_weighted_degree,
+            )
+            for user_id in cohort.users_by_id
+        }
+        neighbors_by_user = cohort.comment_graph.neighbors_by_user
+        exposed_by_message = {message.message_id: set() for message in self.config.messages}
+        campaign_engaged_user_ids: set[str] = set()
+
+        candidate_rows: list[dict[str, object]] = []
+        pair_rows: list[dict[str, object]] = []
+        terminal_rows: list[dict[str, object]] = []
+        variant_evidence_rows: list[dict[str, object]] = []
+        step_rows: list[_BatchStepSummary] = []
+        pair_schedule_position = 0
+        primary_provider_metadata = _adapter_safe_metadata(self.primary_adapter, ProviderLLMConfig())
+        shadow_provider_metadata = _adapter_safe_metadata(self.shadow_adapter, ProviderLLMConfig())
+        primary_live_baseline = _adapter_external_request_invocations(self.primary_adapter)
+        shadow_live_baseline = _adapter_external_request_invocations(self.shadow_adapter)
+        sampling_status = _concurrent_sampling_status(
+            self.primary_adapter,
+            self.shadow_adapter,
+            primary_live_baseline=primary_live_baseline,
+            shadow_live_baseline=shadow_live_baseline,
+        )
+        preflight_config_snapshot = self.config.snapshot(
+            sampling_status=sampling_status,
+            production_deploy_eligible=False,
+        )
+        message_snapshot = [message.model_dump(mode="json") for message in self.config.messages]
+        prompt_contract = _variant_prompt_contract_summary()
+        run_identity = build_concurrent_execution_run_identity(
+            output_target=output_path,
+            operational_workspace=derive_concurrent_execution_workspace(output_path),
+            configuration_snapshot=preflight_config_snapshot,
+            message_snapshot=message_snapshot,
+            sample_audit=cohort.sample_audit,
+            dataset_dir=self.config.dataset_dir,
+            primary_provider_metadata=primary_provider_metadata,
+            shadow_provider_metadata=shadow_provider_metadata,
+            prompt_contract=prompt_contract,
+        )
+        journal = ConcurrentExecutionJournal.open_resume(derive_concurrent_execution_workspace(output_path), identity=run_identity)
+        try:
+            replay = journal.replay()
+            status = replay["status"]
+            if status["lifecycle"] == "published":
+                if not output_path.exists():
+                    raise FileNotFoundError(f"finalized concurrent message output is missing: {output_path}")
+                rebuild_concurrent_message_report(output_path)
+                return output_path
+            if output_path.exists() and status["lifecycle"] not in {"ready_to_finalize", "durable_partial"}:
+                raise FileExistsError(f"output_dir already exists before finalization: {output_path}")
+
+            messages_by_id = {message.message_id: message for message in self.config.messages}
+            resume_state = self._restore_runtime_state(
+                replay=replay,
+                cohort=cohort,
+                messages_by_id=messages_by_id,
+            )
+            candidate_rows = resume_state["candidate_rows"]
+            pair_rows = resume_state["pair_rows"]
+            terminal_rows = resume_state["terminal_rows"]
+            variant_evidence_rows = resume_state["variant_evidence_rows"]
+            step_rows = resume_state["step_rows"]
+            campaign_engaged_user_ids = resume_state["campaign_engaged_user_ids"]
+            exposed_by_message = resume_state["exposed_by_message"]
+            pair_schedule_position = resume_state["pair_schedule_position"]
+            batches_by_time_step = resume_state["batches_by_time_step"]
+            start_time_step = resume_state["next_time_step"]
+            batch_state = batches_by_time_step.get(start_time_step)
+            next_time_step = start_time_step
+            if isinstance(batch_state, dict):
+                batch_plans = cast(list[_PairExecutionPlan], batch_state["batch_plans"])
+                pair_state_by_id = cast(dict[str, dict[str, object]], batch_state["pair_state_by_id"])
+                batch_message_summaries = cast(dict[str, _BatchMessageSummary], batch_state["batch_message_summaries"])
+                batch_primary_positive_user_ids = cast(set[str], batch_state["primary_positive_user_ids"])
+                batch_pair_start = _as_int(batch_state["batch_pair_start"])
+                batch_snapshot_hash = _as_str(batch_state["batch_snapshot_hash"])
+                next_pair_index = _as_int(batch_state["next_pair_index"])
+                for plan in batch_plans[next_pair_index:]:
+                    pair_state = pair_state_by_id[plan.pair_id]
+                    pair_row, primary_positive_event = self._resume_pair(
+                        plan=plan,
+                        pair_state=pair_state,
+                        primary_provider_metadata=primary_provider_metadata,
+                        shadow_provider_metadata=shadow_provider_metadata,
+                        journal=journal,
+                        batch_snapshot_hash=batch_snapshot_hash,
+                    )
+                    terminal_rows.extend(cast(list[dict[str, object]], pair_row.pop("_terminal_rows", [])))
+                    variant_evidence_rows.extend(cast(list[dict[str, object]], pair_row.pop("_variant_evidence", [])))
+                    pair_rows.append(pair_row)
+                    if primary_positive_event is not None:
+                        batch_primary_positive_user_ids.add(plan.user.user_id)
+                        batch_message_summaries[plan.message.message_id]["primary_positive_user_ids"].append(plan.user.user_id)
+                    if pair_row["primary_status"] == "provider_failed":
+                        batch_message_summaries[plan.message.message_id]["primary_provider_failed_user_ids"].append(
+                            plan.user.user_id
+                        )
+                    if pair_row["shadow_status"] == "provider_failed":
+                        batch_message_summaries[plan.message.message_id]["shadow_provider_failed_user_ids"].append(
+                            plan.user.user_id
+                        )
+                committed_user_ids = sorted(batch_primary_positive_user_ids)
+                campaign_engaged_user_ids.update(committed_user_ids)
+                journal.append(
+                    event_type="batch_committed",
+                    event_identity={"time_step": batch_state["time_step"]},
+                    payload={
+                        "time_step": batch_state["time_step"],
+                        "committed_user_ids": committed_user_ids,
+                        "committed_user_count": len(committed_user_ids),
+                        "batch_pair_count": len(batch_plans),
+                    },
+                    batch_snapshot_hash=batch_snapshot_hash,
+                )
+                for pair_row in pair_rows[batch_pair_start:]:
+                    pair_row["campaign_feedback_committed"] = _csv_bool(
+                        pair_row["primary_action"] in CONCURRENT_MESSAGE_POSITIVE_ACTIONS
+                        and str(pair_row["user_id"]) in committed_user_ids
+                    )
+                step_rows.append(
+                    {
+                        "time_step": batch_state["time_step"],
+                        "frozen_campaign_engaged_user_ids": list(batch_state["frozen_campaign_engaged_user_ids"]),
+                        "deduplicated_committed_primary_positive_user_ids": committed_user_ids,
+                        "messages": [batch_message_summaries[message.message_id] for message in self.config.messages],
+                    }
+                )
+                next_time_step = start_time_step + 1
+
+            return self._run_fresh_batches_from(
+                start_time_step=next_time_step,
+                output_path=output_path,
+                cohort=cohort,
+                sample_users=sample_users,
+                base_network_by_user=base_network_by_user,
+                neighbors_by_user=neighbors_by_user,
+                exposed_by_message=exposed_by_message,
+                campaign_engaged_user_ids=campaign_engaged_user_ids,
+                candidate_rows=candidate_rows,
+                pair_rows=pair_rows,
+                terminal_rows=terminal_rows,
+                variant_evidence_rows=variant_evidence_rows,
+                step_rows=step_rows,
+                pair_schedule_position=pair_schedule_position,
+                primary_provider_metadata=primary_provider_metadata,
+                shadow_provider_metadata=shadow_provider_metadata,
+                primary_live_baseline=primary_live_baseline,
+                shadow_live_baseline=shadow_live_baseline,
+                sampling_status=sampling_status,
+                preflight_config_snapshot=preflight_config_snapshot,
+                message_snapshot=message_snapshot,
+                prompt_contract=prompt_contract,
+                journal=journal,
+            )
+        finally:
+            journal.close()
+
+    def _run_fresh_batches_from(
+        self,
+        *,
+        start_time_step: int,
+        output_path: Path,
+        cohort: _PreparedResearchCohort,
+        sample_users: list[ResearchUser],
+        base_network_by_user: Mapping[str, float],
+        neighbors_by_user: Mapping[str, set[str]],
+        exposed_by_message: dict[str, set[str]],
+        campaign_engaged_user_ids: set[str],
+        candidate_rows: list[dict[str, object]],
+        pair_rows: list[dict[str, object]],
+        terminal_rows: list[dict[str, object]],
+        variant_evidence_rows: list[dict[str, object]],
+        step_rows: list[_BatchStepSummary],
+        pair_schedule_position: int,
+        primary_provider_metadata: Mapping[str, object],
+        shadow_provider_metadata: Mapping[str, object],
+        primary_live_baseline: int,
+        shadow_live_baseline: int,
+        sampling_status: str,
+        preflight_config_snapshot: Mapping[str, object],
+        message_snapshot: Sequence[Mapping[str, object]],
+        prompt_contract: Mapping[str, object],
+        journal: ConcurrentExecutionJournal,
+    ) -> Path:
+        for time_step in range(start_time_step, self.config.horizon):
+            frozen_campaign_engaged_user_ids = sorted(campaign_engaged_user_ids)
+            batch_pair_start = len(pair_rows)
+            batch_primary_positive_events: list[dict[str, str]] = []
+            batch_plans: list[_PairExecutionPlan] = []
+            batch_message_summaries: dict[str, _BatchMessageSummary] = {}
+            batch_candidate_rows_by_message: dict[str, list[dict[str, object]]] = {}
+            batch_selected_pair_plans_by_message: dict[str, list[dict[str, object]]] = {}
+
+            for message in self.config.messages:
+                eligible_user_ids = [
+                    user_id
+                    for user_id in cohort.sample_user_ids
+                    if user_id not in exposed_by_message[message.message_id]
+                ]
+                ranked_scores = _rank_message_candidates(
+                    message=message,
+                    users_by_id=cohort.users_by_id,
+                    eligible_user_ids=eligible_user_ids,
+                    base_network_by_user=base_network_by_user,
+                    neighbors_by_user=neighbors_by_user,
+                    campaign_engaged_user_ids=campaign_engaged_user_ids,
+                )
+                selected_scores, selection_reason_by_user = _select_batch_candidates(
+                    time_step=time_step,
+                    ranked_scores=ranked_scores,
+                    seed_user_ids=cohort.seed_user_ids,
+                    delivery_capacity=self.config.delivery_capacity,
+                )
+                ranking_position_by_user = {
+                    score.user_id: ranking_position for ranking_position, score in enumerate(ranked_scores, start=1)
+                }
+                selected_user_ids = [score.user_id for score in selected_scores]
+                exposed_by_message[message.message_id].update(selected_user_ids)
+                message_candidate_rows: list[dict[str, object]] = []
+                for ranking_position, score in enumerate(ranked_scores, start=1):
+                    candidate_row = {
+                        "time_step": time_step,
+                        "message_id": message.message_id,
+                        "user_id": score.user_id,
+                        "is_seed": _csv_bool(score.user_id in cohort.seed_user_ids),
+                        "selected": _csv_bool(score.user_id in selection_reason_by_user),
+                        "selection_reason": selection_reason_by_user.get(score.user_id, ""),
+                        "ranking_position": ranking_position,
+                        "base_network_relevance": round(score.base_network_relevance, 12),
+                        "base_network_relevance_full_precision": _full_precision_cell(score.base_network_relevance),
+                        "campaign_engaged_neighbor_count": score.engaged_neighbor_count,
+                        "campaign_engaged_neighbor_signal": round(score.engaged_neighbor_signal, 12),
+                        "campaign_engaged_neighbor_signal_full_precision": _full_precision_cell(
+                            score.engaged_neighbor_signal
+                        ),
+                        "historical_tag_affinity": CONCURRENT_MESSAGE_HISTORY_AFFINITY,
+                        "raw_message_user_fit": round(score.raw_message_user_fit, 12),
+                        "raw_message_user_fit_full_precision": _full_precision_cell(score.raw_message_user_fit),
+                        "normalized_message_user_fit": round(score.normalized_message_user_fit, 12),
+                        "normalized_message_user_fit_full_precision": _full_precision_cell(
+                            score.normalized_message_user_fit
+                        ),
+                        "personalized_delivery_score": round(score.personalized_delivery_score, 12),
+                        "personalized_delivery_score_full_precision": _full_precision_cell(
+                            score.personalized_delivery_score
+                        ),
+                    }
+                    candidate_rows.append(candidate_row)
+                    message_candidate_rows.append(candidate_row)
+                batch_candidate_rows_by_message[message.message_id] = message_candidate_rows
+                batch_message_summaries[message.message_id] = {
+                    "message_id": message.message_id,
+                    "message_title": message.title,
+                    "eligible_users": len(eligible_user_ids),
+                    "ranked_candidates": len(ranked_scores),
+                    "selected_user_ids": list(selected_user_ids),
+                    "seed_user_ids": [user_id for user_id in selected_user_ids if user_id in cohort.seed_user_ids],
+                    "personalized_topup_user_ids": [
+                        user_id
+                        for user_id, reason in selection_reason_by_user.items()
+                        if reason == "personalized_topup"
+                    ],
+                    "primary_positive_user_ids": [],
+                    "primary_provider_failed_user_ids": [],
+                    "shadow_provider_failed_user_ids": [],
+                    "below_delivery_capacity": len(ranked_scores) - len(selected_scores),
+                    "selection_reason_counts": dict(sorted(Counter(selection_reason_by_user.values()).items())),
+                }
+                message_selected_pair_plans: list[dict[str, object]] = []
+                for score in selected_scores:
+                    user = cohort.users_by_id[score.user_id]
+                    pair_plan = _PairExecutionPlan(
+                        pair_id=f"{user.user_id}:{message.message_id}:{time_step}",
+                        pair_schedule_position=pair_schedule_position,
+                        time_step=time_step,
+                        message=message,
+                        user=user,
+                        profile=_primary_variant_profile(user),
+                        ranking_position=ranking_position_by_user[user.user_id],
+                        selection_reason=selection_reason_by_user[user.user_id],
+                        score=score,
+                    )
+                    batch_plans.append(pair_plan)
+                    message_selected_pair_plans.append(
+                        {
+                            "pair_id": pair_plan.pair_id,
+                            "pair_schedule_position": pair_plan.pair_schedule_position,
+                            "time_step": pair_plan.time_step,
+                            "message_id": pair_plan.message.message_id,
+                            "message_title": pair_plan.message.title,
+                            "user_id": pair_plan.user.user_id,
+                            "ranking_position": pair_plan.ranking_position,
+                            "selection_reason": pair_plan.selection_reason,
+                            "base_network_relevance": round(pair_plan.score.base_network_relevance, 12),
+                            "base_network_relevance_full_precision": _full_precision_cell(
+                                pair_plan.score.base_network_relevance
+                            ),
+                            "campaign_engaged_neighbor_count": pair_plan.score.engaged_neighbor_count,
+                            "campaign_engaged_neighbor_signal": round(pair_plan.score.engaged_neighbor_signal, 12),
+                            "campaign_engaged_neighbor_signal_full_precision": _full_precision_cell(
+                                pair_plan.score.engaged_neighbor_signal
+                            ),
+                            "historical_tag_affinity": CONCURRENT_MESSAGE_HISTORY_AFFINITY,
+                            "raw_message_user_fit": round(pair_plan.score.raw_message_user_fit, 12),
+                            "raw_message_user_fit_full_precision": _full_precision_cell(
+                                pair_plan.score.raw_message_user_fit
+                            ),
+                            "normalized_message_user_fit": round(pair_plan.score.normalized_message_user_fit, 12),
+                            "normalized_message_user_fit_full_precision": _full_precision_cell(
+                                pair_plan.score.normalized_message_user_fit
+                            ),
+                            "personalized_delivery_score": round(pair_plan.score.personalized_delivery_score, 12),
+                            "personalized_delivery_score_full_precision": _full_precision_cell(
+                                pair_plan.score.personalized_delivery_score
+                            ),
+                        }
+                    )
+                    pair_schedule_position += 1
+                batch_selected_pair_plans_by_message[message.message_id] = message_selected_pair_plans
+
+            batch_snapshot_payload = {
+                "schema_version": CONCURRENT_MESSAGE_EXECUTION_SNAPSHOT_SCHEMA,
+                "snapshot_type": "batch_plan",
+                "snapshot_identity": {"time_step": time_step},
+                "time_step": time_step,
+                "frozen_campaign_engaged_user_ids": list(frozen_campaign_engaged_user_ids),
+                "planned_pair_count": len(batch_plans),
+                "planned_variant_count": len(batch_plans) * 2,
+                "messages": [
+                    {
+                        "message_id": message_id,
+                        "message_title": batch_message_summaries[message_id]["message_title"],
+                        "eligible_users": batch_message_summaries[message_id]["eligible_users"],
+                        "ranked_candidates": batch_candidate_rows_by_message[message_id],
+                        "selected_pair_plans": batch_selected_pair_plans_by_message[message_id],
+                        "selected_user_ids": batch_message_summaries[message_id]["selected_user_ids"],
+                        "seed_user_ids": batch_message_summaries[message_id]["seed_user_ids"],
+                        "personalized_topup_user_ids": batch_message_summaries[message_id]["personalized_topup_user_ids"],
+                        "below_delivery_capacity": batch_message_summaries[message_id]["below_delivery_capacity"],
+                        "selection_reason_counts": batch_message_summaries[message_id]["selection_reason_counts"],
+                    }
+                    for message_id in [message.message_id for message in self.config.messages]
+                ],
+            }
+            batch_snapshot_ref = journal.persist_snapshot(
+                snapshot_type="batch_plan",
+                snapshot_identity={"time_step": time_step},
+                payload=batch_snapshot_payload,
+            )
+            batch_snapshot_hash = batch_snapshot_ref["snapshot_hash"]
+
+            for plan in batch_plans:
+                pair_row, primary_positive_event = self._execute_pair(
+                    plan=plan,
+                    primary_provider_metadata=primary_provider_metadata,
+                    shadow_provider_metadata=shadow_provider_metadata,
+                    journal=journal,
+                    batch_snapshot_hash=batch_snapshot_hash,
+                )
+                terminal_rows.extend(cast(list[dict[str, object]], pair_row.pop("_terminal_rows")))
+                variant_evidence_rows.extend(cast(list[dict[str, object]], pair_row.pop("_variant_evidence")))
+                pair_rows.append(pair_row)
+                if primary_positive_event is not None:
+                    batch_primary_positive_events.append(primary_positive_event)
+                    batch_message_summaries[plan.message.message_id]["primary_positive_user_ids"].append(
+                        plan.user.user_id
+                    )
+                if pair_row["primary_status"] == "provider_failed":
+                    batch_message_summaries[plan.message.message_id]["primary_provider_failed_user_ids"].append(
+                        plan.user.user_id
+                    )
+                if pair_row["shadow_status"] == "provider_failed":
+                    batch_message_summaries[plan.message.message_id]["shadow_provider_failed_user_ids"].append(
+                        plan.user.user_id
+                    )
+
+            committed_user_ids = sorted({event["user_id"] for event in batch_primary_positive_events})
+            campaign_engaged_user_ids.update(committed_user_ids)
+            journal.append(
+                event_type="batch_committed",
+                event_identity={"time_step": time_step},
+                payload={
+                    "time_step": time_step,
+                    "committed_user_ids": committed_user_ids,
+                    "committed_user_count": len(committed_user_ids),
+                    "batch_pair_count": len(batch_plans),
+                },
+                batch_snapshot_hash=batch_snapshot_hash,
+            )
+            for pair_row in pair_rows[batch_pair_start:]:
+                pair_row["campaign_feedback_committed"] = _csv_bool(
+                    pair_row["primary_action"] in CONCURRENT_MESSAGE_POSITIVE_ACTIONS
+                    and str(pair_row["user_id"]) in committed_user_ids
+                )
+
+            step_rows.append(
+                {
+                    "time_step": time_step,
+                    "frozen_campaign_engaged_user_ids": frozen_campaign_engaged_user_ids,
+                    "deduplicated_committed_primary_positive_user_ids": committed_user_ids,
+                    "messages": [batch_message_summaries[message.message_id] for message in self.config.messages],
+                }
+            )
+
+        safe_candidate_rows = _safe_runtime_rows(candidate_rows)
+        safe_pair_rows = _safe_runtime_rows(pair_rows)
+        safe_terminal_rows = _safe_runtime_rows(terminal_rows)
+        campaign_diagnostics = ConcurrentCampaignDiagnostics(delivery_capacity=self.config.delivery_capacity).build(
+            candidate_rows=safe_candidate_rows, pair_rows=safe_pair_rows
+        )
+        sampling_status = _concurrent_sampling_status(
+            self.primary_adapter,
+            self.shadow_adapter,
+            primary_live_baseline=primary_live_baseline,
+            shadow_live_baseline=shadow_live_baseline,
+        )
+        validation_summary = self._validation_summary(
+            cohort=cohort,
+            pair_rows=pair_rows,
+            terminal_rows=terminal_rows,
+            variant_evidence_rows=variant_evidence_rows,
+            step_rows=step_rows,
+            diagnostics=campaign_diagnostics,
+            sampling_status=sampling_status,
+            production_deploy_eligible=False,
+        )
+        production_deploy_eligible = _concurrent_production_deploy_eligible(
+            validation_summary,
+            sampling_status=sampling_status,
+            primary_provider_metadata=primary_provider_metadata,
+            shadow_provider_metadata=shadow_provider_metadata,
+        )
+        if production_deploy_eligible:
+            validation_summary = self._validation_summary(
+                cohort=cohort,
+                pair_rows=pair_rows,
+                terminal_rows=terminal_rows,
+                variant_evidence_rows=variant_evidence_rows,
+                step_rows=step_rows,
+                diagnostics=campaign_diagnostics,
+                sampling_status=sampling_status,
+                production_deploy_eligible=production_deploy_eligible,
+            )
+        config_snapshot = self.config.snapshot(
+            sampling_status=sampling_status,
+            production_deploy_eligible=production_deploy_eligible,
+        )
+        sample_audit = dict(cohort.sample_audit)
+        sample_audit["sampling_status"] = sampling_status
+        return self._finalize_concurrent_message_output(
+            output_path=output_path,
+            journal=journal,
+            sample_users=sample_users,
+            config_snapshot=config_snapshot,
+            message_snapshot=message_snapshot,
+            sample_audit=sample_audit,
+            candidate_rows=safe_candidate_rows,
+            pair_rows=safe_pair_rows,
+            terminal_rows=safe_terminal_rows,
+            step_rows=list(step_rows),
+            validation_summary=validation_summary,
+            campaign_diagnostics=campaign_diagnostics,
+            sampling_status=sampling_status,
+        )
+
+    def _finalize_concurrent_message_output(
+        self,
+        *,
+        output_path: Path,
+        journal: ConcurrentExecutionJournal,
+        sample_users: list[ResearchUser],
+        config_snapshot: Mapping[str, object],
+        message_snapshot: Sequence[Mapping[str, object]],
+        sample_audit: Mapping[str, object],
+        candidate_rows: Sequence[Mapping[str, object]],
+        pair_rows: Sequence[Mapping[str, object]],
+        terminal_rows: Sequence[Mapping[str, object]],
+        step_rows: Sequence[Mapping[str, object]],
+        validation_summary: Mapping[str, object],
+        campaign_diagnostics: ConcurrentCampaignDiagnosticArtifacts,
+        sampling_status: str,
+    ) -> Path:
+        staging_path = derive_concurrent_execution_publish_staging_dir(output_path, run_id=journal.run_id)
+
+        def _publish_payload(final_source_hash: str) -> dict[str, object]:
+            return {
                 "output_target": str(output_path),
-                "operational_workspace": str(operational_workspace),
-                "report_path": str(output_path / "report.html"),
+                "staging_path": str(staging_path),
+                "final_source_path": str(output_path),
+                "final_source_hash": final_source_hash,
+                "report_path": str(output_path / CONCURRENT_MESSAGE_REPORT_HTML),
                 "deploy_eligibility": False,
                 "sampling_status": sampling_status,
-            },
+            }
+
+        if output_path.exists():
+            if not output_path.is_dir():
+                raise FileExistsError(f"final concurrent message output already exists as a file: {output_path}")
+            rebuild_concurrent_message_report(output_path)
+            manifest_hash = _sha256_file(output_path / CONCURRENT_MESSAGE_ARTIFACT_MANIFEST_JSON)
+            if not journal.finalized:
+                journal.append(
+                    event_type="run_published",
+                    event_identity={
+                        "run_id": journal.run_id,
+                        "output_target": str(output_path),
+                        "finalization_stage": "published",
+                    },
+                    payload=_publish_payload(manifest_hash),
+                )
+            return output_path
+
+        if staging_path.exists():
+            if staging_path.is_file():
+                raise FileExistsError(f"concurrent message staging path already exists as a file: {staging_path}")
+            shutil.rmtree(staging_path)
+
+        write_concurrent_message_report_artifacts(
+            staging_path,
+            title=self.config.report.title,
+            config_snapshot=config_snapshot,
+            message_snapshot=message_snapshot,
+            sample_users=[user.model_dump(mode="json") for user in sample_users],
+            sample_audit=sample_audit,
+            candidate_rows=candidate_rows,
+            pair_rows=pair_rows,
+            terminal_rows=terminal_rows,
+            step_rows=step_rows,
+            validation_summary=validation_summary,
+            campaign_diagnostics=campaign_diagnostics.payload,
         )
-        final_status = journal.status()
-        if final_status["lifecycle"] != "complete":
-            raise ValueError("concurrent execution journal did not reach a complete lifecycle")
+        rebuild_concurrent_message_report(staging_path)
+        manifest_hash = _sha256_file(staging_path / CONCURRENT_MESSAGE_ARTIFACT_MANIFEST_JSON)
+        if not journal.finalization_started:
+            journal.append(
+                event_type="run_finalized",
+                event_identity={
+                    "run_id": journal.run_id,
+                    "output_target": str(output_path),
+                    "finalization_stage": "finalized",
+                },
+                payload=_publish_payload(manifest_hash),
+            )
+        staging_path.replace(output_path)
+        journal.append(
+            event_type="run_published",
+            event_identity={
+                "run_id": journal.run_id,
+                "output_target": str(output_path),
+                "finalization_stage": "published",
+            },
+            payload=_publish_payload(manifest_hash),
+        )
         return output_path
 
     def _execute_variant(
@@ -1635,6 +2219,8 @@ class ConcurrentMessageExperimentRunner:
                 "action": primary_terminal_row["action"],
                 "reason": primary_terminal_row["reason"],
                 "decision_source": primary_terminal_row["decision_source"],
+                "terminal_row": primary_terminal_row,
+                "variant_evidence": primary_variant_evidence,
             },
             batch_snapshot_hash=batch_snapshot_hash,
         )
@@ -1669,6 +2255,8 @@ class ConcurrentMessageExperimentRunner:
                 "action": shadow_terminal_row["action"],
                 "reason": shadow_terminal_row["reason"],
                 "decision_source": shadow_terminal_row["decision_source"],
+                "terminal_row": shadow_terminal_row,
+                "variant_evidence": shadow_variant_evidence,
             },
             batch_snapshot_hash=batch_snapshot_hash,
         )
@@ -1744,6 +2332,638 @@ class ConcurrentMessageExperimentRunner:
             batch_snapshot_hash=batch_snapshot_hash,
         )
         return pair_row, primary_positive_event
+
+    def _build_pair_row(
+        self,
+        *,
+        plan: _PairExecutionPlan,
+        primary_terminal_row: Mapping[str, object],
+        shadow_terminal_row: Mapping[str, object],
+        primary_variant_evidence: Mapping[str, object],
+        shadow_variant_evidence: Mapping[str, object],
+        committed_user_ids: Sequence[str] | None = None,
+    ) -> dict[str, object]:
+        committed_user_set = set(committed_user_ids or [])
+
+        def _precision(value: float, override: str | None) -> str:
+            return override if override is not None else _full_precision_cell(value)
+
+        pair_row = {
+            "pair_id": plan.pair_id,
+            "pair_schedule_position": plan.pair_schedule_position,
+            "time_step": plan.time_step,
+            "message_id": plan.message.message_id,
+            "message_title": plan.message.title,
+            "user_id": plan.user.user_id,
+            "latent_class": str(plan.user.latent_attributes["latent_class"]),
+            "shadow_gender": str(plan.user.latent_attributes["latent_gender"]),
+            "shadow_age": str(plan.user.latent_attributes["latent_age"]),
+            "shadow_education": str(plan.user.latent_attributes["latent_education"]),
+            "shadow_monthly_income": str(plan.user.latent_attributes["latent_monthly_income"]),
+            "is_seed": _csv_bool(plan.user.is_seed),
+            "selection_reason": plan.selection_reason,
+            "ranking_position": plan.ranking_position,
+            "base_network_relevance": round(plan.score.base_network_relevance, 12),
+            "base_network_relevance_full_precision": _precision(
+                plan.score.base_network_relevance,
+                plan.score.base_network_relevance_full_precision,
+            ),
+            "campaign_engaged_neighbor_count": plan.score.engaged_neighbor_count,
+            "campaign_engaged_neighbor_signal": round(plan.score.engaged_neighbor_signal, 12),
+            "campaign_engaged_neighbor_signal_full_precision": _precision(
+                plan.score.engaged_neighbor_signal,
+                plan.score.engaged_neighbor_signal_full_precision,
+            ),
+            "historical_tag_affinity": CONCURRENT_MESSAGE_HISTORY_AFFINITY,
+            "raw_message_user_fit": round(plan.score.raw_message_user_fit, 12),
+            "raw_message_user_fit_full_precision": _precision(
+                plan.score.raw_message_user_fit,
+                plan.score.raw_message_user_fit_full_precision,
+            ),
+            "normalized_message_user_fit": round(plan.score.normalized_message_user_fit, 12),
+            "normalized_message_user_fit_full_precision": _precision(
+                plan.score.normalized_message_user_fit,
+                plan.score.normalized_message_user_fit_full_precision,
+            ),
+            "personalized_delivery_score": round(plan.score.personalized_delivery_score, 12),
+            "personalized_delivery_score_full_precision": _precision(
+                plan.score.personalized_delivery_score,
+                plan.score.personalized_delivery_score_full_precision,
+            ),
+            "primary_status": primary_terminal_row["terminal_status"],
+            "primary_action": primary_terminal_row["action"],
+            "primary_probability": primary_terminal_row["probability"],
+            "primary_confidence": primary_terminal_row["confidence"],
+            "primary_reason": primary_terminal_row["reason"],
+            "primary_decision_source": primary_terminal_row["decision_source"],
+            "primary_prompt_version": primary_terminal_row["prompt_version"],
+            "primary_provider_metadata": primary_terminal_row["provider_metadata"],
+            "shadow_status": shadow_terminal_row["terminal_status"],
+            "shadow_action": shadow_terminal_row["action"],
+            "shadow_probability": shadow_terminal_row["probability"],
+            "shadow_confidence": shadow_terminal_row["confidence"],
+            "shadow_reason": shadow_terminal_row["reason"],
+            "shadow_decision_source": shadow_terminal_row["decision_source"],
+            "shadow_prompt_version": shadow_terminal_row["prompt_version"],
+            "shadow_provider_metadata": shadow_terminal_row["provider_metadata"],
+            "campaign_feedback_committed": _csv_bool(
+                primary_terminal_row["action"] in CONCURRENT_MESSAGE_POSITIVE_ACTIONS
+                and plan.user.user_id in committed_user_set
+            ),
+            "pair_terminal_coverage": _csv_bool(True),
+            "paired_decision_coverage": _csv_bool(
+                primary_terminal_row["terminal_status"] == "succeeded"
+                and shadow_terminal_row["terminal_status"] == "succeeded"
+            ),
+            "_terminal_rows": [dict(safe_data(primary_terminal_row)), dict(safe_data(shadow_terminal_row))],
+            "_variant_evidence": [
+                dict(safe_data(primary_variant_evidence)),
+                dict(safe_data(shadow_variant_evidence)),
+            ],
+        }
+        return pair_row
+
+    def _resume_pair(
+        self,
+        *,
+        plan: _PairExecutionPlan,
+        pair_state: dict[str, object],
+        primary_provider_metadata: Mapping[str, object],
+        shadow_provider_metadata: Mapping[str, object],
+        journal: ConcurrentExecutionJournal,
+        batch_snapshot_hash: str,
+    ) -> tuple[dict[str, object], dict[str, str] | None]:
+        primary_context = _primary_variant_context(plan)
+        shadow_context = _shadow_variant_context(plan)
+
+        def _ensure_started(decision_variant: str) -> None:
+            started_key = f"{decision_variant}_started"
+            if not bool(pair_state[started_key]):
+                journal.append(
+                    event_type="variant_started",
+                    event_identity={
+                        "pair_id": plan.pair_id,
+                        "decision_variant": decision_variant,
+                        "event_type": "variant_started",
+                        "time_step": plan.time_step,
+                    },
+                    payload={
+                        "pair_id": plan.pair_id,
+                        "pair_schedule_position": plan.pair_schedule_position,
+                        "message_id": plan.message.message_id,
+                        "message_title": plan.message.title,
+                        "user_id": plan.user.user_id,
+                        "ranking_position": plan.ranking_position,
+                        "selection_reason": plan.selection_reason,
+                    },
+                    batch_snapshot_hash=batch_snapshot_hash,
+                )
+                pair_state[started_key] = True
+
+        def _ensure_terminal(
+            *,
+            decision_variant: str,
+            context,
+            provider_metadata: Mapping[str, object],
+        ) -> tuple[dict[str, object], dict[str, object], bool]:
+            terminal_key = f"{decision_variant}_terminal_row"
+            evidence_key = f"{decision_variant}_variant_evidence"
+            terminal_missing = pair_state[terminal_key] is None or pair_state[evidence_key] is None
+            if terminal_missing:
+                attempt, accounting = self._execute_variant(
+                    adapter=self.primary_adapter if decision_variant == "primary" else self.shadow_adapter,
+                    context=context,
+                    pair_schedule_position=plan.pair_schedule_position,
+                    time_step=plan.time_step,
+                    message_id=plan.message.message_id,
+                    default_provider_metadata=provider_metadata,
+                )
+                terminal_row, _, variant_evidence = self._terminal_row(
+                    pair_id=plan.pair_id,
+                    pair_schedule_position=plan.pair_schedule_position,
+                    time_step=plan.time_step,
+                    message_id=plan.message.message_id,
+                    user_id=plan.user.user_id,
+                    context=context,
+                    attempt=attempt,
+                    accounting=accounting,
+                    default_provider_metadata=provider_metadata,
+                )
+                pair_state[terminal_key] = terminal_row
+                pair_state[evidence_key] = variant_evidence
+                terminal_row_dict = terminal_row
+                variant_evidence_dict = variant_evidence
+            else:
+                terminal_row_dict = cast(dict[str, object], pair_state[terminal_key])
+                variant_evidence_dict = cast(dict[str, object], pair_state[evidence_key])
+            return terminal_row_dict, variant_evidence_dict, terminal_missing
+
+        if pair_state["pair_closed"]:
+            pair_row = cast(dict[str, object], pair_state["pair_row"])
+            primary_terminal_row = cast(dict[str, object], pair_state["primary_terminal_row"])
+            primary_action = str(primary_terminal_row["action"])
+            primary_positive_event = (
+                {"message_id": plan.message.message_id, "user_id": plan.user.user_id, "action": primary_action}
+                if primary_terminal_row["terminal_status"] == "succeeded" and primary_action in CONCURRENT_MESSAGE_POSITIVE_ACTIONS
+                else None
+            )
+            return pair_row, primary_positive_event
+
+        _ensure_started("primary")
+        _ensure_started("shadow")
+
+        primary_terminal_row, primary_variant_evidence, primary_needs_event = _ensure_terminal(
+            decision_variant="primary",
+            context=primary_context,
+            provider_metadata=primary_provider_metadata,
+        )
+        primary_action = str(primary_terminal_row["action"])
+        primary_positive_event = (
+            {"message_id": plan.message.message_id, "user_id": plan.user.user_id, "action": primary_action}
+            if primary_terminal_row["terminal_status"] == "succeeded" and primary_action in CONCURRENT_MESSAGE_POSITIVE_ACTIONS
+            else None
+        )
+        shadow_terminal_row, shadow_variant_evidence, shadow_needs_event = _ensure_terminal(
+            decision_variant="shadow",
+            context=shadow_context,
+            provider_metadata=shadow_provider_metadata,
+        )
+
+        if primary_needs_event:
+            journal.append(
+                event_type="variant_terminal",
+                event_identity={
+                    "pair_id": plan.pair_id,
+                    "decision_variant": "primary",
+                    "event_type": "variant_terminal",
+                    "time_step": plan.time_step,
+                },
+                payload={
+                    "pair_id": plan.pair_id,
+                    "pair_schedule_position": plan.pair_schedule_position,
+                    "message_id": plan.message.message_id,
+                    "message_title": plan.message.title,
+                    "user_id": plan.user.user_id,
+                    "terminal_row_id": primary_terminal_row["terminal_row_id"],
+                    "terminal_status": primary_terminal_row["terminal_status"],
+                    "provider_status": primary_terminal_row["provider_status"],
+                    "action": primary_terminal_row["action"],
+                    "reason": primary_terminal_row["reason"],
+                    "decision_source": primary_terminal_row["decision_source"],
+                    "terminal_row": primary_terminal_row,
+                    "variant_evidence": primary_variant_evidence,
+                },
+                batch_snapshot_hash=batch_snapshot_hash,
+            )
+        if shadow_needs_event:
+            journal.append(
+                event_type="variant_terminal",
+                event_identity={
+                    "pair_id": plan.pair_id,
+                    "decision_variant": "shadow",
+                    "event_type": "variant_terminal",
+                    "time_step": plan.time_step,
+                },
+                payload={
+                    "pair_id": plan.pair_id,
+                    "pair_schedule_position": plan.pair_schedule_position,
+                    "message_id": plan.message.message_id,
+                    "message_title": plan.message.title,
+                    "user_id": plan.user.user_id,
+                    "terminal_row_id": shadow_terminal_row["terminal_row_id"],
+                    "terminal_status": shadow_terminal_row["terminal_status"],
+                    "provider_status": shadow_terminal_row["provider_status"],
+                    "action": shadow_terminal_row["action"],
+                    "reason": shadow_terminal_row["reason"],
+                    "decision_source": shadow_terminal_row["decision_source"],
+                    "terminal_row": shadow_terminal_row,
+                    "variant_evidence": shadow_variant_evidence,
+                },
+                batch_snapshot_hash=batch_snapshot_hash,
+            )
+
+        pair_row = self._build_pair_row(
+            plan=plan,
+            primary_terminal_row=primary_terminal_row,
+            shadow_terminal_row=shadow_terminal_row,
+            primary_variant_evidence=primary_variant_evidence,
+            shadow_variant_evidence=shadow_variant_evidence,
+        )
+        journal.append(
+            event_type="pair_closed",
+            event_identity={
+                "pair_id": plan.pair_id,
+                "time_step": plan.time_step,
+            },
+            payload={
+                "pair_id": plan.pair_id,
+                "pair_schedule_position": plan.pair_schedule_position,
+                "message_id": plan.message.message_id,
+                "message_title": plan.message.title,
+                "user_id": plan.user.user_id,
+                "primary_terminal_row_id": primary_terminal_row["terminal_row_id"],
+                "shadow_terminal_row_id": shadow_terminal_row["terminal_row_id"],
+                "primary_status": primary_terminal_row["terminal_status"],
+                "shadow_status": shadow_terminal_row["terminal_status"],
+            },
+            batch_snapshot_hash=batch_snapshot_hash,
+        )
+        pair_state["pair_closed"] = True
+        pair_state["pair_row"] = pair_row
+        return pair_row, primary_positive_event
+
+    def _restore_runtime_state(
+        self,
+        *,
+        replay: Mapping[str, object],
+        cohort: _PreparedResearchCohort,
+        messages_by_id: Mapping[str, ExperimentalMessageDefinition],
+    ) -> dict[str, Any]:
+        status = _require_mapping(replay.get("status"), "replay status")
+        records = replay.get("records", [])
+        if not isinstance(records, Sequence):
+            raise TypeError("replay records must be a sequence")
+
+        candidate_rows: list[dict[str, object]] = []
+        pair_rows: list[dict[str, object]] = []
+        terminal_rows: list[dict[str, object]] = []
+        variant_evidence_rows: list[dict[str, object]] = []
+        step_rows: list[_BatchStepSummary] = []
+        campaign_engaged_user_ids: set[str] = set()
+        exposed_by_message = {message.message_id: set[str]() for message in self.config.messages}
+        pair_schedule_position = 0
+        batches_by_time_step: dict[int, dict[str, Any]] = {}
+        batches_by_snapshot_hash: dict[str, dict[str, Any]] = {}
+
+        def _canonical_candidate_row(row: Mapping[str, object]) -> dict[str, object]:
+            fieldnames = [
+                "time_step",
+                "message_id",
+                "user_id",
+                "is_seed",
+                "selected",
+                "selection_reason",
+                "ranking_position",
+                "base_network_relevance",
+                "base_network_relevance_full_precision",
+                "campaign_engaged_neighbor_count",
+                "campaign_engaged_neighbor_signal",
+                "campaign_engaged_neighbor_signal_full_precision",
+                "historical_tag_affinity",
+                "raw_message_user_fit",
+                "raw_message_user_fit_full_precision",
+                "normalized_message_user_fit",
+                "normalized_message_user_fit_full_precision",
+                "personalized_delivery_score",
+                "personalized_delivery_score_full_precision",
+            ]
+            return {field: row[field] for field in fieldnames if field in row}
+
+        def _canonical_terminal_row(row: Mapping[str, object]) -> dict[str, object]:
+            fieldnames = [
+                "terminal_row_id",
+                "pair_id",
+                "pair_schedule_position",
+                "time_step",
+                "message_id",
+                "user_id",
+                "decision_variant",
+                "prompt_version",
+                "context_source_key",
+                "cache_key",
+                "context_profile_payload",
+                "peer_context_payload",
+                "prompt_field_inclusion",
+                "request_invocations",
+                "provider_response_count",
+                "successful_decision_count",
+                "observed_model_counts",
+                "observed_model_missing_response_count",
+                "observed_model_malformed_response_count",
+                "usage_complete",
+                "usage_complete_response_count",
+                "usage_missing_response_count",
+                "usage_malformed_response_count",
+                "input_usage",
+                "output_usage",
+                "total_usage",
+                "cached_input_usage",
+                "terminal_status",
+                "provider_status",
+                "engage",
+                "probability",
+                "confidence",
+                "action",
+                "reason",
+                "decision_source",
+                "failure_type",
+                "provider_metadata",
+            ]
+            return {field: row[field] for field in fieldnames if field in row}
+
+
+        for record in records:
+            record_type = _as_str(record.get("record_type"))
+            if record_type == "snapshot":
+                snapshot_document = _require_mapping(record.get("snapshot_document"), "snapshot document")
+                snapshot_identity = _require_mapping(snapshot_document.get("snapshot_identity"), "snapshot identity")
+                payload = _require_mapping(snapshot_document.get("payload"), "snapshot payload")
+                snapshot_hash = _as_str(record.get("snapshot_hash"))
+                time_step = _as_int(snapshot_identity.get("time_step"))
+                frozen_campaign_engaged_user_ids = [
+                    _as_str(user_id)
+                    for user_id in payload.get("frozen_campaign_engaged_user_ids", [])
+                    if _as_str(user_id)
+                ]
+                batch_pair_start = len(pair_rows)
+                batch_message_summaries: dict[str, _BatchMessageSummary] = {}
+                batch_plans: list[_PairExecutionPlan] = []
+                pair_state_by_id: dict[str, dict[str, Any]] = {}
+
+                messages = payload.get("messages", [])
+                if not isinstance(messages, Sequence):
+                    raise ValueError(f"snapshot payload messages must be a sequence at time_step {time_step}")
+                for message_payload_raw in messages:
+                    message_payload = _require_mapping(message_payload_raw, "snapshot message")
+                    message_id = _as_str(message_payload.get("message_id"))
+                    message = messages_by_id[message_id]
+                    ranked_candidates = message_payload.get("ranked_candidates", [])
+                    if not isinstance(ranked_candidates, Sequence):
+                        raise ValueError(f"snapshot ranked_candidates must be a sequence for message {message_id}")
+                    candidate_rows.extend(
+                        _canonical_candidate_row(cast(Mapping[str, object], safe_data(row)))
+                        for row in ranked_candidates
+                        if isinstance(row, Mapping)
+                    )
+                    selected_user_ids = [
+                        _as_str(user_id)
+                        for user_id in message_payload.get("selected_user_ids", [])
+                        if _as_str(user_id)
+                    ]
+                    exposed_by_message[message_id].update(selected_user_ids)
+                    seed_user_ids = [
+                        _as_str(user_id)
+                        for user_id in message_payload.get("seed_user_ids", [])
+                        if _as_str(user_id)
+                    ]
+                    personalized_topup_user_ids = [
+                        _as_str(user_id)
+                        for user_id in message_payload.get("personalized_topup_user_ids", [])
+                        if _as_str(user_id)
+                    ]
+                    selection_reason_counts_raw = message_payload.get("selection_reason_counts", {})
+                    if not isinstance(selection_reason_counts_raw, Mapping):
+                        raise ValueError(f"selection_reason_counts must be a mapping for message {message_id}")
+                    selection_reason_counts = {
+                        str(reason): _as_int(count)
+                        for reason, count in selection_reason_counts_raw.items()
+                    }
+                    batch_message_summaries[message_id] = {
+                        "message_id": message_id,
+                        "message_title": _as_str(message_payload.get("message_title")),
+                        "eligible_users": _as_int(message_payload.get("eligible_users")),
+                        "ranked_candidates": len(ranked_candidates),
+                        "selected_user_ids": selected_user_ids,
+                        "seed_user_ids": seed_user_ids,
+                        "personalized_topup_user_ids": personalized_topup_user_ids,
+                        "primary_positive_user_ids": [],
+                        "primary_provider_failed_user_ids": [],
+                        "shadow_provider_failed_user_ids": [],
+                        "below_delivery_capacity": _as_int(message_payload.get("below_delivery_capacity")),
+                        "selection_reason_counts": dict(sorted(selection_reason_counts.items())),
+                    }
+                    selected_pair_plans = message_payload.get("selected_pair_plans", [])
+                    if not isinstance(selected_pair_plans, Sequence):
+                        raise ValueError(f"selected_pair_plans must be a sequence for message {message_id}")
+                    for plan_payload_raw in selected_pair_plans:
+                        plan_payload = _require_mapping(plan_payload_raw, "selected pair plan")
+                        pair_id = _as_str(plan_payload.get("pair_id"))
+                        user_id = _as_str(plan_payload.get("user_id"))
+                        user = cohort.users_by_id[user_id]
+                        score = _MessageScore(
+                            user_id=user_id,
+                            base_network_relevance=float(plan_payload.get("base_network_relevance", 0.0)),
+                            engaged_neighbor_count=_as_int(plan_payload.get("campaign_engaged_neighbor_count")),
+                            engaged_neighbor_signal=float(plan_payload.get("campaign_engaged_neighbor_signal", 0.0)),
+                            raw_message_user_fit=float(plan_payload.get("raw_message_user_fit", 0.0)),
+                            normalized_message_user_fit=float(plan_payload.get("normalized_message_user_fit", 0.0)),
+                            personalized_delivery_score=float(plan_payload.get("personalized_delivery_score", 0.0)),
+                            base_network_relevance_full_precision=_as_str(
+                                plan_payload.get("base_network_relevance_full_precision")
+                            )
+                            or None,
+                            engaged_neighbor_signal_full_precision=_as_str(
+                                plan_payload.get("campaign_engaged_neighbor_signal_full_precision")
+                            )
+                            or None,
+                            raw_message_user_fit_full_precision=_as_str(
+                                plan_payload.get("raw_message_user_fit_full_precision")
+                            )
+                            or None,
+                            normalized_message_user_fit_full_precision=_as_str(
+                                plan_payload.get("normalized_message_user_fit_full_precision")
+                            )
+                            or None,
+                            personalized_delivery_score_full_precision=_as_str(
+                                plan_payload.get("personalized_delivery_score_full_precision")
+                            )
+                            or None,
+                        )
+                        pair_plan = _PairExecutionPlan(
+                            pair_id=pair_id,
+                            pair_schedule_position=_as_int(plan_payload.get("pair_schedule_position")),
+                            time_step=_as_int(plan_payload.get("time_step", time_step)),
+                            message=message,
+                            user=user,
+                            profile=_primary_variant_profile(user),
+                            ranking_position=_as_int(plan_payload.get("ranking_position")),
+                            selection_reason=_as_str(plan_payload.get("selection_reason")),
+                            score=score,
+                        )
+                        batch_plans.append(pair_plan)
+                        pair_state_by_id[pair_id] = {
+                            "plan": pair_plan,
+                            "primary_started": False,
+                            "shadow_started": False,
+                            "primary_terminal_row": None,
+                            "shadow_terminal_row": None,
+                            "primary_variant_evidence": None,
+                            "shadow_variant_evidence": None,
+                            "pair_closed": False,
+                            "pair_row": None,
+                        }
+                        pair_schedule_position = max(
+                            pair_schedule_position,
+                            _as_int(plan_payload.get("pair_schedule_position")) + 1,
+                        )
+
+                batches_by_time_step[time_step] = {
+                    "time_step": time_step,
+                    "batch_snapshot_hash": snapshot_hash,
+                    "batch_pair_start": batch_pair_start,
+                    "batch_message_summaries": batch_message_summaries,
+                    "batch_plans": batch_plans,
+                    "pair_state_by_id": pair_state_by_id,
+                    "frozen_campaign_engaged_user_ids": frozen_campaign_engaged_user_ids,
+                    "primary_positive_user_ids": set[str](),
+                    "next_pair_index": 0,
+                    "committed_user_ids": [],
+                    "committed": False,
+                }
+                batches_by_snapshot_hash[snapshot_hash] = batches_by_time_step[time_step]
+                continue
+
+            if record_type == "event":
+                event_type = _as_str(record.get("event_type"))
+                if event_type == "run_started":
+                    continue
+                if event_type in {"run_finalized", "run_published"}:
+                    continue
+                batch_snapshot_hash = _as_str(record.get("batch_snapshot_hash"))
+                if batch_snapshot_hash not in batches_by_snapshot_hash:
+                    raise ValueError(f"event {event_type} references an unknown snapshot hash")
+                batch_state = batches_by_snapshot_hash[batch_snapshot_hash]
+                if event_type == "batch_committed":
+                    payload = _require_mapping(record.get("payload"), "event payload")
+                    committed_user_ids = [
+                        _as_str(user_id)
+                        for user_id in payload.get("committed_user_ids", [])
+                        if _as_str(user_id)
+                    ]
+                    expected_committed_user_ids = sorted(batch_state["primary_positive_user_ids"])
+                    if committed_user_ids != expected_committed_user_ids:
+                        raise ValueError("batch_committed committed_user_ids do not match replayed primary positives")
+                    batch_state["committed_user_ids"] = committed_user_ids
+                    batch_state["committed"] = True
+                    campaign_engaged_user_ids.update(committed_user_ids)
+                    batch_pair_start = _as_int(batch_state["batch_pair_start"])
+                    for pair_row in pair_rows[batch_pair_start:]:
+                        pair_row["campaign_feedback_committed"] = _csv_bool(
+                            pair_row["primary_action"] in CONCURRENT_MESSAGE_POSITIVE_ACTIONS
+                            and str(pair_row["user_id"]) in committed_user_ids
+                        )
+                    step_rows.append(
+                        {
+                            "time_step": batch_state["time_step"],
+                            "frozen_campaign_engaged_user_ids": list(batch_state["frozen_campaign_engaged_user_ids"]),
+                            "deduplicated_committed_primary_positive_user_ids": committed_user_ids,
+                            "messages": [
+                                batch_state["batch_message_summaries"][message.message_id]
+                                for message in self.config.messages
+                            ],
+                        }
+                    )
+                    continue
+                event_identity = _require_mapping(record.get("event_identity"), "event identity")
+                pair_id = _as_str(event_identity.get("pair_id"))
+                pair_state = batch_state["pair_state_by_id"].get(pair_id)
+                if not isinstance(pair_state, dict):
+                    raise ValueError(f"event {event_type} references an unknown pair_id {pair_id}")
+
+                if event_type == "variant_started":
+                    decision_variant = _as_str(event_identity.get("decision_variant"))
+                    pair_state[f"{decision_variant}_started"] = True
+                    continue
+
+                if event_type == "variant_terminal":
+                    decision_variant = _as_str(event_identity.get("decision_variant"))
+                    payload = _require_mapping(record.get("payload"), "event payload")
+                    terminal_row = _require_mapping(payload.get("terminal_row"), "terminal row")
+                    variant_evidence = _require_mapping(payload.get("variant_evidence"), "variant evidence")
+                    pair_state[f"{decision_variant}_terminal_row"] = dict(safe_data(terminal_row))
+                    pair_state[f"{decision_variant}_variant_evidence"] = dict(safe_data(variant_evidence))
+                    terminal_rows.append(_canonical_terminal_row(cast(Mapping[str, object], safe_data(terminal_row))))
+                    variant_evidence_rows.append(dict(safe_data(variant_evidence)))
+                    continue
+
+                if event_type == "pair_closed":
+                    plan = cast(_PairExecutionPlan, pair_state["plan"])
+                    primary_terminal_row = pair_state["primary_terminal_row"]
+                    shadow_terminal_row = pair_state["shadow_terminal_row"]
+                    primary_variant_evidence = pair_state["primary_variant_evidence"]
+                    shadow_variant_evidence = pair_state["shadow_variant_evidence"]
+                    if not isinstance(primary_terminal_row, Mapping) or not isinstance(shadow_terminal_row, Mapping):
+                        raise ValueError(f"pair_closed encountered before both terminals for pair {pair_id}")
+                    if not isinstance(primary_variant_evidence, Mapping) or not isinstance(shadow_variant_evidence, Mapping):
+                        raise ValueError(f"pair_closed encountered before both variant evidence rows for pair {pair_id}")
+                    pair_row = self._build_pair_row(
+                        plan=plan,
+                        primary_terminal_row=primary_terminal_row,
+                        shadow_terminal_row=shadow_terminal_row,
+                        primary_variant_evidence=primary_variant_evidence,
+                        shadow_variant_evidence=shadow_variant_evidence,
+                    )
+                    pair_row.pop("_terminal_rows", None)
+                    pair_row.pop("_variant_evidence", None)
+                    pair_rows.append(pair_row)
+                    pair_state["pair_closed"] = True
+                    pair_state["pair_row"] = pair_row
+                    batch_state["next_pair_index"] = _as_int(batch_state["next_pair_index"]) + 1
+                    if pair_row["primary_action"] in CONCURRENT_MESSAGE_POSITIVE_ACTIONS:
+                        batch_state["primary_positive_user_ids"].add(str(pair_row["user_id"]))
+                    message_summary = batch_state["batch_message_summaries"][plan.message.message_id]
+                    if pair_row["primary_status"] == "provider_failed":
+                        message_summary["primary_provider_failed_user_ids"].append(str(pair_row["user_id"]))
+                    if pair_row["shadow_status"] == "provider_failed":
+                        message_summary["shadow_provider_failed_user_ids"].append(str(pair_row["user_id"]))
+                    if pair_row["primary_status"] == "succeeded" and pair_row["primary_action"] in CONCURRENT_MESSAGE_POSITIVE_ACTIONS:
+                        message_summary["primary_positive_user_ids"].append(str(pair_row["user_id"]))
+                    continue
+
+                raise ValueError(f"unsupported replay event type: {event_type}")
+
+        return {
+            "candidate_rows": candidate_rows,
+            "pair_rows": pair_rows,
+            "terminal_rows": terminal_rows,
+            "variant_evidence_rows": variant_evidence_rows,
+            "step_rows": step_rows,
+            "campaign_engaged_user_ids": campaign_engaged_user_ids,
+            "exposed_by_message": exposed_by_message,
+            "pair_schedule_position": pair_schedule_position,
+            "batches_by_time_step": batches_by_time_step,
+            "next_time_step": _as_int(status.get("committed_batch_count")),
+        }
 
     def _terminal_row(
         self,

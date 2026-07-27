@@ -74,11 +74,13 @@ class _ScriptedConcurrentAdapter(LLMDecisionAdapter):
         positive_user_ids: set[str],
         fail_pairs: set[tuple[int, str, str]],
         model: str = "capture-model",
+        crash_after_calls: int | None = None,
     ) -> None:
         self.name = name
         self.prompt_version = prompt_version
         self.positive_user_ids = positive_user_ids
         self.fail_pairs = fail_pairs
+        self.crash_after_calls = crash_after_calls
         self.request_invocations = 0
         self.safe_metadata = {
             "adapter": "scripted_concurrent",
@@ -121,6 +123,8 @@ class _ScriptedConcurrentAdapter(LLMDecisionAdapter):
                 "profile_payload": profile.model_dump(mode="json"),
             }
         )
+        if self.crash_after_calls is not None and self.request_invocations >= self.crash_after_calls:
+            raise RuntimeError(f"{self.name} crash after {self.crash_after_calls} calls")
         if (time_step, post.post_id, profile.user_id) in self.fail_pairs:
             raise ProviderDecisionError(TimeoutError(self.name))
         if time_step == 0 and profile.user_id in self.positive_user_ids:
@@ -199,6 +203,11 @@ def _rewrite_manifest_hashes(run_dir: Path, *artifact_keys: str) -> None:
         relative_path = manifest["artifacts"][artifact_key]
         manifest["sha256"][artifact_key] = _sha256(run_dir / relative_path)
     manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def _assert_same_files(left_dir: Path, right_dir: Path, filenames: list[str]) -> None:
+    for filename in filenames:
+        assert (left_dir / filename).read_bytes() == (right_dir / filename).read_bytes(), filename
 
 
 def _latent_row(latent_class: str) -> dict[str, object]:
@@ -659,7 +668,9 @@ def test_concurrent_message_runner_persists_operational_journal_and_status(tmp_p
 
     status = _read_json(workspace_dir / CONCURRENT_MESSAGE_EXECUTION_STATUS_JSON)
     assert status["schema_version"] == "concurrent-message-execution-status-v1"
-    assert status["lifecycle"] == "complete"
+    assert status["lifecycle"] == "published"
+    assert status["final_source_path"] == str(output_dir)
+    assert status["final_source_hash"]
     assert status["deploy_eligibility"] is False
     assert status["planned_batch_count"] == 2
     assert status["planned_pair_count"] == 60
@@ -669,7 +680,7 @@ def test_concurrent_message_runner_persists_operational_journal_and_status(tmp_p
     assert status["closed_pair_count"] == 60
     assert status["committed_batch_count"] == 2
     assert status["last_durable_identity"]["record_type"] == "event"
-    assert status["last_durable_identity"]["event_type"] == "run_finalized"
+    assert status["last_durable_identity"]["event_type"] == "run_published"
 
     snapshot_dir = workspace_dir / CONCURRENT_MESSAGE_EXECUTION_SNAPSHOTS_DIR
     snapshot_paths = sorted(snapshot_dir.glob("*.json"))
@@ -1208,3 +1219,268 @@ def test_concurrent_message_config_rejects_non_production_shape_on_default_profi
     )
 
     assert validation_config.configuration_profile == "validation"
+
+
+
+def test_concurrent_message_runner_resumes_crashed_batch_and_matches_baseline(tmp_path: Path) -> None:
+    dataset_dir = _make_concurrent_fixture(tmp_path)
+    config = ConcurrentMessageExperimentConfig(
+        dataset_dir=dataset_dir,
+        sample_size=30,
+        horizon=2,
+        delivery_capacity=10,
+        configuration_profile="validation",
+    )
+
+    baseline_output = ConcurrentMessageExperimentRunner(
+        config,
+        _ScriptedConcurrentAdapter(
+            name="primary",
+            prompt_version=CONCURRENT_MESSAGE_PRIMARY_PROMPT_VERSION,
+            positive_user_ids={"u1"},
+            fail_pairs=set(),
+        ),
+        _ScriptedConcurrentAdapter(
+            name="shadow",
+            prompt_version=CONCURRENT_MESSAGE_SHADOW_PROMPT_VERSION,
+            positive_user_ids={"u2"},
+            fail_pairs=set(),
+        ),
+    ).run_and_write(tmp_path / "baseline-run")
+
+    crash_output = tmp_path / "crash-resume-run"
+    crashing_primary = _ScriptedConcurrentAdapter(
+        name="primary",
+        prompt_version=CONCURRENT_MESSAGE_PRIMARY_PROMPT_VERSION,
+        positive_user_ids={"u1"},
+        fail_pairs=set(),
+        crash_after_calls=5,
+    )
+    crashing_shadow = _ScriptedConcurrentAdapter(
+        name="shadow",
+        prompt_version=CONCURRENT_MESSAGE_SHADOW_PROMPT_VERSION,
+        positive_user_ids={"u2"},
+        fail_pairs=set(),
+    )
+    with pytest.raises(RuntimeError, match="crash after 5 calls"):
+        ConcurrentMessageExperimentRunner(config, crashing_primary, crashing_shadow).run_and_write(crash_output)
+
+    workspace_dir = derive_concurrent_execution_workspace(crash_output)
+    replay = ConcurrentExecutionJournal.open_existing(workspace_dir).replay()
+    assert replay["status"]["lifecycle"] != "published"
+    assert replay["status"]["closed_pair_count"] > 0
+
+    resumed_primary = _ScriptedConcurrentAdapter(
+        name="primary",
+        prompt_version=CONCURRENT_MESSAGE_PRIMARY_PROMPT_VERSION,
+        positive_user_ids={"u1"},
+        fail_pairs=set(),
+    )
+    resumed_shadow = _ScriptedConcurrentAdapter(
+        name="shadow",
+        prompt_version=CONCURRENT_MESSAGE_SHADOW_PROMPT_VERSION,
+        positive_user_ids={"u2"},
+        fail_pairs=set(),
+    )
+    resumed_output = ConcurrentMessageExperimentRunner(config, resumed_primary, resumed_shadow).run_and_write(
+        crash_output, mode="resume"
+    )
+
+    assert resumed_output == crash_output
+    _assert_same_files(
+        baseline_output,
+        resumed_output,
+        [
+            "concurrent_runtime_candidates.csv",
+            "concurrent_runtime_pairs.csv",
+            "concurrent_runtime_terminal_rows.csv",
+            "concurrent_runtime_steps.json",
+            "concurrent_message_decision_trace.json",
+            "concurrent_validation.json",
+            "concurrent_campaign_diagnostics.json",
+            "artifact_manifest.json",
+            "report.html",
+        ],
+    )
+
+    resumed_primary_calls = {
+        (call["time_step"], call["message_id"], call["user_id"]) for call in resumed_primary.calls
+    }
+    resumed_shadow_calls = {
+        (call["time_step"], call["message_id"], call["user_id"]) for call in resumed_shadow.calls
+    }
+    for record in replay["records"]:
+        if record["record_type"] != "event" or record["event_type"] != "variant_terminal":
+            continue
+        call_key = (
+            record["event_identity"]["time_step"],
+            record["payload"]["message_id"],
+            record["payload"]["user_id"],
+        )
+        if record["event_identity"]["decision_variant"] == "primary":
+            assert call_key not in resumed_primary_calls
+        else:
+            assert call_key not in resumed_shadow_calls
+
+
+
+def test_concurrent_message_runner_resume_after_finalization_is_idempotent(tmp_path: Path) -> None:
+    dataset_dir = _make_concurrent_fixture(tmp_path)
+    config = ConcurrentMessageExperimentConfig(
+        dataset_dir=dataset_dir,
+        sample_size=30,
+        horizon=2,
+        delivery_capacity=10,
+        configuration_profile="validation",
+    )
+
+    output_dir = ConcurrentMessageExperimentRunner(
+        config,
+        _ScriptedConcurrentAdapter(
+            name="finalized-primary",
+            prompt_version=CONCURRENT_MESSAGE_PRIMARY_PROMPT_VERSION,
+            positive_user_ids={"u1"},
+            fail_pairs=set(),
+        ),
+        _ScriptedConcurrentAdapter(
+            name="finalized-shadow",
+            prompt_version=CONCURRENT_MESSAGE_SHADOW_PROMPT_VERSION,
+            positive_user_ids={"u2"},
+            fail_pairs=set(),
+        ),
+    ).run_and_write(tmp_path / "finalized-run")
+
+    workspace_dir = derive_concurrent_execution_workspace(output_dir)
+    record_count = ConcurrentExecutionJournal.open_existing(workspace_dir).status()["record_count"]
+
+    resume_primary = _ScriptedConcurrentAdapter(
+        name="resume-primary",
+        prompt_version=CONCURRENT_MESSAGE_PRIMARY_PROMPT_VERSION,
+        positive_user_ids={"u1"},
+        fail_pairs=set(),
+    )
+    resume_shadow = _ScriptedConcurrentAdapter(
+        name="resume-shadow",
+        prompt_version=CONCURRENT_MESSAGE_SHADOW_PROMPT_VERSION,
+        positive_user_ids={"u2"},
+        fail_pairs=set(),
+    )
+    resumed_output = ConcurrentMessageExperimentRunner(config, resume_primary, resume_shadow).run_and_write(
+        output_dir, mode="resume"
+    )
+
+    assert resumed_output == output_dir
+    assert resume_primary.calls == []
+    assert resume_shadow.calls == []
+    assert ConcurrentExecutionJournal.open_existing(workspace_dir).status()["record_count"] == record_count
+
+
+def test_concurrent_message_runner_recovers_when_publish_marker_crashes_after_rename(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    dataset_dir = _make_concurrent_fixture(tmp_path)
+    config = ConcurrentMessageExperimentConfig(
+        dataset_dir=dataset_dir,
+        sample_size=30,
+        horizon=2,
+        delivery_capacity=10,
+        configuration_profile="validation",
+    )
+
+    baseline_output = ConcurrentMessageExperimentRunner(
+        config,
+        _ScriptedConcurrentAdapter(
+            name="crash-primary",
+            prompt_version=CONCURRENT_MESSAGE_PRIMARY_PROMPT_VERSION,
+            positive_user_ids={"u1"},
+            fail_pairs=set(),
+        ),
+        _ScriptedConcurrentAdapter(
+            name="crash-shadow",
+            prompt_version=CONCURRENT_MESSAGE_SHADOW_PROMPT_VERSION,
+            positive_user_ids={"u2"},
+            fail_pairs=set(),
+        ),
+    ).run_and_write(tmp_path / "publish-marker-baseline")
+
+    output_dir = tmp_path / "publish-marker-crash-run"
+    crashing_primary = _ScriptedConcurrentAdapter(
+        name="crash-primary",
+        prompt_version=CONCURRENT_MESSAGE_PRIMARY_PROMPT_VERSION,
+        positive_user_ids={"u1"},
+        fail_pairs=set(),
+    )
+    crashing_shadow = _ScriptedConcurrentAdapter(
+        name="crash-shadow",
+        prompt_version=CONCURRENT_MESSAGE_SHADOW_PROMPT_VERSION,
+        positive_user_ids={"u2"},
+        fail_pairs=set(),
+    )
+    original_append = ConcurrentExecutionJournal.append
+    crash_state = {"triggered": False}
+
+    def _crashing_append(
+        self: ConcurrentExecutionJournal,
+        *,
+        event_type: str,
+        event_identity: dict[str, object],
+        payload: dict[str, object],
+        batch_snapshot_hash: str | None = None,
+    ) -> dict[str, object]:
+        if event_type == "run_published" and not crash_state["triggered"]:
+            crash_state["triggered"] = True
+            raise RuntimeError("crash after atomic rename before run_published")
+        return original_append(
+            self,
+            event_type=event_type,
+            event_identity=event_identity,
+            payload=payload,
+            batch_snapshot_hash=batch_snapshot_hash,
+        )
+
+    monkeypatch.setattr(ConcurrentExecutionJournal, "append", _crashing_append)
+    with pytest.raises(RuntimeError, match="crash after atomic rename before run_published"):
+        ConcurrentMessageExperimentRunner(config, crashing_primary, crashing_shadow).run_and_write(output_dir)
+
+    workspace_dir = derive_concurrent_execution_workspace(output_dir)
+    crashed_status = ConcurrentExecutionJournal.open_existing(workspace_dir).status()
+    assert crashed_status["lifecycle"] == "durable_partial"
+    assert crashed_status["finalization_started"] is True
+    assert (output_dir / "artifact_manifest.json").is_file()
+
+    resumed_primary = _ScriptedConcurrentAdapter(
+        name="resume-primary",
+        prompt_version=CONCURRENT_MESSAGE_PRIMARY_PROMPT_VERSION,
+        positive_user_ids={"u1"},
+        fail_pairs=set(),
+    )
+    resumed_shadow = _ScriptedConcurrentAdapter(
+        name="resume-shadow",
+        prompt_version=CONCURRENT_MESSAGE_SHADOW_PROMPT_VERSION,
+        positive_user_ids={"u2"},
+        fail_pairs=set(),
+    )
+    resumed_output = ConcurrentMessageExperimentRunner(config, resumed_primary, resumed_shadow).run_and_write(
+        output_dir, mode="resume"
+    )
+
+    assert resumed_output == output_dir
+    assert resumed_primary.calls == []
+    assert resumed_shadow.calls == []
+    _assert_same_files(
+        baseline_output,
+        resumed_output,
+        [
+            "concurrent_runtime_candidates.csv",
+            "concurrent_runtime_pairs.csv",
+            "concurrent_runtime_terminal_rows.csv",
+            "concurrent_runtime_steps.json",
+            "concurrent_message_decision_trace.json",
+            "concurrent_validation.json",
+            "concurrent_campaign_diagnostics.json",
+            "artifact_manifest.json",
+            "report.html",
+        ],
+    )
+    assert ConcurrentExecutionJournal.open_existing(workspace_dir).status()["lifecycle"] == "published"

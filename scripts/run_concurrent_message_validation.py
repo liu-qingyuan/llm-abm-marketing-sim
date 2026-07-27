@@ -110,6 +110,7 @@ def _parse_args() -> argparse.Namespace:
         "--dataset-dir", required=True, help="Processed dataset directory containing the latent-v1 CSV inputs"
     )
     parser.add_argument("--output-dir", required=True, help="Fresh output directory for the validation run")
+    parser.add_argument("--mode", choices=("new", "resume"), default="new", help="Run mode for the concurrent message artifact")
     parser.add_argument("--title", default=DEFAULT_TITLE, help="Report title written into the persisted artifact")
     parser.add_argument(
         "--requested-model", default=DEFAULT_REQUESTED_MODEL, help="Requested model recorded in provider metadata"
@@ -163,7 +164,7 @@ def main() -> int:
         output_tokens=args.shadow_output_tokens,
     )
     output_dir = ConcurrentMessageExperimentRunner(config, primary_adapter, shadow_adapter).run_and_write(
-        args.output_dir
+        args.output_dir, mode=args.mode
     )
 
     validation = json.loads((output_dir / "concurrent_validation.json").read_text(encoding="utf-8"))
