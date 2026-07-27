@@ -13,6 +13,12 @@ from typing import Literal, TypedDict, cast
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from .concurrent_campaign_diagnostics import ConcurrentCampaignDiagnosticArtifacts, ConcurrentCampaignDiagnostics
+from .concurrent_execution_journal import (
+    CONCURRENT_MESSAGE_EXECUTION_SNAPSHOT_SCHEMA,
+    ConcurrentExecutionJournal,
+    build_concurrent_execution_run_identity,
+    derive_concurrent_execution_workspace,
+)
 from .concurrent_message_report import write_concurrent_message_report_artifacts
 from .decision import DecisionInput, EngageDecision, LLMDecisionAdapter, decision_profile_payload
 from .final_research import (
@@ -1140,9 +1146,12 @@ class ConcurrentMessageExperimentRunner:
         dataset_path = self.config.dataset_dir.resolve()
         if output_path.resolve().is_relative_to(dataset_path):
             raise ValueError("output_dir must be outside dataset_dir")
-        if output_path.exists() and any(output_path.iterdir()):
-            raise FileExistsError(f"output_dir already exists and is not empty: {output_path}")
-        output_path.mkdir(parents=True, exist_ok=True)
+        operational_workspace = derive_concurrent_execution_workspace(output_path)
+        if output_path.exists():
+            raise FileExistsError(f"output_dir already exists before finalization: {output_path}")
+        if operational_workspace.exists():
+            if operational_workspace.is_file() or any(operational_workspace.iterdir()):
+                raise FileExistsError(f"operational workspace already exists and is not empty: {operational_workspace}")
 
         cohort = _ResearchCohortPreparer(
             dataset_dir=self.config.dataset_dir,
@@ -1179,6 +1188,30 @@ class ConcurrentMessageExperimentRunner:
         shadow_provider_metadata = _adapter_safe_metadata(self.shadow_adapter, ProviderLLMConfig())
         primary_live_baseline = _adapter_external_request_invocations(self.primary_adapter)
         shadow_live_baseline = _adapter_external_request_invocations(self.shadow_adapter)
+        sampling_status = _concurrent_sampling_status(
+            self.primary_adapter,
+            self.shadow_adapter,
+            primary_live_baseline=primary_live_baseline,
+            shadow_live_baseline=shadow_live_baseline,
+        )
+        preflight_config_snapshot = self.config.snapshot(
+            sampling_status=sampling_status,
+            production_deploy_eligible=False,
+        )
+        message_snapshot = [message.model_dump(mode="json") for message in self.config.messages]
+        prompt_contract = _variant_prompt_contract_summary()
+        run_identity = build_concurrent_execution_run_identity(
+            output_target=output_path,
+            operational_workspace=operational_workspace,
+            configuration_snapshot=preflight_config_snapshot,
+            message_snapshot=message_snapshot,
+            sample_audit=cohort.sample_audit,
+            dataset_dir=self.config.dataset_dir,
+            primary_provider_metadata=primary_provider_metadata,
+            shadow_provider_metadata=shadow_provider_metadata,
+            prompt_contract=prompt_contract,
+        )
+        journal = ConcurrentExecutionJournal.open_new(operational_workspace, identity=run_identity)
 
         for time_step in range(self.config.horizon):
             frozen_campaign_engaged_user_ids = sorted(campaign_engaged_user_ids)
@@ -1186,6 +1219,8 @@ class ConcurrentMessageExperimentRunner:
             batch_primary_positive_events: list[dict[str, str]] = []
             batch_plans: list[_PairExecutionPlan] = []
             batch_message_summaries: dict[str, _BatchMessageSummary] = {}
+            batch_candidate_rows_by_message: dict[str, list[dict[str, object]]] = {}
+            batch_selected_pair_plans_by_message: dict[str, list[dict[str, object]]] = {}
 
             for message in self.config.messages:
                 eligible_user_ids = [
@@ -1212,36 +1247,38 @@ class ConcurrentMessageExperimentRunner:
                 }
                 selected_user_ids = [score.user_id for score in selected_scores]
                 exposed_by_message[message.message_id].update(selected_user_ids)
+                message_candidate_rows: list[dict[str, object]] = []
                 for ranking_position, score in enumerate(ranked_scores, start=1):
-                    candidate_rows.append(
-                        {
-                            "time_step": time_step,
-                            "message_id": message.message_id,
-                            "user_id": score.user_id,
-                            "is_seed": _csv_bool(score.user_id in cohort.seed_user_ids),
-                            "selected": _csv_bool(score.user_id in selection_reason_by_user),
-                            "selection_reason": selection_reason_by_user.get(score.user_id, ""),
-                            "ranking_position": ranking_position,
-                            "base_network_relevance": round(score.base_network_relevance, 12),
-                            "base_network_relevance_full_precision": _full_precision_cell(score.base_network_relevance),
-                            "campaign_engaged_neighbor_count": score.engaged_neighbor_count,
-                            "campaign_engaged_neighbor_signal": round(score.engaged_neighbor_signal, 12),
-                            "campaign_engaged_neighbor_signal_full_precision": _full_precision_cell(
-                                score.engaged_neighbor_signal
-                            ),
-                            "historical_tag_affinity": CONCURRENT_MESSAGE_HISTORY_AFFINITY,
-                            "raw_message_user_fit": round(score.raw_message_user_fit, 12),
-                            "raw_message_user_fit_full_precision": _full_precision_cell(score.raw_message_user_fit),
-                            "normalized_message_user_fit": round(score.normalized_message_user_fit, 12),
-                            "normalized_message_user_fit_full_precision": _full_precision_cell(
-                                score.normalized_message_user_fit
-                            ),
-                            "personalized_delivery_score": round(score.personalized_delivery_score, 12),
-                            "personalized_delivery_score_full_precision": _full_precision_cell(
-                                score.personalized_delivery_score
-                            ),
-                        }
-                    )
+                    candidate_row = {
+                        "time_step": time_step,
+                        "message_id": message.message_id,
+                        "user_id": score.user_id,
+                        "is_seed": _csv_bool(score.user_id in cohort.seed_user_ids),
+                        "selected": _csv_bool(score.user_id in selection_reason_by_user),
+                        "selection_reason": selection_reason_by_user.get(score.user_id, ""),
+                        "ranking_position": ranking_position,
+                        "base_network_relevance": round(score.base_network_relevance, 12),
+                        "base_network_relevance_full_precision": _full_precision_cell(score.base_network_relevance),
+                        "campaign_engaged_neighbor_count": score.engaged_neighbor_count,
+                        "campaign_engaged_neighbor_signal": round(score.engaged_neighbor_signal, 12),
+                        "campaign_engaged_neighbor_signal_full_precision": _full_precision_cell(
+                            score.engaged_neighbor_signal
+                        ),
+                        "historical_tag_affinity": CONCURRENT_MESSAGE_HISTORY_AFFINITY,
+                        "raw_message_user_fit": round(score.raw_message_user_fit, 12),
+                        "raw_message_user_fit_full_precision": _full_precision_cell(score.raw_message_user_fit),
+                        "normalized_message_user_fit": round(score.normalized_message_user_fit, 12),
+                        "normalized_message_user_fit_full_precision": _full_precision_cell(
+                            score.normalized_message_user_fit
+                        ),
+                        "personalized_delivery_score": round(score.personalized_delivery_score, 12),
+                        "personalized_delivery_score_full_precision": _full_precision_cell(
+                            score.personalized_delivery_score
+                        ),
+                    }
+                    candidate_rows.append(candidate_row)
+                    message_candidate_rows.append(candidate_row)
+                batch_candidate_rows_by_message[message.message_id] = message_candidate_rows
                 batch_message_summaries[message.message_id] = {
                     "message_id": message.message_id,
                     "message_title": message.title,
@@ -1260,28 +1297,96 @@ class ConcurrentMessageExperimentRunner:
                     "below_delivery_capacity": len(ranked_scores) - len(selected_scores),
                     "selection_reason_counts": dict(sorted(Counter(selection_reason_by_user.values()).items())),
                 }
+                message_selected_pair_plans: list[dict[str, object]] = []
                 for score in selected_scores:
                     user = cohort.users_by_id[score.user_id]
-                    batch_plans.append(
-                        _PairExecutionPlan(
-                            pair_id=f"{user.user_id}:{message.message_id}:{time_step}",
-                            pair_schedule_position=pair_schedule_position,
-                            time_step=time_step,
-                            message=message,
-                            user=user,
-                            profile=_primary_variant_profile(user),
-                            ranking_position=ranking_position_by_user[user.user_id],
-                            selection_reason=selection_reason_by_user[user.user_id],
-                            score=score,
-                        )
+                    pair_plan = _PairExecutionPlan(
+                        pair_id=f"{user.user_id}:{message.message_id}:{time_step}",
+                        pair_schedule_position=pair_schedule_position,
+                        time_step=time_step,
+                        message=message,
+                        user=user,
+                        profile=_primary_variant_profile(user),
+                        ranking_position=ranking_position_by_user[user.user_id],
+                        selection_reason=selection_reason_by_user[user.user_id],
+                        score=score,
+                    )
+                    batch_plans.append(pair_plan)
+                    message_selected_pair_plans.append(
+                        {
+                            "pair_id": pair_plan.pair_id,
+                            "pair_schedule_position": pair_plan.pair_schedule_position,
+                            "time_step": pair_plan.time_step,
+                            "message_id": pair_plan.message.message_id,
+                            "message_title": pair_plan.message.title,
+                            "user_id": pair_plan.user.user_id,
+                            "ranking_position": pair_plan.ranking_position,
+                            "selection_reason": pair_plan.selection_reason,
+                            "base_network_relevance": round(pair_plan.score.base_network_relevance, 12),
+                            "base_network_relevance_full_precision": _full_precision_cell(
+                                pair_plan.score.base_network_relevance
+                            ),
+                            "campaign_engaged_neighbor_count": pair_plan.score.engaged_neighbor_count,
+                            "campaign_engaged_neighbor_signal": round(pair_plan.score.engaged_neighbor_signal, 12),
+                            "campaign_engaged_neighbor_signal_full_precision": _full_precision_cell(
+                                pair_plan.score.engaged_neighbor_signal
+                            ),
+                            "historical_tag_affinity": CONCURRENT_MESSAGE_HISTORY_AFFINITY,
+                            "raw_message_user_fit": round(pair_plan.score.raw_message_user_fit, 12),
+                            "raw_message_user_fit_full_precision": _full_precision_cell(
+                                pair_plan.score.raw_message_user_fit
+                            ),
+                            "normalized_message_user_fit": round(pair_plan.score.normalized_message_user_fit, 12),
+                            "normalized_message_user_fit_full_precision": _full_precision_cell(
+                                pair_plan.score.normalized_message_user_fit
+                            ),
+                            "personalized_delivery_score": round(pair_plan.score.personalized_delivery_score, 12),
+                            "personalized_delivery_score_full_precision": _full_precision_cell(
+                                pair_plan.score.personalized_delivery_score
+                            ),
+                        }
                     )
                     pair_schedule_position += 1
+                batch_selected_pair_plans_by_message[message.message_id] = message_selected_pair_plans
+
+            batch_snapshot_payload = {
+                "schema_version": CONCURRENT_MESSAGE_EXECUTION_SNAPSHOT_SCHEMA,
+                "snapshot_type": "batch_plan",
+                "snapshot_identity": {"time_step": time_step},
+                "time_step": time_step,
+                "frozen_campaign_engaged_user_ids": list(frozen_campaign_engaged_user_ids),
+                "planned_pair_count": len(batch_plans),
+                "planned_variant_count": len(batch_plans) * 2,
+                "messages": [
+                    {
+                        "message_id": message_id,
+                        "message_title": batch_message_summaries[message_id]["message_title"],
+                        "eligible_users": batch_message_summaries[message_id]["eligible_users"],
+                        "ranked_candidates": batch_candidate_rows_by_message[message_id],
+                        "selected_pair_plans": batch_selected_pair_plans_by_message[message_id],
+                        "selected_user_ids": batch_message_summaries[message_id]["selected_user_ids"],
+                        "seed_user_ids": batch_message_summaries[message_id]["seed_user_ids"],
+                        "personalized_topup_user_ids": batch_message_summaries[message_id]["personalized_topup_user_ids"],
+                        "below_delivery_capacity": batch_message_summaries[message_id]["below_delivery_capacity"],
+                        "selection_reason_counts": batch_message_summaries[message_id]["selection_reason_counts"],
+                    }
+                    for message_id in [message.message_id for message in self.config.messages]
+                ],
+            }
+            batch_snapshot_ref = journal.persist_snapshot(
+                snapshot_type="batch_plan",
+                snapshot_identity={"time_step": time_step},
+                payload=batch_snapshot_payload,
+            )
+            batch_snapshot_hash = batch_snapshot_ref["snapshot_hash"]
 
             for plan in batch_plans:
                 pair_row, primary_positive_event = self._execute_pair(
                     plan=plan,
                     primary_provider_metadata=primary_provider_metadata,
                     shadow_provider_metadata=shadow_provider_metadata,
+                    journal=journal,
+                    batch_snapshot_hash=batch_snapshot_hash,
                 )
                 terminal_rows.extend(cast(list[dict[str, object]], pair_row.pop("_terminal_rows")))
                 variant_evidence_rows.extend(cast(list[dict[str, object]], pair_row.pop("_variant_evidence")))
@@ -1302,6 +1407,17 @@ class ConcurrentMessageExperimentRunner:
 
             committed_user_ids = sorted({event["user_id"] for event in batch_primary_positive_events})
             campaign_engaged_user_ids.update(committed_user_ids)
+            journal.append(
+                event_type="batch_committed",
+                event_identity={"time_step": time_step},
+                payload={
+                    "time_step": time_step,
+                    "committed_user_ids": committed_user_ids,
+                    "committed_user_count": len(committed_user_ids),
+                    "batch_pair_count": len(batch_plans),
+                },
+                batch_snapshot_hash=batch_snapshot_hash,
+            )
             for pair_row in pair_rows[batch_pair_start:]:
                 pair_row["campaign_feedback_committed"] = _csv_bool(
                     pair_row["primary_action"] in CONCURRENT_MESSAGE_POSITIVE_ACTIONS
@@ -1366,7 +1482,7 @@ class ConcurrentMessageExperimentRunner:
             output_path,
             title=self.config.report.title,
             config_snapshot=config_snapshot,
-            message_snapshot=[message.model_dump(mode="json") for message in self.config.messages],
+            message_snapshot=message_snapshot,
             sample_users=[user.model_dump(mode="json") for user in sample_users],
             sample_audit=sample_audit,
             candidate_rows=safe_candidate_rows,
@@ -1376,6 +1492,20 @@ class ConcurrentMessageExperimentRunner:
             validation_summary=validation_summary,
             campaign_diagnostics=campaign_diagnostics.payload,
         )
+        journal.append(
+            event_type="run_finalized",
+            event_identity={"run_id": journal.run_id, "output_target": str(output_path)},
+            payload={
+                "output_target": str(output_path),
+                "operational_workspace": str(operational_workspace),
+                "report_path": str(output_path / "report.html"),
+                "deploy_eligibility": False,
+                "sampling_status": sampling_status,
+            },
+        )
+        final_status = journal.status()
+        if final_status["lifecycle"] != "complete":
+            raise ValueError("concurrent execution journal did not reach a complete lifecycle")
         return output_path
 
     def _execute_variant(
@@ -1415,9 +1545,30 @@ class ConcurrentMessageExperimentRunner:
         plan: _PairExecutionPlan,
         primary_provider_metadata: Mapping[str, object],
         shadow_provider_metadata: Mapping[str, object],
+        journal: ConcurrentExecutionJournal,
+        batch_snapshot_hash: str,
     ) -> tuple[dict[str, object], dict[str, str] | None]:
         primary_context = _primary_variant_context(plan)
         shadow_context = _shadow_variant_context(plan)
+        journal.append(
+            event_type="variant_started",
+            event_identity={
+                "pair_id": plan.pair_id,
+                "decision_variant": "primary",
+                "event_type": "variant_started",
+                "time_step": plan.time_step,
+            },
+            payload={
+                "pair_id": plan.pair_id,
+                "pair_schedule_position": plan.pair_schedule_position,
+                "message_id": plan.message.message_id,
+                "message_title": plan.message.title,
+                "user_id": plan.user.user_id,
+                "ranking_position": plan.ranking_position,
+                "selection_reason": plan.selection_reason,
+            },
+            batch_snapshot_hash=batch_snapshot_hash,
+        )
         primary_attempt, primary_accounting = self._execute_variant(
             adapter=self.primary_adapter,
             context=primary_context,
@@ -1425,6 +1576,25 @@ class ConcurrentMessageExperimentRunner:
             time_step=plan.time_step,
             message_id=plan.message.message_id,
             default_provider_metadata=primary_provider_metadata,
+        )
+        journal.append(
+            event_type="variant_started",
+            event_identity={
+                "pair_id": plan.pair_id,
+                "decision_variant": "shadow",
+                "event_type": "variant_started",
+                "time_step": plan.time_step,
+            },
+            payload={
+                "pair_id": plan.pair_id,
+                "pair_schedule_position": plan.pair_schedule_position,
+                "message_id": plan.message.message_id,
+                "message_title": plan.message.title,
+                "user_id": plan.user.user_id,
+                "ranking_position": plan.ranking_position,
+                "selection_reason": plan.selection_reason,
+            },
+            batch_snapshot_hash=batch_snapshot_hash,
         )
         shadow_attempt, shadow_accounting = self._execute_variant(
             adapter=self.shadow_adapter,
@@ -1445,6 +1615,29 @@ class ConcurrentMessageExperimentRunner:
             accounting=primary_accounting,
             default_provider_metadata=primary_provider_metadata,
         )
+        journal.append(
+            event_type="variant_terminal",
+            event_identity={
+                "pair_id": plan.pair_id,
+                "decision_variant": "primary",
+                "event_type": "variant_terminal",
+                "time_step": plan.time_step,
+            },
+            payload={
+                "pair_id": plan.pair_id,
+                "pair_schedule_position": plan.pair_schedule_position,
+                "message_id": plan.message.message_id,
+                "message_title": plan.message.title,
+                "user_id": plan.user.user_id,
+                "terminal_row_id": primary_terminal_row["terminal_row_id"],
+                "terminal_status": primary_terminal_row["terminal_status"],
+                "provider_status": primary_terminal_row["provider_status"],
+                "action": primary_terminal_row["action"],
+                "reason": primary_terminal_row["reason"],
+                "decision_source": primary_terminal_row["decision_source"],
+            },
+            batch_snapshot_hash=batch_snapshot_hash,
+        )
         shadow_terminal_row, _, shadow_variant_evidence = self._terminal_row(
             pair_id=plan.pair_id,
             pair_schedule_position=plan.pair_schedule_position,
@@ -1455,6 +1648,29 @@ class ConcurrentMessageExperimentRunner:
             attempt=shadow_attempt,
             accounting=shadow_accounting,
             default_provider_metadata=shadow_provider_metadata,
+        )
+        journal.append(
+            event_type="variant_terminal",
+            event_identity={
+                "pair_id": plan.pair_id,
+                "decision_variant": "shadow",
+                "event_type": "variant_terminal",
+                "time_step": plan.time_step,
+            },
+            payload={
+                "pair_id": plan.pair_id,
+                "pair_schedule_position": plan.pair_schedule_position,
+                "message_id": plan.message.message_id,
+                "message_title": plan.message.title,
+                "user_id": plan.user.user_id,
+                "terminal_row_id": shadow_terminal_row["terminal_row_id"],
+                "terminal_status": shadow_terminal_row["terminal_status"],
+                "provider_status": shadow_terminal_row["provider_status"],
+                "action": shadow_terminal_row["action"],
+                "reason": shadow_terminal_row["reason"],
+                "decision_source": shadow_terminal_row["decision_source"],
+            },
+            batch_snapshot_hash=batch_snapshot_hash,
         )
         pair_row = {
             "pair_id": plan.pair_id,
@@ -1508,6 +1724,25 @@ class ConcurrentMessageExperimentRunner:
             "_terminal_rows": [primary_terminal_row, shadow_terminal_row],
             "_variant_evidence": [primary_variant_evidence, shadow_variant_evidence],
         }
+        journal.append(
+            event_type="pair_closed",
+            event_identity={
+                "pair_id": plan.pair_id,
+                "time_step": plan.time_step,
+            },
+            payload={
+                "pair_id": plan.pair_id,
+                "pair_schedule_position": plan.pair_schedule_position,
+                "message_id": plan.message.message_id,
+                "message_title": plan.message.title,
+                "user_id": plan.user.user_id,
+                "primary_terminal_row_id": primary_terminal_row["terminal_row_id"],
+                "shadow_terminal_row_id": shadow_terminal_row["terminal_row_id"],
+                "primary_status": primary_terminal_row["terminal_status"],
+                "shadow_status": shadow_terminal_row["terminal_status"],
+            },
+            batch_snapshot_hash=batch_snapshot_hash,
+        )
         return pair_row, primary_positive_event
 
     def _terminal_row(

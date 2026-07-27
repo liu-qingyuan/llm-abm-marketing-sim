@@ -14,6 +14,14 @@ from llm_abm_sim import (
     rebuild_concurrent_message_report,
 )
 from llm_abm_sim.concurrent_campaign_diagnostics import validate_concurrent_validation_summary
+from llm_abm_sim.concurrent_execution_journal import (
+    CONCURRENT_MESSAGE_EXECUTION_JOURNAL_JSONL,
+    CONCURRENT_MESSAGE_EXECUTION_RUN_IDENTITY_JSON,
+    CONCURRENT_MESSAGE_EXECUTION_SNAPSHOTS_DIR,
+    CONCURRENT_MESSAGE_EXECUTION_STATUS_JSON,
+    ConcurrentExecutionJournal,
+    derive_concurrent_execution_workspace,
+)
 from llm_abm_sim.concurrent_message_experiment import authoritative_message_definitions
 from llm_abm_sim.decision import (
     CachedDecisionAdapter,
@@ -612,6 +620,66 @@ def test_concurrent_message_runner_writes_validation_runtime_artifacts(tmp_path:
         "visible_comments": 0,
         "visible_shares": 0,
     }
+
+
+
+
+def test_concurrent_message_runner_persists_operational_journal_and_status(tmp_path: Path) -> None:
+    dataset_dir = _make_concurrent_fixture(tmp_path)
+    config = ConcurrentMessageExperimentConfig(
+        dataset_dir=dataset_dir,
+        sample_size=30,
+        horizon=2,
+        delivery_capacity=10,
+        configuration_profile="validation",
+    )
+    output_dir = ConcurrentMessageExperimentRunner(
+        config,
+        _ScriptedConcurrentAdapter(
+            name="primary",
+            prompt_version=CONCURRENT_MESSAGE_PRIMARY_PROMPT_VERSION,
+            positive_user_ids={"u1"},
+            fail_pairs={(0, "message_3", "u4")},
+        ),
+        _ScriptedConcurrentAdapter(
+            name="shadow",
+            prompt_version=CONCURRENT_MESSAGE_SHADOW_PROMPT_VERSION,
+            positive_user_ids={"u2"},
+            fail_pairs={(0, "message_2", "u3")},
+        ),
+    ).run_and_write(tmp_path / "journaled-run")
+
+    workspace_dir = derive_concurrent_execution_workspace(output_dir)
+    assert workspace_dir.is_dir()
+    assert (workspace_dir / CONCURRENT_MESSAGE_EXECUTION_RUN_IDENTITY_JSON).is_file()
+    assert (workspace_dir / CONCURRENT_MESSAGE_EXECUTION_JOURNAL_JSONL).is_file()
+    assert (workspace_dir / CONCURRENT_MESSAGE_EXECUTION_STATUS_JSON).is_file()
+    assert not (output_dir / CONCURRENT_MESSAGE_EXECUTION_JOURNAL_JSONL).exists()
+    assert not (output_dir / CONCURRENT_MESSAGE_EXECUTION_STATUS_JSON).exists()
+
+    status = _read_json(workspace_dir / CONCURRENT_MESSAGE_EXECUTION_STATUS_JSON)
+    assert status["schema_version"] == "concurrent-message-execution-status-v1"
+    assert status["lifecycle"] == "complete"
+    assert status["deploy_eligibility"] is False
+    assert status["planned_batch_count"] == 2
+    assert status["planned_pair_count"] == 60
+    assert status["planned_variant_count"] == 120
+    assert status["started_variant_count"] == 120
+    assert status["terminal_variant_count"] == 120
+    assert status["closed_pair_count"] == 60
+    assert status["committed_batch_count"] == 2
+    assert status["last_durable_identity"]["record_type"] == "event"
+    assert status["last_durable_identity"]["event_type"] == "run_finalized"
+
+    snapshot_dir = workspace_dir / CONCURRENT_MESSAGE_EXECUTION_SNAPSHOTS_DIR
+    snapshot_paths = sorted(snapshot_dir.glob("*.json"))
+    assert snapshot_paths
+    snapshot = _read_json(snapshot_paths[0])
+    snapshot["payload"]["planned_variant_count"] += 1
+    snapshot_paths[0].write_text(json.dumps(snapshot, ensure_ascii=False, sort_keys=True) + "\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="snapshot hash mismatch"):
+        ConcurrentExecutionJournal.open_existing(workspace_dir).status()
 
 
 def test_concurrent_message_report_rebuild_rejects_crossed_prompt_token(tmp_path: Path) -> None:
