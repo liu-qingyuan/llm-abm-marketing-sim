@@ -323,7 +323,7 @@ class ConcurrentExecutionJournal:
         }
 
     def status(self) -> dict[str, Any]:
-        return _summarize_workspace(self.workspace_dir)
+        return _replay_workspace(self.workspace_dir)["status"]
 
     def _ensure_writable(self) -> None:
         if self.read_only:
@@ -450,178 +450,6 @@ class ConcurrentExecutionJournal:
             "last_durable_identity": self.last_durable_identity,
             "inflight_unknown": False,
         }
-
-
-def _summarize_workspace(workspace_dir: Path) -> dict[str, Any]:
-    workspace = Path(workspace_dir)
-    return _replay_workspace(workspace_dir)["status"]
-
-    identity_path = workspace / CONCURRENT_MESSAGE_EXECUTION_RUN_IDENTITY_JSON
-    journal_path = workspace / CONCURRENT_MESSAGE_EXECUTION_JOURNAL_JSONL
-    if not identity_path.is_file():
-        raise FileNotFoundError(f"Concurrent execution workspace is missing {identity_path.name}")
-    identity = _read_json_object(identity_path)
-    _validate_run_identity(identity)
-
-    expected_batch_count = _expected_batch_count(identity)
-    sequence = 0
-    previous_checksum: str | None = None
-    record_count = 0
-    snapshot_count = 0
-    event_count = 0
-    planned_batch_count = 0
-    planned_pair_count = 0
-    planned_variant_count = 0
-    started_variant_count = 0
-    terminal_variant_count = 0
-    closed_pair_count = 0
-    committed_batch_count = 0
-    finalized = False
-    last_durable_identity: dict[str, Any] | None = None
-    known_snapshot_hashes: set[str] = set()
-    seen_event_identities: set[str] = set()
-    seen_snapshot_identities: set[str] = set()
-
-    if journal_path.is_file():
-        with journal_path.open(encoding="utf-8") as handle:
-            for line_number, line in enumerate(handle, start=1):
-                raw = line.strip()
-                if not raw:
-                    continue
-                try:
-                    record = json.loads(raw)
-                except json.JSONDecodeError as exc:
-                    raise ValueError(f"journal line {line_number} is not valid JSON") from exc
-                if not isinstance(record, dict):
-                    raise ValueError(f"journal line {line_number} must decode to an object")
-                if _as_str(record.get("schema_version")) != CONCURRENT_MESSAGE_EXECUTION_JOURNAL_SCHEMA:
-                    raise ValueError(f"journal line {line_number} has an unsupported schema version")
-                record_type = _as_str(record.get("record_type"))
-                if record_type not in {"event", "snapshot"}:
-                    raise ValueError(f"journal line {line_number} has unsupported record_type {record_type}")
-                record_sequence = _as_int(record.get("sequence"))
-                if record_sequence != sequence + 1:
-                    raise ValueError(f"journal sequence breaks at line {line_number}")
-                if record.get("previous_checksum") != previous_checksum:
-                    raise ValueError(f"journal checksum chain breaks at line {line_number}")
-                checksum = _as_str(record.get("checksum"))
-                if checksum != _record_checksum({k: v for k, v in record.items() if k != "checksum"}):
-                    raise ValueError(f"journal checksum mismatch at line {line_number}")
-
-                identity_value = record.get("event_identity") if record_type == "event" else record.get("snapshot_identity")
-                identity_signature = _canonical_json(identity_value)
-                if record_type == "event":
-                    event_type = _as_str(record.get("event_type"))
-                    if identity_signature in seen_event_identities:
-                        raise ValueError(f"duplicate journal event identity at line {line_number}")
-                    seen_event_identities.add(identity_signature)
-                    payload = _require_mapping(record.get("payload"), "event payload")
-                    if event_type == "variant_started":
-                        started_variant_count += 1
-                    elif event_type == "variant_terminal":
-                        terminal_variant_count += 1
-                    elif event_type == "pair_closed":
-                        closed_pair_count += 1
-                    elif event_type == "batch_committed":
-                        committed_batch_count += 1
-                    elif event_type == "run_finalized":
-                        finalized = True
-                    if event_type in {"variant_started", "variant_terminal", "pair_closed", "batch_committed"}:
-                        batch_snapshot_hash = record.get("batch_snapshot_hash")
-                        if not isinstance(batch_snapshot_hash, str) or batch_snapshot_hash not in known_snapshot_hashes:
-                            raise ValueError(f"event {event_type} references an unknown snapshot hash at line {line_number}")
-                    if event_type in {"variant_started", "variant_terminal"}:
-                        if not _as_str(payload.get("pair_id")):
-                            raise ValueError(f"event {event_type} payload must include pair_id")
-                    last_durable_identity = {
-                        "record_type": record_type,
-                        "sequence": record_sequence,
-                        "event_type": event_type,
-                        "event_identity": dict(safe_data(identity_value)) if isinstance(identity_value, Mapping) else identity_value,
-                        "batch_snapshot_hash": record.get("batch_snapshot_hash"),
-                    }
-                else:
-                    if identity_signature in seen_snapshot_identities:
-                        raise ValueError(f"duplicate journal snapshot identity at line {line_number}")
-                    seen_snapshot_identities.add(identity_signature)
-                    snapshot_type = _as_str(record.get("snapshot_type"))
-                    snapshot_hash = _as_str(record.get("snapshot_hash"))
-                    snapshot_path = workspace / _as_str(record.get("snapshot_path"))
-                    if not snapshot_path.is_file():
-                        raise FileNotFoundError(f"snapshot file missing for journal line {line_number}: {snapshot_path}")
-                    if _sha256_file(snapshot_path) != snapshot_hash:
-                        raise ValueError(f"snapshot hash mismatch for journal line {line_number}")
-                    snapshot_document = _read_json_object(snapshot_path)
-                    if _as_str(snapshot_document.get("schema_version")) != CONCURRENT_MESSAGE_EXECUTION_SNAPSHOT_SCHEMA:
-                        raise ValueError(f"snapshot file has an unsupported schema version: {snapshot_path}")
-                    if _as_str(snapshot_document.get("snapshot_type")) != snapshot_type:
-                        raise ValueError(f"snapshot file type mismatch at line {line_number}")
-                    if _canonical_json(snapshot_document.get("snapshot_identity")) != _canonical_json(identity_value):
-                        raise ValueError(f"snapshot file identity mismatch at line {line_number}")
-                    payload = _require_mapping(snapshot_document.get("payload"), "snapshot payload")
-                    if _as_int(record.get("planned_pair_count")) != _as_int(payload.get("planned_pair_count")):
-                        raise ValueError(f"snapshot pair count mismatch at line {line_number}")
-                    if _as_int(record.get("planned_variant_count")) != _as_int(payload.get("planned_variant_count")):
-                        raise ValueError(f"snapshot variant count mismatch at line {line_number}")
-                    planned_batch_count += 1
-                    planned_pair_count += _as_int(record.get("planned_pair_count"))
-                    planned_variant_count += _as_int(record.get("planned_variant_count"))
-                    known_snapshot_hashes.add(snapshot_hash)
-                    last_durable_identity = {
-                        "record_type": record_type,
-                        "sequence": record_sequence,
-                        "snapshot_type": snapshot_type,
-                        "snapshot_identity": dict(safe_data(identity_value)) if isinstance(identity_value, Mapping) else identity_value,
-                        "snapshot_hash": snapshot_hash,
-                        "snapshot_path": _as_str(record.get("snapshot_path")),
-                    }
-
-                previous_checksum = checksum
-                sequence = record_sequence
-                record_count += 1
-                if record_type == "event":
-                    event_count += 1
-                else:
-                    snapshot_count += 1
-
-    if finalized:
-        if snapshot_count != expected_batch_count:
-            raise ValueError("finalized journal does not contain the expected batch snapshots")
-        if committed_batch_count != expected_batch_count:
-            raise ValueError("finalized journal does not contain the expected batch commits")
-        if closed_pair_count != planned_pair_count:
-            raise ValueError("finalized journal does not close the planned pair count")
-        if started_variant_count != planned_variant_count:
-            raise ValueError("finalized journal does not close the planned variant count")
-        if terminal_variant_count != planned_variant_count:
-            raise ValueError("finalized journal does not close the terminal variant count")
-
-    lifecycle = _lifecycle_state(
-        expected_batch_count=expected_batch_count,
-        snapshot_count=snapshot_count,
-        committed_batch_count=committed_batch_count,
-        record_count=record_count,
-        finalized=finalized,
-    )
-    return {
-        "schema_version": CONCURRENT_MESSAGE_EXECUTION_STATUS_SCHEMA,
-        "run_id": _as_str(identity.get("run_id")),
-        "identity_hash": _as_str(identity.get("identity_hash")),
-        "lifecycle": lifecycle,
-        "deploy_eligibility": False,
-        "expected_batch_count": expected_batch_count,
-        "planned_batch_count": planned_batch_count,
-        "planned_pair_count": planned_pair_count,
-        "planned_variant_count": planned_variant_count,
-        "started_variant_count": started_variant_count,
-        "terminal_variant_count": terminal_variant_count,
-        "closed_pair_count": closed_pair_count,
-        "committed_batch_count": committed_batch_count,
-        "snapshot_count": snapshot_count,
-        "event_count": event_count,
-        "record_count": record_count,
-        "last_durable_identity": last_durable_identity,
-    }
 
 
 def _replay_workspace(workspace_dir: Path) -> dict[str, Any]:
@@ -1125,20 +953,6 @@ def _ensure_workspace_is_available(workspace: Path) -> None:
 def _expected_batch_count(identity: Mapping[str, Any]) -> int:
     configuration = _require_mapping(identity.get("configuration"), "run identity configuration")
     return _as_int(configuration.get("horizon"))
-
-
-def _lifecycle_state(*, expected_batch_count: int, snapshot_count: int, committed_batch_count: int, record_count: int, finalized: bool) -> str:
-    if finalized:
-        return "complete"
-    if expected_batch_count > 0 and snapshot_count >= expected_batch_count and committed_batch_count >= expected_batch_count:
-        return "ready_for_finalization"
-    if record_count > 0:
-        return "running"
-    return "initialized"
-
-
-def _write_status_file(path: Path, payload: Mapping[str, Any]) -> None:
-    _atomic_write_json(path, payload)
 
 
 def _append_jsonl_record(path: Path, record: Mapping[str, Any]) -> None:

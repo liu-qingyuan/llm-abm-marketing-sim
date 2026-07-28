@@ -20,7 +20,8 @@
 - [Final Research 离线基线](final-research-offline-baseline.md)：记录单目标视频、Target Holdout、holdout-safe 画像投影、研究样本、静态平台推荐和离线 artifacts 的 Module 边界。
 - [Final Research 30 批次 Runtime](final-research-runtime.md)：记录固定批次、一次曝光机会、动态直接邻居反馈、v3/v4/v5/v6 精确版本矩阵、Validation/Formal evidence、v1/v2/v3 release validation 与 formal-only deploy gate，以及独立 Final Research HTML/CSV/JSON 报告合同。
 - [Concurrent Message Competition Experiment](concurrent-message-competition-experiment.md)：记录三个营销 message 各自运行 Per-Message Personalized Top20、Primary/Shadow Decision Trace、报告 UI 和 canonical 发布边界的设计共识；当前已可进入 spec，不代表实现或 live/deploy 授权。
-- [Concurrent Message Campaign Diagnostics](concurrent-message-campaign-diagnostics.md)：记录并发三 message validation runtime 中 campaign diagnostics 的 source-row rebuild、no-feedback paired ranking、reason screening 和五个用户可见 sections 的当前实现边界。
+- [Concurrent Message Campaign Diagnostics](concurrent-message-campaign-diagnostics.md)：记录并发三 message validation runtime 中从 persisted source rows 重建 campaign diagnostics、校验 summary、生成 report sections 和 release-time rebuild 的当前实现边界。
+- [Concurrent Message Durable Execution](concurrent-message-durable-execution.md)：区分 private operational workspace、publish staging、final source directory 和 canonical release，记录 journal replay、resume、atomic publication 与 deploy gate 边界。
 - [Interactive Mechanism Report](interactive-mechanism-report.md)：目标单页交互报告的信息架构、机制/运行双模式、共享 Batch 上下文和统一详情合同。
 
 `../02-架构设计/` 继续作为核心系统阅读路径保留；新增或迁移的长期架构说明默认放在本目录，并从 `../index.md` 或相关 README 指向。
