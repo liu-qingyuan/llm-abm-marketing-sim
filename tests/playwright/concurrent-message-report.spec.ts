@@ -129,7 +129,7 @@ test('concurrent message report exposes sections, filters, drawer, and safe down
     await expect(page.getByTestId('run-evidence-mode-panel')).toBeVisible();
 
     await expect(page.getByTestId('concurrent-message-report')).toBeVisible();
-    await expect(page.getByTestId('validation-status')).toContainText('Validation only');
+    await expect(page.getByTestId('validation-status')).toContainText(/Validation only|Persisted Seed-First Formal Run/);
     await expect(page.getByTestId('campaign-funnel-section')).toContainText('Campaign Funnel');
     await expect(page.getByTestId('message-allocation-section')).toContainText('Message Allocation');
     await expect(page.getByTestId('primary-audience-response-section')).toContainText('Primary Audience Response');
@@ -150,19 +150,19 @@ test('concurrent message report exposes sections, filters, drawer, and safe down
     const selectedMessage = traces[0].message_id;
     const selectedClass = traces.find((row) => row.message_id === selectedMessage)?.latent_class ?? traces[0].latent_class;
     await expect(tracePageSize).toHaveValue('50');
-    await expect(traceMatchCount).toContainText(`${traces.length} matching trace row(s)`);
+    await expect(traceMatchCount).toContainText(`${traces.length.toLocaleString()} matching trace row(s)`);
     await expect(traceRows).toHaveCount(Math.min(50, traces.length));
     await expect(tracePageStatus).toContainText(`Page 1 of ${Math.max(1, Math.ceil(traces.length / 50))}`);
 
     await page.getByTestId('message-filter').selectOption(selectedMessage);
     const messageFiltered = traces.filter((row) => row.message_id === selectedMessage).length;
-    await expect(traceMatchCount).toContainText(`${messageFiltered} matching trace row(s)`);
+    await expect(traceMatchCount).toContainText(`${messageFiltered.toLocaleString()} matching trace row(s)`);
     await expect(traceRows).toHaveCount(Math.min(50, messageFiltered));
     await page.getByTestId('class-filter').selectOption(selectedClass);
     const classFiltered = traces.filter(
       (row) => row.message_id === selectedMessage && row.latent_class === selectedClass,
     ).length;
-    await expect(traceMatchCount).toContainText(`${classFiltered} matching trace row(s)`);
+    await expect(traceMatchCount).toContainText(`${classFiltered.toLocaleString()} matching trace row(s)`);
     await expect(traceRows).toHaveCount(Math.min(50, classFiltered));
     await page.getByTestId('class-filter').selectOption('');
     await page.getByTestId('message-filter').selectOption('');
@@ -170,7 +170,7 @@ test('concurrent message report exposes sections, filters, drawer, and safe down
     const disagreementCount = traces.filter((row) => row.primary_shadow_disagreement).length;
     if (disagreementCount > 0) {
       await page.getByTestId('disagreement-filter').selectOption('true');
-      await expect(traceMatchCount).toContainText(`${disagreementCount} matching trace row(s)`);
+      await expect(traceMatchCount).toContainText(`${disagreementCount.toLocaleString()} matching trace row(s)`);
       await expect(traceRows).toHaveCount(Math.min(50, disagreementCount));
       await page.getByTestId('disagreement-filter').selectOption('');
     }
@@ -182,7 +182,7 @@ test('concurrent message report exposes sections, filters, drawer, and safe down
       await nextTracePage.click();
       await expect(tracePageStatus).toContainText('Page 2 of');
       await expect(traceRows).toHaveCount(Math.min(25, traces.length - 25));
-      await tracePageNumbers.getByRole('button', { name: 'Go to trace page 1' }).click();
+      await tracePageNumbers.getByRole('button', { name: 'Go to trace page 1', exact: true }).click();
       await expect(tracePageStatus).toContainText('Page 1 of');
       await expect(traceRows).toHaveCount(Math.min(25, traces.length));
       await page.getByTestId('message-filter').selectOption(selectedMessage);
@@ -192,7 +192,8 @@ test('concurrent message report exposes sections, filters, drawer, and safe down
     }
     await tracePageSize.selectOption('100');
     await expect(tracePageStatus).toContainText('Page 1 of');
-    await expect(nextTracePage).toBeDisabled();
+    if (traces.length <= 100) await expect(nextTracePage).toBeDisabled();
+    else await expect(nextTracePage).toBeEnabled();
     await expect(traceRows).toHaveCount(Math.min(100, traces.length));
 
     const firstRow = traceRows.first();

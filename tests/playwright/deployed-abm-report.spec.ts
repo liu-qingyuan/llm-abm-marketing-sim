@@ -60,6 +60,13 @@ async function expectFinalResearchReport(page: Page): Promise<void> {
 
 async function expectConcurrentMessageReport(page: Page): Promise<void> {
   await expect(page.getByTestId('concurrent-message-report')).toBeVisible();
+  await expect(page.getByTestId('mechanism-mode-panel')).toBeVisible();
+  for (const anchor of ['overview', 'sample', 'exposure-ranking', 'llm-decision', 'network-feedback']) {
+    await expect(page.locator(`[data-report-anchor="${anchor}"]`)).toHaveAttribute('href', `#${anchor}`);
+  }
+  const runEvidenceButton = page.getByTestId('run-evidence-mode-button');
+  if ((await runEvidenceButton.getAttribute('aria-selected')) !== 'true') await runEvidenceButton.click();
+  await expect(page.getByTestId('run-evidence-mode-panel')).toBeVisible();
   await expect(page.getByTestId('validation-status')).toContainText('Persisted Seed-First Formal Run');
   for (const testId of [
     'messages-section',
@@ -74,6 +81,13 @@ async function expectConcurrentMessageReport(page: Page): Promise<void> {
     await expect(page.getByTestId(testId)).toBeVisible();
   }
   await expect(page.getByTestId('downloads-section')).toContainText('Safe downloads');
+  const firstTraceRow = page.getByTestId('decision-trace-table').locator('tbody tr').first();
+  await expect(firstTraceRow).toBeVisible();
+  await firstTraceRow.click();
+  const drawer = page.getByTestId('trace-drawer');
+  await expect(drawer).toBeVisible();
+  await drawer.getByRole('button', { name: 'Close trace detail' }).click();
+  await expect(drawer).toBeHidden();
 }
 
 test.describe('deployed Seed-First report', () => {

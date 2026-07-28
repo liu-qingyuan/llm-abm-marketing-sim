@@ -9,7 +9,7 @@ from typing import Any
 from .concurrent_message_current_renderer import render_current_report as _render_current_report
 
 
-def _legacy_render_report(payload: Any) -> str:
+def _legacy_render_report(payload: Any, *, include_pagination: bool = True) -> str:
     counts = _required_mapping(payload.validation_summary, "counts", "validation summary")
     funnel = payload.campaign_funnel
     allocation = payload.message_allocation
@@ -729,7 +729,7 @@ renderTable();
 </html>
 """
 
-    return (
+    rendered = (
         template.replace("{{", "{")
         .replace("}}", "}")
         .replace("{html.escape(payload.title)}", html.escape(payload.title))
@@ -753,6 +753,196 @@ renderTable();
         .replace("{download_links}", download_links)
         .replace("{payload_json}", payload_json)
     )
+    return rendered if include_pagination else _restore_pre_pagination_legacy_report(rendered)
+
+
+def _restore_pre_pagination_legacy_report(rendered: str) -> str:
+    """Restore the renderer bytes used by persisted reports before trace pagination."""
+    def replace_between(value: str, start_marker: str, end_marker: str, replacement: str, label: str) -> str:
+        start = value.find(start_marker)
+        end = value.find(end_marker, start + len(start_marker)) if start >= 0 else -1
+        if start < 0 or end < 0:
+            raise ValueError(f"cannot restore historical Concurrent renderer fragment {label}")
+        return value[:start] + replacement + value[end:]
+
+    for current, historical, label in (
+        (
+            "    .trace-count { margin: 16px 0 8px; font-weight: 700; color: var(--blue); }\n",
+            "    .trace-count { font-weight: 700; color: var(--blue); }\n",
+            "legacy trace count style",
+        ),
+        (
+            "    .trace-pagination { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 14px 20px; align-items: end; margin: 12px 0 18px; }\n",
+            "",
+            "legacy pagination style",
+        ),
+        (
+            "    .trace-page-size { display: grid; gap: 6px; max-width: 180px; color: var(--muted); font-size: 12px; }\n",
+            "",
+            "legacy page-size style",
+        ),
+        ("    .trace-page-size select { min-width: 0; }\n", "", "legacy page-size select style"),
+        (
+            "    .trace-page-status { margin: 8px 0 0; color: var(--muted); font-size: 12px; }\n",
+            "",
+            "legacy page-status style",
+        ),
+        (
+            "    .trace-page-controls { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 6px; }\n",
+            "",
+            "legacy page-controls style",
+        ),
+        (
+            "    .trace-page-controls button { min-width: 38px; min-height: 38px; padding: 7px 10px; border: 1px solid var(--line); border-radius: 6px; background: #fff; color: var(--ink); font: inherit; font-size: 12px; font-weight: 700; cursor: pointer; white-space: nowrap; }\n",
+            "",
+            "legacy page button style",
+        ),
+        (
+            "    .trace-page-controls button:hover:not(:disabled), .trace-page-controls button:focus-visible { border-color: var(--blue); outline: 2px solid rgba(31, 95, 166, 0.18); outline-offset: 2px; }\n",
+            "",
+            "legacy page hover style",
+        ),
+        (
+            "    .trace-page-controls button[aria-current=\"page\"] { border-color: var(--blue); background: #edf4fc; color: var(--blue); }\n",
+            "",
+            "legacy current page style",
+        ),
+        ("    .trace-page-controls button:disabled { cursor: not-allowed; opacity: .45; }\n", "", "legacy disabled page style"),
+        (
+            "    .trace-page-numbers { display: inline-flex; flex-wrap: wrap; justify-content: center; gap: 6px; }\n",
+            "",
+            "legacy page numbers style",
+        ),
+        ("      .trace-pagination { grid-template-columns: 1fr; align-items: stretch; }\n", "", "legacy mobile pagination style"),
+        ("      .trace-page-size { max-width: none; }\n", "", "legacy mobile page-size style"),
+        ("      .trace-page-controls { justify-content: flex-start; }\n", "", "legacy mobile page-controls style"),
+        ("      .trace-page-numbers { justify-content: flex-start; }\n", "", "legacy mobile page numbers style"),
+    ):
+        occurrences = rendered.count(current)
+        if occurrences != 1:
+            raise ValueError(f"cannot restore historical Concurrent renderer fragment {label}: found {occurrences}")
+        rendered = rendered.replace(current, historical, 1)
+
+    rendered = rendered.replace(
+        "The report freezes the three authoritative message bodies and their Intended Audience Segments, alongside the paired prompt tokens and safe tuple artifacts. Intended Audience Segment is a design descriptor only: it is not exposure eligibility and is not a Prompt field. Changing any crossed token, aggregate, or artifact hash fails the rebuild.",
+        "The report freezes the three authoritative message bodies, the paired prompt tokens, and the safe tuple artifacts. Changing any crossed token, aggregate, or artifact hash fails the rebuild.",
+        1,
+    )
+    rendered = replace_between(
+        rendered,
+        '      <p class="trace-count" data-testid="visible-trace-count" id="visible-trace-count"><span',
+        '      <div class="table-wrap"><table data-testid="decision-trace-table">',
+        '      <p class="trace-count" data-testid="visible-trace-count" id="visible-trace-count"></p>\n',
+        "legacy pagination markup",
+    )
+    rendered = replace_between(
+        rendered,
+        "function compareTraceTokens(left, right) {\n",
+        "const lineages = payload.field_lineage || [];\n",
+        "const traces = payload.exposure_rows || [];\n",
+        "legacy trace sorting",
+    )
+    rendered = replace_between(
+        rendered,
+        "const visibleTraceCount = document.getElementById('trace-match-count');\n",
+        "const searchInput = document.getElementById('trace-search');\n",
+        "const visibleTraceCount = document.getElementById('visible-trace-count');\n",
+        "legacy trace controls",
+    )
+    rendered = rendered.replace(
+        "let returnFocusTarget = null;\nlet bodyOverflowBeforeDrawer = '';\n",
+        "",
+        1,
+    )
+    rendered = rendered.replace(
+        """    row.message_body,
+    row.latent_class,
+    row.time_step,
+    row.selection_reason,
+    row.provider_status,
+    row.primary_action,
+    row.shadow_action,
+    row.primary_reason,
+    row.shadow_reason,
+""",
+        """    row.primary_action,
+    row.shadow_action,
+    row.primary_reason,
+    row.shadow_reason,
+    row.latent_class,
+""",
+        1,
+    )
+    rendered = replace_between(
+        rendered,
+        "function openDrawer(row, trigger) {\n",
+        "  drawerTitle.textContent =",
+        "function openDrawer(row) {\n",
+        "legacy drawer open",
+    )
+    rendered = replace_between(
+        rendered,
+        "function closeDrawer(restoreFocus = true) {\n",
+        "  currentRows.forEach((row) => {\n",
+        """function closeDrawer() {
+  drawer.hidden = true;
+}
+
+function renderTable() {
+  const rows = traces.filter(passesFilters);
+  visibleTraceCount.textContent = `${rows.length.toLocaleString()} visible trace row(s)`;
+  traceBody.replaceChildren();
+  rows.forEach((row) => {
+""",
+        "legacy trace pagination model",
+    )
+    rendered = rendered.replace(
+        "  currentRows.forEach((row) => {\n",
+        "",
+        1,
+    )
+    rendered = rendered.replace(
+        """    tr.dataset.traceId = String(row.trace_id || row.pair_id || '');
+    tr.dataset.pairId = String(row.pair_id || '');
+""",
+        "",
+        1,
+    )
+    rendered = rendered.replace(
+        """    tr.addEventListener('click', () => openDrawer(row, tr));
+    tr.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter' || event.key === ' ') {
+        event.preventDefault();
+        openDrawer(row, tr);
+      }
+    });
+""",
+        """    tr.addEventListener('click', () => openDrawer(row));
+    tr.addEventListener('keydown', (event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); openDrawer(row); } });
+""",
+        1,
+    )
+    rendered = rendered.replace(
+        """searchInput.addEventListener('input', () => { traceViewModel.page = 1; renderTable(); });
+filterIds.forEach((id) => document.getElementById(id).addEventListener('change', () => { traceViewModel.page = 1; renderTable(); }));
+tracePageSize.addEventListener('change', () => { traceViewModel.setPageSize(tracePageSize.value); renderTable(); });
+previousTracePage.addEventListener('click', () => { traceViewModel.setPage(traceViewModel.page - 1, traceViewModel.filteredRows().length); renderTable(); });
+nextTracePage.addEventListener('click', () => { traceViewModel.setPage(traceViewModel.page + 1, traceViewModel.filteredRows().length); renderTable(); });
+closeButton.addEventListener('click', () => closeDrawer(true));
+document.querySelectorAll('[data-report-mode-target]').forEach((button) => button.addEventListener('click', () => closeDrawer(false)));
+window.addEventListener('hashchange', () => closeDrawer(false));
+document.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape' && drawer.dataset.selectionKind === 'trace') closeDrawer(true);
+});
+""",
+        """searchInput.addEventListener('input', renderTable);
+filterIds.forEach((id) => document.getElementById(id).addEventListener('change', renderTable));
+closeButton.addEventListener('click', closeDrawer);
+document.addEventListener('keydown', (event) => { if (event.key === 'Escape' && !drawer.hidden) closeDrawer(); });
+""",
+        1,
+    )
+    return rendered
 
 
 def _three_part(payload: object) -> str:
@@ -774,9 +964,17 @@ class _CurrentRendererAdapter:
         return _render_current_report(payload, _legacy_render_report)
 
 
+class _HistoricalRendererAdapter:
+    """Frozen adapter for persisted Concurrent reports before trace pagination."""
+
+    def render(self, payload: Any) -> str:
+        return _legacy_render_report(payload, include_pagination=False)
+
+
 _LEGACY_ADAPTER = _LegacyRendererAdapter()
 _CURRENT_ADAPTER = _CurrentRendererAdapter()
-_FIXED_ADAPTERS = (_CURRENT_ADAPTER, _LEGACY_ADAPTER)
+_HISTORICAL_ADAPTER = _HistoricalRendererAdapter()
+_FIXED_ADAPTERS = (_CURRENT_ADAPTER, _LEGACY_ADAPTER, _HISTORICAL_ADAPTER)
 
 
 def render_report(payload: Any, *, expected_sha256: str | None = None) -> str:

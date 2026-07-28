@@ -21,6 +21,7 @@
 - [锦江 Seed-First 完整离线报告验收记录](jinjiang-seed-first-complete-offline-report-validation-20260720.md)：#69 的 1,000 用户完整报告、同源 artifacts、桌面交互、deterministic rebuild 和发布输入 hashes 验收。
 - [锦江 Concurrent Message 完整离线验证记录](jinjiang-concurrent-message-complete-offline-validation-20260726.md)：#98 的 1,000 用户 / 3,000 pair / 1,800 exposure mocked `openai_compatible` validation、deterministic rerun、v4 rejection preflight 和 #99 operational handoff。
 - [锦江 Concurrent Message Formal 发布与验收记录](jinjiang-concurrent-message-formal-release-20260727.md)：#99 的 persisted Formal run、v4 contract validation、candidate deployment、public acceptance 和 canonical `current` 切换记录。
+- [锦江 Concurrent Message 双模式 Formal Presentation 发布与验收记录](jinjiang-concurrent-message-two-mode-formal-release-20260728.md)：#112 的 immutable destination、双模式 renderer、v4 contract、candidate rollback、public acceptance 和 canonical `current` readback 记录。
 - [锦江用户潜在属性研究先验整理](jinjiang-user-latent-attributes-reference-zh.md)：latent class、价值权重、Table 11 成员画像分布和使用边界，只作为外部研究先验，不代表当前代码实现状态。
 
 `../04-开发验证/` 只保留迁移索引；迁移后的 Reference 文档必须保留 lineage、旧文件名和聚合口径说明。
