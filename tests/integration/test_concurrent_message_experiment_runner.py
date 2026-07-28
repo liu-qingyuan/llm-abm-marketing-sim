@@ -23,6 +23,8 @@ from llm_abm_sim.concurrent_execution_journal import (
     derive_concurrent_execution_workspace,
 )
 from llm_abm_sim.concurrent_message_experiment import authoritative_message_definitions
+from llm_abm_sim.concurrent_message_renderer import render_report
+from llm_abm_sim.concurrent_message_report import close_concurrent_message_artifacts
 from llm_abm_sim.decision import (
     CachedDecisionAdapter,
     DecisionInput,
@@ -437,6 +439,50 @@ def _provider_response(
         total_tokens=(input_usage + output_usage) if usage_status == "complete" else None,
         cached_input_tokens=3 if usage_status == "complete" else None,
     )
+
+
+def test_concurrent_message_artifact_closure_is_read_only_and_renderer_hash_dispatch(tmp_path: Path) -> None:
+    dataset_dir = _make_concurrent_fixture(tmp_path)
+    config = ConcurrentMessageExperimentConfig(
+        dataset_dir=dataset_dir,
+        sample_size=30,
+        horizon=2,
+        delivery_capacity=10,
+        configuration_profile="validation",
+    )
+    output_dir = ConcurrentMessageExperimentRunner(
+        config,
+        _ScriptedConcurrentAdapter(
+            name="closure-primary",
+            prompt_version=CONCURRENT_MESSAGE_PRIMARY_PROMPT_VERSION,
+            positive_user_ids={"u1"},
+            fail_pairs=set(),
+        ),
+        _ScriptedConcurrentAdapter(
+            name="closure-shadow",
+            prompt_version=CONCURRENT_MESSAGE_SHADOW_PROMPT_VERSION,
+            positive_user_ids={"u2"},
+            fail_pairs=set(),
+        ),
+    ).run_and_write(tmp_path / "closure-run")
+
+    before = {path.name: path.read_bytes() for path in output_dir.iterdir() if path.is_file()}
+    closure = close_concurrent_message_artifacts(output_dir)
+    after = {path.name: path.read_bytes() for path in output_dir.iterdir() if path.is_file()}
+
+    assert after == before
+    expected_hash = hashlib.sha256(closure.report_html.encode("utf-8")).hexdigest()
+    assert render_report(closure.report_payload) == closure.report_html
+    assert render_report(closure.report_payload, expected_sha256=expected_hash) == closure.report_html
+    with pytest.raises(ValueError, match="no concurrent message renderer matched"):
+        render_report(closure.report_payload, expected_sha256="0" * 64)
+
+    report_before_failure = (output_dir / "report.html").read_bytes()
+    (output_dir / "concurrent_message_users.json").unlink()
+    with pytest.raises(FileNotFoundError, match="requires"):
+        close_concurrent_message_artifacts(output_dir)
+    assert (output_dir / "report.html").read_bytes() == report_before_failure
+
 
 
 def test_concurrent_message_runner_writes_validation_runtime_artifacts(tmp_path: Path) -> None:

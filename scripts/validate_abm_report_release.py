@@ -19,22 +19,8 @@ from llm_abm_sim.concurrent_campaign_diagnostics import (
 )
 from llm_abm_sim.concurrent_message_experiment import authoritative_message_definitions
 from llm_abm_sim.concurrent_message_report import (
-    ConcurrentMessageArtifactManifest,
-    ConcurrentMessageDecisionTraceDocument,
-    ConcurrentMessageDiagnosticsDocument,
-    ConcurrentMessageFieldLineageDocument,
-    ConcurrentMessageReportPayload,
-    ConcurrentMessageRuntimeDocument,
-    ConcurrentMessageUsersDocument,
-    _artifact_path,
-    _build_report_bundle,
-    _ensure_no_unexpected_root_files,
-    _read_csv_rows,
-    _read_json_object,
-    _read_json_records,
-    _sha256_text,
-    _validate_documents_against_build,
-    _validate_input_hashes,
+    ConcurrentMessageArtifactClosure,
+    close_concurrent_message_artifacts,
 )
 from llm_abm_sim.final_research_reason_context import ReasonContextDiagnostics
 from llm_abm_sim.final_research_report import (
@@ -1024,11 +1010,11 @@ def _validate_v4(
         evidence_dir = snapshot_dir.resolve()
 
     try:
-        manifest = ConcurrentMessageArtifactManifest.model_validate(
-            _read_json_object(_safe_artifact(evidence_dir, "artifact_manifest.json", "v4 artifact manifest"))
-        )
+        closure: ConcurrentMessageArtifactClosure = close_concurrent_message_artifacts(evidence_dir)
     except (OSError, ValueError, ValidationError) as exc:
-        raise ReleaseValidationError(f"persisted concurrent message manifest is invalid: {exc}") from exc
+        raise ReleaseValidationError(f"persisted concurrent message evidence is invalid: {exc}") from exc
+    manifest = closure.manifest
+    sample_audit = closure.source_evidence.sample_audit
     _expect_equal(manifest.schema_version, contract.artifact_manifest_schema_version, "v4 artifact manifest schema")
     _expect_equal(manifest.report_schema, contract.payload_schema_version, "v4 report payload schema")
     _expect_equal(manifest.users_schema, contract.users_schema_version, "v4 users schema")
@@ -1038,20 +1024,11 @@ def _validate_v4(
     _expect_equal(manifest.validation_schema, contract.validation_schema_version, "v4 validation schema")
     _expect_equal(manifest.primary_prompt_token, contract.primary_prompt_token, "v4 primary prompt token")
     _expect_equal(manifest.shadow_prompt_token, contract.shadow_prompt_token, "v4 shadow prompt token")
-    if "sample_audit" not in manifest.artifacts:
+    if closure.source_evidence.sample_audit is None:
         raise ReleaseValidationError("v4 artifact manifest must include sample_audit")
-    try:
-        artifacts = {
-            name: _artifact_path(evidence_dir, relative_path, name)
-            for name, relative_path in manifest.artifacts.items()
-        }
-        _ensure_no_unexpected_root_files(evidence_dir, manifest)
-        _validate_input_hashes(manifest, artifacts)
-    except (FileNotFoundError, ValueError) as exc:
-        raise ReleaseValidationError(f"persisted concurrent message artifacts are invalid: {exc}") from exc
 
     required_hash_paths = {*manifest.artifacts.values(), "artifact_manifest.json"}
-    source_files = {path.relative_to(evidence_dir).as_posix() for path in evidence_dir.rglob("*") if path.is_file()}
+    source_files = set(closure.source_files)
     if source_files != required_hash_paths:
         raise ReleaseValidationError(
             "source directory contains files outside the v4 artifact manifest or omits declared files; "
@@ -1065,43 +1042,36 @@ def _validate_v4(
             f"missing={sorted(required_hash_paths - actual_hash_paths)}, "
             f"extra={sorted(actual_hash_paths - required_hash_paths)}"
         )
-    manifest_hashes_by_path = {"artifact_manifest.json": _sha256(evidence_dir / "artifact_manifest.json")}
+    manifest_hashes_by_path = dict(closure.artifact_hashes)
     for name, relative_path in manifest.artifacts.items():
         manifest_hashes_by_path[relative_path] = manifest.sha256[name]
     for raw_path, expected_hash in contract.artifact_sha256.items():
         if len(expected_hash) != 64 or any(character not in "0123456789abcdef" for character in expected_hash):
             raise ReleaseValidationError(f"v4 SHA-256 for {raw_path} must be 64 lowercase hexadecimal characters")
-        artifact = _safe_artifact(evidence_dir, raw_path, f"v4 hashed artifact {raw_path}")
-        _expect_equal(_sha256(artifact), expected_hash, f"SHA-256 for {raw_path}")
+        _safe_artifact(evidence_dir, raw_path, f"v4 hashed artifact {raw_path}")
+        actual_hash = closure.artifact_hashes.get(raw_path)
+        if actual_hash is None:
+            raise ReleaseValidationError(f"v4 hashed artifact is absent from the persisted closure: {raw_path}")
+        _expect_equal(actual_hash, expected_hash, f"SHA-256 for {raw_path}")
         _expect_equal(manifest_hashes_by_path[raw_path], expected_hash, f"v4 manifest SHA-256 for {raw_path}")
 
-    try:
-        config_snapshot = _read_json_object(artifacts["config_snapshot"])
-        message_snapshot = _read_json_records(artifacts["message_snapshot"], "message snapshot")
-        sample_manifest_rows = _read_json_records(artifacts["sample_manifest_json"], "sample manifest")
-        candidate_rows = _read_csv_rows(artifacts["rankings_csv"])
-        pair_rows = _read_csv_rows(artifacts["exposures_csv"])
-        terminal_rows = _read_csv_rows(artifacts["terminals_csv"])
-        step_rows = _read_json_records(artifacts["runtime_steps_json"], "runtime steps")
-        validation_summary = _read_json_object(artifacts["validation_evidence"])
-        campaign_diagnostics = _read_json_object(artifacts["campaign_diagnostics_json"])
-        sample_audit = _load_json(artifacts["sample_audit"])
-        users_document = ConcurrentMessageUsersDocument.model_validate(_read_json_object(artifacts["users_json"]))
-        decision_trace_document = ConcurrentMessageDecisionTraceDocument.model_validate(
-            _read_json_object(artifacts["decision_trace_json"])
-        )
-        runtime_document = ConcurrentMessageRuntimeDocument.model_validate(_read_json_object(artifacts["runtime_contract"]))
-        diagnostics_document = ConcurrentMessageDiagnosticsDocument.model_validate(
-            _read_json_object(artifacts["diagnostics_contract"])
-        )
-        field_lineage_document = ConcurrentMessageFieldLineageDocument.model_validate(
-            _read_json_object(artifacts["field_lineage"])
-        )
-        payload = ConcurrentMessageReportPayload.model_validate(_read_json_object(artifacts["report_payload"]))
-        primary_actions_rows = _read_csv_rows(artifacts["primary_actions_csv"])
-        provider_failure_rows = _read_csv_rows(artifacts["provider_failures_csv"])
-    except (OSError, ValueError, ValidationError) as exc:
-        raise ReleaseValidationError(f"persisted concurrent message evidence is invalid: {exc}") from exc
+    source_evidence = closure.source_evidence
+    config_snapshot = source_evidence.config_snapshot
+    message_snapshot = source_evidence.message_snapshot
+    candidate_rows = source_evidence.candidate_rows
+    pair_rows = source_evidence.pair_rows
+    terminal_rows = source_evidence.terminal_rows
+    validation_summary = source_evidence.validation_summary
+    campaign_diagnostics = source_evidence.campaign_diagnostics
+    sample_audit = source_evidence.sample_audit
+    users_document = closure.users_document
+    decision_trace_document = closure.decision_trace_document
+    runtime_document = closure.runtime_document
+    diagnostics_document = closure.diagnostics_document
+    field_lineage_document = closure.field_lineage_document
+    payload = closure.report_payload
+    primary_actions_rows = closure.primary_actions_rows
+    provider_failure_rows = closure.provider_failure_rows
     if not isinstance(sample_audit, dict):
         raise ReleaseValidationError("v4 sample_audit must be a JSON object")
 
@@ -1406,35 +1376,6 @@ def _validate_v4(
             expected_provider_accounting[variant_name],
             f"v4 terminal provider accounting {variant_name}",
         )
-
-    try:
-        build = _build_report_bundle(
-            title=payload.title,
-            config_snapshot=config_snapshot,
-            message_snapshot=message_snapshot,
-            sample_users=sample_manifest_rows,
-            candidate_rows=candidate_rows,
-            pair_rows=pair_rows,
-            terminal_rows=terminal_rows,
-            step_rows=step_rows,
-            validation_summary=validation_summary,
-            campaign_diagnostics=campaign_diagnostics,
-        )
-        _validate_documents_against_build(
-            manifest=manifest,
-            payload=payload,
-            users_document=users_document,
-            decision_trace_document=decision_trace_document,
-            runtime_document=runtime_document,
-            diagnostics_document=diagnostics_document,
-            field_lineage_document=field_lineage_document,
-            primary_actions_rows=primary_actions_rows,
-            provider_failure_rows=provider_failure_rows,
-            build=build,
-        )
-    except ValueError as exc:
-        raise ReleaseValidationError(f"v4 concurrent report tuple does not close to source rows: {exc}") from exc
-    _expect_equal(_sha256_text(build.report_html), manifest.sha256["report_html"], "v4 rebuilt report_html SHA-256")
 
     return {
         "schema_version": contract.schema_version,
