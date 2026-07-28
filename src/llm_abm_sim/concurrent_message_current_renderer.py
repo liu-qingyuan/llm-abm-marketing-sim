@@ -611,6 +611,7 @@ def render_current_report(payload: Any, legacy_renderer: Callable[[Any], str]) -
       const closeButton = document.getElementById('trace-drawer-close');
       const mechanismButtons = [...document.querySelectorAll('[data-mechanism-key]')];
       let returnFocusTarget = null;
+      let bodyOverflowBeforeDrawer = '';
 
       const details = {{
         'overview-start': {{ title: '同时开始边界', definition: '三条 authoritative message 在同一个发布边界进入各自的 candidate queue，不按 message 顺序获得先发优势。', provenance: 'Synthetic Experiment Contract（合成实验合同）', usage: 'Campaign setup（活动初始化） / Ranking（排序）', limitation: '这里解释稳定流程，不展示任意一次 run 的实际 exposure 或 action。' }},
@@ -648,6 +649,9 @@ def render_current_report(payload: Any, legacy_renderer: Callable[[Any], str]) -
         returnFocusTarget = null;
         drawer.hidden = true;
         drawer.removeAttribute('data-selection-kind');
+        drawer.removeAttribute('aria-modal');
+        document.body.style.overflow = bodyOverflowBeforeDrawer;
+        bodyOverflowBeforeDrawer = '';
         mechanismButtons.forEach((button) => button.setAttribute('aria-expanded', 'false'));
         if (restoreFocus && target?.isConnected) target.focus({{ preventScroll: true }});
       }}
@@ -671,6 +675,9 @@ def render_current_report(payload: Any, legacy_renderer: Callable[[Any], str]) -
         card.appendChild(facts);
         drawerBody.appendChild(card);
         drawer.dataset.selectionKind = 'mechanism';
+        drawer.setAttribute('aria-modal', 'true');
+        bodyOverflowBeforeDrawer = document.body.style.overflow;
+        document.body.style.overflow = 'hidden';
         drawer.hidden = false;
         mechanismButtons.forEach((button) => button.setAttribute('aria-expanded', String(button === trigger)));
         closeButton?.focus({{ preventScroll: true }});
@@ -686,6 +693,7 @@ def render_current_report(payload: Any, legacy_renderer: Callable[[Any], str]) -
         }}
       }}, true);
       document.querySelectorAll('[data-report-mode-target]').forEach((button) => button.addEventListener('click', () => closeMechanismDrawer(false)));
+      window.addEventListener('hashchange', () => closeMechanismDrawer(false));
     }})();
     </script>
   </main>

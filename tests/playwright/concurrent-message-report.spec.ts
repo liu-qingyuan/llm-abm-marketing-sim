@@ -135,33 +135,72 @@ test('concurrent message report exposes sections, filters, drawer, and safe down
     await expect(page.getByTestId('primary-audience-response-section')).toContainText('Primary Audience Response');
     await expect(page.getByTestId('campaign-feedback-effect-section')).toContainText('Campaign Feedback Effect');
     await expect(page.getByTestId('demographic-decision-sensitivity-section')).toContainText('Demographic Decision Sensitivity');
+    await expect(page.getByTestId('messages-section')).toContainText('not exposure eligibility');
+    await expect(page.getByTestId('messages-section')).toContainText('not a Prompt field');
     await expect(page.getByTestId('decision-trace-section')).toContainText('Exposure trace table');
     await expect(page.getByTestId('downloads-section')).toContainText('Safe downloads');
 
     const traces = payload.exposure_rows;
+    const traceRows = page.getByTestId('decision-trace-table').locator('tbody tr');
+    const traceMatchCount = page.getByTestId('trace-match-count');
+    const tracePageStatus = page.getByTestId('trace-page-status');
+    const tracePageSize = page.getByTestId('trace-page-size');
+    const tracePageNumbers = page.getByTestId('trace-page-numbers');
+    const nextTracePage = page.getByTestId('trace-next-page');
     const selectedMessage = traces[0].message_id;
     const selectedClass = traces.find((row) => row.message_id === selectedMessage)?.latent_class ?? traces[0].latent_class;
+    await expect(tracePageSize).toHaveValue('50');
+    await expect(traceMatchCount).toContainText(`${traces.length} matching trace row(s)`);
+    await expect(traceRows).toHaveCount(Math.min(50, traces.length));
+    await expect(tracePageStatus).toContainText(`Page 1 of ${Math.max(1, Math.ceil(traces.length / 50))}`);
+
     await page.getByTestId('message-filter').selectOption(selectedMessage);
     const messageFiltered = traces.filter((row) => row.message_id === selectedMessage).length;
-    await expect(page.getByTestId('decision-trace-table').locator('tbody tr')).toHaveCount(messageFiltered);
+    await expect(traceMatchCount).toContainText(`${messageFiltered} matching trace row(s)`);
+    await expect(traceRows).toHaveCount(Math.min(50, messageFiltered));
     await page.getByTestId('class-filter').selectOption(selectedClass);
     const classFiltered = traces.filter(
       (row) => row.message_id === selectedMessage && row.latent_class === selectedClass,
     ).length;
-    await expect(page.getByTestId('decision-trace-table').locator('tbody tr')).toHaveCount(classFiltered);
+    await expect(traceMatchCount).toContainText(`${classFiltered} matching trace row(s)`);
+    await expect(traceRows).toHaveCount(Math.min(50, classFiltered));
     await page.getByTestId('class-filter').selectOption('');
     await page.getByTestId('message-filter').selectOption('');
 
     const disagreementCount = traces.filter((row) => row.primary_shadow_disagreement).length;
     if (disagreementCount > 0) {
       await page.getByTestId('disagreement-filter').selectOption('true');
-      await expect(page.getByTestId('decision-trace-table').locator('tbody tr')).toHaveCount(disagreementCount);
+      await expect(traceMatchCount).toContainText(`${disagreementCount} matching trace row(s)`);
+      await expect(traceRows).toHaveCount(Math.min(50, disagreementCount));
       await page.getByTestId('disagreement-filter').selectOption('');
     }
 
-    await page.getByTestId('decision-trace-table').locator('tbody tr').first().click();
+    await tracePageSize.selectOption('25');
+    await expect(tracePageStatus).toContainText('Page 1 of');
+    await expect(traceRows).toHaveCount(Math.min(25, traces.length));
+    if (traces.length > 25) {
+      await nextTracePage.click();
+      await expect(tracePageStatus).toContainText('Page 2 of');
+      await expect(traceRows).toHaveCount(Math.min(25, traces.length - 25));
+      await tracePageNumbers.getByRole('button', { name: 'Go to trace page 1' }).click();
+      await expect(tracePageStatus).toContainText('Page 1 of');
+      await expect(traceRows).toHaveCount(Math.min(25, traces.length));
+      await page.getByTestId('message-filter').selectOption(selectedMessage);
+      await expect(tracePageStatus).toContainText('Page 1 of');
+      await expect(traceRows).toHaveCount(Math.min(25, messageFiltered));
+      await page.getByTestId('message-filter').selectOption('');
+    }
+    await tracePageSize.selectOption('100');
+    await expect(tracePageStatus).toContainText('Page 1 of');
+    await expect(nextTracePage).toBeDisabled();
+    await expect(traceRows).toHaveCount(Math.min(100, traces.length));
+
+    const firstRow = traceRows.first();
+    await firstRow.click();
     const drawer = page.getByTestId('trace-drawer');
     await expect(drawer).toBeVisible();
+    await expect(drawer).toHaveAttribute('aria-modal', 'true');
+    await expect.poll(() => page.evaluate(() => document.body.style.overflow)).toBe('hidden');
     await expect(drawer).toContainText('Message and ranking evidence');
     await expect(drawer).toContainText('Primary decision');
     await expect(drawer).toContainText('Shadow decision');
@@ -169,6 +208,17 @@ test('concurrent message report exposes sections, filters, drawer, and safe down
     await expect(drawer).toContainText('Aggregate evidence');
     await page.getByTestId('trace-drawer').getByRole('button', { name: 'Close trace detail' }).click();
     await expect(drawer).toBeHidden();
+    await expect.poll(() => page.evaluate(() => document.body.style.overflow)).toBe('');
+    await expect(firstRow).toBeFocused();
+
+    await firstRow.press('Enter');
+    await expect(drawer).toBeVisible();
+    await page.getByTestId('trace-drawer').getByRole('button', { name: 'Close trace detail' }).click();
+    await expect(firstRow).toBeFocused();
+    await firstRow.press('Space');
+    await expect(drawer).toBeVisible();
+    await page.getByTestId('trace-drawer').getByRole('button', { name: 'Close trace detail' }).click();
+    await expect(firstRow).toBeFocused();
 
     for (const downloadName of ['manifest', 'report_payload', 'users_json', 'decision_trace_json']) {
       const link = page.getByTestId(`download-${downloadName.replaceAll('_', '-')}`);
@@ -270,10 +320,13 @@ test('mechanism scenes explain the Multi-Message contract with one accessible de
     const drawer = page.getByTestId('trace-drawer');
     await expect(drawer).toBeVisible();
     await expect(drawer).toHaveAttribute('data-selection-kind', 'mechanism');
+    await expect(drawer).toHaveAttribute('aria-modal', 'true');
+    await expect.poll(() => page.evaluate(() => document.body.style.overflow)).toBe('hidden');
     await expect(drawer).toContainText('Field Provenance');
     await expect(drawer).toContainText('研究限制');
     await drawer.getByRole('button', { name: 'Close trace detail' }).click();
     await expect(drawer).toBeHidden();
+    await expect.poll(() => page.evaluate(() => document.body.style.overflow)).toBe('');
     await expect(firstHotspot).toBeFocused();
 
     await expectNoLayoutFailures(page);

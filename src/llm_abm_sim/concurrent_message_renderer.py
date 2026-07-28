@@ -239,7 +239,17 @@ def _legacy_render_report(payload: Any) -> str:
     .downloads {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 10px; }}
     .downloads a {{ min-height: 42px; display: flex; align-items: center; padding: 8px 10px; border: 1px solid var(--line); border-radius: 6px; text-decoration: none; font-weight: 700; }}
     .downloads a:hover, .downloads a:focus-visible {{ border-color: var(--green); outline: 2px solid rgba(32, 107, 86, 0.22); outline-offset: 2px; }}
-    .trace-count {{ font-weight: 700; color: var(--blue); }}
+    .trace-count {{ margin: 16px 0 8px; font-weight: 700; color: var(--blue); }}
+    .trace-pagination {{ display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 14px 20px; align-items: end; margin: 12px 0 18px; }}
+    .trace-page-size {{ display: grid; gap: 6px; max-width: 180px; color: var(--muted); font-size: 12px; }}
+    .trace-page-size select {{ min-width: 0; }}
+    .trace-page-status {{ margin: 8px 0 0; color: var(--muted); font-size: 12px; }}
+    .trace-page-controls {{ display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 6px; }}
+    .trace-page-controls button {{ min-width: 38px; min-height: 38px; padding: 7px 10px; border: 1px solid var(--line); border-radius: 6px; background: #fff; color: var(--ink); font: inherit; font-size: 12px; font-weight: 700; cursor: pointer; white-space: nowrap; }}
+    .trace-page-controls button:hover:not(:disabled), .trace-page-controls button:focus-visible {{ border-color: var(--blue); outline: 2px solid rgba(31, 95, 166, 0.18); outline-offset: 2px; }}
+    .trace-page-controls button[aria-current="page"] {{ border-color: var(--blue); background: #edf4fc; color: var(--blue); }}
+    .trace-page-controls button:disabled {{ cursor: not-allowed; opacity: .45; }}
+    .trace-page-numbers {{ display: inline-flex; flex-wrap: wrap; justify-content: center; gap: 6px; }}
     [data-testid="decision-trace-table"] tbody tr {{ cursor: pointer; }}
     [data-testid="decision-trace-table"] tbody tr:hover, [data-testid="decision-trace-table"] tbody tr:focus {{ background: #f2f7fd; outline: 2px solid rgba(31, 95, 166, 0.18); outline-offset: -2px; }}
     .note-list {{ display: grid; gap: 10px; margin: 18px 0 0; padding: 0; list-style: none; }}
@@ -268,6 +278,10 @@ def _legacy_render_report(payload: Any) -> str:
     @media (max-width: 680px) {{
       .hero, .content-band, .downloads-band {{ padding-top: 24px; padding-bottom: 24px; }}
       .summary-grid, .filters, .downloads {{ grid-template-columns: 1fr; }}
+      .trace-pagination {{ grid-template-columns: 1fr; align-items: stretch; }}
+      .trace-page-size {{ max-width: none; }}
+      .trace-page-controls {{ justify-content: flex-start; }}
+      .trace-page-numbers {{ justify-content: flex-start; }}
       .drawer {{ width: 100vw; }}
     }}
   </style>
@@ -290,7 +304,7 @@ def _legacy_render_report(payload: Any) -> str:
     <section class="content-band" data-testid="messages-section">
       <span class="eyebrow">Contract</span>
       <h2>Approved message snapshot</h2>
-      <p class="section-copy">The report freezes the three authoritative message bodies, the paired prompt tokens, and the safe tuple artifacts. Changing any crossed token, aggregate, or artifact hash fails the rebuild.</p>
+      <p class="section-copy">The report freezes the three authoritative message bodies and their Intended Audience Segments, alongside the paired prompt tokens and safe tuple artifacts. Intended Audience Segment is a design descriptor only: it is not exposure eligibility and is not a Prompt field. Changing any crossed token, aggregate, or artifact hash fails the rebuild.</p>
       <div class="table-wrap"><table><thead><tr><th>Message</th><th>Title</th><th>Audience segment</th><th>Body preview</th></tr></thead><tbody>{message_rows}</tbody></table></div>
     </section>
 
@@ -368,7 +382,18 @@ def _legacy_render_report(payload: Any) -> str:
         <label><span>Provider status</span><select data-testid="provider-status-filter" id="provider-status-filter"><option value="">All</option><option value="succeeded">Succeeded</option><option value="provider_failed">Provider failed</option></select></label>
         <label><span>Primary / Shadow disagreement</span><select data-testid="disagreement-filter" id="disagreement-filter"><option value="">All</option><option value="true">Disagree</option><option value="false">Agree</option></select></label>
       </div>
-      <p class="trace-count" data-testid="visible-trace-count" id="visible-trace-count"></p>
+      <p class="trace-count" data-testid="visible-trace-count" id="visible-trace-count"><span data-testid="trace-match-count" id="trace-match-count"></span></p>
+      <div class="trace-pagination" data-testid="trace-pagination" aria-label="Exposure trace pagination">
+        <div>
+          <label class="trace-page-size"><span>Rows per page</span><select data-testid="trace-page-size" id="trace-page-size"><option value="25">25</option><option value="50" selected>50</option><option value="100">100</option></select></label>
+          <p class="trace-page-status" data-testid="trace-page-status" id="trace-page-status" role="status" aria-live="polite"></p>
+        </div>
+        <nav class="trace-page-controls" data-testid="trace-page-controls" aria-label="Trace pages">
+          <button type="button" data-testid="trace-previous-page" id="trace-previous-page" aria-label="Previous trace page">Previous</button>
+          <span class="trace-page-numbers" data-testid="trace-page-numbers" id="trace-page-numbers"></span>
+          <button type="button" data-testid="trace-next-page" id="trace-next-page" aria-label="Next trace page">Next</button>
+        </nav>
+      </div>
       <div class="table-wrap"><table data-testid="decision-trace-table"><thead><tr><th>Batch</th><th>Message</th><th>User</th><th>Class</th><th>Rank</th><th>Selection</th><th>Fit</th><th>Primary</th><th>Shadow</th><th>Provider</th><th>Disagree</th></tr></thead><tbody id="decision-trace-body"></tbody></table></div>
     </section>
 
@@ -392,16 +417,36 @@ def _legacy_render_report(payload: Any) -> str:
   <script id="concurrent-message-payload" type="application/json">{payload_json}</script>
   <script>
 const payload = JSON.parse(document.getElementById('concurrent-message-payload').textContent || '{}');
-const traces = payload.exposure_rows || [];
+function compareTraceTokens(left, right) {{
+  const leftToken = String(left);
+  const rightToken = String(right);
+  return leftToken < rightToken ? -1 : leftToken > rightToken ? 1 : 0;
+}}
+const traces = [...(payload.exposure_rows || [])].sort((left, right) => {{
+  const timeDifference = Number(left.time_step) - Number(right.time_step);
+  if (timeDifference) return timeDifference;
+  const messageDifference = compareTraceTokens(left.message_id, right.message_id);
+  if (messageDifference) return messageDifference;
+  const userDifference = compareTraceTokens(left.user_id, right.user_id);
+  if (userDifference) return userDifference;
+  return compareTraceTokens(left.trace_id || left.pair_id, right.trace_id || right.pair_id);
+}});
 const lineages = payload.field_lineage || [];
 const drawer = document.getElementById('trace-drawer');
 const drawerBody = document.getElementById('trace-drawer-body');
 const drawerTitle = document.getElementById('trace-drawer-title');
 const closeButton = document.getElementById('trace-drawer-close');
 const traceBody = document.getElementById('decision-trace-body');
-const visibleTraceCount = document.getElementById('visible-trace-count');
+const visibleTraceCount = document.getElementById('trace-match-count');
+const tracePageStatus = document.getElementById('trace-page-status');
+const tracePageSize = document.getElementById('trace-page-size');
+const tracePageNumbers = document.getElementById('trace-page-numbers');
+const previousTracePage = document.getElementById('trace-previous-page');
+const nextTracePage = document.getElementById('trace-next-page');
 const searchInput = document.getElementById('trace-search');
 const filterIds = ['message-filter','class-filter','batch-filter','primary-action-filter','provider-status-filter','disagreement-filter'];
+let returnFocusTarget = null;
+let bodyOverflowBeforeDrawer = '';
 
 function optionize(selectId, values) {{
   const select = document.getElementById(selectId);
@@ -431,11 +476,15 @@ function asSearchText(row) {{
     row.user_id,
     row.message_id,
     row.message_title,
+    row.message_body,
+    row.latent_class,
+    row.time_step,
+    row.selection_reason,
+    row.provider_status,
     row.primary_action,
     row.shadow_action,
     row.primary_reason,
     row.shadow_reason,
-    row.latent_class,
   ].join(' ').toLowerCase();
 }}
 
@@ -491,7 +540,12 @@ function renderLineage() {{
   return wrapper;
 }}
 
-function openDrawer(row) {{
+function openDrawer(row, trigger) {{
+  returnFocusTarget = trigger || document.activeElement;
+  bodyOverflowBeforeDrawer = document.body.style.overflow;
+  drawer.dataset.selectionKind = 'trace';
+  drawer.setAttribute('aria-modal', 'true');
+  document.body.style.overflow = 'hidden';
   drawerTitle.textContent = `${{row.user_id}} · ${{row.message_id}} · batch ${{row.time_step}}`;
   drawerBody.replaceChildren();
 
@@ -568,17 +622,71 @@ function openDrawer(row) {{
   closeButton.focus({{ preventScroll: true }});
 }}
 
-function closeDrawer() {{
+function closeDrawer(restoreFocus = true) {{
+  if (drawer.dataset.selectionKind !== 'trace') return;
+  const target = returnFocusTarget;
+  returnFocusTarget = null;
   drawer.hidden = true;
+  drawer.removeAttribute('data-selection-kind');
+  drawer.removeAttribute('aria-modal');
+  document.body.style.overflow = bodyOverflowBeforeDrawer;
+  bodyOverflowBeforeDrawer = '';
+  if (restoreFocus && target?.isConnected) target.focus({{ preventScroll: true }});
 }}
 
+const traceViewModel = {
+  page: 1,
+  pageSize: 50,
+  filteredRows() {{ return traces.filter(passesFilters); }},
+  totalPages(totalRows) {{ return Math.max(1, Math.ceil(totalRows / this.pageSize)); }},
+  setPage(page, totalRows) {{
+    this.page = Math.min(Math.max(1, Number(page) || 1), this.totalPages(totalRows));
+  }},
+  setPageSize(pageSize) {{
+    const allowedSizes = [25, 50, 100];
+    this.pageSize = allowedSizes.includes(Number(pageSize)) ? Number(pageSize) : 50;
+    this.page = 1;
+  }},
+  currentRows(rows) {{
+    const start = (this.page - 1) * this.pageSize;
+    return rows.slice(start, start + this.pageSize);
+  }},
+}};
+
 function renderTable() {{
-  const rows = traces.filter(passesFilters);
-  visibleTraceCount.textContent = `${{rows.length.toLocaleString()}} visible trace row(s)`;
+  const rows = traceViewModel.filteredRows();
+  const totalRows = rows.length;
+  const totalPages = traceViewModel.totalPages(totalRows);
+  traceViewModel.setPage(traceViewModel.page, totalRows);
+  const currentRows = traceViewModel.currentRows(rows);
+  const firstRow = totalRows ? (traceViewModel.page - 1) * traceViewModel.pageSize + 1 : 0;
+  const lastRow = totalRows ? firstRow + currentRows.length - 1 : 0;
+  visibleTraceCount.textContent = `${{totalRows.toLocaleString()}} matching trace row(s)`;
+  tracePageStatus.textContent = totalRows
+    ? `Showing ${{firstRow}}-${{lastRow}} of ${{totalRows.toLocaleString()}} matching trace rows - Page ${{traceViewModel.page}} of ${{totalPages}}`
+    : 'Showing 0-0 of 0 matching trace rows - Page 1 of 1';
+  previousTracePage.disabled = traceViewModel.page <= 1;
+  nextTracePage.disabled = traceViewModel.page >= totalPages;
+  tracePageSize.value = String(traceViewModel.pageSize);
+  tracePageNumbers.replaceChildren();
+  for (let page = 1; page <= totalPages; page += 1) {{
+    const pageButton = element('button', '', page);
+    pageButton.type = 'button';
+    pageButton.dataset.page = String(page);
+    pageButton.setAttribute('aria-label', `Go to trace page ${{page}}`);
+    if (page === traceViewModel.page) pageButton.setAttribute('aria-current', 'page');
+    pageButton.addEventListener('click', () => {{
+      traceViewModel.setPage(page, totalRows);
+      renderTable();
+    }});
+    tracePageNumbers.appendChild(pageButton);
+  }}
   traceBody.replaceChildren();
-  rows.forEach((row) => {{
+  currentRows.forEach((row) => {{
     const tr = document.createElement('tr');
     tr.tabIndex = 0;
+    tr.dataset.traceId = String(row.trace_id || row.pair_id || '');
+    tr.dataset.pairId = String(row.pair_id || '');
     const cells = [
       row.time_step,
       row.message_id,
@@ -593,16 +701,28 @@ function renderTable() {{
       row.primary_shadow_disagreement ? 'true' : 'false',
     ];
     cells.forEach((value) => tr.appendChild(element('td', '', value)));
-    tr.addEventListener('click', () => openDrawer(row));
-    tr.addEventListener('keydown', (event) => {{ if (event.key === 'Enter' || event.key === ' ') {{ event.preventDefault(); openDrawer(row); }} }});
+    tr.addEventListener('click', () => openDrawer(row, tr));
+    tr.addEventListener('keydown', (event) => {{
+      if (event.key === 'Enter' || event.key === ' ') {{
+        event.preventDefault();
+        openDrawer(row, tr);
+      }}
+    }});
     traceBody.appendChild(tr);
   }});
 }}
 
-searchInput.addEventListener('input', renderTable);
-filterIds.forEach((id) => document.getElementById(id).addEventListener('change', renderTable));
-closeButton.addEventListener('click', closeDrawer);
-document.addEventListener('keydown', (event) => {{ if (event.key === 'Escape' && !drawer.hidden) closeDrawer(); }});
+searchInput.addEventListener('input', () => {{ traceViewModel.page = 1; renderTable(); }});
+filterIds.forEach((id) => document.getElementById(id).addEventListener('change', () => {{ traceViewModel.page = 1; renderTable(); }}));
+tracePageSize.addEventListener('change', () => {{ traceViewModel.setPageSize(tracePageSize.value); renderTable(); }});
+previousTracePage.addEventListener('click', () => {{ traceViewModel.setPage(traceViewModel.page - 1, traceViewModel.filteredRows().length); renderTable(); }});
+nextTracePage.addEventListener('click', () => {{ traceViewModel.setPage(traceViewModel.page + 1, traceViewModel.filteredRows().length); renderTable(); }});
+closeButton.addEventListener('click', () => closeDrawer(true));
+document.querySelectorAll('[data-report-mode-target]').forEach((button) => button.addEventListener('click', () => closeDrawer(false)));
+window.addEventListener('hashchange', () => closeDrawer(false));
+document.addEventListener('keydown', (event) => {{
+  if (event.key === 'Escape' && drawer.dataset.selectionKind === 'trace') closeDrawer(true);
+}});
 renderTable();
   </script>
 </body>
