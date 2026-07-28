@@ -183,6 +183,106 @@ test('concurrent message report exposes sections, filters, drawer, and safe down
   expect(consoleErrors).toEqual([]);
 });
 
+test('mechanism scenes explain the Multi-Message contract with one accessible detail drawer', async ({ page }, testInfo) => {
+  const { outputDir } = generateConcurrentReport(testInfo);
+  const reportUrl = pathToFileURL(path.join(outputDir, 'report.html')).toString();
+  const consoleErrors: string[] = [];
+  const pageErrors: string[] = [];
+  page.on('console', (message) => {
+    if (message.type() === 'error') consoleErrors.push(message.text());
+  });
+  page.on('pageerror', (error) => pageErrors.push(error.message));
+
+  for (const viewport of [
+    { width: 1440, height: 1000 },
+    { width: 1600, height: 1000 },
+    { width: 390, height: 844 },
+  ]) {
+    await page.setViewportSize(viewport);
+    await page.goto(reportUrl);
+    const mechanism = page.getByTestId('mechanism-mode-panel');
+    await expect(mechanism).toBeVisible();
+    await expect(mechanism.getByTestId('mechanism-sample-size')).toContainText('1,000');
+    await expect(mechanism.getByTestId('mechanism-eligible-pairs')).toContainText('3,000');
+    await expect(mechanism.getByTestId('mechanism-batch-contract')).toContainText('30 × Top20');
+    await expect(mechanism.getByTestId('mechanism-message-queue-1')).toBeVisible();
+    await expect(mechanism.getByTestId('mechanism-message-queue-2')).toBeVisible();
+    await expect(mechanism.getByTestId('mechanism-message-queue-3')).toBeVisible();
+
+    for (const text of [
+      'Full-Pool Influence Seed Union',
+      'network cohort',
+      'Synthetic Experiment Labels',
+      'three independent queues',
+      'same pair at most once',
+      'Message-User Fit',
+      '[-1,1] → [0,1]',
+      '0.50',
+      '0.30',
+      '0.20',
+      'historical_tag_affinity = 0',
+      'Platform Environment',
+      'Decision Adapter',
+      'Ranking evidence、Class 和其他 messages 不进入当前 pair 的 Prompt',
+      'Shadow 仅作 report-only',
+      'gender',
+      'age',
+      'education',
+      'monthly_income',
+      'like / comment / share',
+      'provider_failed',
+      '同批 context 保持冻结',
+      'Recommendation Signal Inclusion',
+      'Observed Recommendation Signal Effect',
+    ]) {
+      await expect(mechanism).toContainText(text);
+    }
+
+    const mechanismImages = mechanism.locator('img[data-testid^="multi-message-"]');
+    await expect(mechanismImages).toHaveCount(5);
+    const imageDimensions = await mechanismImages.evaluateAll((images) => images.map((image) => ({
+      naturalWidth: (image as HTMLImageElement).naturalWidth,
+      naturalHeight: (image as HTMLImageElement).naturalHeight,
+    })));
+    expect(imageDimensions).toHaveLength(5);
+    imageDimensions.forEach(({ naturalWidth, naturalHeight }) => {
+      expect(naturalWidth).toBeGreaterThan(0);
+      expect(naturalHeight).toBeGreaterThan(0);
+      expect(naturalWidth / naturalHeight).toBeCloseTo(16 / 9, 2);
+    });
+
+    for (const excluded of ['current action distribution', 'message winner', 'demographic causality']) {
+      await expect(mechanism).not.toContainText(excluded);
+    }
+
+    if (viewport.width === 1440 || viewport.width === 390) {
+      await expect(page).toHaveScreenshot(`concurrent-message-mechanism-${viewport.width}.png`, {
+        animations: 'disabled',
+        caret: 'hide',
+        fullPage: false,
+      });
+    }
+
+    const firstHotspot = mechanism.locator('[data-mechanism-key]').first();
+    await firstHotspot.focus();
+    await expect(firstHotspot).toBeFocused();
+    await firstHotspot.press('Enter');
+    const drawer = page.getByTestId('trace-drawer');
+    await expect(drawer).toBeVisible();
+    await expect(drawer).toHaveAttribute('data-selection-kind', 'mechanism');
+    await expect(drawer).toContainText('Field Provenance');
+    await expect(drawer).toContainText('研究限制');
+    await drawer.getByRole('button', { name: 'Close trace detail' }).click();
+    await expect(drawer).toBeHidden();
+    await expect(firstHotspot).toBeFocused();
+
+    await expectNoLayoutFailures(page);
+  }
+
+  expect(pageErrors).toEqual([]);
+  expect(consoleErrors).toEqual([]);
+});
+
 test('current shell keeps mode, anchor hash, focus, and history synchronized', async ({ page }, testInfo) => {
   const { outputDir } = generateConcurrentReport(testInfo);
   const reportUrl = pathToFileURL(path.join(outputDir, 'report.html')).toString();
