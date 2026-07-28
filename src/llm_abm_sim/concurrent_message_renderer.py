@@ -6,6 +6,8 @@ import json
 from collections.abc import Mapping, Sequence
 from typing import Any
 
+from .concurrent_message_current_renderer import render_current_report as _render_current_report
+
 
 def _legacy_render_report(payload: Any) -> str:
     counts = _required_mapping(payload.validation_summary, "counts", "validation summary")
@@ -645,14 +647,22 @@ class _LegacyRendererAdapter:
         return _legacy_render_report(payload)
 
 
+class _CurrentRendererAdapter:
+    """Mechanism-first two-mode adapter for new Concurrent Message artifacts."""
+
+    def render(self, payload: Any) -> str:
+        return _render_current_report(payload, _legacy_render_report)
+
+
 _LEGACY_ADAPTER = _LegacyRendererAdapter()
-_FIXED_ADAPTERS = (_LEGACY_ADAPTER,)
+_CURRENT_ADAPTER = _CurrentRendererAdapter()
+_FIXED_ADAPTERS = (_CURRENT_ADAPTER, _LEGACY_ADAPTER)
 
 
 def render_report(payload: Any, *, expected_sha256: str | None = None) -> str:
-    """Render a persisted payload through the fixed repository-internal adapter set."""
+    """Render current artifacts, or dispatch to a historical exact adapter by hash."""
     if expected_sha256 is None:
-        return _LEGACY_ADAPTER.render(payload)
+        return _CURRENT_ADAPTER.render(payload)
     for adapter in _FIXED_ADAPTERS:
         rendered = adapter.render(payload)
         if _sha256_text(rendered) == expected_sha256:

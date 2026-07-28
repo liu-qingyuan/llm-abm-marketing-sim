@@ -125,6 +125,8 @@ test('concurrent message report exposes sections, filters, drawer, and safe down
   ]) {
     await page.setViewportSize(viewport);
     await page.goto(pathToFileURL(path.join(outputDir, 'report.html')).toString());
+    await page.getByTestId('run-evidence-mode-button').click();
+    await expect(page.getByTestId('run-evidence-mode-panel')).toBeVisible();
 
     await expect(page.getByTestId('concurrent-message-report')).toBeVisible();
     await expect(page.getByTestId('validation-status')).toContainText('Validation only');
@@ -176,6 +178,95 @@ test('concurrent message report exposes sections, filters, drawer, and safe down
 
     await expectNoLayoutFailures(page);
   }
+
+  expect(pageErrors).toEqual([]);
+  expect(consoleErrors).toEqual([]);
+});
+
+test('current shell keeps mode, anchor hash, focus, and history synchronized', async ({ page }, testInfo) => {
+  const { outputDir } = generateConcurrentReport(testInfo);
+  const reportUrl = pathToFileURL(path.join(outputDir, 'report.html')).toString();
+  const consoleErrors: string[] = [];
+  const pageErrors: string[] = [];
+  page.on('console', (message) => {
+    if (message.type() === 'error') consoleErrors.push(message.text());
+  });
+  page.on('pageerror', (error) => pageErrors.push(error.message));
+
+  for (const viewport of [
+    { width: 1440, height: 1000 },
+    { width: 390, height: 844 },
+  ]) {
+    await page.setViewportSize(viewport);
+    await page.goto(reportUrl);
+    await expect(page.getByTestId('final-research-ranking-report')).toHaveCount(0);
+    await expect(page.getByTestId('concurrent-message-report')).toHaveAttribute('data-report-mode', 'mechanism');
+    await expect(page.getByTestId('mechanism-mode-panel')).toBeVisible();
+    await expect(page.getByTestId('run-evidence-mode-panel')).toBeHidden();
+    await expect(page.locator('[data-report-mode-panel]:not([hidden])')).toHaveCount(1);
+    await expect(page.getByTestId('mechanism-mode-panel')).toContainText('三条 message 同时进入独立 queue');
+    await expect(page.getByTestId('mechanism-mode-panel')).toContainText('平台先决定 exposure');
+    await expect(page.getByTestId('mechanism-mode-panel')).toContainText('LLM 只处理已经曝光');
+    await expect(page.getByTestId('mechanism-mode-panel')).toContainText('Shadow 仅作 report-only');
+    await expectNoLayoutFailures(page);
+  }
+
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.goto(`${reportUrl}#run/sample`);
+  await expect(page).toHaveURL(/report\.html#run\/sample$/);
+  await expect(page.getByTestId('run-evidence-mode-panel')).toBeVisible();
+  await expect(page.getByTestId('mechanism-mode-panel')).toBeHidden();
+  await expect(page.getByTestId('run-evidence-mode-panel').locator('[data-section-anchor="sample"]')).toBeFocused();
+
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.goto(reportUrl);
+  const mechanismTab = page.getByTestId('mechanism-mode-button');
+  const runTab = page.getByTestId('run-evidence-mode-button');
+  await mechanismTab.focus();
+  await expect(mechanismTab).toBeFocused();
+  expect(await mechanismTab.evaluate((node) => node.matches(':focus-visible'))).toBe(true);
+  await mechanismTab.press('Enter');
+  await expect(page.getByTestId('mechanism-mode-panel')).toBeVisible();
+  await mechanismTab.press('ArrowRight');
+  await expect(runTab).toBeFocused();
+  await expect(runTab).toHaveAttribute('aria-selected', 'true');
+  await expect(page.getByTestId('concurrent-message-report')).toHaveAttribute('data-report-mode', 'run-evidence');
+  await expect(page).toHaveURL(/report\.html#run\/overview$/);
+  await expect(page.locator('[data-report-mode-panel]:not([hidden])')).toHaveCount(1);
+  await runTab.press('Space');
+  await expect(runTab).toBeFocused();
+  await runTab.press('ArrowLeft');
+  await expect(mechanismTab).toBeFocused();
+  await expect(mechanismTab).toHaveAttribute('aria-selected', 'true');
+  await mechanismTab.press('ArrowRight');
+  await expect(runTab).toBeFocused();
+  await page.goto(reportUrl);
+  await page.getByTestId('run-evidence-mode-button').click();
+
+  await page.getByRole('link', { name: '曝光排序' }).click();
+  await expect(page).toHaveURL(/report\.html#run\/exposure-ranking$/);
+  await expect(page.getByTestId('run-evidence-mode-panel').locator('[data-section-anchor="exposure-ranking"]')).toBeFocused();
+  await expect(page.getByRole('link', { name: '曝光排序' })).toHaveAttribute('aria-current', 'location');
+  await page.goBack();
+  await expect(page).toHaveURL(/report\.html#run\/overview$/);
+  await expect(runTab).toHaveAttribute('aria-selected', 'true');
+  await page.goBack();
+  await expect(page).toHaveURL(/report\.html(?:#overview)?$/);
+  await expect(page.getByTestId('mechanism-mode-panel')).toBeVisible();
+  await expect(page.getByTestId('run-evidence-mode-panel')).toBeHidden();
+
+  await page.evaluate(() => {
+    window.location.hash = '#run/llm-decision';
+  });
+  await expect(page).toHaveURL(/report\.html#run\/llm-decision$/);
+  await expect(page.getByTestId('run-evidence-mode-panel')).toBeVisible();
+  await expect(page.getByTestId('run-evidence-mode-panel').locator('[data-section-anchor="llm-decision"]')).toBeFocused();
+  await page.evaluate(() => {
+    window.location.hash = '#sample';
+  });
+  await expect(page).toHaveURL(/report\.html#sample$/);
+  await expect(page.getByTestId('mechanism-mode-panel')).toBeVisible();
+  await expect(page.getByTestId('mechanism-mode-panel').locator('[data-section-anchor="sample"]')).toBeFocused();
 
   expect(pageErrors).toEqual([]);
   expect(consoleErrors).toEqual([]);

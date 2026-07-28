@@ -23,7 +23,7 @@ from llm_abm_sim.concurrent_execution_journal import (
     derive_concurrent_execution_workspace,
 )
 from llm_abm_sim.concurrent_message_experiment import authoritative_message_definitions
-from llm_abm_sim.concurrent_message_renderer import render_report
+from llm_abm_sim.concurrent_message_renderer import _legacy_render_report, render_report
 from llm_abm_sim.concurrent_message_report import close_concurrent_message_artifacts
 from llm_abm_sim.decision import (
     CachedDecisionAdapter,
@@ -472,8 +472,12 @@ def test_concurrent_message_artifact_closure_is_read_only_and_renderer_hash_disp
 
     assert after == before
     expected_hash = hashlib.sha256(closure.report_html.encode("utf-8")).hexdigest()
+    legacy_html = _legacy_render_report(closure.report_payload)
+    legacy_hash = hashlib.sha256(legacy_html.encode("utf-8")).hexdigest()
+    assert closure.report_html != legacy_html
     assert render_report(closure.report_payload) == closure.report_html
     assert render_report(closure.report_payload, expected_sha256=expected_hash) == closure.report_html
+    assert render_report(closure.report_payload, expected_sha256=legacy_hash) == legacy_html
     with pytest.raises(ValueError, match="no concurrent message renderer matched"):
         render_report(closure.report_payload, expected_sha256="0" * 64)
 
