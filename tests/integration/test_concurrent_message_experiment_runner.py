@@ -3,11 +3,13 @@ from __future__ import annotations
 import csv
 import hashlib
 import json
+import os
 from pathlib import Path
 from typing import Any, Literal, cast
 
 import pytest
 
+import llm_abm_sim.concurrent_message_report as concurrent_message_report_module
 from llm_abm_sim import (
     ConcurrentMessageExperimentConfig,
     ConcurrentMessageExperimentRunner,
@@ -487,6 +489,190 @@ def test_concurrent_message_artifact_closure_is_read_only_and_renderer_hash_disp
         close_concurrent_message_artifacts(output_dir)
     assert (output_dir / "report.html").read_bytes() == report_before_failure
 
+
+
+def test_concurrent_message_report_rebuild_derives_immutable_destination(tmp_path: Path) -> None:
+    dataset_dir = _make_concurrent_fixture(tmp_path)
+    config = ConcurrentMessageExperimentConfig(
+        dataset_dir=dataset_dir,
+        sample_size=30,
+        horizon=2,
+        delivery_capacity=10,
+        configuration_profile="validation",
+    )
+    source_dir = ConcurrentMessageExperimentRunner(
+        config,
+        _ScriptedConcurrentAdapter(
+            name="primary",
+            prompt_version=CONCURRENT_MESSAGE_PRIMARY_PROMPT_VERSION,
+            positive_user_ids={"u1"},
+            fail_pairs={(0, "message_3", "u4")},
+        ),
+        _ScriptedConcurrentAdapter(
+            name="shadow",
+            prompt_version=CONCURRENT_MESSAGE_SHADOW_PROMPT_VERSION,
+            positive_user_ids={"u2"},
+            fail_pairs={(0, "message_2", "u3")},
+        ),
+    ).run_and_write(tmp_path / "immutable-source")
+    source_before = {path.name: path.read_bytes() for path in source_dir.iterdir() if path.is_file()}
+    source_manifest = _read_json(source_dir / "artifact_manifest.json")
+    destination_dir = tmp_path / "presentation" / "candidate"
+
+    report_path = rebuild_concurrent_message_report(source_dir, destination_dir=destination_dir)
+
+    assert report_path == destination_dir / "report.html"
+    assert destination_dir.is_dir()
+    assert {path.name for path in destination_dir.iterdir() if path.is_file()} == set(source_before)
+    assert source_before == {path.name: path.read_bytes() for path in source_dir.iterdir() if path.is_file()}
+    for relative_path in source_manifest["artifacts"].values():
+        if relative_path != "report.html":
+            assert (destination_dir / relative_path).read_bytes() == (source_dir / relative_path).read_bytes()
+    destination_manifest = _read_json(destination_dir / "artifact_manifest.json")
+    assert destination_manifest["sha256"]["report_html"] == _sha256(destination_dir / "report.html")
+    close_concurrent_message_artifacts(destination_dir)
+    assert rebuild_concurrent_message_report(destination_dir) == destination_dir / "report.html"
+
+
+
+def test_concurrent_message_report_rebuild_destination_uses_current_renderer_for_legacy_source(
+    tmp_path: Path,
+) -> None:
+    source_dir = _make_validation_report_source(tmp_path, "legacy-source")
+    source_closure = close_concurrent_message_artifacts(source_dir)
+    legacy_html = _legacy_render_report(source_closure.report_payload)
+    (source_dir / "report.html").write_text(legacy_html, encoding="utf-8")
+    source_manifest = _read_json(source_dir / "artifact_manifest.json")
+    source_manifest["sha256"]["report_html"] = _sha256(source_dir / "report.html")
+    (source_dir / "artifact_manifest.json").write_text(
+        json.dumps(source_manifest, ensure_ascii=False, sort_keys=True) + "\n", encoding="utf-8"
+    )
+    destination_dir = tmp_path / "current-presentation"
+
+    rebuild_concurrent_message_report(source_dir, destination_dir=destination_dir)
+
+    assert (destination_dir / "report.html").read_text(encoding="utf-8") == render_report(source_closure.report_payload)
+    assert (destination_dir / "report.html").read_text(encoding="utf-8") != legacy_html
+
+
+def _make_validation_report_source(tmp_path: Path, name: str) -> Path:
+    dataset_dir = _make_concurrent_fixture(tmp_path)
+    config = ConcurrentMessageExperimentConfig(
+        dataset_dir=dataset_dir,
+        sample_size=30,
+        horizon=2,
+        delivery_capacity=10,
+        configuration_profile="validation",
+    )
+    return ConcurrentMessageExperimentRunner(
+        config,
+        _ScriptedConcurrentAdapter(
+            name="primary",
+            prompt_version=CONCURRENT_MESSAGE_PRIMARY_PROMPT_VERSION,
+            positive_user_ids={"u1"},
+            fail_pairs={(0, "message_3", "u4")},
+        ),
+        _ScriptedConcurrentAdapter(
+            name="shadow",
+            prompt_version=CONCURRENT_MESSAGE_SHADOW_PROMPT_VERSION,
+            positive_user_ids={"u2"},
+            fail_pairs={(0, "message_2", "u3")},
+        ),
+    ).run_and_write(tmp_path / name)
+
+
+def test_concurrent_message_report_rebuild_rejects_invalid_source_before_staging(tmp_path: Path) -> None:
+    source_dir = _make_validation_report_source(tmp_path, "invalid-source")
+    (source_dir / "unexpected.txt").write_text("unexpected", encoding="utf-8")
+    destination_dir = tmp_path / "presentation-candidate"
+
+    with pytest.raises(ValueError, match="unlisted artifacts"):
+        rebuild_concurrent_message_report(source_dir, destination_dir=destination_dir)
+
+    assert not destination_dir.exists()
+    assert not list(tmp_path.glob(".presentation-candidate.*.staging"))
+
+
+def test_concurrent_message_report_rebuild_cleans_staging_on_render_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source_dir = _make_validation_report_source(tmp_path, "render-failure-source")
+    destination_dir = tmp_path / "presentation-candidate"
+
+    def fail_render(payload: object, *, expected_sha256: str | None = None) -> str:
+        del payload, expected_sha256
+        raise RuntimeError("render failed")
+
+    monkeypatch.setattr(concurrent_message_report_module, "render_report", fail_render)
+    with pytest.raises(RuntimeError, match="render failed"):
+        rebuild_concurrent_message_report(source_dir, destination_dir=destination_dir)
+
+    assert not destination_dir.exists()
+    assert not list(tmp_path.glob(".presentation-candidate.*.staging"))
+
+
+def test_concurrent_message_report_rebuild_cleans_staging_on_copy_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source_dir = _make_validation_report_source(tmp_path, "copy-failure-source")
+    destination_dir = tmp_path / "copy-failure-candidate"
+
+    def fail_copy(source: str | os.PathLike[str], destination: str | os.PathLike[str]) -> None:
+        del source, destination
+        raise OSError("copy failed")
+
+    monkeypatch.setattr(concurrent_message_report_module.shutil, "copyfile", fail_copy)
+    with pytest.raises(OSError, match="copy failed"):
+        rebuild_concurrent_message_report(source_dir, destination_dir=destination_dir)
+
+    assert not destination_dir.exists()
+    assert not list(tmp_path.glob(".copy-failure-candidate.*.staging"))
+
+
+def test_concurrent_message_report_rebuild_rejects_source_file_set_mutation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source_dir = _make_validation_report_source(tmp_path, "source-mutation-source")
+    destination_dir = tmp_path / "source-mutation-candidate"
+    original_render = concurrent_message_report_module.render_report
+    unexpected_path = source_dir / "unexpected-during-rebuild.txt"
+
+    def mutate_source(payload: object, *, expected_sha256: str | None = None) -> str:
+        unexpected_path.write_text("unexpected", encoding="utf-8")
+        return original_render(payload, expected_sha256=expected_sha256)
+
+    monkeypatch.setattr(concurrent_message_report_module, "render_report", mutate_source)
+    with pytest.raises(ValueError, match="artifact set changed"):
+        rebuild_concurrent_message_report(source_dir, destination_dir=destination_dir)
+
+    assert not destination_dir.exists()
+    assert not list(tmp_path.glob(".source-mutation-candidate.*.staging"))
+    unexpected_path.unlink()
+
+
+def test_concurrent_message_report_rebuild_rejects_unsafe_destinations(tmp_path: Path) -> None:
+    source_dir = _make_validation_report_source(tmp_path, "unsafe-source")
+    existing_dir = tmp_path / "existing-candidate"
+    existing_dir.mkdir()
+
+    with pytest.raises(FileExistsError, match="already exists"):
+        rebuild_concurrent_message_report(source_dir, destination_dir=existing_dir)
+    with pytest.raises(ValueError, match="must not overlap"):
+        rebuild_concurrent_message_report(source_dir, destination_dir=source_dir / "nested-candidate")
+    with pytest.raises(ValueError, match="must not contain"):
+        rebuild_concurrent_message_report(source_dir, destination_dir=tmp_path / ".." / "escaped-candidate")
+
+    source_link = tmp_path / "source-link"
+    os.symlink(source_dir, source_link, target_is_directory=True)
+    with pytest.raises(ValueError, match="symlink"):
+        rebuild_concurrent_message_report(source_link, destination_dir=tmp_path / "linked-source-candidate")
+
+    destination_link = tmp_path / "destination-link"
+    os.symlink(source_dir, destination_link, target_is_directory=True)
+    with pytest.raises(FileExistsError, match="already exists"):
+        rebuild_concurrent_message_report(source_dir, destination_dir=destination_link)
+
+    assert not list(tmp_path.glob(".linked-source-candidate.*.staging"))
 
 
 def test_concurrent_message_runner_writes_validation_runtime_artifacts(tmp_path: Path) -> None:

@@ -21,6 +21,9 @@ Status: Implemented runtime architecture note
 | final source directory | runner 的显式 `output_dir`，例如 `runs/<persisted-run>` | `config_snapshot`、runtime rows、diagnostics、report payload、HTML、downloads 和 manifest；staging 通过 `Path.replace` 成为该目录 | 仅是本地 release validator 的 source；只有匹配且通过显式 Formal contract 才能进入 candidate deploy |
 | canonical release | deploy script 使用的显式 contract、final source snapshot 和 release id | candidate deployment、health/host checks、atomic `current` switch、public acceptance 和失败回退 | canonical endpoint 的唯一发布边界；不能从 workspace 或 staging 推断授权 |
 
+`rebuild_concurrent_message_report(run_dir, *, destination_dir=None)` 是报告 Module 的唯一公开重建 Interface。省略或显式传入 `None` 时，它先完成 typed artifact closure，再以 persisted report hash 选择冻结的 renderer bytes，并只原子替换 source 的 `report.html`；manifest、payload、runtime、diagnostics、downloads 和其他 source artifacts 不会被重建写入。显式 destination 时，source closure 在任何 staging 创建前完成；Module 只按 canonical artifact table 复制 approved persisted views 到 destination sibling 的唯一 staging directory，使用 current two-mode renderer 生成新的 `report.html`，重建 manifest，并再次通过 closure 与默认 exact rebuild 验证后才 atomic rename。destination 必须原先不存在且与 source 不重叠、无 symlink/path escape，并与 staging 保持同一 filesystem；任何 copy、render、hash、closure 或 rename 失败都会清理 staging，source 和最终 destination 保持不变。该 Interface 返回 source 或 candidate 的 `report.html` 路径，不创建 release contract、不调用 `validate_release(...)`，Formal eligibility 与 deploy policy 仍归 release Module。
+
+
 Operational workspace 是私有运行状态，不是报告 source。它与 final source 位于不同路径，默认被 git 忽略，可能包含恢复所需的用户/run evidence；不得复制到报告目录或部署包。Status JSON 是 operational observation，`ConcurrentExecutionJournal.status()` 会重新执行 validated replay，不把旧 status 文件当作事实来源。
 
 ## Runtime 生命周期

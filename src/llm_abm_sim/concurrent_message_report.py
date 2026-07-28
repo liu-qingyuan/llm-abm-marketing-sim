@@ -3,6 +3,9 @@ from __future__ import annotations
 import csv
 import hashlib
 import json
+import os
+import shutil
+import tempfile
 from collections import defaultdict
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
@@ -618,6 +621,8 @@ def close_concurrent_message_artifacts(run_dir: str | Path) -> ConcurrentMessage
     whether those bytes should be written.
     """
     run_path = Path(run_dir)
+    if run_path.is_symlink():
+        raise ValueError("Concurrent message run directory must not be a symlink")
     if not run_path.is_dir():
         raise FileNotFoundError(f"Concurrent message run directory does not exist: {run_path}")
     manifest_path = run_path / CONCURRENT_MESSAGE_ARTIFACT_MANIFEST_JSON
@@ -725,11 +730,174 @@ def close_concurrent_message_artifacts(run_dir: str | Path) -> ConcurrentMessage
     )
 
 
-def rebuild_concurrent_message_report(run_dir: str | Path) -> Path:
-    closure = close_concurrent_message_artifacts(run_dir)
-    report_path = closure.artifact_paths["report_html"]
-    _atomic_write_text(report_path, closure.report_html)
-    return report_path
+def rebuild_concurrent_message_report(
+    run_dir: str | Path,
+    *,
+    destination_dir: str | Path | None = None,
+) -> Path:
+    """Rebuild a report exactly in place or publish an immutable presentation candidate.
+
+    With ``destination_dir=None`` this preserves the historical exact in-place
+    rebuild contract and returns ``run_dir/report.html``. With an explicit
+    destination, the validated persisted source tuple is copied into a unique
+    sibling staging directory, rendered with the current two-mode adapter, and
+    validated again before an atomic rename; the source is never modified and
+    failures leave both the destination and staging directory absent. The
+    returned path is the candidate's ``report.html``. Release contracts and
+    deployment validation remain the responsibility of the release module.
+    """
+    if destination_dir is None:
+        closure = close_concurrent_message_artifacts(run_dir)
+        report_path = closure.artifact_paths["report_html"]
+        _atomic_write_text(report_path, closure.report_html)
+        return report_path
+
+    source_path = Path(run_dir)
+    destination_path = _validate_presentation_destination(source_path, Path(destination_dir))
+    closure = close_concurrent_message_artifacts(source_path)
+    source_hashes = dict(closure.artifact_hashes)
+    staging_path: Path | None = None
+    try:
+        staging_path = _create_presentation_staging_directory(destination_path)
+        _copy_presentation_artifacts(closure, staging_path)
+        _atomic_write_text(
+            staging_path / CONCURRENT_MESSAGE_REPORT_HTML,
+            render_report(closure.report_payload),
+        )
+        manifest = _build_manifest(staging_path, closure.source_evidence.validation_summary)
+        _write_json(staging_path / CONCURRENT_MESSAGE_ARTIFACT_MANIFEST_JSON, manifest.model_dump(mode="json"))
+
+        _validate_presentation_candidate(
+            source_closure=closure,
+            candidate_dir=staging_path,
+            source_hashes=source_hashes,
+        )
+        rebuild_concurrent_message_report(staging_path)
+        _validate_presentation_candidate(
+            source_closure=closure,
+            candidate_dir=staging_path,
+            source_hashes=source_hashes,
+        )
+        _assert_source_hashes_unchanged(source_path, source_hashes)
+        if os.path.lexists(destination_path):
+            raise FileExistsError(f"presentation destination appeared during rebuild: {destination_path}")
+        if os.stat(staging_path).st_dev != os.stat(destination_path.parent).st_dev:
+            raise OSError("presentation staging and destination are on different filesystems")
+        staging_path.replace(destination_path)
+        staging_path = None
+        return destination_path / CONCURRENT_MESSAGE_REPORT_HTML
+    finally:
+        if staging_path is not None:
+            _remove_presentation_staging(staging_path)
+
+
+def _validate_presentation_destination(source_path: Path, destination_path: Path) -> Path:
+    if source_path.is_symlink():
+        raise ValueError("presentation source directory must not be a symlink")
+    if not source_path.is_dir():
+        raise FileNotFoundError(f"Concurrent message run directory does not exist: {source_path}")
+    if ".." in destination_path.parts:
+        raise ValueError("presentation destination path must not contain '..'")
+    if os.path.lexists(destination_path):
+        raise FileExistsError(f"presentation destination already exists: {destination_path}")
+
+    source_absolute = source_path.absolute()
+    source_resolved = source_path.resolve(strict=True)
+    destination_absolute = destination_path.absolute()
+    destination_resolved = destination_path.resolve(strict=False)
+    if source_absolute != source_resolved:
+        raise ValueError("presentation source path must not contain symlink components")
+    if destination_absolute != destination_resolved:
+        raise ValueError("presentation destination path must not contain symlink components")
+    if (
+        destination_resolved == source_resolved
+        or destination_resolved.is_relative_to(source_resolved)
+        or source_resolved.is_relative_to(destination_resolved)
+    ):
+        raise ValueError("presentation source and destination paths must not overlap")
+
+    existing_parent = destination_path.parent
+    while not os.path.lexists(existing_parent):
+        parent = existing_parent.parent
+        if parent == existing_parent:
+            break
+        existing_parent = parent
+    if not existing_parent.is_dir() or existing_parent.is_symlink():
+        raise ValueError("presentation destination parent must be a regular directory")
+    if os.stat(source_resolved).st_dev != os.stat(existing_parent).st_dev:
+        raise OSError("presentation source and destination are on different filesystems")
+    return destination_path
+
+
+def _create_presentation_staging_directory(destination_path: Path) -> Path:
+    destination_path.parent.mkdir(parents=True, exist_ok=True)
+    if destination_path.parent.is_symlink():
+        raise ValueError("presentation destination parent must not be a symlink")
+    staging_path = Path(
+        tempfile.mkdtemp(
+            prefix=f".{destination_path.name}.",
+            suffix=".staging",
+            dir=destination_path.parent,
+        )
+    )
+    if os.stat(staging_path).st_dev != os.stat(destination_path.parent).st_dev:
+        _remove_presentation_staging(staging_path)
+        raise OSError("presentation staging and destination are on different filesystems")
+    return staging_path
+
+
+def _copy_presentation_artifacts(closure: ConcurrentMessageArtifactClosure, candidate_dir: Path) -> None:
+    for name, relative_path in closure.manifest.artifacts.items():
+        if name == "report_html":
+            continue
+        source_artifact = closure.artifact_paths[name]
+        destination_artifact = candidate_dir / relative_path
+        shutil.copyfile(source_artifact, destination_artifact)
+
+
+def _validate_presentation_candidate(
+    *,
+    source_closure: ConcurrentMessageArtifactClosure,
+    candidate_dir: Path,
+    source_hashes: Mapping[str, str],
+) -> ConcurrentMessageArtifactClosure:
+    candidate_closure = close_concurrent_message_artifacts(candidate_dir)
+    for name, relative_path in source_closure.manifest.artifacts.items():
+        if name == "report_html":
+            continue
+        expected_hash = source_hashes[relative_path]
+        if candidate_closure.artifact_hashes.get(relative_path) != expected_hash:
+            raise ValueError(f"presentation artifact was not copied byte-identically: {relative_path}")
+    return candidate_closure
+
+
+def _assert_source_hashes_unchanged(source_path: Path, expected_hashes: Mapping[str, str]) -> None:
+    actual_files: set[str] = set()
+    for path in source_path.rglob("*"):
+        relative_path = path.relative_to(source_path).as_posix()
+        if path.is_symlink():
+            raise ValueError(f"presentation source artifacts changed during rebuild: {relative_path}")
+        if path.is_file():
+            actual_files.add(relative_path)
+        elif not path.is_dir():
+            raise ValueError(f"presentation source artifacts changed during rebuild: {relative_path}")
+    if actual_files != set(expected_hashes):
+        raise ValueError("presentation source artifact set changed during rebuild")
+    actual_hashes = {
+        relative_path: _sha256_file(source_path / relative_path)
+        for relative_path in expected_hashes
+    }
+    if actual_hashes != dict(expected_hashes):
+        raise ValueError("presentation source artifacts changed during rebuild")
+
+
+def _remove_presentation_staging(staging_path: Path) -> None:
+    if not os.path.lexists(staging_path):
+        return
+    if staging_path.is_symlink() or not staging_path.is_dir():
+        staging_path.unlink()
+        return
+    shutil.rmtree(staging_path)
 
 
 def _build_report_bundle(
@@ -1348,7 +1516,15 @@ def _validate_input_hashes(
 
 def _ensure_no_unexpected_root_files(run_path: Path, manifest: ConcurrentMessageArtifactManifest) -> None:
     expected = set(manifest.artifacts.values()) | {CONCURRENT_MESSAGE_ARTIFACT_MANIFEST_JSON}
-    actual = {path.name for path in run_path.iterdir() if path.is_file()}
+    actual: set[str] = set()
+    for path in run_path.rglob("*"):
+        relative_path = path.relative_to(run_path).as_posix()
+        if path.is_symlink():
+            raise ValueError(f"run directory contains symlink: {relative_path}")
+        if path.is_file():
+            actual.add(relative_path)
+        elif not path.is_dir():
+            raise ValueError(f"run directory contains non-regular artifact: {relative_path}")
     unexpected = sorted(actual - expected)
     if unexpected:
         raise ValueError(f"run directory contains unlisted artifacts: {', '.join(unexpected)}")
