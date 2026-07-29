@@ -38,6 +38,43 @@ _EDITORIAL_CATALOG: dict[str, dict[str, str]] = {
         "drawer.aria": "机制详情",
         "drawer.close": "关闭详情",
         "drawer.detail": "机制详情",
+            "drawer.tabs_aria": "详情证据分组",
+            "drawer.tab.summary": "摘要",
+            "drawer.tab.decision": "Primary 与 Shadow",
+            "drawer.tab.context": "Context",
+            "drawer.tab.lineage": "Lineage",
+            "drawer.identity": "Identity",
+            "drawer.provider_terminal": "Provider terminal",
+            "drawer.paired_outcome": "配对结果 / 差异",
+            "drawer.disagreement": "Engage difference",
+            "drawer.ranking_summary": "Ranking summary",
+            "drawer.prompt_boundary": "Prompt visibility boundary",
+            "drawer.message": "Message",
+            "drawer.user": "User",
+            "drawer.batch": "Batch",
+            "drawer.class": "Class",
+            "drawer.seed": "Seed",
+            "drawer.primary": "Primary",
+            "drawer.shadow": "Shadow",
+            "drawer.status": "Status",
+            "drawer.action": "Action",
+            "drawer.probability": "Probability",
+            "drawer.confidence": "Confidence",
+            "drawer.source": "Decision source",
+            "drawer.prompt_token": "Prompt token",
+            "drawer.authoritative": "Authoritative message",
+            "drawer.primary_reason": "Persisted Primary reason",
+            "drawer.shadow_reason": "Persisted Shadow reason",
+            "drawer.primary_context": "Primary context",
+            "drawer.shadow_context": "Shadow context",
+            "drawer.peer_context": "Peer context",
+            "drawer.field_differences": "Field differences",
+            "drawer.field_provenance": "Field Provenance",
+            "drawer.field_usage_stage": "Field Usage Stage",
+            "drawer.aggregate_source": "Aggregate source",
+            "drawer.aggregate_evidence": "Aggregate evidence",
+            "drawer.not_in_prompt": "Ranking evidence、Class、其他 messages 和 peer behavior 不进入任何 Prompt。",
+            "drawer.no_differences": "没有 persisted field differences。",
         "drawer.provenance": "证据归属",
         "drawer.usage": "使用阶段",
         "drawer.limitation": "限制",
@@ -205,6 +242,56 @@ _EDITORIAL_CATALOG: dict[str, dict[str, str]] = {
         "run.message.body": "Authoritative source body",
         "run.exposure.kicker": "本次运行 · 曝光排序",
         "run.exposure.title": "三条 message 的 600 exposures 与 30-batch persisted ranking",
+            "run.trace.batch": "Batch",
+            "run.trace.class": "Class",
+            "run.trace.kicker": "本次运行 · LLM Decision Trace",
+            "run.trace.title": "每一次 exposure 都保留 Primary / Shadow paired evidence",
+            "run.trace.lead": "这张 trace table 先在全部 1,800 persisted rows 上应用筛选，再进行分页。首屏只呈现 identity、terminal status、paired outcome、ranking summary 和 Prompt visibility boundary；完整 message、contexts 与 lineage 位于 shared drawer 的对应 tab。",
+            "run.trace.summary": "Message action summary",
+            "run.trace.message": "Message",
+            "run.trace.actions": "Primary action counts",
+            "run.trace.positive_rate": "Positive rate",
+            "run.trace.sensitivity": "Paired sensitivity",
+            "run.trace.paired_coverage": "Paired coverage",
+            "run.trace.disagreement_rate": "Disagreement",
+            "run.trace.mean_delta": "Mean absolute probability delta",
+            "run.trace.flagged_reasons": "Flagged Shadow reasons",
+            "run.trace.filters": "Trace filters",
+            "run.trace.search": "Search",
+            "run.trace.search_placeholder": "trace id, user id, message or class",
+            "run.trace.message_filter": "Message",
+            "run.trace.class_filter": "Class",
+            "run.trace.batch_filter": "Batch",
+            "run.trace.action_filter": "Primary action",
+            "run.trace.provider_filter": "Provider status",
+            "run.trace.disagreement_filter": "Primary / Shadow disagreement",
+            "run.trace.all_messages": "All messages",
+            "run.trace.all_classes": "All Classes",
+            "run.trace.all_batches": "All batches",
+            "run.trace.all_actions": "All actions",
+            "run.trace.all_provider_status": "All Provider status",
+            "run.trace.all_disagreement": "All paired outcomes",
+            "run.trace.only_disagreement": "Disagreement only",
+            "run.trace.no_disagreement": "No disagreement",
+            "run.trace.table_aria": "Persisted LLM Decision Trace",
+            "run.trace.user": "User",
+            "run.trace.primary_action": "Primary",
+            "run.trace.provider": "Provider",
+            "run.trace.disagreement": "Difference",
+            "run.trace.ranking": "Rank",
+            "run.trace.page_size": "Rows per page",
+            "run.trace.rows": "Rows",
+            "run.trace.empty": "No persisted trace rows match these filters.",
+            "run.trace.previous": "Previous page",
+            "run.trace.next": "Next page",
+            "run.trace.first_page": "First page",
+            "run.trace.last_page": "Last page",
+            "run.trace.open_row": "Open trace detail",
+            "run.trace.action.like": "like",
+            "run.trace.action.comment": "comment",
+            "run.trace.action.share": "share",
+            "run.trace.action.ignore": "ignore",
+            "run.trace.action.provider_failed": "provider_failed",
         "run.exposure.lead": "先看每条 message 的 exposure、union、overlap、Class × Message matrix 和 Message-User Fit range；batch table 默认分页，selector 可访问全部 30 batches / 90 rows。这里不生成 winner 或 causal claim。",
         "run.exposure.summary": "Exposure summary",
         "run.exposure.per_message": "Per-message exposures",
@@ -294,6 +381,43 @@ _EDITORIAL_CATALOG: dict[str, dict[str, str]] = {
         "drawer.aria": "Mechanism detail",
         "drawer.close": "Close detail",
         "drawer.detail": "Mechanism detail",
+            "drawer.tabs_aria": "Detail evidence groups",
+            "drawer.tab.summary": "Summary",
+            "drawer.tab.decision": "Primary and Shadow",
+            "drawer.tab.context": "Context",
+            "drawer.tab.lineage": "Lineage",
+            "drawer.identity": "Identity",
+            "drawer.provider_terminal": "Provider terminal",
+            "drawer.paired_outcome": "Paired outcome / difference",
+            "drawer.disagreement": "Engage difference",
+            "drawer.ranking_summary": "Ranking summary",
+            "drawer.prompt_boundary": "Prompt visibility boundary",
+            "drawer.message": "Message",
+            "drawer.user": "User",
+            "drawer.batch": "Batch",
+            "drawer.class": "Class",
+            "drawer.seed": "Seed",
+            "drawer.primary": "Primary",
+            "drawer.shadow": "Shadow",
+            "drawer.status": "Status",
+            "drawer.action": "Action",
+            "drawer.probability": "Probability",
+            "drawer.confidence": "Confidence",
+            "drawer.source": "Decision source",
+            "drawer.prompt_token": "Prompt token",
+            "drawer.authoritative": "Authoritative message",
+            "drawer.primary_reason": "Persisted Primary reason",
+            "drawer.shadow_reason": "Persisted Shadow reason",
+            "drawer.primary_context": "Primary context",
+            "drawer.shadow_context": "Shadow context",
+            "drawer.peer_context": "Peer context",
+            "drawer.field_differences": "Field differences",
+            "drawer.field_provenance": "Field Provenance",
+            "drawer.field_usage_stage": "Field Usage Stage",
+            "drawer.aggregate_source": "Aggregate source",
+            "drawer.aggregate_evidence": "Aggregate evidence",
+            "drawer.not_in_prompt": "Ranking evidence, Class, other messages, and peer behavior are excluded from every Prompt.",
+            "drawer.no_differences": "No persisted field differences.",
         "drawer.provenance": "Evidence provenance",
         "drawer.usage": "Usage stage",
         "drawer.limitation": "Limitation",
@@ -461,6 +585,56 @@ _EDITORIAL_CATALOG: dict[str, dict[str, str]] = {
         "run.message.body": "Authoritative source body",
         "run.exposure.kicker": "This run · Exposure ranking",
         "run.exposure.title": "600 exposures per message across the persisted 30-batch ranking",
+            "run.trace.batch": "Batch",
+            "run.trace.class": "Class",
+            "run.trace.kicker": "This run · LLM Decision Trace",
+            "run.trace.title": "Every exposure keeps Primary / Shadow paired evidence",
+            "run.trace.lead": "This trace table applies filters to all 1,800 persisted rows before pagination. The first viewport shows only identity, terminal status, paired outcome, ranking summary, and the Prompt visibility boundary; full message, contexts, and lineage live in the corresponding shared-drawer tabs.",
+            "run.trace.summary": "Message action summary",
+            "run.trace.message": "Message",
+            "run.trace.actions": "Primary action counts",
+            "run.trace.positive_rate": "Positive rate",
+            "run.trace.sensitivity": "Paired sensitivity",
+            "run.trace.paired_coverage": "Paired coverage",
+            "run.trace.disagreement_rate": "Disagreement",
+            "run.trace.mean_delta": "Mean absolute probability delta",
+            "run.trace.flagged_reasons": "Flagged Shadow reasons",
+            "run.trace.filters": "Trace filters",
+            "run.trace.search": "Search",
+            "run.trace.search_placeholder": "trace id, user id, message or class",
+            "run.trace.message_filter": "Message",
+            "run.trace.class_filter": "Class",
+            "run.trace.batch_filter": "Batch",
+            "run.trace.action_filter": "Primary action",
+            "run.trace.provider_filter": "Provider status",
+            "run.trace.disagreement_filter": "Primary / Shadow disagreement",
+            "run.trace.all_messages": "All messages",
+            "run.trace.all_classes": "All Classes",
+            "run.trace.all_batches": "All batches",
+            "run.trace.all_actions": "All actions",
+            "run.trace.all_provider_status": "All Provider status",
+            "run.trace.all_disagreement": "All paired outcomes",
+            "run.trace.only_disagreement": "Disagreement only",
+            "run.trace.no_disagreement": "No disagreement",
+            "run.trace.table_aria": "Persisted LLM Decision Trace",
+            "run.trace.user": "User",
+            "run.trace.primary_action": "Primary",
+            "run.trace.provider": "Provider",
+            "run.trace.disagreement": "Difference",
+            "run.trace.ranking": "Rank",
+            "run.trace.page_size": "Rows per page",
+            "run.trace.rows": "Rows",
+            "run.trace.empty": "No persisted trace rows match these filters.",
+            "run.trace.previous": "Previous page",
+            "run.trace.next": "Next page",
+            "run.trace.first_page": "First page",
+            "run.trace.last_page": "Last page",
+            "run.trace.open_row": "Open trace detail",
+            "run.trace.action.like": "like",
+            "run.trace.action.comment": "comment",
+            "run.trace.action.share": "share",
+            "run.trace.action.ignore": "ignore",
+            "run.trace.action.provider_failed": "provider_failed",
         "run.exposure.lead": "Start with per-message exposure, union, overlap, Class × Message matrix, and Message-User Fit ranges. The batch table is paginated by default; the selector exposes all 30 batches / 90 rows. This view makes no winner or causal claim.",
         "run.exposure.summary": "Exposure summary",
         "run.exposure.per_message": "Per-message exposures",
@@ -980,6 +1154,141 @@ def _format_fit(value: object) -> str:
     return formatted[1:] if formatted.startswith("0.") else formatted
 
 
+_TRACE_ACTIONS = ("like", "comment", "share", "ignore", "provider_failed")
+
+
+def _safe_trace_value(value: object) -> Any:
+    if isinstance(value, Mapping):
+        return {str(key): _safe_trace_value(nested) for key, nested in sorted(value.items(), key=lambda item: str(item[0]))}
+    if isinstance(value, (list, tuple)):
+        return [_safe_trace_value(nested) for nested in value]
+    if value is None or isinstance(value, (bool, int, float, str)):
+        return value
+    return str(value)
+
+
+def _safe_trace_mapping(source: object, key: str, context: str) -> dict[str, Any]:
+    return {str(name): _safe_trace_value(value) for name, value in _required_mapping(source, key, context).items()}
+
+
+def _safe_trace_sequence(source: object, key: str, context: str) -> list[Any]:
+    return [_safe_trace_value(value) for value in _required_sequence(source, key, context)]
+
+
+def _trace_lineage_rows(payload: Any) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for index, entry in enumerate(_required_sequence(payload, "field_lineage", "payload")):
+        usage_stages = _required_sequence(entry, "usage_stages", f"field_lineage[{index}]")
+        rows.append(
+            {
+                "field_name": str(_value(entry, "field_name", "")).strip(),
+                "label": str(_value(entry, "label", "")).strip(),
+                "source_artifact": str(_value(entry, "source_artifact", "")).strip(),
+                "evidence_class": str(_value(entry, "evidence_class", "")).strip(),
+                "prompt_visibility": str(_value(entry, "prompt_visibility", "")).strip(),
+                "usage_stages": [str(stage) for stage in usage_stages],
+                "description": str(_value(entry, "description", "")).strip(),
+            }
+        )
+    if any(not row["field_name"] or not row["source_artifact"] for row in rows):
+        raise ValueError("field lineage requires field names and source artifacts")
+    return rows
+
+
+def _trace_view_row(row: Any, messages_by_id: Mapping[str, Mapping[str, str]], index: int) -> dict[str, Any]:
+    context = f"exposure_rows[{index}]"
+    trace_id = str(_value(row, "trace_id", "")).strip()
+    message_id = str(_value(row, "message_id", "")).strip()
+    user_id = str(_value(row, "user_id", "")).strip()
+    if not trace_id or not message_id or not user_id:
+        raise ValueError(f"{context} requires trace_id, message_id and user_id")
+    message = messages_by_id.get(message_id)
+    if message is None:
+        raise ValueError(f"{context} references an unknown message")
+    ranking = _required_mapping(row, "ranking_evidence", context)
+    primary_context = _safe_trace_mapping(row, "primary_context", context)
+    shadow_context = _safe_trace_mapping(row, "shadow_context", context)
+    primary_peer_context = _safe_trace_mapping(row, "primary_peer_context", context)
+    shadow_peer_context = _safe_trace_mapping(row, "shadow_peer_context", context)
+    field_differences = _safe_trace_sequence(row, "field_differences", context)
+    prompt_inclusion = _safe_trace_mapping(row, "prompt_field_inclusion", context)
+    shadow_added_fields = _safe_trace_mapping(row, "shadow_added_fields", context)
+    primary_status = str(_value(row, "primary_status", "")).strip()
+    shadow_status = str(_value(row, "shadow_status", "")).strip()
+    primary_action = str(_value(row, "primary_action", "")).strip()
+    shadow_action = str(_value(row, "shadow_action", "")).strip()
+    if primary_action not in _TRACE_ACTIONS or shadow_action not in _TRACE_ACTIONS:
+        raise ValueError(f"{context} contains an unsupported action")
+    if not isinstance(_value(row, "primary_shadow_disagreement", None), bool):
+        raise ValueError(f"{context}.primary_shadow_disagreement must be persisted boolean")
+    dual_success = primary_status == "succeeded" and shadow_status == "succeeded"
+    engage_disagreement = dual_success and ((primary_action != "ignore") != (shadow_action != "ignore"))
+    return {
+        "trace_id": trace_id,
+        "pair_id": str(_value(row, "pair_id", trace_id)).strip(),
+        "time_step": _required_int(row, "time_step", context),
+        "message_id": message_id,
+        "message_title": message["title"],
+        "message_body": message["body"],
+        "user_id": user_id,
+        "latent_class": str(_value(row, "latent_class", "")).strip(),
+        "is_seed": bool(_value(row, "is_seed", False)),
+        "selection_reason": str(_value(row, "selection_reason", "")).strip(),
+        "ranking_position": _required_int(row, "ranking_position", context),
+        "personalized_delivery_score": _required_float(row, "personalized_delivery_score", context),
+        "primary_status": primary_status,
+        "primary_action": primary_action,
+        "primary_probability": _safe_trace_value(_value(row, "primary_probability", None)),
+        "primary_confidence": _safe_trace_value(_value(row, "primary_confidence", None)),
+        "primary_reason": str(_value(row, "primary_reason", "")),
+        "primary_decision_source": str(_value(row, "primary_decision_source", "")),
+        "primary_prompt_version": str(_value(row, "primary_prompt_version", "")),
+        "shadow_status": shadow_status,
+        "shadow_action": shadow_action,
+        "shadow_probability": _safe_trace_value(_value(row, "shadow_probability", None)),
+        "shadow_confidence": _safe_trace_value(_value(row, "shadow_confidence", None)),
+        "shadow_reason": str(_value(row, "shadow_reason", "")),
+        "shadow_decision_source": str(_value(row, "shadow_decision_source", "")),
+        "shadow_prompt_version": str(_value(row, "shadow_prompt_version", "")),
+        "provider_status": str(_value(row, "provider_status", "")).strip(),
+        "decision_difference": bool(_value(row, "primary_shadow_disagreement", False)),
+        "disagreement": engage_disagreement,
+        "primary_context": primary_context,
+        "shadow_context": shadow_context,
+        "primary_peer_context": primary_peer_context,
+        "shadow_peer_context": shadow_peer_context,
+        "shadow_added_fields": shadow_added_fields,
+        "prompt_field_inclusion": prompt_inclusion,
+        "field_differences": field_differences,
+        "ranking_evidence": {
+            "ranking_position": _required_int(ranking, "ranking_position", f"{context}.ranking_evidence"),
+            "selection_reason": str(_value(ranking, "selection_reason", "")),
+            "base_network_relevance": _required_float(ranking, "base_network_relevance", f"{context}.ranking_evidence"),
+            "campaign_engaged_neighbor_count": _required_int(ranking, "campaign_engaged_neighbor_count", f"{context}.ranking_evidence"),
+            "campaign_engaged_neighbor_signal": _required_float(ranking, "campaign_engaged_neighbor_signal", f"{context}.ranking_evidence"),
+            "raw_message_user_fit": _required_float(ranking, "raw_message_user_fit", f"{context}.ranking_evidence"),
+            "normalized_message_user_fit": _required_float(ranking, "normalized_message_user_fit", f"{context}.ranking_evidence"),
+            "personalized_delivery_score": _required_float(ranking, "personalized_delivery_score", f"{context}.ranking_evidence"),
+            "not_in_prompt": _value(ranking, "not_in_prompt", False),
+        },
+        "aggregate_evidence": _safe_trace_mapping(row, "aggregate_evidence", context),
+    }
+
+
+def _format_rate(numerator: object, denominator: object) -> str:
+    numerator_int = _as_int(numerator)
+    denominator_int = _as_int(denominator)
+    rate = numerator_int / denominator_int if denominator_int else 0.0
+    percent = f"{rate * 100:.1f}".rstrip("0").rstrip(".")
+    return f"{_format_count(numerator_int)}/{_format_count(denominator_int)}={percent}%"
+
+
+def _format_delta(value: object) -> str:
+    formatted = f"{_as_float(value):.3f}"
+    return formatted[1:] if formatted.startswith("0.") else formatted
+
+
+
 def _run_evidence_data(payload: Any) -> dict[str, Any]:
     """Build the run presentation only from allowlisted, persisted payload fields."""
     run = _required_mapping(payload, "run", "payload")
@@ -1053,11 +1362,27 @@ def _run_evidence_data(payload: Any) -> dict[str, Any]:
     role_order.extend(sorted(set(role_counts) - set(role_order)))
     class_order = sorted(class_counts)
 
+    response_source = _required_mapping(payload, "primary_audience_response", "payload")
+    response_by_message = _required_mapping(response_source, "per_message", "primary_audience_response")
     per_message_source = _required_mapping(funnel, "per_message", "campaign_funnel")
     per_message: list[dict[str, Any]] = []
     for message in messages:
         message_id = message["message_id"]
         entry = _required_mapping(per_message_source, message_id, "campaign_funnel.per_message")
+        response_entry = _required_mapping(response_by_message, message_id, "primary_audience_response.per_message")
+        action_counts_source = _required_mapping(response_entry, "action_counts", f"primary_audience_response.{message_id}")
+        action_counts = {
+            action: _required_int(action_counts_source, action, f"primary_audience_response.{message_id}.action_counts")
+            for action in _TRACE_ACTIONS
+        }
+        positive_actions = _required_int(response_entry, "positive_actions", f"primary_audience_response.{message_id}")
+        decision_rate = _required_mapping(response_entry, "decision_engagement_rate", f"primary_audience_response.{message_id}")
+        positive_numerator = _required_int(decision_rate, "numerator", f"primary_audience_response.{message_id}.decision_engagement_rate")
+        positive_denominator = _required_int(decision_rate, "denominator", f"primary_audience_response.{message_id}.decision_engagement_rate")
+        if positive_actions != sum(action_counts[action] for action in ("like", "comment", "share")):
+            raise ValueError(f"positive action count does not close for {message_id}")
+        if positive_numerator != positive_actions or positive_denominator != _required_int(entry, "exposures", f"campaign_funnel.per_message.{message_id}"):
+            raise ValueError(f"positive rate denominator does not close for {message_id}")
         per_message.append(
             {
                 "message_id": message_id,
@@ -1065,6 +1390,10 @@ def _run_evidence_data(payload: Any) -> dict[str, Any]:
                 "exposures": _required_int(entry, "exposures", f"campaign_funnel.per_message.{message_id}"),
                 "primary_successes": _required_int(entry, "primary_successes", f"campaign_funnel.per_message.{message_id}"),
                 "shadow_successes": _required_int(entry, "shadow_successes", f"campaign_funnel.per_message.{message_id}"),
+                "action_counts": action_counts,
+                "positive_actions": positive_actions,
+                "positive_numerator": positive_numerator,
+                "positive_denominator": positive_denominator,
             }
         )
 
@@ -1164,6 +1493,34 @@ def _run_evidence_data(payload: Any) -> dict[str, Any]:
         artifacts = [str(value) for _, value in sorted(downloads.items())]
     else:
         artifacts = [str(value) for value in sorted(vars(downloads).values()) if isinstance(value, str)]
+    messages_by_id = {message["message_id"]: message for message in messages}
+    trace_rows = [_trace_view_row(row, messages_by_id, index) for index, row in enumerate(raw_exposures)]
+    trace_ids = [row["trace_id"] for row in trace_rows]
+    if len(set(trace_ids)) != len(trace_ids):
+        raise ValueError("persisted trace rows require unique trace_id values")
+    sensitivity = _required_mapping(payload, "demographic_decision_sensitivity", "payload")
+    paired_coverage = _required_mapping(sensitivity, "paired_decision_coverage", "demographic_decision_sensitivity")
+    disagreement_rate = _required_mapping(sensitivity, "engage_disagreement_rate", "demographic_decision_sensitivity")
+    mean_delta = _required_mapping(sensitivity, "mean_absolute_probability_delta", "demographic_decision_sensitivity")
+    reason_screening = _required_mapping(sensitivity, "reason_screening", "demographic_decision_sensitivity")
+    disagreement_count = sum(1 for row in trace_rows if row["disagreement"])
+    if disagreement_count != _required_int(disagreement_rate, "numerator", "engage_disagreement_rate"):
+        raise ValueError("persisted disagreement rows do not match sensitivity numerator")
+    trace_sensitivity = {
+        "paired_coverage": {
+            "numerator": _required_int(paired_coverage, "numerator", "paired_decision_coverage"),
+            "denominator": _required_int(paired_coverage, "denominator", "paired_decision_coverage"),
+            "value": _required_float(paired_coverage, "value", "paired_decision_coverage"),
+        },
+        "disagreement": {
+            "numerator": _required_int(disagreement_rate, "numerator", "engage_disagreement_rate"),
+            "denominator": _required_int(disagreement_rate, "denominator", "engage_disagreement_rate"),
+            "value": _required_float(disagreement_rate, "value", "engage_disagreement_rate"),
+        },
+        "mean_delta": _required_float(mean_delta, "value", "mean_absolute_probability_delta"),
+        "flagged_reasons": _required_int(reason_screening, "flagged_pair_count", "reason_screening"),
+    }
+    field_lineage = _trace_lineage_rows(payload)
 
     return {
         "schema": str(_value(payload, "schema_version", "")),
@@ -1189,6 +1546,9 @@ def _run_evidence_data(payload: Any) -> dict[str, Any]:
         "class_matrix": class_matrix,
         "fit_ranges": fit_ranges,
         "batch_rows": batch_rows,
+        "trace_rows": trace_rows,
+        "trace_sensitivity": trace_sensitivity,
+        "field_lineage": field_lineage,
     }
 
 
@@ -1723,6 +2083,70 @@ def _run_exposure_section(data: Mapping[str, Any]) -> str:
     '''
 
 
+def _run_trace_section(data: Mapping[str, Any]) -> str:
+    action_labels = {
+        "like": "run.trace.action.like",
+        "comment": "run.trace.action.comment",
+        "share": "run.trace.action.share",
+        "ignore": "run.trace.action.ignore",
+        "provider_failed": "run.trace.action.provider_failed",
+    }
+    message_summary = "".join(
+        f'<article class="editorial-trace-summary-card" data-testid="run-trace-summary-{_escaped(message["message_id"], quote=True)}">'
+        f'<header><code>{_escaped(message["message_id"])}</code><h3>{_escaped(message["title"])}</h3></header>'
+        f'<p class="editorial-trace-action-counts" data-testid="run-trace-actions-{_escaped(message["message_id"], quote=True)}">'
+        + " · ".join(
+            f'{_i18n(action_labels[action])} {_format_count(message["action_counts"][action])}' for action in _TRACE_ACTIONS
+        )
+        + "</p>"
+        f'<strong data-testid="run-trace-positive-rate-{_escaped(message["message_id"], quote=True)}">{_format_rate(message["positive_numerator"], message["positive_denominator"])}</strong>'
+        f'<span>{_i18n("run.trace.positive_rate")}</span></article>'
+        for message in data["per_message"]
+    )
+    sensitivity = data["trace_sensitivity"]
+    message_options = "".join(
+        f'<option value="{_escaped(message["message_id"], quote=True)}">{_escaped(message["title"])}</option>' for message in data["messages"]
+    )
+    class_options = "".join(f'<option value="{_escaped(class_id, quote=True)}">{_escaped(class_id)}</option>' for class_id in data["class_counts"])
+    batch_values = sorted({row["time_step"] for row in data["trace_rows"]})
+    batch_options = "".join(f'<option value="{time_step}">{time_step}</option>' for time_step in batch_values)
+    action_options = "".join(
+        f'<option value="{_escaped(action, quote=True)}" data-i18n="{_escaped(action_labels[action], quote=True)}">{_copy(action_labels[action])}</option>'
+        for action in _TRACE_ACTIONS
+    )
+    trace_json = json.dumps(data["trace_rows"], ensure_ascii=False, separators=(",", ":")).replace("</", "<\\/")
+    lineage_json = json.dumps(data["field_lineage"], ensure_ascii=False, separators=(",", ":")).replace("</", "<\\/")
+    return f'''
+          <section id="run-llm-decision" class="editorial-section editorial-run-section editorial-section-decision" data-section-anchor="llm-decision" data-testid="run-llm-decision-section" tabindex="-1">
+            <div class="editorial-section-header"><div>{_i18n("run.trace.kicker", class_name="editorial-kicker")}{_i18n("run.trace.title", tag="h2")}</div>{_i18n("run.trace.lead", tag="p", class_name="editorial-lead")}</div>
+            <div class="editorial-trace-summary" data-testid="run-trace-summary"><h2>{_i18n("run.trace.summary")}</h2><div class="editorial-trace-summary-grid">{message_summary}</div></div>
+            <div class="editorial-trace-sensitivity" data-testid="run-trace-sensitivity"><h2>{_i18n("run.trace.sensitivity")}</h2><div class="editorial-trace-sensitivity-grid">
+              <article data-testid="run-trace-paired-coverage"><strong>{_format_rate(sensitivity["paired_coverage"]["numerator"], sensitivity["paired_coverage"]["denominator"])}</strong>{_i18n("run.trace.paired_coverage")}</article>
+              <article data-testid="run-trace-disagreement-rate"><strong>{_format_rate(sensitivity["disagreement"]["numerator"], sensitivity["disagreement"]["denominator"])}</strong>{_i18n("run.trace.disagreement_rate")}</article>
+              <article data-testid="run-trace-mean-delta"><strong>{_format_delta(sensitivity["mean_delta"])}</strong>{_i18n("run.trace.mean_delta")}</article>
+              <article data-testid="run-trace-flagged-reasons"><strong>{_format_count(sensitivity["flagged_reasons"])}</strong>{_i18n("run.trace.flagged_reasons")}</article>
+            </div></div>
+            <div class="editorial-trace-tool" data-testid="run-trace-tool">
+              <div class="editorial-trace-filter-heading"><h2>{_i18n("run.trace.filters")}</h2><output data-testid="run-trace-filtered-count" aria-live="polite"></output></div>
+              <div class="editorial-trace-filters">
+                <label>{_i18n("run.trace.search", tag="span")}<input type="search" data-testid="run-trace-search" data-i18n-placeholder="run.trace.search_placeholder" placeholder="{_copy("run.trace.search_placeholder")}" {_attribute_i18n("run.trace.search", "aria-label")}></label>
+                <label>{_i18n("run.trace.message_filter", tag="span")}<select data-testid="run-trace-message-select" {_attribute_i18n("run.trace.message_filter", "aria-label")}><option value="all" data-i18n="run.trace.all_messages">{_copy("run.trace.all_messages")}</option>{message_options}</select></label>
+                <label>{_i18n("run.trace.class_filter", tag="span")}<select data-testid="run-trace-class-select" {_attribute_i18n("run.trace.class_filter", "aria-label")}><option value="all" data-i18n="run.trace.all_classes">{_copy("run.trace.all_classes")}</option>{class_options}</select></label>
+                <label>{_i18n("run.trace.batch_filter", tag="span")}<select data-testid="run-trace-batch-select" {_attribute_i18n("run.trace.batch_filter", "aria-label")}><option value="all" data-i18n="run.trace.all_batches">{_copy("run.trace.all_batches")}</option>{batch_options}</select></label>
+                <label>{_i18n("run.trace.action_filter", tag="span")}<select data-testid="run-trace-action-select" {_attribute_i18n("run.trace.action_filter", "aria-label")}><option value="all" data-i18n="run.trace.all_actions">{_copy("run.trace.all_actions")}</option>{action_options}</select></label>
+                <label>{_i18n("run.trace.provider_filter", tag="span")}<select data-testid="run-trace-provider-select" {_attribute_i18n("run.trace.provider_filter", "aria-label")}><option value="all" data-i18n="run.trace.all_provider_status">{_copy("run.trace.all_provider_status")}</option><option value="succeeded">succeeded</option><option value="provider_failed">provider_failed</option></select></label>
+                <label>{_i18n("run.trace.disagreement_filter", tag="span")}<select data-testid="run-trace-disagreement-select" {_attribute_i18n("run.trace.disagreement_filter", "aria-label")}><option value="all" data-i18n="run.trace.all_disagreement">{_copy("run.trace.all_disagreement")}</option><option value="yes" data-i18n="run.trace.only_disagreement">{_copy("run.trace.only_disagreement")}</option><option value="no" data-i18n="run.trace.no_disagreement">{_copy("run.trace.no_disagreement")}</option></select></label>
+              </div>
+              <script type="application/json" data-testid="run-trace-rows-data">{trace_json}</script>
+              <script type="application/json" data-testid="run-trace-lineage-data">{lineage_json}</script>
+              <div class="editorial-table-scroll"><table class="editorial-trace-table" data-testid="run-trace-table" {_attribute_i18n("run.trace.table_aria", "aria-label")}><thead><tr><th>{_i18n("run.trace.message", tag="span")}</th><th>{_i18n("run.trace.user", tag="span")}</th><th>{_i18n("run.trace.batch", tag="span")}</th><th>{_i18n("run.trace.class", tag="span")}</th><th>{_i18n("run.trace.primary_action", tag="span")}</th><th>{_i18n("run.trace.provider", tag="span")}</th><th>{_i18n("run.trace.disagreement", tag="span")}</th><th>{_i18n("run.trace.ranking", tag="span")}</th></tr></thead><tbody data-testid="run-trace-table-body"></tbody></table></div>
+              <p class="editorial-trace-empty" data-testid="run-trace-empty" hidden>{_i18n("run.trace.empty")}</p>
+              <div class="editorial-trace-pagination" data-testid="run-trace-pagination" {_attribute_i18n("run.exposure.pagination_aria", "aria-label")}><label>{_i18n("run.trace.page_size", tag="span")}<select data-testid="run-trace-page-size" aria-label="{_copy("run.trace.page_size")}"><option value="25" selected>25</option><option value="50">50</option><option value="100">100</option></select></label><button type="button" data-trace-page="previous" aria-label="{_copy("run.trace.previous")}">{_i18n("run.trace.previous")}</button><div class="editorial-trace-page-numbers" data-testid="run-trace-page-numbers"></div><button type="button" data-trace-page="next" aria-label="{_copy("run.trace.next")}">{_i18n("run.trace.next")}</button><output data-testid="run-trace-page-status" aria-live="polite"></output></div>
+            </div>
+          </section>
+    '''
+
+
 def _run_placeholder_section(anchor: str) -> str:
     return (
         f'<section id="run-{_escaped(anchor, quote=True)}" class="editorial-section editorial-run-section" '
@@ -1734,8 +2158,15 @@ def _run_placeholder_section(anchor: str) -> str:
 
 def _run_scaffold(payload: Any) -> str:
     data = _run_evidence_data(payload)
-    placeholders = "".join(_run_placeholder_section(anchor) for anchor in _EDITORIAL_ANCHORS[3:])
-    return '<div class="editorial-run-scaffold" data-testid="editorial-run-scaffold">' + _run_overview_section(data) + _run_sample_section(data) + _run_exposure_section(data) + placeholders + "</div>"
+    return (
+        '<div class="editorial-run-scaffold" data-testid="editorial-run-scaffold">'
+        + _run_overview_section(data)
+        + _run_sample_section(data)
+        + _run_exposure_section(data)
+        + _run_trace_section(data)
+        + _run_placeholder_section("network-feedback")
+        + "</div>"
+    )
 
 
 _EDITORIAL_CSS = r"""
@@ -1884,6 +2315,75 @@ code { overflow-wrap: anywhere; font-family: ui-monospace, SFMono-Regular, Menlo
 .editorial-drawer-body dl { margin: 22px 0 0; }
 .editorial-drawer-body dt { margin-top: 18px; color: var(--editorial-green); font-size: 12px; font-weight: 700; }
 .editorial-drawer-body dd { margin: 4px 0 0; color: var(--editorial-ink); line-height: 1.55; }
+    .editorial-drawer-backdrop { min-width: 0; }
+    .editorial-drawer-tabs { display: flex; gap: 4px; margin: 22px 0 0; border-bottom: 1px solid var(--editorial-rule); overflow-x: auto; }
+    .editorial-drawer-tabs button { flex: 0 0 auto; min-height: 42px; padding: 8px 12px; border: 0; border-bottom: 3px solid transparent; background: transparent; color: var(--editorial-muted); font-size: 13px; font-weight: 650; white-space: nowrap; }
+    .editorial-drawer-tabs button[aria-selected="true"] { border-bottom-color: var(--editorial-cobalt); color: var(--editorial-cobalt); }
+    .editorial-drawer-panels { min-width: 0; }
+    .editorial-drawer-panels > section[hidden] { display: none !important; }
+    .editorial-drawer-identity { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin-top: 20px; }
+    .editorial-drawer-identity article, .editorial-drawer-panel-block { min-width: 0; padding: 12px; border-top: 1px solid var(--editorial-rule); background: var(--editorial-cool-paper); }
+    .editorial-drawer-identity strong, .editorial-drawer-panel-block > strong { display: block; margin-bottom: 4px; color: var(--editorial-muted); font-size: 11px; font-weight: 700; }
+    .editorial-drawer-identity span, .editorial-drawer-panel-block > span { display: block; color: var(--editorial-ink); font-size: 13px; overflow-wrap: anywhere; }
+    .editorial-drawer-panel { display: grid; gap: 16px; padding-top: 20px; }
+    .editorial-drawer-panel h3 { margin: 0; color: var(--editorial-ink); font-size: 17px; }
+    .editorial-drawer-panel p { margin: 0; color: var(--editorial-muted); line-height: 1.6; overflow-wrap: anywhere; }
+    .editorial-drawer-panel dl { display: grid; gap: 10px; margin: 0; }
+    .editorial-drawer-panel dl div { min-width: 0; padding-top: 9px; border-top: 1px solid var(--editorial-rule); }
+    .editorial-drawer-panel dt { color: var(--editorial-muted); font-size: 11px; font-weight: 700; }
+    .editorial-drawer-panel dd { margin: 3px 0 0; color: var(--editorial-ink); overflow-wrap: anywhere; }
+    .editorial-drawer-decision-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+    .editorial-drawer-decision-card { min-width: 0; padding: 14px; border-top: 2px solid var(--editorial-cobalt); background: var(--editorial-cool-paper); }
+    .editorial-drawer-decision-card:nth-child(2) { border-top-color: var(--editorial-amber); }
+    .editorial-drawer-decision-card h3 { margin-bottom: 10px; font-size: 15px; }
+    .editorial-drawer-message { padding: 14px; border-top: 2px solid var(--editorial-green); background: var(--editorial-cool-paper); }
+    .editorial-drawer-message h3 { margin-bottom: 9px; font-size: 16px; }
+    .editorial-drawer-message p { margin: 0 0 10px; color: var(--editorial-muted); font-size: 13px; }
+    .editorial-drawer-context-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+    .editorial-drawer-context-grid pre { max-height: 260px; margin: 0; padding: 12px; overflow: auto; background: var(--editorial-cool-paper); color: var(--editorial-ink); font: 12px/1.55 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
+    .editorial-drawer-lineage-list { display: grid; gap: 12px; margin: 0; padding: 0; list-style: none; }
+    .editorial-drawer-lineage-list li { min-width: 0; padding: 12px; border-top: 1px solid var(--editorial-rule); background: var(--editorial-cool-paper); }
+    .editorial-drawer-lineage-list strong, .editorial-drawer-lineage-list code { display: block; overflow-wrap: anywhere; }
+    .editorial-drawer-lineage-list code { margin-bottom: 5px; color: var(--editorial-cobalt); font-size: 12px; }
+    .editorial-drawer-lineage-list p { margin-top: 6px; font-size: 12px; }
+    .editorial-trace-summary, .editorial-trace-sensitivity, .editorial-trace-tool { max-width: 1280px; margin: 0 auto 32px; }
+    .editorial-trace-summary h2, .editorial-trace-sensitivity h2, .editorial-trace-tool h2 { margin: 0 0 13px; font-size: 21px; line-height: 1.25; }
+    .editorial-trace-summary-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); border-top: 1px solid var(--editorial-rule); border-bottom: 1px solid var(--editorial-rule); }
+    .editorial-trace-summary-card { min-width: 0; padding: 16px; border-right: 1px solid var(--editorial-rule); }
+    .editorial-trace-summary-card:last-child { border-right: 0; }
+    .editorial-trace-summary-card header { min-width: 0; margin-bottom: 10px; }
+    .editorial-trace-summary-card header code { display: block; color: var(--editorial-muted); font-size: 12px; overflow-wrap: anywhere; }
+    .editorial-trace-summary-card header h3 { margin-top: 5px; font-size: 16px; overflow-wrap: anywhere; }
+    .editorial-trace-summary-card p { margin: 0 0 12px; color: var(--editorial-muted); font-size: 12px; line-height: 1.55; overflow-wrap: anywhere; }
+    .editorial-trace-summary-card strong { display: block; color: var(--editorial-ink); font-size: 21px; }
+    .editorial-trace-summary-card > span { display: block; margin-top: 3px; color: var(--editorial-muted); font-size: 12px; }
+    .editorial-trace-sensitivity { padding: 18px 0; border-top: 1px solid var(--editorial-rule); border-bottom: 1px solid var(--editorial-rule); }
+    .editorial-trace-sensitivity-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); }
+    .editorial-trace-sensitivity-grid article { min-width: 0; padding: 12px 16px; border-right: 1px solid var(--editorial-rule); }
+    .editorial-trace-sensitivity-grid article:last-child { border-right: 0; }
+    .editorial-trace-sensitivity-grid strong { display: block; margin-bottom: 5px; color: var(--editorial-ink); font-size: 22px; overflow-wrap: anywhere; }
+    .editorial-trace-sensitivity-grid article > span { display: block; color: var(--editorial-muted); font-size: 12px; line-height: 1.4; }
+    .editorial-trace-filter-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; }
+    .editorial-trace-filter-heading output { color: var(--editorial-muted); font-size: 12px; }
+    .editorial-trace-filters { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin: 0 0 18px; }
+    .editorial-trace-filters label, .editorial-trace-pagination label { display: grid; gap: 6px; min-width: 0; color: var(--editorial-muted); font-size: 12px; font-weight: 650; }
+    .editorial-trace-filters input, .editorial-trace-filters select, .editorial-trace-pagination select { width: 100%; min-width: 0; min-height: 38px; padding: 8px 10px; border: 1px solid var(--editorial-rule); background: var(--editorial-paper); color: var(--editorial-ink); }
+    .editorial-trace-table { min-width: 880px; }
+    .editorial-trace-table tbody tr { cursor: pointer; }
+    .editorial-trace-table tbody tr:hover, .editorial-trace-table tbody tr:focus-visible { background: #eef5ff; outline: 2px solid rgba(11, 87, 208, .2); outline-offset: -2px; }
+    .editorial-trace-table td { white-space: nowrap; }
+    .editorial-trace-table td:first-child, .editorial-trace-table td:nth-child(2) { max-width: 180px; overflow-wrap: anywhere; white-space: normal; }
+    .editorial-trace-empty[hidden] { display: none; }
+    .editorial-trace-empty { margin: 16px 0; color: var(--editorial-muted); }
+    .editorial-trace-pagination { display: grid; grid-template-columns: minmax(150px, .4fr) auto minmax(160px, 1fr) auto; align-items: end; gap: 10px; margin-top: 16px; }
+    .editorial-trace-pagination > button { min-height: 38px; padding: 7px 12px; border: 1px solid var(--editorial-rule); background: var(--editorial-paper); color: var(--editorial-ink); white-space: nowrap; }
+    .editorial-trace-pagination > button:disabled { cursor: not-allowed; opacity: .42; }
+    .editorial-trace-page-numbers { display: flex; flex-wrap: wrap; justify-content: center; gap: 5px; min-width: 0; }
+    .editorial-trace-page-numbers button { min-width: 34px; min-height: 34px; padding: 5px 8px; border: 1px solid var(--editorial-rule); background: var(--editorial-paper); color: var(--editorial-ink); font-size: 12px; }
+    .editorial-trace-page-numbers button[aria-current="page"] { border-color: var(--editorial-cobalt); color: var(--editorial-cobalt); font-weight: 700; }
+    .editorial-trace-page-numbers button:disabled { border-color: transparent; cursor: default; }
+    .editorial-trace-pagination output { min-width: 0; color: var(--editorial-muted); font-size: 12px; text-align: center; }
+
 .editorial-run-status-strip { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 0; max-width: 1280px; margin: 0 auto 28px; border-top: 1px solid var(--editorial-rule); border-bottom: 1px solid var(--editorial-rule); }
 .editorial-run-status-strip > div { min-width: 0; padding: 15px 18px; border-right: 1px solid var(--editorial-rule); }
 .editorial-run-status-strip > div:last-child { border-right: 0; }
@@ -1998,7 +2498,14 @@ code { overflow-wrap: anywhere; font-family: ui-monospace, SFMono-Regular, Menlo
   .editorial-queue-grid, .editorial-run-summary-grid { grid-template-columns: 1fr; }
   .editorial-run-summary-grid article { border-right: 0; border-bottom: 1px solid var(--editorial-rule); }
   .editorial-run-summary-grid article:last-child { border-bottom: 0; }
-  .editorial-rule-grid, .editorial-responsibility-grid, .editorial-feedback-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .editorial-rule-grid, .editorial-responsibility-grid, .editorial-feedback-grid, .editorial-drawer-decision-grid, .editorial-drawer-context-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.editorial-trace-summary-grid { grid-template-columns: 1fr; }
+.editorial-trace-summary-card { border-right: 0; border-bottom: 1px solid var(--editorial-rule); }
+.editorial-trace-summary-card:last-child { border-bottom: 0; }
+.editorial-trace-filters { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.editorial-trace-sensitivity-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.editorial-trace-sensitivity-grid article:nth-child(2n) { border-right: 0; }
+.editorial-trace-sensitivity-grid article:nth-child(-n + 2) { border-bottom: 1px solid var(--editorial-rule); }
 }
 @media (max-width: 680px) {
   .editorial-header { padding: 10px 18px; }
@@ -2038,6 +2545,14 @@ code { overflow-wrap: anywhere; font-family: ui-monospace, SFMono-Regular, Menlo
   .editorial-run-status-strip > div, .editorial-run-funnel-grid article, .editorial-run-exposure-summary-grid article { border-right: 0; border-bottom: 1px solid var(--editorial-rule); }
   .editorial-run-status-strip > div:last-child, .editorial-run-funnel-grid article:last-child, .editorial-run-exposure-summary-grid article:last-child { border-bottom: 0; }
   .editorial-run-two-column, .editorial-run-contract-grid { grid-template-columns: 1fr; }
+.editorial-drawer-identity, .editorial-drawer-decision-grid, .editorial-drawer-context-grid { grid-template-columns: 1fr; }
+.editorial-trace-filters, .editorial-trace-sensitivity-grid { grid-template-columns: 1fr; }
+.editorial-trace-sensitivity-grid article { border-right: 0; border-bottom: 1px solid var(--editorial-rule); }
+.editorial-trace-sensitivity-grid article:last-child { border-bottom: 0; }
+.editorial-trace-pagination { grid-template-columns: 1fr 1fr; align-items: center; }
+.editorial-trace-pagination label { grid-column: 1 / -1; }
+.editorial-trace-page-numbers { grid-column: 1 / -1; grid-row: 3; }
+.editorial-trace-pagination output { grid-column: 1 / -1; grid-row: 4; }
   .editorial-run-table-heading { display: grid; align-items: start; gap: 14px; }
   .editorial-run-table-heading label { min-width: 0; }
   .editorial-pagination { justify-content: space-between; gap: 6px; }
@@ -2065,7 +2580,9 @@ _EDITORIAL_SCRIPT = r"""
   const header = root.querySelector('.editorial-header');
   const drawer = document.getElementById('trace-drawer');
   const drawerTitle = drawer?.querySelector('[data-testid="mechanism-detail-title"]');
-  const drawerBody = drawer?.querySelector('[data-testid="mechanism-detail-body"]');
+  const drawerIdentity = drawer?.querySelector('[data-testid="drawer-identity"]');
+  const drawerTabButtons = [...(drawer?.querySelectorAll('[data-drawer-tab]') || [])];
+  const drawerPanels = [...(drawer?.querySelectorAll('[data-drawer-panel]') || [])];
   const closeButton = drawer?.querySelector('[data-testid="editorial-drawer-close"]');
   const mechanismButtons = [...root.querySelectorAll('[data-mechanism-key]')];
   const exposureRowsData = root.querySelector('[data-testid="run-exposure-rows-data"]');
@@ -2073,15 +2590,39 @@ _EDITORIAL_SCRIPT = r"""
   const exposureSelect = root.querySelector('[data-testid="run-exposure-message-select"]');
   const exposurePageStatus = root.querySelector('[data-testid="run-exposure-page-status"]');
   const exposurePageButtons = [...root.querySelectorAll('[data-run-exposure-page]')];
+  const traceRowsData = root.querySelector('[data-testid="run-trace-rows-data"]');
+  const traceLineageData = root.querySelector('[data-testid="run-trace-lineage-data"]');
+  const traceTableBody = root.querySelector('[data-testid="run-trace-table-body"]');
+  const traceEmpty = root.querySelector('[data-testid="run-trace-empty"]');
+  const traceFilteredCount = root.querySelector('[data-testid="run-trace-filtered-count"]');
+  const tracePageStatus = root.querySelector('[data-testid="run-trace-page-status"]');
+  const tracePageNumbers = root.querySelector('[data-testid="run-trace-page-numbers"]');
+  const tracePageSize = root.querySelector('[data-testid="run-trace-page-size"]');
+  const traceFilters = {
+    search: root.querySelector('[data-testid="run-trace-search"]'),
+    message: root.querySelector('[data-testid="run-trace-message-select"]'),
+    class: root.querySelector('[data-testid="run-trace-class-select"]'),
+    batch: root.querySelector('[data-testid="run-trace-batch-select"]'),
+    action: root.querySelector('[data-testid="run-trace-action-select"]'),
+    provider: root.querySelector('[data-testid="run-trace-provider-select"]'),
+    disagreement: root.querySelector('[data-testid="run-trace-disagreement-select"]'),
+  };
   let exposureRows = [];
+  let traceRows = [];
+  let traceLineage = [];
   try {
     exposureRows = exposureRowsData ? JSON.parse(exposureRowsData.textContent || '[]') : [];
+    traceRows = traceRowsData ? JSON.parse(traceRowsData.textContent || '[]') : [];
+    traceLineage = traceLineageData ? JSON.parse(traceLineageData.textContent || '[]') : [];
   } catch (error) {
     exposureRows = [];
-    console.error('Persisted exposure rows could not be parsed', error);
+    traceRows = [];
+    traceLineage = [];
+    console.error('Persisted evidence rows could not be parsed', error);
   }
   const exposureState = { filter: 'all', page: 0, pageSize: 10 };
-  const state = { language: 'zh-CN', mode: 'mechanism', anchor: 'overview', drawerKey: null, returnFocus: null };
+  const traceState = { search: '', message: 'all', class: 'all', batch: 'all', action: 'all', provider: 'all', disagreement: 'all', page: 0, pageSize: 25 };
+  const state = { language: 'zh-CN', mode: 'mechanism', anchor: 'overview', drawerRecord: null, drawerTab: 'summary', returnFocus: null };
   let previousBodyOverflow = '';
 
   function copy(key) {
@@ -2134,6 +2675,97 @@ _EDITORIAL_SCRIPT = r"""
     });
   }
 
+  function filteredTraceRows() {
+    const query = traceState.search.trim().toLowerCase();
+    return traceRows.filter((row) => {
+      const searchable = [row.trace_id, row.pair_id, row.message_id, row.message_title, row.user_id, row.latent_class, row.selection_reason]
+        .join(' ')
+        .toLowerCase();
+      return (!query || searchable.includes(query))
+        && (traceState.message === 'all' || row.message_id === traceState.message)
+        && (traceState.class === 'all' || row.latent_class === traceState.class)
+        && (traceState.batch === 'all' || String(row.time_step) === traceState.batch)
+        && (traceState.action === 'all' || row.primary_action === traceState.action)
+        && (traceState.provider === 'all' || row.provider_status === traceState.provider)
+        && (traceState.disagreement === 'all'
+          || (traceState.disagreement === 'yes' && row.disagreement)
+          || (traceState.disagreement === 'no' && !row.disagreement));
+    });
+  }
+
+  function tracePageTokens(pageCount, currentPage) {
+    if (pageCount <= 7) return Array.from({ length: pageCount }, (_, index) => index);
+    const pages = new Set([0, pageCount - 1, currentPage, currentPage - 1, currentPage + 1]);
+    const sorted = [...pages].filter((page) => page >= 0 && page < pageCount).sort((left, right) => left - right);
+    const tokens = [];
+    sorted.forEach((page, index) => {
+      if (index && page - sorted[index - 1] > 1) tokens.push(null);
+      tokens.push(page);
+    });
+    return tokens;
+  }
+
+  function renderTracePage() {
+    if (!traceTableBody || !tracePageStatus || !tracePageNumbers) return;
+    const filtered = filteredTraceRows();
+    const pageCount = Math.max(1, Math.ceil(filtered.length / traceState.pageSize));
+    traceState.page = Math.min(traceState.page, pageCount - 1);
+    const start = traceState.page * traceState.pageSize;
+    const visibleRows = filtered.slice(start, start + traceState.pageSize);
+    traceTableBody.replaceChildren();
+    visibleRows.forEach((row) => {
+      const tr = document.createElement('tr');
+      tr.tabIndex = 0;
+      tr.dataset.testid = `run-trace-row-${row.trace_id}`;
+      tr.dataset.traceId = row.trace_id;
+      tr.dataset.messageId = row.message_id;
+      tr.dataset.timeStep = String(row.time_step);
+      tr.setAttribute('aria-controls', 'trace-drawer');
+      tr.setAttribute('aria-label', `${copy('run.trace.open_row')}: ${row.trace_id}`);
+      [
+        `${row.message_id} · ${row.message_title}`,
+        row.user_id,
+        String(row.time_step),
+        row.latent_class,
+        row.primary_action,
+        row.provider_status,
+        row.disagreement ? 'yes' : 'no',
+        String(row.ranking_position),
+      ].forEach((value) => {
+        const td = document.createElement('td');
+        td.textContent = value;
+        tr.append(td);
+      });
+      traceTableBody.append(tr);
+      if (state.drawerRecord?.kind === 'trace' && state.drawerRecord.id === row.trace_id) state.returnFocus = tr;
+    });
+    if (traceEmpty) traceEmpty.hidden = filtered.length > 0;
+    if (traceFilteredCount) traceFilteredCount.textContent = `${filtered.length.toLocaleString()} ${copy('run.trace.rows')}`;
+    const first = filtered.length ? start + 1 : 0;
+    const last = Math.min(start + traceState.pageSize, filtered.length);
+    tracePageStatus.textContent = `${copy('run.exposure.page')} ${traceState.page + 1} / ${pageCount} · ${copy('run.trace.rows')} ${first}-${last} / ${filtered.length}`;
+    tracePageNumbers.replaceChildren();
+    tracePageTokens(pageCount, traceState.page).forEach((token) => {
+      const button = document.createElement('button');
+      button.type = 'button';
+      if (token === null) {
+        button.textContent = '…';
+        button.disabled = true;
+        button.setAttribute('aria-hidden', 'true');
+      } else {
+        button.textContent = String(token + 1);
+        button.dataset.tracePage = String(token);
+        button.setAttribute('aria-label', `${token === 0 ? copy('run.trace.first_page') : token === pageCount - 1 ? copy('run.trace.last_page') : copy('run.exposure.page')} ${token + 1}`);
+        if (token === traceState.page) button.setAttribute('aria-current', 'page');
+      }
+      tracePageNumbers.append(button);
+    });
+    const previous = root.querySelector('[data-trace-page="previous"]');
+    const next = root.querySelector('[data-trace-page="next"]');
+    if (previous) previous.disabled = traceState.page === 0;
+    if (next) next.disabled = traceState.page >= pageCount - 1;
+  }
+
   function applyLanguage() {
     const location = parseHash();
     if (window.location.hash) {
@@ -2160,8 +2792,9 @@ _EDITORIAL_SCRIPT = r"""
     });
     const title = document.querySelector('title[data-i18n]');
     if (title) title.textContent = copy(title.dataset.i18n);
-    if (state.drawerKey) renderDrawer(state.drawerKey);
+    if (state.drawerRecord) renderDrawer();
     renderExposurePage();
+    renderTracePage();
     setActiveNavigation(state.anchor);
   }
 
@@ -2207,7 +2840,7 @@ _EDITORIAL_SCRIPT = r"""
 
   function applyLocation({ focus = false } = {}) {
     const location = parseHash();
-    if (state.drawerKey && location.mode !== state.mode) closeDrawer(false);
+    if (state.drawerRecord && location.mode !== state.mode) closeDrawer(false);
     state.mode = location.mode;
     state.anchor = location.anchor;
     setMode(location.mode);
@@ -2234,50 +2867,266 @@ _EDITORIAL_SCRIPT = r"""
       .filter((element) => !element.hasAttribute('disabled') && element.offsetParent !== null);
   }
 
-  function renderDrawer(key) {
-    const detail = details[key]?.[state.language];
-    if (!detail || !drawerTitle || !drawerBody) return;
-    drawerTitle.textContent = detail.title;
-    drawerBody.innerHTML = '';
-    const definition = document.createElement('p');
-    definition.textContent = detail.definition;
+  function appendText(parent, tag, text, className = '') {
+    const element = document.createElement(tag);
+    element.textContent = text == null ? '' : String(text);
+    if (className) element.className = className;
+    parent.append(element);
+    return element;
+  }
+
+  function appendDefinitionList(parent, entries) {
     const list = document.createElement('dl');
-    for (const [labelKey, value] of [
+    entries.forEach(([label, value]) => {
+      const item = document.createElement('div');
+      appendText(item, 'dt', copy(label));
+      appendText(item, 'dd', value);
+      list.append(item);
+    });
+    parent.append(list);
+    return list;
+  }
+
+  function appendJsonBlock(parent, label, value) {
+    const block = document.createElement('div');
+    block.className = 'editorial-drawer-panel-block';
+    appendText(block, 'strong', copy(label));
+    const pre = document.createElement('pre');
+    pre.textContent = JSON.stringify(value ?? {}, null, 2);
+    block.append(pre);
+    parent.append(block);
+    return block;
+  }
+
+  function appendParagraphs(parent, text) {
+    String(text || '').split(/\n\n+/).filter(Boolean).forEach((paragraph) => appendText(parent, 'p', paragraph));
+  }
+
+  function renderIdentity(items) {
+    if (!drawerIdentity) return;
+    drawerIdentity.replaceChildren();
+    items.forEach(([label, value]) => {
+      const article = document.createElement('article');
+      appendText(article, 'strong', copy(label));
+      appendText(article, 'span', value);
+      drawerIdentity.append(article);
+    });
+  }
+
+  function panelElement(name) {
+    return drawerPanels.find((panel) => panel.dataset.drawerPanel === name);
+  }
+
+  function renderMechanismDrawer(detail) {
+    renderIdentity([['drawer.identity', detail.title]]);
+    const summary = panelElement('summary');
+    const decision = panelElement('decision');
+    const context = panelElement('context');
+    const lineage = panelElement('lineage');
+    [summary, decision, context, lineage].forEach((panel) => panel?.replaceChildren());
+    if (!summary || !decision || !context || !lineage) return;
+    summary.className = decision.className = context.className = lineage.className = 'editorial-drawer-panel';
+    appendText(summary, 'h3', copy('drawer.tab.summary'));
+    appendText(summary, 'p', detail.definition);
+    appendDefinitionList(summary, [
       ['drawer.provenance', detail.provenance],
       ['drawer.usage', detail.usage],
       ['drawer.limitation', detail.limitation],
-    ]) {
-      const label = document.createElement('dt');
-      label.textContent = copy(labelKey);
-      const valueElement = document.createElement('dd');
-      valueElement.textContent = value;
-      list.append(label, valueElement);
-    }
-    drawerBody.append(definition, list);
+    ]);
+    appendText(decision, 'h3', copy('drawer.tab.decision'));
+    appendText(decision, 'p', detail.definition);
+    appendText(decision, 'p', detail.limitation);
+    appendText(context, 'h3', copy('drawer.tab.context'));
+    appendText(context, 'p', detail.definition);
+    appendText(context, 'p', detail.limitation);
+    appendText(lineage, 'h3', copy('drawer.tab.lineage'));
+    appendDefinitionList(lineage, [
+      ['drawer.field_provenance', detail.provenance],
+      ['drawer.field_usage_stage', detail.usage],
+      ['drawer.aggregate_source', 'mechanism contract'],
+    ]);
   }
 
-  function openDrawer(key, trigger) {
-    if (!drawer || !details[key]?.[state.language]) return;
-    state.drawerKey = key;
+  function renderTraceDrawer(trace) {
+    renderIdentity([
+      ['drawer.message', `${trace.message_id} · ${trace.message_title}`],
+      ['drawer.user', trace.user_id],
+      ['drawer.batch', trace.time_step],
+      ['drawer.class', trace.latent_class],
+      ['drawer.seed', trace.is_seed ? 'true' : 'false'],
+      ['drawer.identity', trace.trace_id],
+    ]);
+    const summary = panelElement('summary');
+    const decision = panelElement('decision');
+    const context = panelElement('context');
+    const lineage = panelElement('lineage');
+    [summary, decision, context, lineage].forEach((panel) => panel?.replaceChildren());
+    if (!summary || !decision || !context || !lineage) return;
+    summary.className = decision.className = context.className = lineage.className = 'editorial-drawer-panel';
+    appendText(summary, 'h3', copy('drawer.provider_terminal'));
+    appendDefinitionList(summary, [
+      ['drawer.provider_terminal', trace.provider_status],
+      ['drawer.primary', `${trace.primary_status} · ${trace.primary_action}`],
+      ['drawer.shadow', `${trace.shadow_status} · ${trace.shadow_action}`],
+    ]);
+    const outcome = document.createElement('div');
+    outcome.className = 'editorial-drawer-panel-block';
+    appendText(outcome, 'strong', copy('drawer.paired_outcome'));
+    appendDefinitionList(outcome, [
+      ['drawer.primary', `${trace.primary_action} · ${trace.primary_probability ?? 'n/a'}`],
+      ['drawer.shadow', `${trace.shadow_action} · ${trace.shadow_probability ?? 'n/a'}`],
+      ['drawer.disagreement', trace.disagreement ? 'engage difference' : 'no engage difference'],
+      ['drawer.field_differences', trace.decision_difference ? 'persisted field difference' : copy('drawer.no_differences')],
+    ]);
+    summary.append(outcome);
+    const ranking = document.createElement('div');
+    ranking.className = 'editorial-drawer-panel-block';
+    appendText(ranking, 'strong', copy('drawer.ranking_summary'));
+    appendDefinitionList(ranking, [
+      ['drawer.ranking_summary', `#${trace.ranking_position} · ${trace.personalized_delivery_score}`],
+      ['drawer.source', trace.selection_reason],
+    ]);
+    summary.append(ranking);
+    const boundary = document.createElement('div');
+    boundary.className = 'editorial-callout editorial-callout-amber';
+    appendText(boundary, 'strong', copy('drawer.prompt_boundary'));
+    appendText(boundary, 'p', copy('drawer.not_in_prompt'));
+    summary.append(boundary);
+
+    appendText(decision, 'h3', copy('drawer.tab.decision'));
+    const decisionGrid = document.createElement('div');
+    decisionGrid.className = 'editorial-drawer-decision-grid';
+    [['drawer.primary', trace.primary_status, trace.primary_action, trace.primary_probability, trace.primary_confidence, trace.primary_decision_source, trace.primary_prompt_version], ['drawer.shadow', trace.shadow_status, trace.shadow_action, trace.shadow_probability, trace.shadow_confidence, trace.shadow_decision_source, trace.shadow_prompt_version]].forEach(([label, status, action, probability, confidence, source, token]) => {
+      const card = document.createElement('article');
+      card.className = 'editorial-drawer-decision-card';
+      appendText(card, 'h3', copy(label));
+      appendDefinitionList(card, [
+        ['drawer.status', status],
+        ['drawer.action', action],
+        ['drawer.probability', probability ?? 'n/a'],
+        ['drawer.confidence', confidence ?? 'n/a'],
+        ['drawer.source', source],
+        ['drawer.prompt_token', token],
+      ]);
+      decisionGrid.append(card);
+    });
+    decision.append(decisionGrid);
+    appendJsonBlock(decision, 'drawer.shadow', trace.shadow_added_fields);
+
+    appendText(context, 'h3', copy('drawer.tab.context'));
+    const message = document.createElement('div');
+    message.className = 'editorial-drawer-message';
+    appendText(message, 'h3', trace.message_title);
+    appendText(message, 'p', copy('drawer.authoritative'));
+    appendParagraphs(message, trace.message_body);
+    context.append(message);
+    appendDefinitionList(context, [
+      ['drawer.primary_reason', trace.primary_reason],
+      ['drawer.shadow_reason', trace.shadow_reason],
+    ]);
+    const contextGrid = document.createElement('div');
+    contextGrid.className = 'editorial-drawer-context-grid';
+    appendJsonBlock(contextGrid, 'drawer.primary_context', trace.primary_context);
+    appendJsonBlock(contextGrid, 'drawer.shadow_context', trace.shadow_context);
+    appendJsonBlock(contextGrid, 'drawer.peer_context', { primary: trace.primary_peer_context, shadow: trace.shadow_peer_context });
+    context.append(contextGrid);
+
+    appendText(lineage, 'h3', copy('drawer.tab.lineage'));
+    const differences = document.createElement('div');
+    differences.className = 'editorial-drawer-panel-block';
+    appendText(differences, 'strong', copy('drawer.field_differences'));
+    const differenceList = document.createElement('ul');
+    differenceList.className = 'editorial-drawer-lineage-list';
+    if (trace.field_differences.length) {
+      trace.field_differences.forEach((difference) => {
+        const item = document.createElement('li');
+        appendText(item, 'code', difference.field_name || 'field');
+        appendText(item, 'strong', difference.label || '');
+        appendText(item, 'p', `${difference.primary_display || ''} → ${difference.shadow_display || ''}`);
+        appendText(item, 'p', difference.note || '');
+        differenceList.append(item);
+      });
+    } else {
+      appendText(differences, 'p', copy('drawer.no_differences'));
+    }
+    differences.append(differenceList);
+    lineage.append(differences);
+    const lineageList = document.createElement('ul');
+    lineageList.className = 'editorial-drawer-lineage-list';
+    traceLineage.forEach((entry) => {
+      const item = document.createElement('li');
+      appendText(item, 'code', entry.field_name);
+      appendText(item, 'strong', entry.label);
+      appendText(item, 'p', `${copy('drawer.field_provenance')}: ${entry.source_artifact} · ${entry.evidence_class} · ${entry.prompt_visibility}`);
+      appendText(item, 'p', `${copy('drawer.field_usage_stage')}: ${entry.usage_stages.join(' / ')}`);
+      appendText(item, 'p', entry.description);
+      lineageList.append(item);
+    });
+    lineage.append(lineageList);
+    appendJsonBlock(lineage, 'drawer.aggregate_evidence', trace.aggregate_evidence);
+    appendDefinitionList(lineage, [['drawer.aggregate_source', 'concurrent_message_diagnostics.json']]);
+  }
+
+  function selectDrawerTab(tab, focus = false) {
+    if (!['summary', 'decision', 'context', 'lineage'].includes(tab)) return;
+    state.drawerTab = tab;
+    drawerTabButtons.forEach((button) => {
+      const selected = button.dataset.drawerTab === tab;
+      button.setAttribute('aria-selected', String(selected));
+      button.tabIndex = selected ? 0 : -1;
+    });
+    drawerPanels.forEach((panel) => {
+      panel.hidden = panel.dataset.drawerPanel !== tab;
+    });
+    if (focus) drawerTabButtons.find((button) => button.dataset.drawerTab === tab)?.focus();
+  }
+
+  function renderDrawer() {
+    if (!drawer || !state.drawerRecord || !drawerTitle) return;
+    if (state.drawerRecord.kind === 'trace') {
+      const trace = traceRows.find((row) => row.trace_id === state.drawerRecord.id);
+      if (!trace) return closeDrawer(false);
+      drawerTitle.textContent = `${trace.message_id} · ${trace.user_id}`;
+      renderTraceDrawer(trace);
+    } else {
+      const detail = details[state.drawerRecord.key]?.[state.language];
+      if (!detail) return closeDrawer(false);
+      drawerTitle.textContent = detail.title;
+      renderMechanismDrawer(detail);
+    }
+    selectDrawerTab(state.drawerTab);
+  }
+
+  function openDrawer(record, trigger) {
+    const normalized = typeof record === 'string' ? { kind: 'mechanism', key: record } : record;
+    if (!drawer || (normalized.kind === 'mechanism' && !details[normalized.key]?.[state.language]) || (normalized.kind === 'trace' && !traceRows.some((row) => row.trace_id === normalized.id))) return;
+    state.drawerRecord = normalized;
+    state.drawerTab = 'summary';
     state.returnFocus = trigger;
-    renderDrawer(key);
+    renderDrawer();
     drawer.hidden = false;
+    drawer.setAttribute('aria-hidden', 'false');
     root.dataset.drawerState = 'open';
     previousBodyOverflow = document.body.style.overflow;
     document.body.style.overflow = 'hidden';
     mechanismButtons.forEach((button) => button.setAttribute('aria-expanded', String(button === trigger)));
+    traceTableBody?.querySelectorAll('tr[data-trace-id]').forEach((row) => row.setAttribute('aria-expanded', String(row === trigger)));
     closeButton?.focus();
   }
 
   function closeDrawer(restoreFocus = true) {
-    if (!drawer || drawer.hidden) return;
+    if (!drawer) return;
     const returnFocus = state.returnFocus;
     drawer.hidden = true;
+    drawer.setAttribute('aria-hidden', 'true');
     root.dataset.drawerState = 'closed';
     document.body.style.overflow = previousBodyOverflow;
     mechanismButtons.forEach((button) => button.setAttribute('aria-expanded', 'false'));
-    state.drawerKey = null;
+    traceTableBody?.querySelectorAll('tr[data-trace-id]').forEach((row) => row.removeAttribute('aria-expanded'));
+    state.drawerRecord = null;
     state.returnFocus = null;
+    drawerIdentity?.replaceChildren();
+    drawerPanels.forEach((panel) => panel.replaceChildren());
     if (restoreFocus && returnFocus?.isConnected) returnFocus.focus();
   }
 
@@ -2315,19 +3164,69 @@ _EDITORIAL_SCRIPT = r"""
     exposureState.page = Math.max(0, exposureState.page + direction);
     renderExposurePage();
   }));
-
-  mechanismButtons.forEach((button) => button.addEventListener('click', () => openDrawer(button.dataset.mechanismKey, button)));
-  closeButton?.addEventListener('click', () => closeDrawer(true));
-  drawer?.addEventListener('click', (event) => {
-    if (event.target === drawer) closeDrawer(true);
+  const resetTracePage = () => {
+    traceState.page = 0;
+    renderTracePage();
+  };
+  traceFilters.search?.addEventListener('input', () => {
+    traceState.search = traceFilters.search.value;
+    resetTracePage();
   });
+  [['message', traceFilters.message], ['class', traceFilters.class], ['batch', traceFilters.batch], ['action', traceFilters.action], ['provider', traceFilters.provider], ['disagreement', traceFilters.disagreement]].forEach(([key, control]) => {
+    control?.addEventListener('change', () => {
+      traceState[key] = control.value;
+      resetTracePage();
+    });
+  });
+  tracePageSize?.addEventListener('change', () => {
+    traceState.pageSize = Number(tracePageSize.value) || 25;
+    resetTracePage();
+  });
+  root.querySelector('[data-trace-page="previous"]')?.addEventListener('click', () => {
+    traceState.page = Math.max(0, traceState.page - 1);
+    renderTracePage();
+  });
+  root.querySelector('[data-trace-page="next"]')?.addEventListener('click', () => {
+    traceState.page += 1;
+    renderTracePage();
+  });
+  tracePageNumbers?.addEventListener('click', (event) => {
+    const button = event.target.closest('[data-trace-page]');
+    if (!button) return;
+    traceState.page = Number(button.dataset.tracePage);
+    renderTracePage();
+  });
+  mechanismButtons.forEach((button) => button.addEventListener('click', () => openDrawer({ kind: 'mechanism', key: button.dataset.mechanismKey }, button)));
+  traceTableBody?.addEventListener('click', (event) => {
+    const row = event.target.closest('tr[data-trace-id]');
+    if (row) openDrawer({ kind: 'trace', id: row.dataset.traceId }, row);
+  });
+  traceTableBody?.addEventListener('keydown', (event) => {
+    if (!['Enter', ' '].includes(event.key)) return;
+    const row = event.target.closest('tr[data-trace-id]');
+    if (!row) return;
+    event.preventDefault();
+    openDrawer({ kind: 'trace', id: row.dataset.traceId }, row);
+  });
+  drawerTabButtons.forEach((button, index) => {
+    button.addEventListener('click', () => selectDrawerTab(button.dataset.drawerTab, true));
+    button.addEventListener('keydown', (event) => {
+      if (!['ArrowLeft', 'ArrowRight'].includes(event.key)) return;
+      event.preventDefault();
+      const offset = event.key === 'ArrowRight' ? 1 : -1;
+      const next = drawerTabButtons[(index + offset + drawerTabButtons.length) % drawerTabButtons.length];
+      selectDrawerTab(next.dataset.drawerTab, true);
+    });
+  });
+  closeButton?.addEventListener('click', () => closeDrawer(true));
+  drawer?.querySelector('.editorial-drawer-backdrop')?.addEventListener('click', () => closeDrawer(true));
   document.addEventListener('keydown', (event) => {
-    if (event.key === 'Escape' && state.drawerKey) {
+    if (event.key === 'Escape' && state.drawerRecord) {
       event.preventDefault();
       closeDrawer(true);
       return;
     }
-    if (event.key !== 'Tab' || !state.drawerKey) return;
+    if (event.key !== 'Tab' || !state.drawerRecord) return;
     const focusable = focusableInDrawer();
     if (!focusable.length) return;
     const first = focusable[0];
@@ -2349,7 +3248,7 @@ _EDITORIAL_SCRIPT = r"""
   if (typeof IntersectionObserver === 'function') {
     const visibleSections = new Set();
     const observer = new IntersectionObserver((entries) => {
-      if (state.drawerKey) return;
+      if (state.drawerRecord) return;
       entries.forEach((entry) => {
         if (entry.isIntersecting && !entry.target.closest('[hidden]')) visibleSections.add(entry.target);
         else visibleSections.delete(entry.target);
@@ -2412,14 +3311,28 @@ def _render_editorial_candidate(payload: ConcurrentMessageReportPayload) -> str:
     <section id="editorial-run-panel" role="tabpanel" aria-labelledby="editorial-run-tab" data-report-mode-panel="run-evidence" data-testid="run-evidence-mode-panel" hidden>
       {run_scaffold}
     </section>
-    <aside id="trace-drawer" class="editorial-detail-drawer" data-testid="evidence-drawer" role="dialog" aria-modal="true" aria-label="{_copy('drawer.aria')}" data-i18n-aria-label="drawer.aria" hidden>
-      <div aria-hidden="true"></div>
+    <aside id="trace-drawer" class="editorial-detail-drawer" data-testid="evidence-drawer" role="dialog" aria-modal="true" aria-labelledby="trace-drawer-title" aria-hidden="true" hidden>
+      <div class="editorial-drawer-backdrop" aria-hidden="true"></div>
       <div class="editorial-drawer-surface">
         <div class="editorial-drawer-header">
-          <h2 data-testid="mechanism-detail-title">{_copy('drawer.detail')}</h2>
+          <h2 id="trace-drawer-title" data-testid="mechanism-detail-title">{_copy('drawer.detail')}</h2>
           <button class="editorial-drawer-close" type="button" data-testid="editorial-drawer-close" aria-label="{_copy('drawer.close')}" data-i18n-aria-label="drawer.close">×</button>
         </div>
-        <div class="editorial-drawer-body" data-testid="mechanism-detail-body"></div>
+        <div class="editorial-drawer-body" data-testid="shared-drawer-body">
+          <div class="editorial-drawer-identity" data-testid="drawer-identity"></div>
+          <div class="editorial-drawer-tabs" role="tablist" aria-label="{_copy('drawer.tabs_aria')}" data-i18n-aria-label="drawer.tabs_aria">
+            <button type="button" role="tab" id="drawer-tab-summary" aria-controls="drawer-panel-summary" aria-selected="true" data-drawer-tab="summary" data-i18n="drawer.tab.summary">{_copy('drawer.tab.summary')}</button>
+            <button type="button" role="tab" id="drawer-tab-decision" aria-controls="drawer-panel-decision" aria-selected="false" tabindex="-1" data-drawer-tab="decision" data-i18n="drawer.tab.decision">{_copy('drawer.tab.decision')}</button>
+            <button type="button" role="tab" id="drawer-tab-context" aria-controls="drawer-panel-context" aria-selected="false" tabindex="-1" data-drawer-tab="context" data-i18n="drawer.tab.context">{_copy('drawer.tab.context')}</button>
+            <button type="button" role="tab" id="drawer-tab-lineage" aria-controls="drawer-panel-lineage" aria-selected="false" tabindex="-1" data-drawer-tab="lineage" data-i18n="drawer.tab.lineage">{_copy('drawer.tab.lineage')}</button>
+          </div>
+          <div class="editorial-drawer-panels">
+            <section id="drawer-panel-summary" role="tabpanel" aria-labelledby="drawer-tab-summary" data-drawer-panel="summary"></section>
+            <section id="drawer-panel-decision" role="tabpanel" aria-labelledby="drawer-tab-decision" data-drawer-panel="decision" hidden></section>
+            <section id="drawer-panel-context" role="tabpanel" aria-labelledby="drawer-tab-context" data-drawer-panel="context" hidden></section>
+            <section id="drawer-panel-lineage" role="tabpanel" aria-labelledby="drawer-tab-lineage" data-drawer-panel="lineage" hidden></section>
+          </div>
+        </div>
       </div>
     </aside>
   </main>

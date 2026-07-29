@@ -117,6 +117,20 @@ def test_run_evidence_recomputes_persisted_formal_fixture(formal_payload: Concur
         (0.574908137029, 0.692596514244, 0.828893393071),
     ]
     assert len(data["batch_rows"]) == 90
+    assert len(data["trace_rows"]) == 1800
+    assert data["per_message"][0]["action_counts"] == {"like": 480, "comment": 37, "share": 3, "ignore": 80, "provider_failed": 0}
+    assert [
+        (row["positive_numerator"], row["positive_denominator"])
+        for row in data["per_message"]
+    ] == [(520, 600), (487, 600), (585, 600)]
+    assert data["trace_sensitivity"] == {
+        "paired_coverage": {"numerator": 1800, "denominator": 1800, "value": 1.0},
+        "disagreement": {"numerator": 244, "denominator": 1800, "value": 0.135555555556},
+        "mean_delta": 0.121361111111,
+        "flagged_reasons": 0,
+    }
+    assert len(data["field_lineage"]) == 7
+    assert sum(row["disagreement"] for row in data["trace_rows"]) == 244
 
     html = candidate._render_editorial_candidate(formal_payload)
     assert 'data-testid="run-coverage-sequence">0/434/332/234</code>' in html
@@ -124,6 +138,19 @@ def test_run_evidence_recomputes_persisted_formal_fixture(formal_payload: Concur
     assert 'data-fit-mean=".776"' in html
     assert 'data-fit-max=".829"' in html
     assert formal_payload.messages[0]["body"].split("\n\n", 1)[0] in html
+
+
+def test_run_evidence_allows_provider_failure_outside_dual_success_sensitivity(
+    formal_payload: ConcurrentMessageReportPayload,
+) -> None:
+    broken = formal_payload.model_copy(deep=True)
+    broken.exposure_rows[0].primary_status = "provider_failed"
+    broken.exposure_rows[0].primary_action = "provider_failed"
+
+    data = candidate._run_evidence_data(broken)
+
+    assert len(data["trace_rows"]) == 1800
+    assert sum(row["disagreement"] for row in data["trace_rows"]) == 244
 
 
 def test_run_evidence_rejects_inconsistent_persisted_coverage(formal_payload: ConcurrentMessageReportPayload) -> None:

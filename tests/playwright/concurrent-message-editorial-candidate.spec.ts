@@ -218,3 +218,86 @@ test('Editorial run evidence recomputes summaries and paginates persisted batche
     expect(geometry.targetTop).toBeGreaterThanOrEqual(geometry.headerBottom);
   }
 });
+
+test('Editorial trace filters, pagination, shared drawer, and language state remain closed over persisted rows', async ({ page }, testInfo) => {
+  const reportPath = generateEditorialCandidate(testInfo.outputDir);
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.goto(pathToFileURL(reportPath).toString());
+  await page.getByTestId('run-evidence-mode-button').click();
+  await page.getByRole('link', { name: 'LLM 决策', exact: true }).click();
+
+  const rows = page.getByTestId('run-trace-table-body').locator('tr');
+  await expect(rows).toHaveCount(25);
+  await expect(page.getByTestId('run-trace-page-status')).toContainText('1 / 72');
+  await expect(page.getByTestId('run-trace-page-numbers').locator('button')).toHaveCount(4);
+  await expect(page.getByTestId('run-trace-page-numbers').locator('button:disabled')).toHaveCount(1);
+  const firstIdentity = await rows.first().getAttribute('data-trace-id');
+  await page.locator('[data-trace-page="next"]').click();
+  await expect(page.getByTestId('run-trace-page-status')).toContainText('2 / 72');
+  expect(await rows.first().getAttribute('data-trace-id')).not.toBe(firstIdentity);
+
+  await page.getByTestId('run-trace-message-select').selectOption('message_2');
+  await expect(rows).toHaveCount(25);
+  await expect(page.getByTestId('run-trace-page-status')).toContainText('1 / 24');
+  await expect(rows.first()).toHaveAttribute('data-message-id', 'message_2');
+  await page.getByTestId('run-trace-page-size').selectOption('50');
+  await expect(rows).toHaveCount(50);
+  await expect(page.getByTestId('run-trace-page-status')).toContainText('1 / 12');
+
+  await rows.first().press('Enter');
+  const drawer = page.getByTestId('evidence-drawer');
+  await expect(drawer).toBeVisible();
+  await expect(drawer).toHaveAttribute('role', 'dialog');
+  await expect(drawer).toHaveAttribute('aria-modal', 'true');
+  await expect(drawer.getByRole('tab')).toHaveCount(4);
+  await expect(drawer.locator('[data-drawer-panel="summary"]')).toBeVisible();
+  await expect(drawer.locator('[data-drawer-panel="summary"]')).not.toContainText('每次在旅途中下榻酒店');
+  await expect.poll(() => page.evaluate(() => document.body.style.overflow)).toBe('hidden');
+  await page.getByRole('tab', { name: 'Context', exact: true }).click();
+  await expect(drawer.locator('[data-drawer-panel="context"]')).toBeVisible();
+  await expect(drawer.locator('[data-drawer-panel="context"]')).toContainText('一次好的入住体验');
+  await page.getByRole('tab', { name: 'Lineage', exact: true }).click();
+  await expect(drawer.locator('[data-drawer-panel="lineage"]')).toContainText('Field Provenance');
+  await page.getByRole('tab', { name: 'Context', exact: true }).click();
+  await expect(drawer.locator('[data-drawer-panel="context"]')).toBeVisible();
+  await page.getByRole('button', { name: 'English', exact: true }).click();
+  await expect(page.locator('html')).toHaveAttribute('lang', 'en-US');
+  await expect(page.getByTestId('run-trace-page-size')).toHaveValue('50');
+  await expect(page.getByTestId('run-trace-message-select')).toHaveValue('message_2');
+  await expect(drawer).toBeVisible();
+  await expect(drawer.getByRole('tab', { name: 'Context', exact: true })).toHaveAttribute('aria-selected', 'true');
+  await expect(drawer.locator('[data-drawer-panel="lineage"]')).toBeHidden();
+  await page.getByRole('button', { name: 'Close detail', exact: true }).focus();
+  await page.keyboard.press('Tab');
+  await expect.poll(() => page.evaluate(() => document.activeElement?.closest('[role="dialog"]') !== null)).toBe(true);
+  const selectedTraceId = await page.getByTestId('run-trace-table-body').locator('tr').first().getAttribute('data-trace-id');
+  await page.keyboard.press('Escape');
+  await expect(drawer).toBeHidden();
+  await expect.poll(() => page.evaluate(() => document.body.style.overflow)).toBe('');
+  await expect.poll(() => page.evaluate((traceId) => document.activeElement?.getAttribute('data-trace-id'), selectedTraceId)).toBe(selectedTraceId);
+
+  await rows.first().click();
+  await expect(drawer).toBeVisible();
+  await page.getByRole('button', { name: 'Close detail', exact: true }).click();
+  await rows.first().press(' ');
+  await expect(drawer).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(drawer).toBeHidden();
+
+  await page.getByTestId('mechanism-mode-button').click();
+  await expect(drawer).toBeHidden();
+  await page.getByTestId('run-evidence-mode-button').click();
+  await page.locator('[data-report-anchor="llm-decision"]').click();
+  for (const viewport of [{ width: 1600, height: 1000 }, { width: 390, height: 844 }]) {
+    await page.setViewportSize(viewport);
+    await page.locator('#run-llm-decision').scrollIntoViewIfNeeded();
+    const geometry = await page.evaluate(() => ({
+      horizontalOverflow: document.documentElement.scrollWidth > window.innerWidth + 1,
+      tableWidth: document.querySelector<HTMLElement>('[data-testid="run-trace-table"]')?.getBoundingClientRect().width || 0,
+      sectionWidth: document.querySelector<HTMLElement>('#run-llm-decision')?.getBoundingClientRect().width || 0,
+    }));
+    expect(geometry.horizontalOverflow).toBe(false);
+    expect(geometry.tableWidth).toBeGreaterThan(0);
+    expect(geometry.sectionWidth).toBeLessThanOrEqual(viewport.width + 1);
+  }
+});
