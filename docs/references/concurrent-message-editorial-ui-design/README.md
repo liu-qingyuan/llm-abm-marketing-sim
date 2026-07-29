@@ -40,6 +40,20 @@ Persisted payload、Spec 和现有 Formal artifact 是术语、数值、authorit
 | `media-mechanism-llm-decision.png` | production source for `(mechanism, llm-decision)` | `1503d4669da9b6d844cb9f674b89b19143a56ff9e8c8132437f4218276a4a337` |
 | `media-mechanism-network-feedback.png` | production source for `(mechanism, network-feedback)` | `c136cb0ca5f7cd231f95f7e7c74f6fb3e1ed3ce465fb822ae7e603c41956a951` |
 
+## Editorial Candidate Asset Derivatives
+
+Ticket #118 adds five renderer-private, versioned derivatives from the committed text-free media sources. The source mapping remains explicit in the candidate asset catalog, while package data includes the derivatives through `report_assets/*.webp`.
+
+| Asset key | Source | Versioned derivative | Derivative SHA-256 |
+| --- | --- | --- | --- |
+| `overview` | `media-mechanism-overview.png` | `editorial-mechanism-overview-v1.webp` | `1ba062f0c8b1dea458c63f4b2eaa1a5c605e7c164051212330cab51c3c6b3806` |
+| `sample` | `media-mechanism-sample.png` | `editorial-mechanism-sample-v1.webp` | `d6738cae46fd3925af4f5d4375d978c0e170afd1435b16f0ad0baba4e8a598f8` |
+| `exposure-ranking` | `media-mechanism-exposure-ranking.png` | `editorial-mechanism-exposure-ranking-v1.webp` | `76a8361b5ad8e0448275d1b69815408ddac0463bef21f4f4677fbc8e7fd68613` |
+| `llm-decision` | `media-mechanism-llm-decision.png` | `editorial-mechanism-llm-decision-v1.webp` | `52f7f62b0a0969055c21fe46fb88ba158664c3e7aeb42ec2ba69db3c5bad4828` |
+| `network-feedback` | `media-mechanism-network-feedback.png` | `editorial-mechanism-network-feedback-v1.webp` | `3b15835acc900c446d72636638fcd884159ba0d1103bf014c90587b5cd4e8f37` |
+
+The five existing `multi-message-mechanism-*.webp` compatibility assets remain byte-identical and are owned by the frozen compatibility renderer. The candidate embeds only the new versioned derivatives as data URIs; it does not add a runtime fetch or external media request.
+
 ## Visual System
 
 ### Typography
