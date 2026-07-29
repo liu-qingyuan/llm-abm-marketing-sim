@@ -58,7 +58,58 @@ async function expectFinalResearchReport(page: Page): Promise<void> {
   await expect(page.getByTestId('run-evidence-method-status')).toContainText('Persisted Seed-First Formal Run');
 }
 
+async function expectEditorialReport(page: Page): Promise<void> {
+  const root = page.getByTestId('editorial-report');
+  await expect(root).toBeVisible();
+  await expect(page.locator('html')).toHaveAttribute('lang', 'zh-CN');
+  await expect(root).toHaveAttribute('data-report-mode', 'mechanism');
+  await expect(root).toHaveAttribute('data-report-language', 'zh-CN');
+  await expect(page.getByTestId('mechanism-mode-panel')).toBeVisible();
+  for (const anchor of ['overview', 'sample', 'exposure-ranking', 'llm-decision', 'network-feedback']) {
+    await expect(page.locator(`[data-report-anchor="${anchor}"]`)).toHaveAttribute('href', `#${anchor}`);
+    await expect(page.locator(`[data-report-mode-panel="mechanism"] [data-section-anchor="${anchor}"]`)).toBeAttached();
+  }
+  await expect(page.getByTestId('mechanism-sample-size')).toContainText('1,000');
+  await expect(page.getByTestId('mechanism-eligible-pairs')).toContainText('3,000');
+
+  await page.getByRole('button', { name: 'English', exact: true }).click();
+  await expect(page.locator('html')).toHaveAttribute('lang', 'en-US');
+  await expect(root).toHaveAttribute('data-report-language', 'en-US');
+  await page.getByRole('button', { name: '中文', exact: true }).click();
+  await expect(page.locator('html')).toHaveAttribute('lang', 'zh-CN');
+  await expect(root).toHaveAttribute('data-report-language', 'zh-CN');
+
+  await page.getByTestId('run-evidence-mode-button').click();
+  await expect(page.getByTestId('run-evidence-mode-panel')).toBeVisible();
+  await expect(page.getByTestId('run-formal-status')).toContainText('Formal');
+  await expect(page.getByTestId('run-sample-users')).toContainText('1,000');
+  await expect(page.getByTestId('run-eligible-pairs')).toContainText('3,000');
+  await expect(page.getByTestId('run-actual-exposures')).toContainText('1,800');
+  await expect(page.getByTestId('run-coverage-sequence')).toBeVisible();
+
+  await expect(page.getByTestId('run-trace-tool')).toBeVisible();
+  await expect(page.getByTestId('run-trace-search')).toBeVisible();
+  await expect(page.getByTestId('run-trace-message-select')).toBeVisible();
+  const firstTraceRow = page.getByTestId('run-trace-table-body').locator('tr').first();
+  await expect(firstTraceRow).toBeVisible();
+  await firstTraceRow.click();
+  const drawer = page.getByTestId('evidence-drawer');
+  await expect(drawer).toBeVisible();
+  await page.getByTestId('editorial-drawer-close').click();
+  await expect(drawer).toBeHidden();
+
+  await expect(page.getByTestId('run-downloads-section')).toBeVisible();
+  for (const group of ['report', 'sample-users', 'decision', 'runtime-diagnostics']) {
+    await expect(page.getByTestId(`run-download-group-${group}`)).toBeVisible();
+  }
+}
+
 async function expectConcurrentMessageReport(page: Page): Promise<void> {
+  if (await page.getByTestId('editorial-report').count()) {
+    await expectEditorialReport(page);
+    return;
+  }
+
   await expect(page.getByTestId('concurrent-message-report')).toBeVisible();
   await expect(page.getByTestId('mechanism-mode-panel')).toBeVisible();
   for (const anchor of ['overview', 'sample', 'exposure-ranking', 'llm-decision', 'network-feedback']) {

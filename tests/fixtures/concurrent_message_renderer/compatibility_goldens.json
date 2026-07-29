@@ -5,7 +5,7 @@
     {
       "name": "editorial_default",
       "adapter": "default Editorial",
-      "sha256": "8b6dff533f0be81d740b92d596f33f8168b4740ebdafca824c403d65e378bca3",
+      "sha256": "1d1e1ead3691aa275c74ff723a79960019c42fd58f179d8b74619f0a0b218ea9",
       "golden": "editorial_default.html.gz"
     },
     {

@@ -3302,8 +3302,8 @@ _EDITORIAL_SCRIPT = r"""
     return panel?.querySelector(`[data-section-anchor="${anchor}"]`) || null;
   }
 
-  function setActiveNavigation(anchor) {
-    state.anchor = anchor;
+  function setActiveNavigation(anchor, { updateState = true } = {}) {
+    if (updateState) state.anchor = anchor;
     navigationLinks.forEach((link) => {
       if (link.dataset.reportAnchor === anchor) link.setAttribute('aria-current', 'location');
       else link.removeAttribute('aria-current');
@@ -3827,7 +3827,7 @@ _EDITORIAL_SCRIPT = r"""
       const current = [...visibleSections]
         .filter((section) => !section.closest('[hidden]'))
         .sort((left, right) => Math.abs(left.getBoundingClientRect().top - 96) - Math.abs(right.getBoundingClientRect().top - 96))[0];
-      if (current) setActiveNavigation(current.dataset.sectionAnchor);
+      if (current) setActiveNavigation(current.dataset.sectionAnchor, { updateState: !window.location.hash });
     }, { rootMargin: '-96px 0px -55% 0px', threshold: 0 });
     root.querySelectorAll('[data-report-mode-panel] [data-section-anchor]').forEach((section) => observer.observe(section));
   }

@@ -8,7 +8,7 @@ responses, credentials, or request headers.
 
 `compatibility_goldens.json` is the source of truth for the fixture schema and
 SHA-256 values. The `editorial_default` golden is the public default report hash
-`8b6dff533f0be81d740b92d596f33f8168b4740ebdafca824c403d65e378bca3`. The
+`1d1e1ead3691aa275c74ff723a79960019c42fd58f179d8b74619f0a0b218ea9`. The
 `pre_pagination_historical` golden is the published source report hash
 `740f55a30bc4183a75724592496c6b6aa809a85ab385ccf96bc53093cb49a76d`. The
 `current_two_mode` golden is the published destination compatibility report hash
