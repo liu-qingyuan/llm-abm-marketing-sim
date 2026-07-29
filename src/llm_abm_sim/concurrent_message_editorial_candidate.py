@@ -6,6 +6,7 @@ from base64 import b64encode
 from collections import Counter
 from collections.abc import Mapping, Sequence
 from importlib.resources import files
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -17,6 +18,36 @@ _EDITORIAL_ANCHORS = ("overview", "sample", "exposure-ranking", "llm-decision", 
 _EDITORIAL_ASSET_VERSION = "v1"
 
 
+_EDITORIAL_DOWNLOAD_GROUPS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("report", ("report_payload", "validation_evidence", "manifest")),
+    ("sample-users", ("sample_manifest_json", "sample_manifest_csv", "users_json", "users_csv")),
+    ("decision", ("decision_trace_json", "decision_trace_csv", "primary_actions_csv", "provider_failures_csv")),
+    ("runtime-diagnostics", ("runtime_contract", "diagnostics_contract", "field_lineage", "rankings_csv", "exposures_csv", "terminals_csv")),
+)
+_EDITORIAL_DOWNLOAD_PATHS: dict[str, str] = {
+    "report_payload": "concurrent_message_report_payload.json",
+    "users_json": "concurrent_message_users.json",
+    "users_csv": "concurrent_message_users.csv",
+    "decision_trace_json": "concurrent_message_decision_trace.json",
+    "decision_trace_csv": "concurrent_message_decision_trace.csv",
+    "runtime_contract": "concurrent_message_runtime.json",
+    "diagnostics_contract": "concurrent_message_diagnostics.json",
+    "field_lineage": "concurrent_message_field_lineage.json",
+    "validation_evidence": "concurrent_validation.json",
+    "sample_manifest_json": "sample_manifest.json",
+    "sample_manifest_csv": "sample_manifest.csv",
+    "rankings_csv": "concurrent_runtime_candidates.csv",
+    "exposures_csv": "concurrent_runtime_pairs.csv",
+    "terminals_csv": "concurrent_runtime_terminal_rows.csv",
+    "primary_actions_csv": "concurrent_message_primary_actions.csv",
+    "provider_failures_csv": "concurrent_message_provider_failures.csv",
+    "manifest": "artifact_manifest.json",
+}
+_EDITORIAL_DOWNLOAD_KEYS = tuple(key for _, keys in _EDITORIAL_DOWNLOAD_GROUPS for key in keys)
+
+
+# The candidate owns the presentation grouping, but every path remains the
+# persisted artifact layout used by the closure and manifest contracts.
 # This catalog belongs to the candidate. The general report dictionary does not own
 # Concurrent-specific terms, source-language boundaries, or mechanism explanations.
 _EDITORIAL_CATALOG: dict[str, dict[str, str]] = {
@@ -74,6 +105,15 @@ _EDITORIAL_CATALOG: dict[str, dict[str, str]] = {
             "drawer.aggregate_source": "Aggregate source",
             "drawer.aggregate_evidence": "Aggregate evidence",
             "drawer.not_in_prompt": "Ranking evidence、Class、其他 messages 和 peer behavior 不进入任何 Prompt。",
+            "drawer.feedback_batch": "Feedback batch evidence",
+            "drawer.feedback_summary": "Batch summary",
+            "drawer.feedback_full_ranking": "Full-ranking Top20 user IDs",
+            "drawer.feedback_no_feedback_ranking": "Paired no-feedback Top20 user IDs",
+            "drawer.feedback_overlap_ids": "Top20 overlap user IDs",
+            "drawer.feedback_added_ids": "Feedback added user IDs",
+            "drawer.feedback_removed_ids": "Feedback removed user IDs",
+            "drawer.feedback_source": "Aggregate source",
+            "drawer.feedback_no_ids": "No user IDs in this batch.",
             "drawer.no_differences": "没有 persisted field differences。",
         "drawer.provenance": "证据归属",
         "drawer.usage": "使用阶段",
@@ -177,7 +217,7 @@ _EDITORIAL_CATALOG: dict[str, dict[str, str]] = {
         "feedback.time.body": "同批 context 冻结；信号只在下一批三条独立 ranking 中出现。",
         "run.kicker": "本次运行 · Editorial candidate",
         "run.title": "本次运行 evidence 将沿同一条研究链路展开",
-        "run.lead": "当前 Ticket 先建立独立的 typed-payload shell。后续 Editorial Tickets 在这里加入概览、样本、曝光排序、LLM trace、网络反馈和 approved downloads；本占位不会调用或生成其他 renderer。",
+        "run.lead": "本次 run evidence 直接从 typed persisted payload 展开概览、样本、曝光排序、LLM trace、网络反馈和 approved downloads；不会调用或生成其他 renderer。",
         "run.status.title": "Typed payload source",
         "run.status.body": "这些 source values 保持原值；它们不是翻译 catalog 的一部分。",
         "run.contract.title": "Persisted contract",
@@ -322,6 +362,36 @@ _EDITORIAL_CATALOG: dict[str, dict[str, str]] = {
         "run.exposure.pagination_aria": "Exposure batch pagination",
         "run.exposure.empty": "No persisted batch rows match this filter.",
         "run.evidence.descriptive": "Descriptive persisted evidence; no winner, attribution, or causal effect is inferred.",
+        "run.feedback.kicker": "本次运行 · 网络反馈",
+        "run.feedback.title": "Primary feedback 只在下一批改变三条 ranking",
+        "run.feedback.lead": "默认先看 changed message-batches、Top20 overlap 和 exact batch evidence；完整 added/removed user IDs 只在 shared drawer/detail 或 approved downloads 中展开。",
+        "run.feedback.changed": "changed message-batches",
+        "run.feedback.batch_total": "all message-batches",
+        "run.feedback.message": "Message",
+        "run.feedback.batch": "Batch",
+        "run.feedback.eligible": "Eligible users",
+        "run.feedback.top_count": "Top20",
+        "run.feedback.overlap": "Top20 overlap",
+        "run.feedback.added": "added",
+        "run.feedback.removed": "removed",
+        "run.feedback.range": "Top20 overlap range",
+        "run.feedback.scope": "Batch evidence scope",
+        "run.feedback.changed_only": "Changed batches only",
+        "run.feedback.all_batches": "All batches",
+        "run.feedback.all_messages": "All messages",
+        "run.feedback.details": "Open batch detail",
+        "run.feedback.table_aria": "Persisted network feedback batch evidence",
+        "run.feedback.rows": "batches",
+        "run.feedback.descriptive": "Paired no-feedback diagnostics are descriptive simulation evidence; they do not claim that every batch changed or that feedback caused a platform effect.",
+        "run.downloads.kicker": "本次运行 · Approved downloads",
+        "run.downloads.title": "17 个 approved artifacts，按研究职责分组",
+        "run.downloads.lead": "所有 href 都来自 payload 的 canonical view；artifact 名称保持 authoritative 原值，缺失、改名、crossed 或 escaped target 在 closure 阶段 fail closed。",
+        "run.downloads.group.report": "Report",
+        "run.downloads.group.sample-users": "Sample / Users",
+        "run.downloads.group.decision": "Decision",
+        "run.downloads.group.runtime-diagnostics": "Runtime / Diagnostics",
+        "run.downloads.link": "Approved artifact",
+        "run.downloads.table_aria": "Approved concurrent message downloads",
         "detail.overview-start.label": "同时开始边界",
         "detail.overview-start.caption": "三条 message 在同一发布边界进入各自 queue",
         "detail.overview-pair.label": "user × message pair",
@@ -417,6 +487,15 @@ _EDITORIAL_CATALOG: dict[str, dict[str, str]] = {
             "drawer.aggregate_source": "Aggregate source",
             "drawer.aggregate_evidence": "Aggregate evidence",
             "drawer.not_in_prompt": "Ranking evidence, Class, other messages, and peer behavior are excluded from every Prompt.",
+            "drawer.feedback_batch": "Feedback batch evidence",
+            "drawer.feedback_summary": "Batch summary",
+            "drawer.feedback_full_ranking": "Full-ranking Top20 user IDs",
+            "drawer.feedback_no_feedback_ranking": "Paired no-feedback Top20 user IDs",
+            "drawer.feedback_overlap_ids": "Top20 overlap user IDs",
+            "drawer.feedback_added_ids": "Feedback added user IDs",
+            "drawer.feedback_removed_ids": "Feedback removed user IDs",
+            "drawer.feedback_source": "Aggregate source",
+            "drawer.feedback_no_ids": "No user IDs in this batch.",
             "drawer.no_differences": "No persisted field differences.",
         "drawer.provenance": "Evidence provenance",
         "drawer.usage": "Usage stage",
@@ -520,7 +599,7 @@ _EDITORIAL_CATALOG: dict[str, dict[str, str]] = {
         "feedback.time.body": "The same-batch context is frozen; signal appears only in the next batch's three independent rankings.",
         "run.kicker": "This run · Editorial candidate",
         "run.title": "This run's evidence will follow the same research chain",
-        "run.lead": "This Ticket establishes an independent typed-payload shell first. Later Editorial Tickets add overview, sample, exposure ranking, LLM trace, network feedback, and approved downloads here; this scaffold does not call or generate another renderer.",
+        "run.lead": "This run evidence expands directly from the typed persisted payload into overview, sample, exposure ranking, LLM trace, network feedback, and approved downloads; it does not call or generate another renderer.",
         "run.status.title": "Typed payload source",
         "run.status.body": "These source values remain unchanged; they are not translation-catalog entries.",
         "run.contract.title": "Persisted contract",
@@ -665,6 +744,36 @@ _EDITORIAL_CATALOG: dict[str, dict[str, str]] = {
         "run.exposure.pagination_aria": "Exposure batch pagination",
         "run.exposure.empty": "No persisted batch rows match this filter.",
         "run.evidence.descriptive": "Descriptive persisted evidence; no winner, attribution, or causal effect is inferred.",
+        "run.feedback.kicker": "This run · Network feedback",
+        "run.feedback.title": "Primary feedback changes all three rankings in the next batch only",
+        "run.feedback.lead": "Start with changed message-batches, Top20 overlap, and exact batch evidence; full added/removed user IDs appear only in the shared drawer/detail or approved downloads.",
+        "run.feedback.changed": "changed message-batches",
+        "run.feedback.batch_total": "all message-batches",
+        "run.feedback.message": "Message",
+        "run.feedback.batch": "Batch",
+        "run.feedback.eligible": "Eligible users",
+        "run.feedback.top_count": "Top20",
+        "run.feedback.overlap": "Top20 overlap",
+        "run.feedback.added": "added",
+        "run.feedback.removed": "removed",
+        "run.feedback.range": "Top20 overlap range",
+        "run.feedback.scope": "Batch evidence scope",
+        "run.feedback.changed_only": "Changed batches only",
+        "run.feedback.all_batches": "All batches",
+        "run.feedback.all_messages": "All messages",
+        "run.feedback.details": "Open batch detail",
+        "run.feedback.table_aria": "Persisted network feedback batch evidence",
+        "run.feedback.rows": "batches",
+        "run.feedback.descriptive": "Paired no-feedback diagnostics are descriptive simulation evidence; they do not claim that every batch changed or that feedback caused a platform effect.",
+        "run.downloads.kicker": "This run · Approved downloads",
+        "run.downloads.title": "17 approved artifacts grouped by research responsibility",
+        "run.downloads.lead": "Every href comes from the payload's canonical view; artifact names remain authoritative, and missing, renamed, crossed, or escaped targets fail closed during closure.",
+        "run.downloads.group.report": "Report",
+        "run.downloads.group.sample-users": "Sample / Users",
+        "run.downloads.group.decision": "Decision",
+        "run.downloads.group.runtime-diagnostics": "Runtime / Diagnostics",
+        "run.downloads.link": "Approved artifact",
+        "run.downloads.table_aria": "Approved concurrent message downloads",
         "detail.overview-start.label": "Simultaneous start boundary",
         "detail.overview-start.caption": "The three messages enter their queues at one publication boundary",
         "detail.overview-pair.label": "user × message pair",
@@ -1175,6 +1284,193 @@ def _safe_trace_sequence(source: object, key: str, context: str) -> list[Any]:
     return [_safe_trace_value(value) for value in _required_sequence(source, key, context)]
 
 
+def _required_bool(source: object, key: str, context: str) -> bool:
+    value = _value(source, key, None)
+    if not isinstance(value, bool):
+        raise ValueError(f"{context}.{key} must be a persisted boolean")
+    return value
+
+
+def _required_string_sequence(source: object, key: str, context: str) -> list[str]:
+    values = _required_sequence(source, key, context)
+    result: list[str] = []
+    for index, value in enumerate(values):
+        if not isinstance(value, str) or not value.strip():
+            raise ValueError(f"{context}.{key}[{index}] must be a non-empty persisted string")
+        result.append(value)
+    if len(set(result)) != len(result):
+        raise ValueError(f"{context}.{key} must not contain duplicate values")
+    return result
+
+
+def _validated_downloads(payload: Any) -> dict[str, str]:
+    raw_downloads = _value(payload, "downloads", None)
+    if raw_downloads is None:
+        raise ValueError("payload.downloads is required")
+    if isinstance(raw_downloads, Mapping):
+        actual = dict(raw_downloads)
+    else:
+        actual = {key: _value(raw_downloads, key, None) for key in _EDITORIAL_DOWNLOAD_KEYS}
+    if set(actual) != set(_EDITORIAL_DOWNLOAD_KEYS):
+        raise ValueError("approved downloads do not match the canonical artifact keys")
+    normalized: dict[str, str] = {}
+    for key in _EDITORIAL_DOWNLOAD_KEYS:
+        value = actual.get(key)
+        if not isinstance(value, str) or value != _EDITORIAL_DOWNLOAD_PATHS[key]:
+            raise ValueError(f"approved download {key} does not match the canonical artifact layout")
+        path = Path(value)
+        if path.is_absolute() or ".." in path.parts or "\\" in value:
+            raise ValueError(f"approved download {key} escapes the run directory")
+        normalized[key] = value
+    return normalized
+
+
+def _feedback_effect_data(
+    payload: Any,
+    *,
+    message_ids: Sequence[str],
+    message_titles: Mapping[str, str],
+    horizon: int,
+    delivery_capacity: int,
+) -> dict[str, Any]:
+    source = _required_mapping(payload, "campaign_feedback_effect", "payload")
+    if horizon <= 0 or delivery_capacity <= 0:
+        raise ValueError("feedback evidence requires positive horizon and delivery capacity")
+    if delivery_capacity < 20:
+        raise ValueError("feedback evidence requires delivery capacity for Top20 rankings")
+    flag_fields = (
+        "advances_runtime_state",
+        "calls_decision_adapter",
+        "descriptive_only",
+        "feedback_component_zeroed_only",
+        "full_precision_ranking",
+        "non_causal",
+        "same_candidate_set_and_frozen_state",
+    )
+    flags = {field: _required_bool(source, field, "campaign_feedback_effect") for field in flag_fields}
+    if flags != {
+        "advances_runtime_state": False,
+        "calls_decision_adapter": False,
+        "descriptive_only": True,
+        "feedback_component_zeroed_only": True,
+        "full_precision_ranking": True,
+        "non_causal": True,
+        "same_candidate_set_and_frozen_state": True,
+    }:
+        raise ValueError("campaign feedback diagnostics do not close to the descriptive frozen-state contract")
+
+    overall = _required_mapping(source, "overall", "campaign_feedback_effect")
+    expected_batch_count = len(message_ids) * horizon
+    message_batch_count = _required_int(overall, "message_batch_count", "campaign_feedback_effect.overall")
+    changed_message_batch_count = _required_int(
+        overall, "changed_message_batch_count", "campaign_feedback_effect.overall"
+    )
+    added_ids = _required_string_sequence(
+        overall, "distinct_feedback_added_user_ids", "campaign_feedback_effect.overall"
+    )
+    removed_ids = _required_string_sequence(
+        overall, "distinct_feedback_removed_user_ids", "campaign_feedback_effect.overall"
+    )
+    changed_ids = _required_string_sequence(overall, "distinct_changed_user_ids", "campaign_feedback_effect.overall")
+    if message_batch_count != expected_batch_count:
+        raise ValueError("campaign feedback message batch count does not match the persisted horizon")
+
+    per_message_source = _required_mapping(source, "per_message", "campaign_feedback_effect")
+    if set(per_message_source) != set(message_ids):
+        raise ValueError("campaign feedback per-message keys do not match persisted messages")
+    normalized_messages: list[dict[str, Any]] = []
+    all_added: set[str] = set()
+    all_removed: set[str] = set()
+    total_changed = 0
+    for message_id in message_ids:
+        entry = _required_mapping(per_message_source, message_id, "campaign_feedback_effect.per_message")
+        title = str(_value(entry, "message_title", "")).strip()
+        if title != message_titles[message_id]:
+            raise ValueError(f"campaign feedback title does not match persisted message {message_id}")
+        declared_changed = _required_int(entry, "changed_batch_count", f"campaign_feedback_effect.{message_id}")
+        raw_batches = _required_sequence(entry, "batches", f"campaign_feedback_effect.{message_id}")
+        if len(raw_batches) != horizon:
+            raise ValueError(f"campaign feedback batches do not cover horizon for {message_id}")
+        normalized_batches: list[dict[str, Any]] = []
+        changed_count = 0
+        overlap_counts: list[int] = []
+        for index, batch in enumerate(raw_batches):
+            context = f"campaign_feedback_effect.{message_id}.batches[{index}]"
+            time_step = _required_int(batch, "time_step", context)
+            if time_step != index:
+                raise ValueError(f"campaign feedback batches are not ordered for {message_id}")
+            eligible_users = _required_int(batch, "eligible_users", context)
+            top_count = _required_int(batch, "top_count", context)
+            top_overlap_count = _required_int(batch, "top_overlap_count", context)
+            full_ids = _required_string_sequence(batch, "full_ranking_top_user_ids", context)
+            no_feedback_ids = _required_string_sequence(batch, "no_feedback_top_user_ids", context)
+            overlap = _required_string_sequence(batch, "top_overlap_user_ids", context)
+            feedback_added = _required_string_sequence(batch, "feedback_added_user_ids", context)
+            feedback_removed = _required_string_sequence(batch, "feedback_removed_user_ids", context)
+            if top_count != 20:
+                raise ValueError(f"campaign feedback evidence must contain Top20 rankings for {context}")
+            if top_count != len(full_ids) or top_count != len(no_feedback_ids):
+                raise ValueError(f"campaign feedback Top20 rows do not match top_count for {context}")
+            if top_count > delivery_capacity or top_overlap_count < 0 or top_overlap_count > top_count:
+                raise ValueError(f"campaign feedback Top20 bounds are invalid for {context}")
+            no_feedback_set = set(no_feedback_ids)
+            full_set = set(full_ids)
+            expected_overlap = [user_id for user_id in full_ids if user_id in no_feedback_set]
+            expected_added = [user_id for user_id in full_ids if user_id not in no_feedback_set]
+            expected_removed = [user_id for user_id in no_feedback_ids if user_id not in full_set]
+            if overlap != expected_overlap or feedback_added != expected_added or feedback_removed != expected_removed:
+                raise ValueError(f"campaign feedback set differences do not close for {context}")
+            if top_overlap_count != len(overlap):
+                raise ValueError(f"campaign feedback overlap count does not close for {context}")
+            changed = _required_bool(batch, "top_selection_changed", context)
+            if changed != bool(feedback_added or feedback_removed):
+                raise ValueError(f"campaign feedback changed flag does not close for {context}")
+            changed_count += int(changed)
+            overlap_counts.append(top_overlap_count)
+            all_added.update(feedback_added)
+            all_removed.update(feedback_removed)
+            normalized_batches.append(
+                {
+                    "time_step": time_step,
+                    "eligible_users": eligible_users,
+                    "top_count": top_count,
+                    "top_overlap_count": top_overlap_count,
+                    "top_selection_changed": changed,
+                    "feedback_added_user_ids": feedback_added,
+                    "feedback_removed_user_ids": feedback_removed,
+                    "full_ranking_top_user_ids": full_ids,
+                    "no_feedback_top_user_ids": no_feedback_ids,
+                    "top_overlap_user_ids": overlap,
+                }
+            )
+        if declared_changed != changed_count:
+            raise ValueError(f"campaign feedback changed batch count does not close for {message_id}")
+        total_changed += changed_count
+        normalized_messages.append(
+            {
+                "message_id": message_id,
+                "title": title,
+                "changed_batch_count": changed_count,
+                "overlap_range": {"min": min(overlap_counts), "max": max(overlap_counts)},
+                "batches": normalized_batches,
+            }
+        )
+
+    if changed_message_batch_count != total_changed:
+        raise ValueError("campaign feedback overall changed batch count does not close")
+    if set(added_ids) != all_added or set(removed_ids) != all_removed or set(changed_ids) != all_added | all_removed:
+        raise ValueError("campaign feedback distinct user IDs do not close to batch evidence")
+    return {
+        "message_batch_count": message_batch_count,
+        "changed_message_batch_count": changed_message_batch_count,
+        "distinct_feedback_added_user_ids": added_ids,
+        "distinct_feedback_removed_user_ids": removed_ids,
+        "distinct_changed_user_ids": changed_ids,
+        "flags": flags,
+        "per_message": normalized_messages,
+    }
+
+
 def _trace_lineage_rows(payload: Any) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     for index, entry in enumerate(_required_sequence(payload, "field_lineage", "payload")):
@@ -1444,6 +1740,14 @@ def _run_evidence_data(payload: Any) -> dict[str, Any]:
 
     batch_source = _required_sequence(allocation, "batch_capacity", "message_allocation")
     horizon = _required_int(run, "horizon", "run")
+    delivery_capacity = _required_int(run, "delivery_capacity", "run")
+    feedback = _feedback_effect_data(
+        payload,
+        message_ids=[message["message_id"] for message in messages],
+        message_titles=message_titles,
+        horizon=horizon,
+        delivery_capacity=delivery_capacity,
+    )
     if len(batch_source) != len(messages) * horizon:
         raise ValueError("persisted batch capacity rows do not match message count and horizon")
     batch_rows: list[dict[str, Any]] = []
@@ -1488,11 +1792,8 @@ def _run_evidence_data(payload: Any) -> dict[str, Any]:
     observed_model = _observed_model(payload)
     if not observed_model:
         raise ValueError("variant_provider_accounting must persist an observed model")
-    downloads = _value(payload, "downloads", {})
-    if isinstance(downloads, Mapping):
-        artifacts = [str(value) for _, value in sorted(downloads.items())]
-    else:
-        artifacts = [str(value) for value in sorted(vars(downloads).values()) if isinstance(value, str)]
+    downloads = _validated_downloads(payload)
+    artifacts = [downloads[key] for key in _EDITORIAL_DOWNLOAD_KEYS]
     messages_by_id = {message["message_id"]: message for message in messages}
     trace_rows = [_trace_view_row(row, messages_by_id, index) for index, row in enumerate(raw_exposures)]
     trace_ids = [row["trace_id"] for row in trace_rows]
@@ -1548,6 +1849,8 @@ def _run_evidence_data(payload: Any) -> dict[str, Any]:
         "batch_rows": batch_rows,
         "trace_rows": trace_rows,
         "trace_sensitivity": trace_sensitivity,
+        "feedback": feedback,
+        "downloads": downloads,
         "field_lineage": field_lineage,
     }
 
@@ -1982,7 +2285,6 @@ def _run_overview_section(data: Mapping[str, Any]) -> str:
         f'<li data-testid="run-coverage-{_escaped(key, quote=True)}"><strong>{_format_count(value)} / {_format_count(data["sample_users"])}</strong>{_i18n("run.coverage.messages")} · {key}</li>'
         for key, value in sorted(data["coverage"].items(), key=lambda item: int(item[0]))
     )
-    artifact_rows = "".join(f'<li><code>{_escaped(artifact)}</code></li>' for artifact in data["artifacts"])
     return f'''
       <section id="run-overview" class="editorial-section editorial-run-section editorial-run-intro" data-section-anchor="overview" data-testid="run-intro" tabindex="-1">
         <div class="editorial-section-header">
@@ -2012,7 +2314,7 @@ def _run_overview_section(data: Mapping[str, Any]) -> str:
         </div>
         <div class="editorial-run-contract-grid">
           <article><h2>{_i18n("run.contract.title")}</h2>{_i18n("run.contract.body", tag="p")}<dl class="editorial-source-list"><div><dt>{_i18n("run.source.primary_token")}</dt><dd><code>{_escaped(data["primary_token"])}</code></dd></div><div><dt>{_i18n("run.source.shadow_token")}</dt><dd><code>{_escaped(data["shadow_token"])}</code></dd></div></dl></article>
-          <article class="editorial-artifact-list"><h2>{_i18n("run.source.approved_artifacts")}</h2><ul>{artifact_rows}</ul></article>
+          <article><h2>{_i18n("run.status.title")}</h2>{_i18n("run.status.body", tag="p")}<dl class="editorial-source-list"><div><dt>{_i18n("run.source.schema")}</dt><dd><code>{_escaped(data["schema"])}</code></dd></div><div><dt>{_i18n("run.source.model")}</dt><dd><code>{_escaped(data["observed_model"])}</code></dd></div></dl></article>
         </div>
       </section>
     '''
@@ -2083,6 +2385,43 @@ def _run_exposure_section(data: Mapping[str, Any]) -> str:
     '''
 
 
+def _run_feedback_section(feedback: Mapping[str, Any]) -> str:
+    per_message = feedback["per_message"]
+    summary_cards = "".join(
+        f'<article data-testid="run-feedback-message-{_escaped(message["message_id"], quote=True)}">'
+        f'<code>{_escaped(message["message_id"])}</code>'
+        f'<strong>{_format_count(message["changed_batch_count"])} / {_format_count(len(message["batches"]))}</strong>'
+        f'<span>{_i18n("run.feedback.changed")}</span>'
+        f'<p>{_i18n("run.feedback.range")} <code>{message["overlap_range"]["min"]}–{message["overlap_range"]["max"]}</code></p>'
+        "</article>"
+        for message in per_message
+    )
+    message_options = "".join(
+        f'<option value="{_escaped(message["message_id"], quote=True)}">{_escaped(message["title"])}</option>'
+        for message in per_message
+    )
+    feedback_json = json.dumps(feedback, ensure_ascii=False, separators=(",", ":")).replace("</", "<\\/")
+    return f'''
+      <section id="run-network-feedback" class="editorial-section editorial-run-section editorial-section-feedback" data-section-anchor="network-feedback" data-testid="run-network-feedback-section" tabindex="-1">
+        <div class="editorial-section-header"><div>{_i18n("run.feedback.kicker", class_name="editorial-kicker")}{_i18n("run.feedback.title", tag="h2")}</div>{_i18n("run.feedback.lead", tag="p", class_name="editorial-lead")}</div>
+        <div class="editorial-feedback-summary" data-testid="run-feedback-summary">
+          <article data-testid="run-feedback-changed-total"><strong>{_format_count(feedback["changed_message_batch_count"])} / {_format_count(feedback["message_batch_count"])}</strong><span>{_i18n("run.feedback.changed")}</span><code>{_format_count(feedback["message_batch_count"])} {_i18n("run.feedback.batch_total")}</code></article>
+          {summary_cards}
+        </div>
+        <div class="editorial-callout editorial-callout-amber" data-testid="run-feedback-caveat"><strong>{_i18n("run.feedback.descriptive")}</strong></div>
+        <div class="editorial-feedback-tool" data-testid="run-feedback-tool">
+          <div class="editorial-feedback-filter-heading"><h2>{_i18n("run.feedback.scope")}</h2><output data-testid="run-feedback-filtered-count" aria-live="polite"></output></div>
+          <div class="editorial-feedback-filters">
+            <label>{_i18n("run.feedback.message", tag="span")}<select data-testid="run-feedback-message-select" {_attribute_i18n("run.feedback.message", "aria-label")}><option value="all" data-i18n="run.feedback.all_messages">{_copy("run.feedback.all_messages")}</option>{message_options}</select></label>
+            <label>{_i18n("run.feedback.scope", tag="span")}<select data-testid="run-feedback-scope-select" {_attribute_i18n("run.feedback.scope", "aria-label")}><option value="changed" data-i18n="run.feedback.changed_only">{_copy("run.feedback.changed_only")}</option><option value="all" data-i18n="run.feedback.all_batches">{_copy("run.feedback.all_batches")}</option></select></label>
+          </div>
+          <script type="application/json" data-testid="run-feedback-data">{feedback_json}</script>
+          <div class="editorial-table-scroll"><table class="editorial-feedback-table" data-testid="run-feedback-table" {_attribute_i18n("run.feedback.table_aria", "aria-label")}><thead><tr><th>{_i18n("run.feedback.message", tag="span")}</th><th>{_i18n("run.feedback.batch", tag="span")}</th><th>{_i18n("run.feedback.eligible", tag="span")}</th><th>{_i18n("run.feedback.top_count", tag="span")}</th><th>{_i18n("run.feedback.overlap", tag="span")}</th><th>{_i18n("run.feedback.added", tag="span")}</th><th>{_i18n("run.feedback.removed", tag="span")}</th><th>{_i18n("run.feedback.details", tag="span")}</th></tr></thead><tbody data-testid="run-feedback-table-body"></tbody></table></div>
+        </div>
+      </section>
+    '''
+
+
 def _run_trace_section(data: Mapping[str, Any]) -> str:
     action_labels = {
         "like": "run.trace.action.like",
@@ -2147,6 +2486,25 @@ def _run_trace_section(data: Mapping[str, Any]) -> str:
     '''
 
 
+def _run_downloads_section(downloads: Mapping[str, str]) -> str:
+    groups: list[str] = []
+    for group, keys in _EDITORIAL_DOWNLOAD_GROUPS:
+        links = "".join(
+            f'<a class="editorial-download-link" data-download-group="{_escaped(group, quote=True)}" data-download-key="{_escaped(key, quote=True)}" data-testid="download-{_escaped(key.replace("_", "-"), quote=True)}" href="{_escaped(downloads[key], quote=True)}"><span>{_i18n("run.downloads.link")}</span><code>{_escaped(downloads[key])}</code></a>'
+            for key in keys
+        )
+        groups.append(
+            f'<section class="editorial-download-group" data-testid="run-download-group-{_escaped(group, quote=True)}" data-download-group="{_escaped(group, quote=True)}">'
+            f'<h3>{_i18n(f"run.downloads.group.{group}")}</h3><div class="editorial-download-links" role="list">{links}</div></section>'
+        )
+    return f'''
+      <section class="editorial-section editorial-run-section editorial-downloads-section" data-testid="run-downloads-section">
+        <div class="editorial-section-header"><div>{_i18n("run.downloads.kicker", class_name="editorial-kicker")}{_i18n("run.downloads.title", tag="h2")}</div>{_i18n("run.downloads.lead", tag="p", class_name="editorial-lead")}</div>
+        <div class="editorial-download-groups">{"".join(groups)}</div>
+      </section>
+    '''
+
+
 def _run_placeholder_section(anchor: str) -> str:
     return (
         f'<section id="run-{_escaped(anchor, quote=True)}" class="editorial-section editorial-run-section" '
@@ -2164,7 +2522,8 @@ def _run_scaffold(payload: Any) -> str:
         + _run_sample_section(data)
         + _run_exposure_section(data)
         + _run_trace_section(data)
-        + _run_placeholder_section("network-feedback")
+        + _run_feedback_section(data["feedback"])
+        + _run_downloads_section(data["downloads"])
         + "</div>"
     )
 
@@ -2384,7 +2743,45 @@ code { overflow-wrap: anywhere; font-family: ui-monospace, SFMono-Regular, Menlo
     .editorial-trace-page-numbers button:disabled { border-color: transparent; cursor: default; }
     .editorial-trace-pagination output { min-width: 0; color: var(--editorial-muted); font-size: 12px; text-align: center; }
 
-.editorial-run-status-strip { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 0; max-width: 1280px; margin: 0 auto 28px; border-top: 1px solid var(--editorial-rule); border-bottom: 1px solid var(--editorial-rule); }
+.editorial-feedback-summary { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); max-width: 1280px; margin: 0 auto 32px; border-top: 1px solid var(--editorial-rule); border-bottom: 1px solid var(--editorial-rule); }
+    .editorial-feedback-summary article { min-width: 0; padding: 17px 18px; border-right: 1px solid var(--editorial-rule); }
+    .editorial-feedback-summary article:last-child { border-right: 0; }
+    .editorial-feedback-summary article:first-child { border-top: 3px solid var(--editorial-cobalt); }
+    .editorial-feedback-summary article:nth-child(2) { border-top: 3px solid var(--editorial-green); }
+    .editorial-feedback-summary article:nth-child(3) { border-top: 3px solid var(--editorial-cobalt); }
+    .editorial-feedback-summary article:nth-child(4) { border-top: 3px solid var(--editorial-amber); }
+    .editorial-feedback-summary article:nth-child(5) { border-top: 3px solid var(--editorial-green); }
+    .editorial-feedback-summary code, .editorial-feedback-summary span, .editorial-feedback-summary p { display: block; color: var(--editorial-muted); font-size: 12px; line-height: 1.45; overflow-wrap: anywhere; }
+    .editorial-feedback-summary strong { display: block; margin: 7px 0 4px; color: var(--editorial-ink); font-size: 24px; line-height: 1.1; }
+    .editorial-feedback-summary p { margin: 13px 0 0; }
+    .editorial-feedback-summary p code { display: inline; color: var(--editorial-cobalt); font-size: 13px; font-weight: 700; }
+    .editorial-feedback-tool { max-width: 1280px; margin: 0 auto 32px; }
+    .editorial-feedback-filter-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; margin-bottom: 13px; }
+    .editorial-feedback-filter-heading h2 { margin: 0; font-size: 21px; line-height: 1.25; }
+    .editorial-feedback-filter-heading output { color: var(--editorial-muted); font-size: 12px; }
+    .editorial-feedback-filters { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin-bottom: 18px; }
+    .editorial-feedback-filters label { display: grid; gap: 6px; min-width: 0; color: var(--editorial-muted); font-size: 12px; font-weight: 650; }
+    .editorial-feedback-filters select { width: 100%; min-width: 0; min-height: 38px; padding: 8px 10px; border: 1px solid var(--editorial-rule); background: var(--editorial-paper); color: var(--editorial-ink); }
+    .editorial-feedback-table { min-width: 760px; }
+    .editorial-feedback-table tbody tr { cursor: pointer; }
+    .editorial-feedback-table tbody tr:hover, .editorial-feedback-table tbody tr:focus-visible { background: #eef5ff; outline: 2px solid rgba(11, 87, 208, .2); outline-offset: -2px; }
+    .editorial-feedback-table td { white-space: nowrap; }
+    .editorial-feedback-table td:first-child { max-width: 190px; overflow-wrap: anywhere; white-space: normal; }
+    .editorial-feedback-table td:last-child button { min-height: 32px; padding: 5px 8px; border: 1px solid var(--editorial-rule); background: var(--editorial-paper); color: var(--editorial-cobalt); font-size: 12px; white-space: nowrap; }
+    .editorial-downloads-section { background: #fbfdff; }
+    .editorial-download-groups { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 28px 36px; max-width: 1280px; margin: 0 auto; }
+    .editorial-download-group { min-width: 0; padding-top: 16px; border-top: 2px solid var(--editorial-cobalt); }
+    .editorial-download-group:nth-child(2) { border-top-color: var(--editorial-green); }
+    .editorial-download-group:nth-child(3) { border-top-color: var(--editorial-amber); }
+    .editorial-download-group:nth-child(4) { border-top-color: var(--editorial-green); }
+    .editorial-download-group h3 { margin: 0 0 12px; font-size: 18px; }
+    .editorial-download-links { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+    .editorial-download-link { display: grid; gap: 5px; min-width: 0; padding: 11px 12px; border: 1px solid var(--editorial-rule); background: var(--editorial-paper); color: var(--editorial-ink); text-decoration: none; }
+    .editorial-download-link:hover, .editorial-download-link:focus-visible { border-color: var(--editorial-cobalt); outline: 2px solid rgba(11, 87, 208, .16); outline-offset: 2px; }
+    .editorial-download-link span { color: var(--editorial-muted); font-size: 11px; font-weight: 650; }
+    .editorial-download-link code { color: var(--editorial-cobalt); font-size: 12px; overflow-wrap: anywhere; }
+
+    .editorial-run-status-strip { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 0; max-width: 1280px; margin: 0 auto 28px; border-top: 1px solid var(--editorial-rule); border-bottom: 1px solid var(--editorial-rule); }
 .editorial-run-status-strip > div { min-width: 0; padding: 15px 18px; border-right: 1px solid var(--editorial-rule); }
 .editorial-run-status-strip > div:last-child { border-right: 0; }
 .editorial-run-status-strip strong, .editorial-run-status-strip code, .editorial-run-status-value { display: block; overflow-wrap: anywhere; }
@@ -2527,6 +2924,10 @@ code { overflow-wrap: anywhere; font-family: ui-monospace, SFMono-Regular, Menlo
 }
 @media (max-width: 820px) {
   .editorial-run-status-strip, .editorial-run-funnel-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .editorial-feedback-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .editorial-feedback-summary article:nth-child(2n) { border-right: 0; }
+      .editorial-feedback-summary article:nth-child(-n + 4) { border-bottom: 1px solid var(--editorial-rule); }
+      .editorial-download-groups { grid-template-columns: 1fr; }
   .editorial-run-status-strip > div:nth-child(2), .editorial-run-funnel-grid article:nth-child(2) { border-right: 0; }
   .editorial-run-status-strip > div:nth-child(-n + 2), .editorial-run-funnel-grid article:nth-child(-n + 2) { border-bottom: 1px solid var(--editorial-rule); }
   .editorial-run-accounting-grid { grid-template-columns: 1fr; }
@@ -2542,6 +2943,11 @@ code { overflow-wrap: anywhere; font-family: ui-monospace, SFMono-Regular, Menlo
 @media (max-width: 680px) {
   .editorial-brand { min-width: 0; max-width: 220px; white-space: normal; font-size: 16px; line-height: 1.2; }
   .editorial-run-status-strip, .editorial-run-funnel-grid, .editorial-run-coverage ul, .editorial-run-exposure-summary-grid { grid-template-columns: 1fr; }
+      .editorial-feedback-summary { grid-template-columns: 1fr; }
+      .editorial-feedback-summary article { border-right: 0; border-bottom: 1px solid var(--editorial-rule); }
+      .editorial-feedback-summary article:last-child { border-bottom: 0; }
+      .editorial-feedback-filters { grid-template-columns: 1fr; }
+      .editorial-download-links { grid-template-columns: 1fr; }
   .editorial-run-status-strip > div, .editorial-run-funnel-grid article, .editorial-run-exposure-summary-grid article { border-right: 0; border-bottom: 1px solid var(--editorial-rule); }
   .editorial-run-status-strip > div:last-child, .editorial-run-funnel-grid article:last-child, .editorial-run-exposure-summary-grid article:last-child { border-bottom: 0; }
   .editorial-run-two-column, .editorial-run-contract-grid { grid-template-columns: 1fr; }
@@ -2589,7 +2995,12 @@ _EDITORIAL_SCRIPT = r"""
   const exposureTableBody = root.querySelector('[data-testid="run-exposure-table-body"]');
   const exposureSelect = root.querySelector('[data-testid="run-exposure-message-select"]');
   const exposurePageStatus = root.querySelector('[data-testid="run-exposure-page-status"]');
-  const exposurePageButtons = [...root.querySelectorAll('[data-run-exposure-page]')];
+  const feedbackDataElement = root.querySelector('[data-testid="run-feedback-data"]');
+   const feedbackTableBody = root.querySelector('[data-testid="run-feedback-table-body"]');
+   const feedbackMessageSelect = root.querySelector('[data-testid="run-feedback-message-select"]');
+   const feedbackScopeSelect = root.querySelector('[data-testid="run-feedback-scope-select"]');
+   const feedbackFilteredCount = root.querySelector('[data-testid="run-feedback-filtered-count"]');
+   const exposurePageButtons = [...root.querySelectorAll('[data-run-exposure-page]')];
   const traceRowsData = root.querySelector('[data-testid="run-trace-rows-data"]');
   const traceLineageData = root.querySelector('[data-testid="run-trace-lineage-data"]');
   const traceTableBody = root.querySelector('[data-testid="run-trace-table-body"]');
@@ -2608,10 +3019,12 @@ _EDITORIAL_SCRIPT = r"""
     disagreement: root.querySelector('[data-testid="run-trace-disagreement-select"]'),
   };
   let exposureRows = [];
-  let traceRows = [];
+  let feedbackData = { message_batch_count: 0, changed_message_batch_count: 0, flags: {}, per_message: [] };
+   let traceRows = [];
   let traceLineage = [];
   try {
     exposureRows = exposureRowsData ? JSON.parse(exposureRowsData.textContent || '[]') : [];
+     feedbackData = feedbackDataElement ? JSON.parse(feedbackDataElement.textContent || '{}') : feedbackData;
     traceRows = traceRowsData ? JSON.parse(traceRowsData.textContent || '[]') : [];
     traceLineage = traceLineageData ? JSON.parse(traceLineageData.textContent || '[]') : [];
   } catch (error) {
@@ -2675,7 +3088,62 @@ _EDITORIAL_SCRIPT = r"""
     });
   }
 
-  function filteredTraceRows() {
+  function feedbackRowsForState() {
+     const selectedMessage = feedbackMessageSelect?.value || 'all';
+     const scope = feedbackScopeSelect?.value || 'changed';
+     const rows = [];
+     feedbackData.per_message.forEach((message) => {
+       if (selectedMessage !== 'all' && message.message_id !== selectedMessage) return;
+       message.batches.forEach((batch) => {
+         if (scope === 'changed' && !batch.top_selection_changed) return;
+         rows.push({ ...batch, message_id: message.message_id, message_title: message.title });
+       });
+     });
+     return rows;
+   }
+
+   function renderFeedbackRows() {
+     if (!feedbackTableBody) return;
+     const rows = feedbackRowsForState();
+     feedbackTableBody.replaceChildren();
+     rows.forEach((row) => {
+       const tr = document.createElement('tr');
+       const feedbackKey = `${row.message_id}:${row.time_step}`;
+       tr.tabIndex = 0;
+       tr.dataset.testid = `run-feedback-row-${row.message_id}-${row.time_step}`;
+       tr.dataset.feedbackKey = feedbackKey;
+       tr.dataset.messageId = row.message_id;
+       tr.dataset.timeStep = String(row.time_step);
+       tr.setAttribute('aria-label', `${copy('run.feedback.details')}: ${feedbackKey}`);
+       [
+         `${row.message_id} · ${row.message_title}`,
+         String(row.time_step),
+         String(row.eligible_users),
+         String(row.top_count),
+         String(row.top_overlap_count),
+         String(row.feedback_added_user_ids.length),
+         String(row.feedback_removed_user_ids.length),
+       ].forEach((value) => {
+         const td = document.createElement('td');
+         td.textContent = value;
+         tr.append(td);
+       });
+       const detailCell = document.createElement('td');
+       const detailButton = document.createElement('button');
+       detailButton.type = 'button';
+       detailButton.dataset.feedbackOpen = feedbackKey;
+       detailButton.textContent = copy('run.feedback.details');
+       detailCell.append(detailButton);
+       tr.append(detailCell);
+       feedbackTableBody.append(tr);
+       if (state.drawerRecord?.kind === 'feedback' && state.drawerRecord.id === feedbackKey) state.returnFocus = tr;
+     });
+     if (feedbackFilteredCount) {
+       feedbackFilteredCount.textContent = `${rows.length.toLocaleString()} ${copy('run.feedback.rows')}`;
+     }
+   }
+
+   function filteredTraceRows() {
     const query = traceState.search.trim().toLowerCase();
     return traceRows.filter((row) => {
       const searchable = [row.trace_id, row.pair_id, row.message_id, row.message_title, row.user_id, row.latent_class, row.selection_reason]
@@ -2793,6 +3261,7 @@ _EDITORIAL_SCRIPT = r"""
     const title = document.querySelector('title[data-i18n]');
     if (title) title.textContent = copy(title.dataset.i18n);
     if (state.drawerRecord) renderDrawer();
+        renderFeedbackRows();
     renderExposurePage();
     renderTracePage();
     setActiveNavigation(state.anchor);
@@ -3067,7 +3536,70 @@ _EDITORIAL_SCRIPT = r"""
     appendDefinitionList(lineage, [['drawer.aggregate_source', 'concurrent_message_diagnostics.json']]);
   }
 
-  function selectDrawerTab(tab, focus = false) {
+  function appendIdList(parent, label, values) {
+     const block = document.createElement('div');
+     block.className = 'editorial-drawer-panel-block';
+     appendText(block, 'strong', copy(label));
+     if (!values.length) {
+       appendText(block, 'p', copy('drawer.feedback_no_ids'));
+       parent.append(block);
+       return block;
+     }
+     const list = document.createElement('ul');
+     list.className = 'editorial-drawer-lineage-list';
+     values.forEach((value) => {
+       const item = document.createElement('li');
+       appendText(item, 'code', value);
+       list.append(item);
+     });
+     block.append(list);
+     parent.append(block);
+     return block;
+   }
+
+   function renderFeedbackDrawer(batch) {
+     renderIdentity([
+       ['drawer.feedback_batch', `${batch.message_id} · ${batch.message_title} · ${copy('run.feedback.batch')} ${batch.time_step}`],
+       ['run.feedback.eligible', batch.eligible_users],
+       ['run.feedback.overlap', `${batch.top_overlap_count} / ${batch.top_count}`],
+       ['run.feedback.added', batch.feedback_added_user_ids.length],
+       ['run.feedback.removed', batch.feedback_removed_user_ids.length],
+       ['drawer.feedback_source', 'concurrent_campaign_diagnostics.json'],
+     ]);
+     const summary = panelElement('summary');
+     const decision = panelElement('decision');
+     const context = panelElement('context');
+     const lineage = panelElement('lineage');
+     [summary, decision, context, lineage].forEach((panel) => panel?.replaceChildren());
+     if (!summary || !decision || !context || !lineage) return;
+     summary.className = decision.className = context.className = lineage.className = 'editorial-drawer-panel';
+     appendText(summary, 'h3', copy('drawer.feedback_summary'));
+     appendDefinitionList(summary, [
+       ['run.feedback.batch', batch.time_step],
+       ['run.feedback.eligible', batch.eligible_users],
+       ['run.feedback.top_count', batch.top_count],
+       ['run.feedback.overlap', `${batch.top_overlap_count} / ${batch.top_count}`],
+       ['run.feedback.added', batch.feedback_added_user_ids.length],
+       ['run.feedback.removed', batch.feedback_removed_user_ids.length],
+     ]);
+     appendText(summary, 'p', copy('run.feedback.descriptive'));
+
+     appendText(decision, 'h3', copy('drawer.feedback_full_ranking'));
+     appendIdList(decision, 'drawer.feedback_full_ranking', batch.full_ranking_top_user_ids);
+     appendIdList(decision, 'drawer.feedback_no_feedback_ranking', batch.no_feedback_top_user_ids);
+     appendIdList(decision, 'drawer.feedback_overlap_ids', batch.top_overlap_user_ids);
+
+     appendText(context, 'h3', copy('drawer.tab.context'));
+     appendIdList(context, 'drawer.feedback_added_ids', batch.feedback_added_user_ids);
+     appendIdList(context, 'drawer.feedback_removed_ids', batch.feedback_removed_user_ids);
+     appendText(context, 'p', copy('run.feedback.lead'));
+
+     appendText(lineage, 'h3', copy('drawer.tab.lineage'));
+     appendJsonBlock(lineage, 'drawer.feedback_source', feedbackData.flags);
+     appendDefinitionList(lineage, [['drawer.feedback_source', 'concurrent_campaign_diagnostics.json']]);
+   }
+
+   function selectDrawerTab(tab, focus = false) {
     if (!['summary', 'decision', 'context', 'lineage'].includes(tab)) return;
     state.drawerTab = tab;
     drawerTabButtons.forEach((button) => {
@@ -3088,7 +3620,12 @@ _EDITORIAL_SCRIPT = r"""
       if (!trace) return closeDrawer(false);
       drawerTitle.textContent = `${trace.message_id} · ${trace.user_id}`;
       renderTraceDrawer(trace);
-    } else {
+        } else if (state.drawerRecord.kind === 'feedback') {
+          const feedbackRecord = feedbackData.per_message.flatMap((message) => message.batches.map((batch) => ({ ...batch, message_id: message.message_id, message_title: message.title }))).find((row) => `${row.message_id}:${row.time_step}` === state.drawerRecord.id);
+          if (!feedbackRecord) return closeDrawer(false);
+          drawerTitle.textContent = `${feedbackRecord.message_id} · ${copy('run.feedback.batch')} ${feedbackRecord.time_step}`;
+          renderFeedbackDrawer(feedbackRecord);
+        } else {
       const detail = details[state.drawerRecord.key]?.[state.language];
       if (!detail) return closeDrawer(false);
       drawerTitle.textContent = detail.title;
@@ -3099,7 +3636,7 @@ _EDITORIAL_SCRIPT = r"""
 
   function openDrawer(record, trigger) {
     const normalized = typeof record === 'string' ? { kind: 'mechanism', key: record } : record;
-    if (!drawer || (normalized.kind === 'mechanism' && !details[normalized.key]?.[state.language]) || (normalized.kind === 'trace' && !traceRows.some((row) => row.trace_id === normalized.id))) return;
+    if (!drawer || (normalized.kind === 'mechanism' && !details[normalized.key]?.[state.language]) || (normalized.kind === 'trace' && !traceRows.some((row) => row.trace_id === normalized.id)) || (normalized.kind === 'feedback' && !feedbackData.per_message.some((message) => message.batches.some((batch) => `${message.message_id}:${batch.time_step}` === normalized.id)))) return;
     state.drawerRecord = normalized;
     state.drawerTab = 'summary';
     state.returnFocus = trigger;
@@ -3111,6 +3648,7 @@ _EDITORIAL_SCRIPT = r"""
     document.body.style.overflow = 'hidden';
     mechanismButtons.forEach((button) => button.setAttribute('aria-expanded', String(button === trigger)));
     traceTableBody?.querySelectorAll('tr[data-trace-id]').forEach((row) => row.setAttribute('aria-expanded', String(row === trigger)));
+       feedbackTableBody?.querySelectorAll('tr[data-feedback-key]').forEach((row) => row.setAttribute('aria-expanded', String(row === trigger)));
     closeButton?.focus();
   }
 
@@ -3123,6 +3661,7 @@ _EDITORIAL_SCRIPT = r"""
     document.body.style.overflow = previousBodyOverflow;
     mechanismButtons.forEach((button) => button.setAttribute('aria-expanded', 'false'));
     traceTableBody?.querySelectorAll('tr[data-trace-id]').forEach((row) => row.removeAttribute('aria-expanded'));
+       feedbackTableBody?.querySelectorAll('tr[data-feedback-key]').forEach((row) => row.removeAttribute('aria-expanded'));
     state.drawerRecord = null;
     state.returnFocus = null;
     drawerIdentity?.replaceChildren();
@@ -3164,7 +3703,20 @@ _EDITORIAL_SCRIPT = r"""
     exposureState.page = Math.max(0, exposureState.page + direction);
     renderExposurePage();
   }));
-  const resetTracePage = () => {
+  feedbackMessageSelect?.addEventListener('change', () => renderFeedbackRows());
+   feedbackScopeSelect?.addEventListener('change', () => renderFeedbackRows());
+   feedbackTableBody?.addEventListener('click', (event) => {
+     const row = event.target.closest('tr[data-feedback-key]');
+     if (row) openDrawer({ kind: 'feedback', id: row.dataset.feedbackKey }, row);
+   });
+   feedbackTableBody?.addEventListener('keydown', (event) => {
+     if (!['Enter', ' '].includes(event.key)) return;
+     const row = event.target.closest('tr[data-feedback-key]');
+     if (!row) return;
+     event.preventDefault();
+     openDrawer({ kind: 'feedback', id: row.dataset.feedbackKey }, row);
+   });
+   const resetTracePage = () => {
     traceState.page = 0;
     renderTracePage();
   };

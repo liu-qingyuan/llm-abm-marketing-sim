@@ -131,13 +131,65 @@ def test_run_evidence_recomputes_persisted_formal_fixture(formal_payload: Concur
     }
     assert len(data["field_lineage"]) == 7
     assert sum(row["disagreement"] for row in data["trace_rows"]) == 244
+    assert data["feedback"]["message_batch_count"] == 90
+    assert data["feedback"]["changed_message_batch_count"] == 15
+    assert [message["changed_batch_count"] for message in data["feedback"]["per_message"]] == [5, 5, 5]
+    assert [message["overlap_range"] for message in data["feedback"]["per_message"]] == [
+        {"min": 5, "max": 20},
+        {"min": 8, "max": 20},
+        {"min": 6, "max": 20},
+    ]
+    assert [
+        (
+            batch["top_overlap_count"],
+            len(batch["feedback_added_user_ids"]),
+            len(batch["feedback_removed_user_ids"]),
+        )
+        for batch in data["feedback"]["per_message"][0]["batches"][1:6]
+    ] == [(15, 5, 5), (10, 10, 10), (19, 1, 1), (5, 15, 15), (19, 1, 1)]
+    assert data["downloads"] == candidate._EDITORIAL_DOWNLOAD_PATHS
+    assert len(candidate._EDITORIAL_DOWNLOAD_KEYS) == 17
 
     html = candidate._render_editorial_candidate(formal_payload)
     assert 'data-testid="run-coverage-sequence">0/434/332/234</code>' in html
     assert 'data-fit-min=".588"' in html
     assert 'data-fit-mean=".776"' in html
     assert 'data-fit-max=".829"' in html
+    assert html.count("data-download-key=") == 17
+    assert html.count('data-testid="run-download-group-') == 4
+    assert 'data-testid="run-feedback-changed-total"' in html
+    assert '15 / 90' in html
     assert formal_payload.messages[0]["body"].split("\n\n", 1)[0] in html
+
+
+@pytest.mark.parametrize("corruption", ["missing", "renamed", "crossed", "escaped"])
+def test_editorial_candidate_rejects_noncanonical_download_targets(
+    formal_payload: ConcurrentMessageReportPayload,
+    corruption: str,
+) -> None:
+    downloads = formal_payload.downloads.model_dump(mode="json")
+    if corruption == "missing":
+        downloads.pop("users_json")
+    elif corruption == "renamed":
+        downloads["users_json"] = "renamed_users.json"
+    elif corruption == "crossed":
+        downloads["users_json"], downloads["users_csv"] = downloads["users_csv"], downloads["users_json"]
+    else:
+        downloads["users_json"] = "../users.json"
+    broken = formal_payload.model_copy(update={"downloads": downloads})
+
+    with pytest.raises(ValueError, match="approved download|approved downloads"):
+        candidate._run_evidence_data(broken)
+
+
+def test_editorial_candidate_rejects_non_top20_feedback_batch(
+    formal_payload: ConcurrentMessageReportPayload,
+) -> None:
+    broken = formal_payload.model_copy(deep=True)
+    broken.campaign_feedback_effect["per_message"]["message_1"]["batches"][0]["top_count"] = 19
+
+    with pytest.raises(ValueError, match="Top20 rankings"):
+        candidate._run_evidence_data(broken)
 
 
 def test_run_evidence_allows_provider_failure_outside_dual_success_sensitivity(

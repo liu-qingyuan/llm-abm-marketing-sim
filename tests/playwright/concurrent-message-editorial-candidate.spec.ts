@@ -301,3 +301,91 @@ test('Editorial trace filters, pagination, shared drawer, and language state rem
     expect(geometry.sectionWidth).toBeLessThanOrEqual(viewport.width + 1);
   }
 });
+
+
+test('Editorial network feedback closes persisted batches and groups canonical downloads', async ({ page }, testInfo) => {
+  const reportPath = generateEditorialCandidate(testInfo.outputDir);
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.goto(pathToFileURL(reportPath).toString());
+  await page.getByTestId('run-evidence-mode-button').click();
+  await page.getByRole('link', { name: '网络反馈', exact: true }).click();
+
+  const feedback = page.getByTestId('run-network-feedback-section');
+  await expect(feedback).toBeVisible();
+  await expect(page.getByTestId('run-feedback-changed-total')).toContainText('15 / 90');
+  for (const [messageId, changed, minimum, maximum] of [
+    ['message_1', '5 / 30', '5', '20'],
+    ['message_2', '5 / 30', '8', '20'],
+    ['message_3', '5 / 30', '6', '20'],
+  ]) {
+    const card = page.getByTestId(`run-feedback-message-${messageId}`);
+    await expect(card).toContainText(changed);
+    await expect(card).toContainText(`${minimum}–${maximum}`);
+  }
+
+  const feedbackRows = page.getByTestId('run-feedback-table-body').locator('tr');
+  await expect(feedbackRows).toHaveCount(15);
+  await expect(feedbackRows.first()).toHaveAttribute('data-time-step', '1');
+  await page.getByTestId('run-feedback-scope-select').selectOption('all');
+  await expect(feedbackRows).toHaveCount(90);
+  await page.getByTestId('run-feedback-message-select').selectOption('message_1');
+  await expect(feedbackRows).toHaveCount(30);
+  await page.getByTestId('run-feedback-scope-select').selectOption('changed');
+  await expect(feedbackRows).toHaveCount(5);
+
+  await feedbackRows.first().press('Enter');
+  const drawer = page.getByTestId('evidence-drawer');
+  await expect(drawer).toBeVisible();
+  await expect(drawer.locator('[data-drawer-panel="summary"]')).toContainText('15');
+  await page.getByRole('tab', { name: 'Context', exact: true }).click();
+  await expect(drawer.locator('[data-drawer-panel="context"]')).toContainText('Feedback added user IDs');
+  await expect(drawer.locator('[data-drawer-panel="context"] code')).toHaveCount(10);
+  await page.getByRole('tab', { name: 'Lineage', exact: true }).click();
+  await expect(drawer.locator('[data-drawer-panel="lineage"]')).toContainText('concurrent_campaign_diagnostics.json');
+  await page.getByTestId('editorial-drawer-close').click();
+  await expect(drawer).toBeHidden();
+
+  const expectedDownloads = [
+    'concurrent_message_report_payload.json',
+    'concurrent_validation.json',
+    'artifact_manifest.json',
+    'sample_manifest.json',
+    'sample_manifest.csv',
+    'concurrent_message_users.json',
+    'concurrent_message_users.csv',
+    'concurrent_message_decision_trace.json',
+    'concurrent_message_decision_trace.csv',
+    'concurrent_message_primary_actions.csv',
+    'concurrent_message_provider_failures.csv',
+    'concurrent_message_runtime.json',
+    'concurrent_message_diagnostics.json',
+    'concurrent_message_field_lineage.json',
+    'concurrent_runtime_candidates.csv',
+    'concurrent_runtime_pairs.csv',
+    'concurrent_runtime_terminal_rows.csv',
+  ];
+  await expect(page.getByTestId('run-downloads-section').getByRole('link')).toHaveCount(17);
+  await expect(page.locator('[data-testid^="run-download-group-"]')).toHaveCount(4);
+  const hrefs = await page.locator('[data-download-key]').evaluateAll((links) => links.map((link) => link.getAttribute('href')));
+  expect(hrefs).toEqual(expectedDownloads);
+
+  await page.getByRole('button', { name: 'English', exact: true }).click();
+  await expect(page.locator('html')).toHaveAttribute('lang', 'en-US');
+  await expect(page.getByTestId('run-feedback-scope-select')).toHaveValue('changed');
+  await expect(page.getByTestId('run-feedback-message-select')).toHaveValue('message_1');
+  await expect(page.getByTestId('run-downloads-section')).toContainText('17 approved artifacts grouped by research responsibility');
+  await expect(page.locator('[data-download-key]').evaluateAll((links) => links.map((link) => link.getAttribute('href')))).resolves.toEqual(expectedDownloads);
+
+  for (const viewport of [{ width: 1600, height: 1000 }, { width: 390, height: 844 }]) {
+    await page.setViewportSize(viewport);
+    await feedback.scrollIntoViewIfNeeded();
+    const geometry = await page.evaluate(() => ({
+      horizontalOverflow: document.documentElement.scrollWidth > window.innerWidth + 1,
+      feedbackWidth: document.querySelector<HTMLElement>('[data-testid="run-network-feedback-section"]')?.getBoundingClientRect().width || 0,
+      downloadsWidth: document.querySelector<HTMLElement>('[data-testid="run-downloads-section"]')?.getBoundingClientRect().width || 0,
+    }));
+    expect(geometry.horizontalOverflow).toBe(false);
+    expect(geometry.feedbackWidth).toBeLessThanOrEqual(viewport.width + 1);
+    expect(geometry.downloadsWidth).toBeLessThanOrEqual(viewport.width + 1);
+  }
+});
