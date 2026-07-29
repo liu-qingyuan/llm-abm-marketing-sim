@@ -101,6 +101,40 @@ def test_editorial_candidate_is_deterministic_private_and_direct(formal_payload:
     assert formal_payload.downloads.report_payload in first
 
 
+def test_run_evidence_recomputes_persisted_formal_fixture(formal_payload: ConcurrentMessageReportPayload) -> None:
+    data = candidate._run_evidence_data(formal_payload)
+
+    assert (data["sample_users"], data["eligible_pairs"], data["actual_exposures"]) == (1000, 3000, 1800)
+    assert data["coverage"] == {"0": 0, "1": 434, "2": 332, "3": 234}
+    assert data["role_counts"] == {"seed": 20, "network_cohort": 60, "ordinary": 920}
+    assert data["class_counts"] == {"class_1": 422, "class_2": 417, "class_3": 161}
+    assert [row["values"] for row in data["class_matrix"]] == [[422, 168, 388], [51, 417, 51], [127, 15, 161]]
+    assert data["union_count"] == 1000
+    assert data["three_way_count"] == 234
+    assert [(row["min"], row["mean"], row["max"]) for row in data["fit_ranges"]] == [
+        (0.588110057966, 0.760953182281, 0.833353574559),
+        (0.493275781501, 0.775782336835, 0.811959203577),
+        (0.574908137029, 0.692596514244, 0.828893393071),
+    ]
+    assert len(data["batch_rows"]) == 90
+
+    html = candidate._render_editorial_candidate(formal_payload)
+    assert 'data-testid="run-coverage-sequence">0/434/332/234</code>' in html
+    assert 'data-fit-min=".588"' in html
+    assert 'data-fit-mean=".776"' in html
+    assert 'data-fit-max=".829"' in html
+    assert formal_payload.messages[0]["body"].split("\n\n", 1)[0] in html
+
+
+def test_run_evidence_rejects_inconsistent_persisted_coverage(formal_payload: ConcurrentMessageReportPayload) -> None:
+    broken = formal_payload.model_copy(deep=True)
+    broken.campaign_funnel["campaign_exposure_coverage"]["1"] = 435
+
+    with pytest.raises(ValueError, match="exposure coverage"):
+        candidate._run_evidence_data(broken)
+
+
+
 def test_editorial_candidate_does_not_enter_public_fixed_adapters() -> None:
     assert all("Editorial" not in type(adapter).__name__ for adapter in _FIXED_ADAPTERS)
     assert len(_FIXED_ADAPTERS) == 3

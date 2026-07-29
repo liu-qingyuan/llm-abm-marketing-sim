@@ -3,6 +3,7 @@ from __future__ import annotations
 import html
 import json
 from base64 import b64encode
+from collections import Counter
 from collections.abc import Mapping, Sequence
 from importlib.resources import files
 from typing import TYPE_CHECKING, Any
@@ -145,7 +146,7 @@ _EDITORIAL_CATALOG: dict[str, dict[str, str]] = {
         "run.contract.title": "Persisted contract",
         "run.contract.body": "schema、prompt tokens、model、message IDs、artifact names 和 Decision reasons 继续使用各自的 source language/value。",
         "run.placeholder.title": "后续 evidence surface",
-        "run.placeholder.body": "本 section 的 anchor 与 hash grammar 已闭合；完整 run evidence 由后续 Ticket 直接从同一 typed payload 渲染。",
+        "run.placeholder.body": "其余 run evidence anchors 已保留；后续 implementation Ticket 会从同一份 typed payload 增加对应 evidence surface。",
         "run.source.schema": "Payload schema",
         "run.source.profile": "Configuration profile",
         "run.source.model": "Observed model",
@@ -155,6 +156,85 @@ _EDITORIAL_CATALOG: dict[str, dict[str, str]] = {
         "run.source.approved_artifacts": "Approved artifacts · 已批准产物",
         "run.source.message": "Source message remains unchanged",
         "run.source.reason": "Persisted Decision reason remains unchanged",
+        "run.overview.kicker": "本次运行 · 概览",
+        "run.overview.title": "Formal run 的证据从同一份 persisted payload 展开",
+        "run.overview.lead": "这里显示本次 run 的实际覆盖、曝光和 paired accounting。所有计数都来自 persisted payload；它们是 descriptive evidence，不是 winner 或因果效果。",
+        "run.status.label": "运行状态 · Run status",
+        "run.status.formal": "Formal",
+        "run.status.not_formal": "非 Formal",
+        "run.status.profile": "Configuration profile",
+        "run.status.schema": "Payload schema",
+        "run.status.model": "Observed model",
+        "run.status.tokens": "Prompt tokens",
+        "run.metric.sample": "Sample users · 研究样本用户",
+        "run.metric.eligible": "Eligible pairs · 合格 user × message pairs",
+        "run.metric.exposures": "Actual exposures · 实际曝光 pairs",
+        "run.metric.distinct": "Distinct users · 去重曝光用户",
+        "run.accounting.title": "Primary / Shadow accounting",
+        "run.accounting.attempted": "attempted",
+        "run.accounting.succeeded": "succeeded",
+        "run.accounting.failures": "provider_failed",
+        "run.accounting.primary": "Primary",
+        "run.accounting.shadow": "Shadow · report-only",
+        "run.funnel.title": "Campaign Funnel",
+        "run.funnel.sample": "Sample users",
+        "run.funnel.eligible": "Eligible user × message pairs",
+        "run.funnel.exposures": "Actual exposures",
+        "run.funnel.distinct": "Distinct exposed users",
+        "run.coverage.title": "Exposure coverage · 曝光覆盖",
+        "run.coverage.subtitle": "按曝光 message 数量分组；每项明确显示 numerator / denominator。",
+        "run.coverage.messages": "messages exposed · 曝光 message 数",
+        "run.sample.kicker": "本次运行 · 样本",
+        "run.sample.title": "Seed-first sample 的角色与 Class 构成",
+        "run.sample.lead": "样本角色、latent Class 和 exposure coverage 都从本次 persisted user rows 聚合。Intended Audience Segment 只保留为 message 的 design descriptor，不进入 eligibility 或 Prompt field。",
+        "run.sample.roles": "Sample roles · 样本角色",
+        "run.sample.role": "角色",
+        "run.sample.count": "数量",
+        "run.sample.seed": "seed",
+        "run.sample.network": "network_cohort",
+        "run.sample.ordinary": "ordinary",
+        "run.sample.classes": "Latent Class composition · Latent Class 构成",
+        "run.sample.class": "Class",
+        "run.sample.coverage": "Exposure coverage by sample user · 按样本用户的曝光覆盖",
+        "run.sample.authoritative": "Authoritative messages · 权威 messages",
+        "run.sample.authoritative.body": "下方正文保持 authoritative source language 原文。",
+        "run.sample.design_descriptor": "Intended Audience Segment · design descriptor",
+        "run.sample.source_body": "Authoritative source body",
+        "run.message.audience": "Intended Audience Segment · design descriptor",
+        "run.message.id": "Message ID",
+        "run.message.body": "Authoritative source body",
+        "run.exposure.kicker": "本次运行 · 曝光排序",
+        "run.exposure.title": "三条 message 的 600 exposures 与 30-batch persisted ranking",
+        "run.exposure.lead": "先看每条 message 的 exposure、union、overlap、Class × Message matrix 和 Message-User Fit range；batch table 默认分页，selector 可访问全部 30 batches / 90 rows。这里不生成 winner 或 causal claim。",
+        "run.exposure.summary": "Exposure summary",
+        "run.exposure.per_message": "Per-message exposures",
+        "run.exposure.union": "Union of exposed users",
+        "run.exposure.three_way": "Three-way intersection",
+        "run.exposure.pairwise": "Pairwise overlap",
+        "run.exposure.matrix": "Class × Message matrix",
+        "run.exposure.fit": "Message-User Fit · normalized proxy metric",
+        "run.exposure.fit_metric": "min / mean / max",
+        "run.exposure.message": "Message",
+        "run.exposure.min": "min",
+        "run.exposure.mean": "mean",
+        "run.exposure.max": "max",
+        "run.exposure.batch_table": "Persisted batch rows",
+        "run.exposure.selector": "Filter batches by message",
+        "run.exposure.all_messages": "All messages",
+        "run.exposure.batch": "Batch",
+        "run.exposure.selected": "Selected pairs",
+        "run.exposure.eligible_users": "Eligible users",
+        "run.exposure.capacity": "Capacity",
+        "run.exposure.below": "Below capacity",
+        "run.exposure.cumulative": "Cumulative pairs",
+        "run.exposure.page": "Page",
+        "run.exposure.rows": "Rows",
+        "run.exposure.previous": "Previous page",
+        "run.exposure.next": "Next page",
+        "run.exposure.table_aria": "Persisted exposure batch table",
+        "run.exposure.pagination_aria": "Exposure batch pagination",
+        "run.exposure.empty": "No persisted batch rows match this filter.",
+        "run.evidence.descriptive": "Descriptive persisted evidence; no winner, attribution, or causal effect is inferred.",
         "detail.overview-start.label": "同时开始边界",
         "detail.overview-start.caption": "三条 message 在同一发布边界进入各自 queue",
         "detail.overview-pair.label": "user × message pair",
@@ -322,7 +402,7 @@ _EDITORIAL_CATALOG: dict[str, dict[str, str]] = {
         "run.contract.title": "Persisted contract",
         "run.contract.body": "Schema, prompt tokens, model, message IDs, artifact names, and Decision reasons keep their source language or value.",
         "run.placeholder.title": "Later evidence surface",
-        "run.placeholder.body": "The anchor and hash grammar are closed here; later Tickets render the complete run evidence from the same typed payload.",
+        "run.placeholder.body": "The remaining run evidence anchors are reserved; later implementation Tickets will add their evidence surfaces from the same typed payload.",
         "run.source.schema": "Payload schema",
         "run.source.profile": "Configuration profile",
         "run.source.model": "Observed model",
@@ -332,6 +412,85 @@ _EDITORIAL_CATALOG: dict[str, dict[str, str]] = {
         "run.source.approved_artifacts": "Approved artifacts",
         "run.source.message": "Source message remains unchanged",
         "run.source.reason": "Persisted Decision reason remains unchanged",
+        "run.overview.kicker": "This run · Overview",
+        "run.overview.title": "Formal run evidence expands from one persisted payload",
+        "run.overview.lead": "This view shows actual run coverage, exposure, and paired accounting. Every count comes from the persisted payload; it is descriptive evidence, not a winner claim or causal effect.",
+        "run.status.label": "Run status",
+        "run.status.formal": "Formal",
+        "run.status.not_formal": "Not Formal",
+        "run.status.profile": "Configuration profile",
+        "run.status.schema": "Payload schema",
+        "run.status.model": "Observed model",
+        "run.status.tokens": "Prompt tokens",
+        "run.metric.sample": "Sample users",
+        "run.metric.eligible": "Eligible user × message pairs",
+        "run.metric.exposures": "Actual exposures",
+        "run.metric.distinct": "Distinct exposed users",
+        "run.accounting.title": "Primary / Shadow accounting",
+        "run.accounting.attempted": "attempted",
+        "run.accounting.succeeded": "succeeded",
+        "run.accounting.failures": "provider_failed",
+        "run.accounting.primary": "Primary",
+        "run.accounting.shadow": "Shadow · report-only",
+        "run.funnel.title": "Campaign Funnel",
+        "run.funnel.sample": "Sample users",
+        "run.funnel.eligible": "Eligible user × message pairs",
+        "run.funnel.exposures": "Actual exposures",
+        "run.funnel.distinct": "Distinct exposed users",
+        "run.coverage.title": "Exposure coverage",
+        "run.coverage.subtitle": "Users grouped by distinct messages exposed; numerator / denominator is explicit.",
+        "run.coverage.messages": "messages exposed",
+        "run.sample.kicker": "This run · Sample",
+        "run.sample.title": "Seed-first sample roles and Class composition",
+        "run.sample.lead": "Sample roles, latent Class, and exposure coverage are aggregated from the persisted user rows. Intended Audience Segment remains a message design descriptor; it is not an eligibility or Prompt field.",
+        "run.sample.roles": "Sample roles",
+        "run.sample.role": "Role",
+        "run.sample.count": "Count",
+        "run.sample.seed": "seed",
+        "run.sample.network": "network_cohort",
+        "run.sample.ordinary": "ordinary",
+        "run.sample.classes": "Latent Class composition",
+        "run.sample.class": "Class",
+        "run.sample.coverage": "Exposure coverage by sample user",
+        "run.sample.authoritative": "Authoritative messages",
+        "run.sample.authoritative.body": "The body below remains in its authoritative source language.",
+        "run.sample.design_descriptor": "Intended Audience Segment · design descriptor",
+        "run.sample.source_body": "Authoritative source body",
+        "run.message.audience": "Intended Audience Segment · design descriptor",
+        "run.message.id": "Message ID",
+        "run.message.body": "Authoritative source body",
+        "run.exposure.kicker": "This run · Exposure ranking",
+        "run.exposure.title": "600 exposures per message across the persisted 30-batch ranking",
+        "run.exposure.lead": "Start with per-message exposure, union, overlap, Class × Message matrix, and Message-User Fit ranges. The batch table is paginated by default; the selector exposes all 30 batches / 90 rows. This view makes no winner or causal claim.",
+        "run.exposure.summary": "Exposure summary",
+        "run.exposure.per_message": "Per-message exposures",
+        "run.exposure.union": "Union of exposed users",
+        "run.exposure.three_way": "Three-way intersection",
+        "run.exposure.pairwise": "Pairwise overlap",
+        "run.exposure.matrix": "Class × Message matrix",
+        "run.exposure.fit": "Message-User Fit · normalized proxy metric",
+        "run.exposure.fit_metric": "min / mean / max",
+        "run.exposure.message": "Message",
+        "run.exposure.min": "min",
+        "run.exposure.mean": "mean",
+        "run.exposure.max": "max",
+        "run.exposure.batch_table": "Persisted batch rows",
+        "run.exposure.selector": "Filter batches by message",
+        "run.exposure.all_messages": "All messages",
+        "run.exposure.batch": "Batch",
+        "run.exposure.selected": "Selected pairs",
+        "run.exposure.eligible_users": "Eligible users",
+        "run.exposure.capacity": "Capacity",
+        "run.exposure.below": "Below capacity",
+        "run.exposure.cumulative": "Cumulative pairs",
+        "run.exposure.page": "Page",
+        "run.exposure.rows": "Rows",
+        "run.exposure.previous": "Previous page",
+        "run.exposure.next": "Next page",
+        "run.exposure.table_aria": "Persisted exposure batch table",
+        "run.exposure.pagination_aria": "Exposure batch pagination",
+        "run.exposure.empty": "No persisted batch rows match this filter.",
+        "run.evidence.descriptive": "Descriptive persisted evidence; no winner, attribution, or causal effect is inferred.",
         "detail.overview-start.label": "Simultaneous start boundary",
         "detail.overview-start.caption": "The three messages enter their queues at one publication boundary",
         "detail.overview-pair.label": "user × message pair",
@@ -771,6 +930,268 @@ def _as_int(value: object, default: int = 0) -> int:
         return default
 
 
+def _as_float(value: object, default: float = 0.0) -> float:
+    try:
+        return float(value) if value is not None else default
+    except (TypeError, ValueError):
+        return default
+
+
+def _required_mapping(source: object, key: str, context: str) -> Mapping[str, Any]:
+    value = _value(source, key, None)
+    if not isinstance(value, Mapping):
+        raise ValueError(f"{context}.{key} must be a persisted mapping")
+    return value
+
+
+def _required_sequence(source: object, key: str, context: str) -> Sequence[Any]:
+    value = _value(source, key, None)
+    if isinstance(value, (str, bytes, bytearray)) or not isinstance(value, Sequence):
+        raise ValueError(f"{context}.{key} must be a persisted sequence")
+    return value
+
+
+def _required_int(source: object, key: str, context: str) -> int:
+    value = _value(source, key, None)
+    if isinstance(value, bool) or value is None:
+        raise ValueError(f"{context}.{key} must be a persisted integer")
+    try:
+        return int(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{context}.{key} must be a persisted integer") from exc
+
+
+def _required_float(source: object, key: str, context: str) -> float:
+    value = _value(source, key, None)
+    if isinstance(value, bool) or value is None:
+        raise ValueError(f"{context}.{key} must be a persisted number")
+    try:
+        return float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{context}.{key} must be a persisted number") from exc
+
+
+def _format_count(value: object) -> str:
+    return f"{_as_int(value):,}"
+
+
+def _format_fit(value: object) -> str:
+    formatted = f"{_as_float(value):.3f}"
+    return formatted[1:] if formatted.startswith("0.") else formatted
+
+
+def _run_evidence_data(payload: Any) -> dict[str, Any]:
+    """Build the run presentation only from allowlisted, persisted payload fields."""
+    run = _required_mapping(payload, "run", "payload")
+    funnel = _required_mapping(payload, "campaign_funnel", "payload")
+    allocation = _required_mapping(payload, "message_allocation", "payload")
+    validation = _required_mapping(payload, "validation_summary", "payload")
+    counts = _required_mapping(validation, "counts", "validation_summary")
+    raw_messages = _required_sequence(payload, "messages", "payload")
+    raw_users = _required_sequence(payload, "user_rows", "payload")
+    raw_exposures = _required_sequence(payload, "exposure_rows", "payload")
+    if not raw_messages or not raw_users:
+        raise ValueError("run evidence requires persisted messages and user rows")
+
+    messages: list[dict[str, str]] = []
+    message_ids: set[str] = set()
+    message_titles: dict[str, str] = {}
+    for index, message in enumerate(raw_messages, start=1):
+        message_id = str(_value(message, "message_id", "")).strip()
+        title = str(_value(message, "title", "")).strip()
+        body = str(_value(message, "body", "")).strip()
+        audience = str(_value(message, "intended_audience_segment", "")).strip()
+        if not message_id or not title or not body or not audience:
+            raise ValueError(f"messages[{index}] is missing authoritative persisted fields")
+        if message_id in message_ids:
+            raise ValueError(f"duplicate persisted message id: {message_id}")
+        message_ids.add(message_id)
+        message_titles[message_id] = title
+        messages.append({"message_id": message_id, "title": title, "body": body, "audience": audience})
+
+    sample_users = _required_int(counts, "sample_users", "validation_summary.counts")
+    eligible_pairs = _required_int(counts, "eligible_user_message_pairs", "validation_summary.counts")
+    actual_exposures = _required_int(counts, "actual_exposures", "validation_summary.counts")
+    if sample_users != len(raw_users) or actual_exposures != len(raw_exposures):
+        raise ValueError("persisted row counts do not match validation counts")
+    distinct_exposed_users = _required_int(counts, "distinct_exposed_users", "validation_summary.counts")
+    distinct_exposure_user_ids = {
+        str(_value(row, "user_id", "")).strip() for row in raw_exposures if str(_value(row, "user_id", "")).strip()
+    }
+    if distinct_exposed_users != len(distinct_exposure_user_ids):
+        raise ValueError("distinct exposed users do not match persisted exposure rows")
+
+    primary = _required_mapping(funnel, "primary", "campaign_funnel")
+    shadow = _required_mapping(funnel, "shadow", "campaign_funnel")
+    accounting = {
+        "primary": {
+            "attempted": _required_int(primary, "attempted", "campaign_funnel.primary"),
+            "succeeded": _required_int(primary, "succeeded", "campaign_funnel.primary"),
+            "failures": _required_int(primary, "provider_failed", "campaign_funnel.primary"),
+        },
+        "shadow": {
+            "attempted": _required_int(shadow, "attempted", "campaign_funnel.shadow"),
+            "succeeded": _required_int(shadow, "succeeded", "campaign_funnel.shadow"),
+            "failures": _required_int(shadow, "provider_failed", "campaign_funnel.shadow"),
+        },
+    }
+
+    coverage_source = _required_mapping(funnel, "campaign_exposure_coverage", "campaign_funnel")
+    coverage = {str(key): _required_int(coverage_source, str(key), "campaign_exposure_coverage") for key in sorted(coverage_source, key=str)}
+    if sum(coverage.values()) != sample_users:
+        raise ValueError("exposure coverage does not sum to persisted sample users")
+    observed_coverage = Counter(_required_int(row, "distinct_message_count", "user_rows[]") for row in raw_users)
+    expected_coverage = {int(key): value for key, value in coverage.items()}
+    if any(observed_coverage.get(key, 0) != value for key, value in expected_coverage.items()) or set(observed_coverage) - set(expected_coverage):
+        raise ValueError("exposure coverage does not match persisted user rows")
+
+    role_counts = Counter(str(_value(row, "sample_role", "")).strip() for row in raw_users)
+    class_counts = Counter(str(_value(row, "latent_class", "")).strip() for row in raw_users)
+    if "" in role_counts or "" in class_counts:
+        raise ValueError("persisted user rows require sample_role and latent_class")
+    role_order = [role for role in ("seed", "network_cohort", "ordinary") if role in role_counts]
+    role_order.extend(sorted(set(role_counts) - set(role_order)))
+    class_order = sorted(class_counts)
+
+    per_message_source = _required_mapping(funnel, "per_message", "campaign_funnel")
+    per_message: list[dict[str, Any]] = []
+    for message in messages:
+        message_id = message["message_id"]
+        entry = _required_mapping(per_message_source, message_id, "campaign_funnel.per_message")
+        per_message.append(
+            {
+                "message_id": message_id,
+                "title": message["title"],
+                "exposures": _required_int(entry, "exposures", f"campaign_funnel.per_message.{message_id}"),
+                "primary_successes": _required_int(entry, "primary_successes", f"campaign_funnel.per_message.{message_id}"),
+                "shadow_successes": _required_int(entry, "shadow_successes", f"campaign_funnel.per_message.{message_id}"),
+            }
+        )
+
+    overlap = _required_mapping(allocation, "overlap", "message_allocation")
+    pairwise_source = _required_sequence(overlap, "pairwise", "message_allocation.overlap")
+    pairwise: list[dict[str, Any]] = []
+    for index, entry in enumerate(pairwise_source):
+        left = str(_value(entry, "left_message_id", "")).strip()
+        right = str(_value(entry, "right_message_id", "")).strip()
+        if left not in message_ids or right not in message_ids or left == right:
+            raise ValueError(f"message_allocation.overlap.pairwise[{index}] has invalid message ids")
+        pairwise.append(
+            {
+                "left_message_id": left,
+                "right_message_id": right,
+                "overlap_count": _required_int(entry, "overlap_count", f"message_allocation.overlap.pairwise[{index}]"),
+            }
+        )
+    class_matrix_source = _required_mapping(allocation, "class_message_matrix", "message_allocation")
+    class_matrix: list[dict[str, Any]] = []
+    for class_id in class_order:
+        row = _required_mapping(class_matrix_source, class_id, "message_allocation.class_message_matrix")
+        class_matrix.append(
+            {
+                "class_id": class_id,
+                "values": [
+                    _required_int(row, message["message_id"], f"class_message_matrix.{class_id}") for message in messages
+                ],
+            }
+        )
+
+    fit_source = _required_mapping(allocation, "fit_distribution_by_message", "message_allocation")
+    fit_ranges: list[dict[str, Any]] = []
+    for message in messages:
+        message_id = message["message_id"]
+        entry = _required_mapping(fit_source, message_id, "message_allocation.fit_distribution_by_message")
+        normalized = _required_mapping(entry, "normalized_message_user_fit", f"fit_distribution.{message_id}")
+        fit_ranges.append(
+            {
+                "message_id": message_id,
+                "title": message["title"],
+                "count": _required_int(normalized, "count", f"fit_distribution.{message_id}"),
+                "min": _required_float(normalized, "min", f"fit_distribution.{message_id}"),
+                "mean": _required_float(normalized, "mean", f"fit_distribution.{message_id}"),
+                "max": _required_float(normalized, "max", f"fit_distribution.{message_id}"),
+            }
+        )
+
+    batch_source = _required_sequence(allocation, "batch_capacity", "message_allocation")
+    horizon = _required_int(run, "horizon", "run")
+    if len(batch_source) != len(messages) * horizon:
+        raise ValueError("persisted batch capacity rows do not match message count and horizon")
+    batch_rows: list[dict[str, Any]] = []
+    seen_batches: set[tuple[str, int]] = set()
+    message_order = {message["message_id"]: index for index, message in enumerate(messages)}
+    for index, row in enumerate(batch_source):
+        message_id = str(_value(row, "message_id", "")).strip()
+        if message_id not in message_ids:
+            raise ValueError(f"batch_capacity[{index}] references an unknown message")
+        time_step = _required_int(row, "time_step", f"batch_capacity[{index}]")
+        identity = (message_id, time_step)
+        if identity in seen_batches:
+            raise ValueError(f"duplicate persisted batch row: {identity}")
+        seen_batches.add(identity)
+        batch_rows.append(
+            {
+                "message_id": message_id,
+                "title": message_titles[message_id],
+                "time_step": time_step,
+                "selected_pairs": _required_int(row, "selected_pairs", f"batch_capacity[{index}]"),
+                "configured_capacity": _required_int(row, "configured_capacity", f"batch_capacity[{index}]"),
+                "eligible_users": _required_int(row, "eligible_users", f"batch_capacity[{index}]"),
+                "below_delivery_capacity": _required_int(row, "below_delivery_capacity", f"batch_capacity[{index}]"),
+                "cumulative_pairs": _required_int(row, "cumulative_pairs", f"batch_capacity[{index}]"),
+            }
+        )
+    if {message_id for message_id, _ in seen_batches} != message_ids or any(
+        sum(1 for batch_message_id, _ in seen_batches if batch_message_id == message_id) != horizon for message_id in message_ids
+    ):
+        raise ValueError("persisted batch rows do not cover every message and horizon")
+    batch_rows.sort(key=lambda row: (message_order[row["message_id"]], row["time_step"]))
+
+    prompt_tokens = _required_mapping(run, "prompt_tokens", "run")
+    primary_token = str(_value(prompt_tokens, "primary", "")).strip()
+    shadow_token = str(_value(prompt_tokens, "shadow", "")).strip()
+    profile = str(_value(run, "configuration_profile", "")).strip()
+    if not profile or not primary_token or not shadow_token:
+        raise ValueError("run metadata requires configuration profile and prompt tokens")
+    production_eligible = _value(run, "production_deploy_eligible", None)
+    if not isinstance(production_eligible, bool):
+        raise ValueError("run.production_deploy_eligible must be persisted boolean metadata")
+    observed_model = _observed_model(payload)
+    if not observed_model:
+        raise ValueError("variant_provider_accounting must persist an observed model")
+    downloads = _value(payload, "downloads", {})
+    if isinstance(downloads, Mapping):
+        artifacts = [str(value) for _, value in sorted(downloads.items())]
+    else:
+        artifacts = [str(value) for value in sorted(vars(downloads).values()) if isinstance(value, str)]
+
+    return {
+        "schema": str(_value(payload, "schema_version", "")),
+        "profile": profile,
+        "formal": production_eligible and profile == "production",
+        "observed_model": observed_model,
+        "primary_token": primary_token,
+        "shadow_token": shadow_token,
+        "artifacts": artifacts,
+        "sample_users": sample_users,
+        "eligible_pairs": eligible_pairs,
+        "actual_exposures": actual_exposures,
+        "distinct_exposed_users": distinct_exposed_users,
+        "accounting": accounting,
+        "coverage": coverage,
+        "role_counts": {role: role_counts[role] for role in role_order},
+        "class_counts": {class_id: class_counts[class_id] for class_id in class_order},
+        "messages": messages,
+        "per_message": per_message,
+        "union_count": _required_int(overlap, "distinct_union_count", "message_allocation.overlap"),
+        "three_way_count": _required_int(overlap, "three_way_intersection_count", "message_allocation.overlap"),
+        "pairwise": pairwise,
+        "class_matrix": class_matrix,
+        "fit_ranges": fit_ranges,
+        "batch_rows": batch_rows,
+    }
+
+
 def _escaped(value: object, *, quote: bool = False) -> str:
     return html.escape(str(value), quote=quote)
 
@@ -1170,64 +1591,151 @@ def _observed_model(payload: Any) -> str:
     primary = _value(accounting, "primary", {})
     model_counts = _value(primary, "observed_model_counts", {})
     if isinstance(model_counts, Mapping) and model_counts:
-        return str(next(iter(model_counts)))
+        return str(sorted(model_counts)[0])
     return ""
 
 
-def _run_scaffold(payload: Any) -> str:
-    run = _value(payload, "run", {})
-    schema = _value(payload, "schema_version", "")
-    profile = _value(run, "configuration_profile", "")
-    model = _observed_model(payload)
-    prompt_tokens = _value(run, "prompt_tokens", {})
-    primary_token = _value(prompt_tokens, "primary", "")
-    shadow_token = _value(prompt_tokens, "shadow", "")
-    downloads = _value(payload, "downloads", {})
-    artifact_values = []
-    if isinstance(downloads, Mapping):
-        artifact_values = [str(value) for _, value in sorted(downloads.items())]
-    else:
-        artifact_values = [str(value) for value in sorted(vars(downloads).values()) if isinstance(value, str)]
-    artifact_rows = "".join(
-        f'<li><code>{_escaped(artifact)}</code></li>' for artifact in artifact_values
+def _run_overview_section(data: Mapping[str, Any]) -> str:
+    accounting = data["accounting"]
+    status_key = "run.status.formal" if data["formal"] else "run.status.not_formal"
+    coverage_sequence = "/".join(str(data["coverage"][key]) for key in sorted(data["coverage"], key=int))
+    accounting_cards = "".join(
+        f'<article data-testid="run-{variant}-accounting">'
+        f'<h3>{_i18n(f"run.accounting.{variant}")}</h3>'
+        f'<strong class="editorial-run-accounting-value">{_format_count(values["succeeded"])} / {_format_count(values["failures"])}</strong>'
+        f'<p>{_i18n("run.accounting.succeeded")} / {_i18n("run.accounting.failures")}</p>'
+        f'<dl class="editorial-source-list"><div><dt>{_i18n("run.accounting.attempted")}</dt><dd>{_format_count(values["attempted"])}</dd></div>'
+        f'<div><dt>{_i18n("run.accounting.succeeded")}</dt><dd>{_format_count(values["succeeded"])}</dd></div>'
+        f'<div><dt>{_i18n("run.accounting.failures")}</dt><dd>{_format_count(values["failures"])}</dd></div></dl></article>'
+        for variant, values in accounting.items()
     )
-
-    sections: list[str] = []
-    for anchor in _EDITORIAL_ANCHORS:
-        sections.append(
-            f'<section id="run-{_escaped(anchor, quote=True)}" class="editorial-section editorial-run-section" '
-            f'data-section-anchor="{_escaped(anchor, quote=True)}" data-testid="run-{_escaped(anchor, quote=True)}-section" tabindex="-1">'
-            f'<div class="editorial-section-header"><div>{_i18n("run.kicker", class_name="editorial-kicker")}'
-            f'<h2>{_i18n("run.placeholder.title")}</h2></div>{_i18n("run.placeholder.body", tag="p", class_name="editorial-lead")}</div>'
-            f'<p class="editorial-run-anchor-note"><code>#run/{_escaped(anchor)}</code></p></section>'
+    funnel_cards = "".join(
+        f'<article><strong>{_format_count(value)}</strong>{_i18n(key, tag="span")}</article>'
+        for key, value in (
+            ("run.funnel.sample", data["sample_users"]),
+            ("run.funnel.eligible", data["eligible_pairs"]),
+            ("run.funnel.exposures", data["actual_exposures"]),
+            ("run.funnel.distinct", data["distinct_exposed_users"]),
         )
-
-    return (
-        '<div class="editorial-run-scaffold" data-testid="editorial-run-scaffold">'
-        '<section class="editorial-run-intro editorial-section" data-section-anchor="overview" data-testid="run-intro" tabindex="-1">'
-        '<div class="editorial-section-header"><div>'
-        f'{_i18n("run.kicker", class_name="editorial-kicker")}{_i18n("run.title", tag="h1")}'
-        f'</div>{_i18n("run.lead", tag="p", class_name="editorial-lead")}</div>'
-        '<div class="editorial-run-summary-grid">'
-        f'<article><strong>{_i18n("run.status.title")}</strong>{_i18n("run.status.body", tag="p")}'
-        '<dl class="editorial-source-list">'
-        f'<div><dt>{_i18n("run.source.schema")}</dt><dd><code>{_escaped(schema)}</code></dd></div>'
-        f'<div><dt>{_i18n("run.source.profile")}</dt><dd><code>{_escaped(profile)}</code></dd></div>'
-        f'<div><dt>{_i18n("run.source.model")}</dt><dd><code>{_escaped(model)}</code></dd></div>'
-        '</dl></article>'
-        f'<article><strong>{_i18n("run.contract.title")}</strong>{_i18n("run.contract.body", tag="p")}'
-        '<dl class="editorial-source-list">'
-        f'<div><dt>{_i18n("run.source.primary_token")}</dt><dd><code>{_escaped(primary_token)}</code></dd></div>'
-        f'<div><dt>{_i18n("run.source.shadow_token")}</dt><dd><code>{_escaped(shadow_token)}</code></dd></div>'
-        f'<div><dt>{_i18n("run.source.message")}</dt><dd>{_i18n("run.source.message")}</dd></div>'
-        f'<div><dt>{_i18n("run.source.reason")}</dt><dd>{_i18n("run.source.reason")}</dd></div>'
-        '</dl></article>'
-        f'<article class="editorial-artifact-list"><strong>{_i18n("run.source.approved_artifacts")}</strong><ul>'
-        f'{artifact_rows}</ul></article>'
-        '</div></section>'
-        + "".join(sections)
-        + "</div>"
     )
+    coverage_rows = "".join(
+        f'<li data-testid="run-coverage-{_escaped(key, quote=True)}"><strong>{_format_count(value)} / {_format_count(data["sample_users"])}</strong>{_i18n("run.coverage.messages")} · {key}</li>'
+        for key, value in sorted(data["coverage"].items(), key=lambda item: int(item[0]))
+    )
+    artifact_rows = "".join(f'<li><code>{_escaped(artifact)}</code></li>' for artifact in data["artifacts"])
+    return f'''
+      <section id="run-overview" class="editorial-section editorial-run-section editorial-run-intro" data-section-anchor="overview" data-testid="run-intro" tabindex="-1">
+        <div class="editorial-section-header">
+          <div>{_i18n("run.overview.kicker", class_name="editorial-kicker")}{_i18n("run.overview.title", tag="h1")}</div>
+          {_i18n("run.overview.lead", tag="p", class_name="editorial-lead")}
+        </div>
+        <div class="editorial-run-status-strip" data-testid="run-status-strip">
+          <div data-testid="run-formal-status"><strong>{_i18n("run.status.label")}</strong><span class="editorial-run-status-value">{_i18n(status_key)}</span></div>
+          <div><strong>{_i18n("run.status.profile")}</strong><code>{_escaped(data["profile"])}</code></div>
+          <div><strong>{_i18n("run.status.schema")}</strong><code>{_escaped(data["schema"])}</code></div>
+          <div><strong>{_i18n("run.status.model")}</strong><code>{_escaped(data["observed_model"])}</code></div>
+        </div>
+        <div class="editorial-metric-strip" data-testid="run-overview-metrics">
+          <article data-testid="run-sample-users"><strong>{_format_count(data["sample_users"])}</strong>{_i18n("run.metric.sample", tag="span")}</article>
+          <article data-testid="run-eligible-pairs"><strong>{_format_count(data["eligible_pairs"])}</strong>{_i18n("run.metric.eligible", tag="span")}</article>
+          <article data-testid="run-actual-exposures"><strong>{_format_count(data["actual_exposures"])}</strong>{_i18n("run.metric.exposures", tag="span")}</article>
+          <article data-testid="run-distinct-exposed-users"><strong>{_format_count(data["distinct_exposed_users"])}</strong>{_i18n("run.metric.distinct", tag="span")}</article>
+        </div>
+        <div class="editorial-run-summary-grid editorial-run-accounting-grid" data-testid="run-accounting">
+          <div class="editorial-run-summary-heading"><h2>{_i18n("run.accounting.title")}</h2><p>{_i18n("run.status.tokens", tag="span")} <code>{_escaped(data["primary_token"])}</code> · <code>{_escaped(data["shadow_token"])}</code></p></div>
+          {accounting_cards}
+        </div>
+        <div class="editorial-run-funnel" data-testid="run-campaign-funnel"><h2>{_i18n("run.funnel.title")}</h2><div class="editorial-run-funnel-grid">{funnel_cards}</div></div>
+        <div class="editorial-run-coverage" data-testid="run-exposure-coverage">
+          <div><h2>{_i18n("run.coverage.title")}</h2>{_i18n("run.coverage.subtitle", tag="p")}<code data-testid="run-coverage-sequence">{_escaped(coverage_sequence)}</code></div>
+          <ul>{coverage_rows}</ul>
+        </div>
+        <div class="editorial-run-contract-grid">
+          <article><h2>{_i18n("run.contract.title")}</h2>{_i18n("run.contract.body", tag="p")}<dl class="editorial-source-list"><div><dt>{_i18n("run.source.primary_token")}</dt><dd><code>{_escaped(data["primary_token"])}</code></dd></div><div><dt>{_i18n("run.source.shadow_token")}</dt><dd><code>{_escaped(data["shadow_token"])}</code></dd></div></dl></article>
+          <article class="editorial-artifact-list"><h2>{_i18n("run.source.approved_artifacts")}</h2><ul>{artifact_rows}</ul></article>
+        </div>
+      </section>
+    '''
+
+
+def _run_sample_section(data: Mapping[str, Any]) -> str:
+    role_keys = {"seed": "run.sample.seed", "network_cohort": "run.sample.network", "ordinary": "run.sample.ordinary"}
+    role_rows = "".join(
+        f'<tr><th>{_i18n(role_keys[role]) if role in role_keys else _escaped(role)}</th><td>{_format_count(count)}</td></tr>'
+        for role, count in data["role_counts"].items()
+    )
+    class_rows = "".join(f'<tr><th><code>{_escaped(class_id)}</code></th><td>{_format_count(count)}</td></tr>' for class_id, count in data["class_counts"].items())
+    coverage_rows = "".join(
+        f'<tr><th>{key} {_i18n("run.coverage.messages")}</th><td>{_format_count(value)}</td><td>{_format_count(data["sample_users"])}</td></tr>'
+        for key, value in sorted(data["coverage"].items(), key=lambda item: int(item[0]))
+    )
+    message_cards = "".join(
+        f'<article class="editorial-authoritative-message" data-testid="run-authoritative-message-{_escaped(message["message_id"], quote=True)}" data-message-id="{_escaped(message["message_id"], quote=True)}">'
+        f'<header><code>{_escaped(message["message_id"])}</code><h3>{_escaped(message["title"])}</h3></header>'
+        f'<dl class="editorial-source-list"><div><dt>{_i18n("run.message.audience")}</dt><dd>{_escaped(message["audience"])}</dd></div><div><dt>{_i18n("run.message.id")}</dt><dd><code>{_escaped(message["message_id"])}</code></dd></div></dl>'
+        f'<div class="editorial-authoritative-body"><p class="editorial-source-label">{_i18n("run.message.body")}</p>{_paragraphs(message["body"])}</div></article>'
+        for message in data["messages"]
+    )
+    return f'''
+      <section id="run-sample" class="editorial-section editorial-run-section editorial-section-sample" data-section-anchor="sample" data-testid="run-sample-section" tabindex="-1">
+        <div class="editorial-section-header"><div>{_i18n("run.sample.kicker", class_name="editorial-kicker")}{_i18n("run.sample.title", tag="h2")}</div>{_i18n("run.sample.lead", tag="p", class_name="editorial-lead")}</div>
+        <div class="editorial-run-two-column">
+          <article class="editorial-run-table-block" data-testid="run-sample-roles"><h2>{_i18n("run.sample.roles")}</h2><table><thead><tr><th>{_i18n("run.sample.role", tag="span")}</th><th>{_i18n("run.sample.count", tag="span")}</th></tr></thead><tbody>{role_rows}</tbody></table></article>
+          <article class="editorial-run-table-block" data-testid="run-sample-classes"><h2>{_i18n("run.sample.classes")}</h2><table><thead><tr><th>{_i18n("run.sample.class", tag="span")}</th><th>{_i18n("run.sample.count", tag="span")}</th></tr></thead><tbody>{class_rows}</tbody></table></article>
+        </div>
+        <article class="editorial-run-table-block" data-testid="run-sample-coverage"><h2>{_i18n("run.sample.coverage")}</h2><table><thead><tr><th>{_i18n("run.coverage.messages", tag="span")}</th><th>{_i18n("run.sample.count", tag="span")}</th><th>{_i18n("run.funnel.sample", tag="span")}</th></tr></thead><tbody>{coverage_rows}</tbody></table></article>
+        <div class="editorial-run-message-heading"><h2>{_i18n("run.sample.authoritative")}</h2>{_i18n("run.sample.authoritative.body", tag="p")}</div>
+        <div class="editorial-authoritative-grid">{message_cards}</div>
+      </section>
+    '''
+
+
+def _run_exposure_section(data: Mapping[str, Any]) -> str:
+    message_options = "".join(
+        f'<option value="{_escaped(message["message_id"], quote=True)}">{_escaped(message["title"])}</option>' for message in data["messages"]
+    )
+    summary_cards = "".join(
+        f'<article data-testid="run-exposure-summary-{_escaped(message["message_id"], quote=True)}"><code>{_escaped(message["message_id"])}</code><strong>{_format_count(message["exposures"])}</strong><span>{_i18n("run.exposure.per_message")}</span></article>'
+        for message in data["per_message"]
+    )
+    fit_rows = "".join(
+        f'<tr data-testid="run-fit-range-{_escaped(fit["message_id"], quote=True)}"><th><code>{_escaped(fit["message_id"])}</code><span>{_escaped(fit["title"])}</span></th><td data-fit-min="{_format_fit(fit["min"])}">{_format_fit(fit["min"])}</td><td data-fit-mean="{_format_fit(fit["mean"])}">{_format_fit(fit["mean"])}</td><td data-fit-max="{_format_fit(fit["max"])}">{_format_fit(fit["max"])}</td></tr>'
+        for fit in data["fit_ranges"]
+    )
+    pairwise_rows = "".join(
+        f'<li data-testid="run-pairwise-{_escaped(pair["left_message_id"] + "-" + pair["right_message_id"], quote=True)}"><code>{_escaped(pair["left_message_id"])}</code> × <code>{_escaped(pair["right_message_id"])}</code><strong>{_format_count(pair["overlap_count"])}</strong></li>'
+        for pair in data["pairwise"]
+    )
+    matrix_headers = "".join(f'<th><code>{_escaped(message["message_id"])}</code></th>' for message in data["messages"])
+    matrix_rows = "".join(
+        f'<tr data-testid="run-matrix-{_escaped(row["class_id"], quote=True)}"><th><code>{_escaped(row["class_id"])}</code></th>{"".join(f"<td>{_format_count(value)}</td>" for value in row["values"])}</tr>'
+        for row in data["class_matrix"]
+    )
+    batch_json = json.dumps(data["batch_rows"], ensure_ascii=False, separators=(",", ":")).replace("&", "\\u0026").replace("<", "\\u003c").replace(">", "\\u003e")
+    return f'''
+      <section id="run-exposure-ranking" class="editorial-section editorial-run-section editorial-section-ranking" data-section-anchor="exposure-ranking" data-testid="run-exposure-ranking-section" tabindex="-1">
+        <div class="editorial-section-header"><div>{_i18n("run.exposure.kicker", class_name="editorial-kicker")}{_i18n("run.exposure.title", tag="h2")}</div>{_i18n("run.exposure.lead", tag="p", class_name="editorial-lead")}</div>
+        <div class="editorial-run-exposure-summary" data-testid="run-exposure-summary"><h2>{_i18n("run.exposure.summary")}</h2><div class="editorial-run-exposure-summary-grid">{summary_cards}<article data-testid="run-exposure-union"><code>union</code><strong>{_format_count(data["union_count"])}</strong><span>{_i18n("run.exposure.union")}</span></article><article data-testid="run-exposure-three-way"><code>3-way</code><strong>{_format_count(data["three_way_count"])}</strong><span>{_i18n("run.exposure.three_way")}</span></article></div></div>
+        <div class="editorial-run-two-column editorial-run-overlap-grid"><article class="editorial-run-table-block" data-testid="run-pairwise-overlap"><h2>{_i18n("run.exposure.pairwise")}</h2><ul class="editorial-overlap-list">{pairwise_rows}</ul></article><article class="editorial-run-table-block" data-testid="run-class-message-matrix"><h2>{_i18n("run.exposure.matrix")}</h2><div class="editorial-table-scroll"><table><thead><tr><th>{_i18n("run.sample.class", tag="span")}</th>{matrix_headers}</tr></thead><tbody>{matrix_rows}</tbody></table></div></article></div>
+        <article class="editorial-run-table-block" data-testid="run-fit-ranges"><h2>{_i18n("run.exposure.fit")}</h2><table><thead><tr><th>{_i18n("run.exposure.message", tag="span")}</th><th>{_i18n("run.exposure.min", tag="span")}</th><th>{_i18n("run.exposure.mean", tag="span")}</th><th>{_i18n("run.exposure.max", tag="span")}</th></tr></thead><tbody>{fit_rows}</tbody></table><p class="editorial-table-note">{_i18n("run.exposure.fit_metric")}</p></article>
+        <article class="editorial-run-table-block editorial-run-batch-block" data-testid="run-batch-table"><div class="editorial-run-table-heading"><div><h2>{_i18n("run.exposure.batch_table")}</h2><p>{_i18n("run.evidence.descriptive")}</p></div><label>{_i18n("run.exposure.selector", tag="span")}<select data-testid="run-exposure-message-select" data-i18n-aria-label="run.exposure.selector" aria-label="{_copy("run.exposure.selector")}"><option value="all" data-i18n="run.exposure.all_messages">{_copy("run.exposure.all_messages")}</option>{message_options}</select></label></div><script type="application/json" data-testid="run-exposure-rows-data">{batch_json}</script><div class="editorial-table-scroll"><table data-testid="run-exposure-table" data-i18n-aria-label="run.exposure.table_aria" aria-label="{_copy("run.exposure.table_aria")}"><thead><tr><th>{_i18n("run.exposure.message", tag="span")}</th><th>{_i18n("run.exposure.batch", tag="span")}</th><th>{_i18n("run.exposure.selected", tag="span")}</th><th>{_i18n("run.exposure.eligible_users", tag="span")}</th><th>{_i18n("run.exposure.capacity", tag="span")}</th><th>{_i18n("run.exposure.below", tag="span")}</th><th>{_i18n("run.exposure.cumulative", tag="span")}</th></tr></thead><tbody data-testid="run-exposure-table-body"></tbody></table></div><div class="editorial-pagination" data-testid="run-exposure-pagination" data-i18n-aria-label="run.exposure.pagination_aria" aria-label="{_copy("run.exposure.pagination_aria")}"><button type="button" data-run-exposure-page="previous">{_i18n("run.exposure.previous")}</button><output data-testid="run-exposure-page-status" aria-live="polite"></output><button type="button" data-run-exposure-page="next">{_i18n("run.exposure.next")}</button></div></article>
+      </section>
+    '''
+
+
+def _run_placeholder_section(anchor: str) -> str:
+    return (
+        f'<section id="run-{_escaped(anchor, quote=True)}" class="editorial-section editorial-run-section" '
+        f'data-section-anchor="{_escaped(anchor, quote=True)}" data-testid="run-{_escaped(anchor, quote=True)}-section" tabindex="-1">'
+        f'<div class="editorial-section-header"><div>{_i18n("run.kicker", class_name="editorial-kicker")}{_i18n("run.placeholder.title", tag="h2")}</div>{_i18n("run.placeholder.body", tag="p", class_name="editorial-lead")}</div>'
+        f'<p class="editorial-run-anchor-note"><code>#run/{_escaped(anchor)}</code></p></section>'
+    )
+
+
+def _run_scaffold(payload: Any) -> str:
+    data = _run_evidence_data(payload)
+    placeholders = "".join(_run_placeholder_section(anchor) for anchor in _EDITORIAL_ANCHORS[3:])
+    return '<div class="editorial-run-scaffold" data-testid="editorial-run-scaffold">' + _run_overview_section(data) + _run_sample_section(data) + _run_exposure_section(data) + placeholders + "</div>"
 
 
 _EDITORIAL_CSS = r"""
@@ -1376,6 +1884,84 @@ code { overflow-wrap: anywhere; font-family: ui-monospace, SFMono-Regular, Menlo
 .editorial-drawer-body dl { margin: 22px 0 0; }
 .editorial-drawer-body dt { margin-top: 18px; color: var(--editorial-green); font-size: 12px; font-weight: 700; }
 .editorial-drawer-body dd { margin: 4px 0 0; color: var(--editorial-ink); line-height: 1.55; }
+.editorial-run-status-strip { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 0; max-width: 1280px; margin: 0 auto 28px; border-top: 1px solid var(--editorial-rule); border-bottom: 1px solid var(--editorial-rule); }
+.editorial-run-status-strip > div { min-width: 0; padding: 15px 18px; border-right: 1px solid var(--editorial-rule); }
+.editorial-run-status-strip > div:last-child { border-right: 0; }
+.editorial-run-status-strip strong, .editorial-run-status-strip code, .editorial-run-status-value { display: block; overflow-wrap: anywhere; }
+.editorial-run-status-strip strong { margin-bottom: 6px; color: var(--editorial-muted); font-size: 12px; font-weight: 650; }
+.editorial-run-status-strip code { color: var(--editorial-ink); font-size: 12px; }
+.editorial-run-status-value { color: var(--editorial-green); font-weight: 700; }
+.editorial-run-accounting-grid { grid-template-columns: minmax(210px, .8fr) repeat(2, minmax(0, 1fr)); margin-bottom: 32px; }
+.editorial-run-summary-heading { min-width: 0; padding: 20px; border-right: 1px solid var(--editorial-rule); }
+.editorial-run-summary-heading h2, .editorial-run-funnel h2, .editorial-run-coverage h2, .editorial-run-contract-grid h2 { margin: 0 0 9px; font-size: 21px; line-height: 1.25; }
+.editorial-run-summary-heading p, .editorial-run-contract-grid p, .editorial-run-coverage p { margin: 0; color: var(--editorial-muted); font-size: 13px; line-height: 1.6; }
+.editorial-run-accounting-grid article { border-right: 1px solid var(--editorial-rule); }
+.editorial-run-accounting-grid article:last-child { border-right: 0; }
+.editorial-run-accounting-grid article h3 { margin-bottom: 8px; font-size: 16px; }
+.editorial-run-accounting-grid article > p { margin: 0 0 12px; color: var(--editorial-muted); font-size: 12px; }
+.editorial-run-accounting-value { display: block; margin-bottom: 4px; color: var(--editorial-ink); font-size: 27px; line-height: 1.1; }
+.editorial-run-funnel, .editorial-run-coverage, .editorial-run-contract-grid { max-width: 1280px; margin: 0 auto 32px; }
+.editorial-run-funnel-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); border-top: 1px solid var(--editorial-rule); border-bottom: 1px solid var(--editorial-rule); }
+.editorial-run-funnel-grid article { min-width: 0; padding: 17px 18px; border-right: 1px solid var(--editorial-rule); }
+.editorial-run-funnel-grid article:last-child { border-right: 0; }
+.editorial-run-funnel-grid strong { display: block; margin-bottom: 6px; font-size: 25px; }
+.editorial-run-funnel-grid span { display: block; color: var(--editorial-muted); font-size: 12px; line-height: 1.4; }
+.editorial-run-coverage { display: grid; grid-template-columns: minmax(230px, .7fr) minmax(0, 1.3fr); gap: 24px; padding: 20px 0; border-top: 1px solid var(--editorial-rule); border-bottom: 1px solid var(--editorial-rule); }
+.editorial-run-coverage > div > code { display: inline-block; margin-top: 14px; color: var(--editorial-cobalt); font-size: 19px; font-weight: 700; }
+.editorial-run-coverage ul { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin: 0; padding: 0; list-style: none; }
+.editorial-run-coverage li { min-width: 0; padding: 13px; border-top: 2px solid var(--editorial-cobalt); background: var(--editorial-cool-paper); color: var(--editorial-muted); font-size: 12px; }
+.editorial-run-coverage li strong { display: block; margin-bottom: 4px; color: var(--editorial-ink); font-size: 20px; }
+.editorial-run-contract-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+.editorial-run-contract-grid article { min-width: 0; padding-top: 17px; border-top: 2px solid var(--editorial-cobalt); }
+.editorial-run-contract-grid article:last-child { border-top-color: var(--editorial-amber); }
+.editorial-run-contract-grid .editorial-artifact-list ul { max-height: 150px; }
+.editorial-run-two-column { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; max-width: 1280px; margin: 0 auto 28px; }
+.editorial-run-table-block { min-width: 0; max-width: 1280px; margin: 0 auto 28px; }
+.editorial-run-two-column .editorial-run-table-block { width: 100%; margin: 0; }
+.editorial-run-table-block h2, .editorial-run-message-heading h2 { margin: 0 0 13px; font-size: 21px; line-height: 1.25; }
+.editorial-run-table-block table { width: 100%; border-collapse: collapse; color: var(--editorial-ink); font-size: 13px; }
+.editorial-run-table-block th, .editorial-run-table-block td { min-width: 0; padding: 11px 12px; border-top: 1px solid var(--editorial-rule); text-align: left; vertical-align: top; overflow-wrap: anywhere; }
+.editorial-run-table-block thead th { color: var(--editorial-muted); font-size: 12px; font-weight: 650; }
+.editorial-run-table-block tbody th { font-weight: 650; }
+.editorial-run-table-block td { color: var(--editorial-ink); }
+.editorial-run-table-block th span { display: inline; }
+.editorial-run-table-block td code, .editorial-run-table-block th code { overflow-wrap: anywhere; }
+.editorial-run-table-block .editorial-table-note { margin: 10px 0 0; color: var(--editorial-muted); font-size: 12px; }
+.editorial-run-message-heading { max-width: 1280px; margin: 38px auto 16px; }
+.editorial-run-message-heading p { margin: 0; color: var(--editorial-muted); font-size: 13px; }
+.editorial-authoritative-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; max-width: 1280px; margin: 0 auto; }
+.editorial-authoritative-message { min-width: 0; padding: 18px; border-top: 3px solid var(--editorial-cobalt); background: var(--editorial-paper); }
+.editorial-authoritative-message:nth-child(2) { border-top-color: var(--editorial-green); }
+.editorial-authoritative-message:nth-child(3) { border-top-color: var(--editorial-amber); }
+.editorial-authoritative-message header { margin-bottom: 13px; }
+.editorial-authoritative-message header code { color: var(--editorial-muted); font-size: 12px; }
+.editorial-authoritative-message header h3 { margin-top: 6px; font-size: 18px; overflow-wrap: anywhere; }
+.editorial-authoritative-message dd { color: var(--editorial-ink); }
+.editorial-authoritative-body { margin-top: 17px; padding-top: 13px; border-top: 1px solid var(--editorial-rule); color: var(--editorial-muted); font-size: 13px; }
+.editorial-authoritative-body p { margin: 0 0 10px; line-height: 1.65; }
+.editorial-run-exposure-summary { max-width: 1280px; margin: 0 auto 28px; }
+.editorial-run-exposure-summary h2 { margin: 0 0 13px; font-size: 21px; }
+.editorial-run-exposure-summary-grid { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); border-top: 1px solid var(--editorial-rule); border-bottom: 1px solid var(--editorial-rule); }
+.editorial-run-exposure-summary-grid article { min-width: 0; padding: 16px; border-right: 1px solid var(--editorial-rule); }
+.editorial-run-exposure-summary-grid article:last-child { border-right: 0; }
+.editorial-run-exposure-summary-grid code { display: block; margin-bottom: 7px; color: var(--editorial-muted); font-size: 12px; overflow-wrap: anywhere; }
+.editorial-run-exposure-summary-grid strong { display: block; margin-bottom: 5px; font-size: 25px; }
+.editorial-run-exposure-summary-grid span { display: block; color: var(--editorial-muted); font-size: 12px; line-height: 1.4; }
+.editorial-overlap-list { display: grid; gap: 0; margin: 0; padding: 0; list-style: none; }
+.editorial-overlap-list li { display: flex; justify-content: space-between; gap: 12px; padding: 12px; border-top: 1px solid var(--editorial-rule); color: var(--editorial-muted); }
+.editorial-overlap-list strong { color: var(--editorial-ink); }
+.editorial-table-scroll { max-width: 100%; overflow-x: auto; }
+.editorial-run-table-heading { display: flex; align-items: end; justify-content: space-between; gap: 24px; margin-bottom: 15px; }
+.editorial-run-table-heading p { margin: 0; color: var(--editorial-muted); font-size: 13px; }
+.editorial-run-table-heading label { display: grid; gap: 6px; min-width: min(300px, 100%); color: var(--editorial-muted); font-size: 12px; font-weight: 650; }
+.editorial-run-table-heading select { width: 100%; min-width: 0; padding: 8px 10px; border: 1px solid var(--editorial-rule); background: var(--editorial-paper); color: var(--editorial-ink); }
+.editorial-pagination { display: flex; align-items: center; justify-content: flex-end; gap: 12px; margin-top: 14px; }
+.editorial-pagination button { min-height: 38px; padding: 7px 12px; border: 1px solid var(--editorial-rule); background: var(--editorial-paper); color: var(--editorial-ink); }
+.editorial-pagination button:disabled { cursor: not-allowed; opacity: .42; }
+.editorial-pagination output { min-width: 145px; color: var(--editorial-muted); font-size: 12px; text-align: center; }
+.editorial-run-batch-block { margin-top: 36px; }
+.editorial-run-section code { overflow-wrap: anywhere; }
+
 .editorial-run-section { background: var(--editorial-paper); }
 .editorial-run-intro { background: #fbfdff; }
 .editorial-run-summary-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); max-width: 1280px; margin: 0 auto; border-top: 1px solid var(--editorial-rule); border-bottom: 1px solid var(--editorial-rule); }
@@ -1432,6 +2018,32 @@ code { overflow-wrap: anywhere; font-family: ui-monospace, SFMono-Regular, Menlo
   .editorial-detail-drawer { grid-template-columns: 1fr; }
   .editorial-drawer-surface { padding: calc(var(--editorial-header-offset) + 22px) 18px 32px; }
 }
+@media (max-width: 820px) {
+  .editorial-run-status-strip, .editorial-run-funnel-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .editorial-run-status-strip > div:nth-child(2), .editorial-run-funnel-grid article:nth-child(2) { border-right: 0; }
+  .editorial-run-status-strip > div:nth-child(-n + 2), .editorial-run-funnel-grid article:nth-child(-n + 2) { border-bottom: 1px solid var(--editorial-rule); }
+  .editorial-run-accounting-grid { grid-template-columns: 1fr; }
+  .editorial-run-summary-heading, .editorial-run-accounting-grid article { border-right: 0; border-bottom: 1px solid var(--editorial-rule); }
+  .editorial-run-accounting-grid article:last-child { border-bottom: 0; }
+  .editorial-run-coverage { grid-template-columns: 1fr; }
+  .editorial-run-coverage ul { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .editorial-authoritative-grid { grid-template-columns: 1fr; }
+  .editorial-run-exposure-summary-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .editorial-run-exposure-summary-grid article:nth-child(2n) { border-right: 0; }
+  .editorial-run-exposure-summary-grid article:nth-child(-n + 4) { border-bottom: 1px solid var(--editorial-rule); }
+}
+@media (max-width: 680px) {
+  .editorial-brand { min-width: 0; max-width: 220px; white-space: normal; font-size: 16px; line-height: 1.2; }
+  .editorial-run-status-strip, .editorial-run-funnel-grid, .editorial-run-coverage ul, .editorial-run-exposure-summary-grid { grid-template-columns: 1fr; }
+  .editorial-run-status-strip > div, .editorial-run-funnel-grid article, .editorial-run-exposure-summary-grid article { border-right: 0; border-bottom: 1px solid var(--editorial-rule); }
+  .editorial-run-status-strip > div:last-child, .editorial-run-funnel-grid article:last-child, .editorial-run-exposure-summary-grid article:last-child { border-bottom: 0; }
+  .editorial-run-two-column, .editorial-run-contract-grid { grid-template-columns: 1fr; }
+  .editorial-run-table-heading { display: grid; align-items: start; gap: 14px; }
+  .editorial-run-table-heading label { min-width: 0; }
+  .editorial-pagination { justify-content: space-between; gap: 6px; }
+  .editorial-pagination output { min-width: 0; }
+}
+
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; scroll-behavior: auto !important; transition-duration: .01ms !important; }
 }
@@ -1456,6 +2068,19 @@ _EDITORIAL_SCRIPT = r"""
   const drawerBody = drawer?.querySelector('[data-testid="mechanism-detail-body"]');
   const closeButton = drawer?.querySelector('[data-testid="editorial-drawer-close"]');
   const mechanismButtons = [...root.querySelectorAll('[data-mechanism-key]')];
+  const exposureRowsData = root.querySelector('[data-testid="run-exposure-rows-data"]');
+  const exposureTableBody = root.querySelector('[data-testid="run-exposure-table-body"]');
+  const exposureSelect = root.querySelector('[data-testid="run-exposure-message-select"]');
+  const exposurePageStatus = root.querySelector('[data-testid="run-exposure-page-status"]');
+  const exposurePageButtons = [...root.querySelectorAll('[data-run-exposure-page]')];
+  let exposureRows = [];
+  try {
+    exposureRows = exposureRowsData ? JSON.parse(exposureRowsData.textContent || '[]') : [];
+  } catch (error) {
+    exposureRows = [];
+    console.error('Persisted exposure rows could not be parsed', error);
+  }
+  const exposureState = { filter: 'all', page: 0, pageSize: 10 };
   const state = { language: 'zh-CN', mode: 'mechanism', anchor: 'overview', drawerKey: null, returnFocus: null };
   let previousBodyOverflow = '';
 
@@ -1467,6 +2092,46 @@ _EDITORIAL_SCRIPT = r"""
     const height = Math.ceil(header?.getBoundingClientRect().height || 76);
     root.style.setProperty('--editorial-header-offset', `${height}px`);
     document.documentElement.style.setProperty('--editorial-header-offset', `${height}px`);
+  }
+
+  function renderExposurePage() {
+    if (!exposureTableBody || !exposureSelect || !exposurePageStatus) return;
+    const filtered = exposureState.filter === 'all'
+      ? exposureRows
+      : exposureRows.filter((row) => row.message_id === exposureState.filter);
+    const pageCount = Math.max(1, Math.ceil(filtered.length / exposureState.pageSize));
+    exposureState.page = Math.min(exposureState.page, pageCount - 1);
+    const start = exposureState.page * exposureState.pageSize;
+    const visibleRows = filtered.slice(start, start + exposureState.pageSize);
+    exposureTableBody.replaceChildren();
+    visibleRows.forEach((row) => {
+      const tr = document.createElement('tr');
+      tr.dataset.testid = `run-exposure-row-${row.message_id}-${row.time_step}`;
+      tr.dataset.messageId = row.message_id;
+      tr.dataset.timeStep = String(row.time_step);
+      [
+        row.title,
+        String(row.time_step),
+        String(row.selected_pairs),
+        String(row.eligible_users),
+        String(row.configured_capacity),
+        String(row.below_delivery_capacity),
+        String(row.cumulative_pairs),
+      ].forEach((value) => {
+        const td = document.createElement('td');
+        td.textContent = value;
+        tr.append(td);
+      });
+      exposureTableBody.append(tr);
+    });
+    const first = filtered.length ? start + 1 : 0;
+    const last = Math.min(start + exposureState.pageSize, filtered.length);
+    exposurePageStatus.textContent = `${copy('run.exposure.page')} ${exposureState.page + 1} / ${pageCount} · ${copy('run.exposure.rows')} ${first}-${last} / ${filtered.length}`;
+    exposurePageButtons.forEach((button) => {
+      button.disabled = button.dataset.runExposurePage === 'previous'
+        ? exposureState.page === 0
+        : exposureState.page >= pageCount - 1;
+    });
   }
 
   function applyLanguage() {
@@ -1496,6 +2161,7 @@ _EDITORIAL_SCRIPT = r"""
     const title = document.querySelector('title[data-i18n]');
     if (title) title.textContent = copy(title.dataset.i18n);
     if (state.drawerKey) renderDrawer(state.drawerKey);
+    renderExposurePage();
     setActiveNavigation(state.anchor);
   }
 
@@ -1637,6 +2303,17 @@ _EDITORIAL_SCRIPT = r"""
     if (!languages.includes(language) || language === state.language) return;
     state.language = language;
     applyLanguage();
+  }));
+
+  exposureSelect?.addEventListener('change', () => {
+    exposureState.filter = exposureSelect.value;
+    exposureState.page = 0;
+    renderExposurePage();
+  });
+  exposurePageButtons.forEach((button) => button.addEventListener('click', () => {
+    const direction = button.dataset.runExposurePage === 'next' ? 1 : -1;
+    exposureState.page = Math.max(0, exposureState.page + direction);
+    renderExposurePage();
   }));
 
   mechanismButtons.forEach((button) => button.addEventListener('click', () => openDrawer(button.dataset.mechanismKey, button)));

@@ -145,3 +145,76 @@ test('Editorial candidate closes the hash, history, focus, mode, language, and d
   await expect(page).toHaveURL(/#sample$/);
   await expect(page.getByTestId('mechanism-mode-panel')).toBeVisible();
 });
+
+
+test('Editorial run evidence recomputes summaries and paginates persisted batches', async ({ page }, testInfo) => {
+  const reportPath = generateEditorialCandidate(testInfo.outputDir);
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.goto(pathToFileURL(reportPath).toString());
+
+  await page.getByTestId('run-evidence-mode-button').click();
+  await expect(page).toHaveURL(/#run\/overview$/);
+  await expect(page.getByTestId('run-evidence-mode-panel')).toBeVisible();
+  await expect(page.getByTestId('run-formal-status')).toContainText('Formal');
+  await expect(page.getByTestId('run-sample-users')).toContainText('1,000');
+  await expect(page.getByTestId('run-eligible-pairs')).toContainText('3,000');
+  await expect(page.getByTestId('run-actual-exposures')).toContainText('1,800');
+  await expect(page.getByTestId('run-coverage-sequence')).toHaveText('0/434/332/234');
+
+  await page.getByRole('link', { name: '样本', exact: true }).click();
+  await expect(page).toHaveURL(/#run\/sample$/);
+  await expect(page.getByTestId('run-sample-roles')).toContainText('20');
+  await expect(page.getByTestId('run-sample-roles')).toContainText('60');
+  await expect(page.getByTestId('run-sample-roles')).toContainText('920');
+  await expect(page.getByTestId('run-sample-classes')).toContainText('422');
+  await expect(page.getByTestId('run-sample-classes')).toContainText('417');
+  await expect(page.getByTestId('run-sample-classes')).toContainText('161');
+  await expect(page.getByTestId('run-authoritative-message-message_1')).toContainText('每次在旅途中下榻酒店');
+
+  await page.getByRole('link', { name: '曝光排序', exact: true }).click();
+  await expect(page).toHaveURL(/#run\/exposure-ranking$/);
+  await expect(page.getByTestId('run-exposure-summary-message_1')).toContainText('600');
+  await expect(page.getByTestId('run-exposure-union')).toContainText('1,000');
+  await expect(page.getByTestId('run-exposure-three-way')).toContainText('234');
+  await expect(page.getByTestId('run-fit-range-message_1')).toContainText('.588');
+  await expect(page.getByTestId('run-fit-range-message_1')).toContainText('.761');
+  await expect(page.getByTestId('run-fit-range-message_1')).toContainText('.833');
+
+  const rows = page.getByTestId('run-exposure-table-body').locator('tr');
+  await expect(rows).toHaveCount(10);
+  await expect(page.getByTestId('run-exposure-page-status')).toContainText('1 / 9');
+  await page.locator('[data-run-exposure-page="next"]').click();
+  await expect(rows.first()).toHaveAttribute('data-time-step', '10');
+  await page.getByTestId('run-exposure-message-select').selectOption('message_2');
+  await expect(rows).toHaveCount(10);
+  await expect(rows.first()).toHaveAttribute('data-message-id', 'message_2');
+  await expect(page.getByTestId('run-exposure-page-status')).toContainText('1 / 3');
+  await page.locator('[data-run-exposure-page="next"]').click();
+  await expect(rows.first()).toHaveAttribute('data-time-step', '10');
+  await page.locator('[data-run-exposure-page="next"]').click();
+  await expect(rows.last()).toHaveAttribute('data-time-step', '29');
+
+  await page.getByRole('button', { name: 'English', exact: true }).click();
+  await expect(page.locator('html')).toHaveAttribute('lang', 'en-US');
+  await expect(page.getByTestId('run-exposure-message-select')).toHaveAttribute('aria-label', 'Filter batches by message');
+  await expect(page.getByTestId('run-exposure-table')).toHaveAttribute('aria-label', 'Persisted exposure batch table');
+  await expect(page.getByTestId('run-authoritative-message-message_1')).toContainText('每次在旅途中下榻酒店');
+
+  for (const viewport of [{ width: 1600, height: 1000 }, { width: 390, height: 844 }]) {
+    await page.setViewportSize(viewport);
+    await page.evaluate(() => window.dispatchEvent(new Event('hashchange')));
+    const geometry = await page.evaluate(() => {
+      const header = document.querySelector<HTMLElement>('.editorial-header');
+      const target = document.querySelector<HTMLElement>('[data-report-mode-panel="run-evidence"] [data-section-anchor="exposure-ranking"]');
+      return {
+        horizontalOverflow: document.documentElement.scrollWidth > window.innerWidth + 1,
+        tableVisible: document.querySelector('[data-testid="run-exposure-table"]')?.getBoundingClientRect().width || 0,
+        targetTop: target?.getBoundingClientRect().top || 0,
+        headerBottom: header?.getBoundingClientRect().bottom || 0,
+      };
+    });
+    expect(geometry.horizontalOverflow).toBe(false);
+    expect(geometry.tableVisible).toBeGreaterThan(0);
+    expect(geometry.targetTop).toBeGreaterThanOrEqual(geometry.headerBottom);
+  }
+});
