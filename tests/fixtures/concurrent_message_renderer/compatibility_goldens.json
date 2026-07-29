@@ -1,0 +1,24 @@
+{
+  "schema_version": "concurrent-message-renderer-compatibility-goldens-v1",
+  "payload": "formal_report_payload.json.gz",
+  "variants": [
+    {
+      "name": "current_two_mode",
+      "adapter": "default current two-mode",
+      "sha256": "ba006c5e18d091a77e8eebd73e86287209ccaf2571023d1114e35fd64872f556",
+      "golden": "current_two_mode.html.gz"
+    },
+    {
+      "name": "single_flow_legacy",
+      "adapter": "fixed single-flow legacy",
+      "sha256": "3584d1f95e8154163c0f0bd316b2612e6bfcbd19b5c03e778eac81770f6714f9",
+      "golden": "single_flow_legacy.html.gz"
+    },
+    {
+      "name": "pre_pagination_historical",
+      "adapter": "fixed pre-pagination historical",
+      "sha256": "740f55a30bc4183a75724592496c6b6aa809a85ab385ccf96bc53093cb49a76d",
+      "golden": "pre_pagination_historical.html.gz"
+    }
+  ]
+}

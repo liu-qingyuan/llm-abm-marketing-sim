@@ -51,6 +51,6 @@ Destination 含 23 个文件。除 `report.html` 与 `artifact_manifest.json` �
 ## 边界与风险
 
 - 本次没有读取、打印或写入 `.env`、API key、credentials、raw Prompt、raw Provider request/response、鉴权 headers 或 raw payload。
-- 历史 Formal source 的 pre-pagination renderer 由内部 frozen adapter 精确恢复；Medium follow-up 是补充一个直接绑定正式 v4 report hash 的自动化回归 fixture，当前 operational validation 已覆盖该 hash。
+- 历史 Formal source 的 pre-pagination renderer 由内部 frozen adapter 精确恢复；固定 compatibility fixture 位于 `tests/fixtures/concurrent_message_renderer/`，通过静态 payload 和 HTML goldens 直接验证 two-mode `ba006c...`、single-flow compatibility path 及 source historical `740f55...`，不再依赖运行时动态计算 expected hash。
 - 实际 Release ID 是部署命令显式传入的合法唯一 ID；contract 的 `source_directory` 与 artifact hashes 是唯一 release validation identity，保持不变。
 - 无最终 rollback；canonical 当前服务上述 two-mode presentation release，上一 release 保留在 managed `releases` 目录中。
