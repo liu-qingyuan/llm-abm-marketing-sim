@@ -7,6 +7,7 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 
 from .concurrent_message_current_renderer import render_current_report as _render_current_report
+from .concurrent_message_editorial_candidate import _render_editorial_candidate
 
 
 def _legacy_render_report(payload: Any, *, include_pagination: bool = True) -> str:
@@ -950,6 +951,13 @@ def _three_part(payload: object) -> str:
     return f"{_as_int(mapping.get('attempted'))} / {_as_int(mapping.get('succeeded'))} / {_as_int(mapping.get('provider_failed'))}"
 
 
+class _EditorialRendererAdapter:
+    """Editorial default adapter for the public concurrent report."""
+
+    def render(self, payload: Any) -> str:
+        return _render_editorial_candidate(payload)
+
+
 class _LegacyRendererAdapter:
     """Compatibility adapter for the existing single-flow Concurrent HTML."""
 
@@ -971,16 +979,17 @@ class _HistoricalRendererAdapter:
         return _legacy_render_report(payload, include_pagination=False)
 
 
-_LEGACY_ADAPTER = _LegacyRendererAdapter()
+_EDITORIAL_ADAPTER = _EditorialRendererAdapter()
 _CURRENT_ADAPTER = _CurrentRendererAdapter()
+_LEGACY_ADAPTER = _LegacyRendererAdapter()
 _HISTORICAL_ADAPTER = _HistoricalRendererAdapter()
-_FIXED_ADAPTERS = (_CURRENT_ADAPTER, _LEGACY_ADAPTER, _HISTORICAL_ADAPTER)
+_FIXED_ADAPTERS = (_EDITORIAL_ADAPTER, _CURRENT_ADAPTER, _LEGACY_ADAPTER, _HISTORICAL_ADAPTER)
 
 
 def render_report(payload: Any, *, expected_sha256: str | None = None) -> str:
-    """Render current artifacts, or dispatch to a historical exact adapter by hash."""
+    """Render the Editorial default, or dispatch to a fixed exact adapter by hash."""
     if expected_sha256 is None:
-        return _CURRENT_ADAPTER.render(payload)
+        return _EDITORIAL_ADAPTER.render(payload)
     for adapter in _FIXED_ADAPTERS:
         rendered = adapter.render(payload)
         if _sha256_text(rendered) == expected_sha256:

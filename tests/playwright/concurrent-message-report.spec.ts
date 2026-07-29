@@ -33,8 +33,12 @@ function generateConcurrentReport(testInfo: { outputDir: string }): { outputDir:
 set -euo pipefail
 . .venv/bin/activate
 python3 - <<'PY'
+import hashlib
+import json
 from pathlib import Path
 from llm_abm_sim import ConcurrentMessageExperimentConfig, ConcurrentMessageExperimentRunner
+from llm_abm_sim.concurrent_message_renderer import _CURRENT_ADAPTER
+from llm_abm_sim.concurrent_message_report import ConcurrentMessageReportPayload
 from llm_abm_sim.prompt_field_summary import (
     CONCURRENT_MESSAGE_PRIMARY_PROMPT_VERSION,
     CONCURRENT_MESSAGE_SHADOW_PROMPT_VERSION,
@@ -68,6 +72,15 @@ ConcurrentMessageExperimentRunner(
         fail_pairs={(0, 'message_2', 'u3')},
     ),
 ).run_and_write(root)
+payload = ConcurrentMessageReportPayload.model_validate_json(
+    (root / 'concurrent_message_report_payload.json').read_bytes()
+)
+compatibility_html = _CURRENT_ADAPTER.render(payload)
+(root / 'report.html').write_text(compatibility_html, encoding='utf-8')
+manifest_path = root / 'artifact_manifest.json'
+manifest = json.loads(manifest_path.read_text(encoding='utf-8'))
+manifest['sha256']['report_html'] = hashlib.sha256(compatibility_html.encode('utf-8')).hexdigest()
+manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, sort_keys=True) + '\\n', encoding='utf-8')
 PY`;
   execFileSync('bash', ['-lc', command], { stdio: 'inherit' });
   const payload = JSON.parse(

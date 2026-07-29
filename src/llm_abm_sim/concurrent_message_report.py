@@ -740,7 +740,7 @@ def rebuild_concurrent_message_report(
     With ``destination_dir=None`` this preserves the historical exact in-place
     rebuild contract and returns ``run_dir/report.html``. With an explicit
     destination, the validated persisted source tuple is copied into a unique
-    sibling staging directory, rendered with the current two-mode adapter, and
+    sibling staging directory, rendered with the public Editorial default, and
     validated again before an atomic rename; the source is never modified and
     failures leave both the destination and staging directory absent. The
     returned path is the candidate's ``report.html``. Release contracts and

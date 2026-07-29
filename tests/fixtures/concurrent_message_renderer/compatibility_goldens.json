@@ -3,6 +3,12 @@
   "payload": "formal_report_payload.json.gz",
   "variants": [
     {
+      "name": "editorial_default",
+      "adapter": "default Editorial",
+      "sha256": "8b6dff533f0be81d740b92d596f33f8168b4740ebdafca824c403d65e378bca3",
+      "golden": "editorial_default.html.gz"
+    },
+    {
       "name": "current_two_mode",
       "adapter": "default current two-mode",
       "sha256": "ba006c5e18d091a77e8eebd73e86287209ccaf2571023d1114e35fd64872f556",

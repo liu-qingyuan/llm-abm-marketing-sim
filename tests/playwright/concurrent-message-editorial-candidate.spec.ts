@@ -11,7 +11,7 @@ set -euo pipefail
 python - <<'PY'
 import gzip
 from pathlib import Path
-from llm_abm_sim.concurrent_message_editorial_candidate import _render_editorial_candidate
+from llm_abm_sim.concurrent_message_renderer import render_report
 from llm_abm_sim.concurrent_message_report import ConcurrentMessageReportPayload
 
 fixture = Path('tests/fixtures/concurrent_message_renderer/formal_report_payload.json.gz')
@@ -19,7 +19,7 @@ output = Path(${JSON.stringify(reportPath)})
 with gzip.open(fixture, 'rb') as stream:
     payload = ConcurrentMessageReportPayload.model_validate_json(stream.read())
 output.parent.mkdir(parents=True, exist_ok=True)
-output.write_text(_render_editorial_candidate(payload), encoding='utf-8')
+output.write_text(render_report(payload), encoding='utf-8')
 PY`;
   execFileSync('bash', ['-lc', command], { stdio: 'inherit' });
   return reportPath;

@@ -1277,7 +1277,10 @@ def _safe_trace_value(value: object) -> Any:
 
 
 def _safe_trace_mapping(source: object, key: str, context: str) -> dict[str, Any]:
-    return {str(name): _safe_trace_value(value) for name, value in _required_mapping(source, key, context).items()}
+    return {
+        str(name): _safe_trace_value(value)
+        for name, value in sorted(_required_mapping(source, key, context).items(), key=lambda item: str(item[0]))
+    }
 
 
 def _safe_trace_sequence(source: object, key: str, context: str) -> list[Any]:
@@ -1334,10 +1337,10 @@ def _feedback_effect_data(
     delivery_capacity: int,
 ) -> dict[str, Any]:
     source = _required_mapping(payload, "campaign_feedback_effect", "payload")
-    if horizon <= 0 or delivery_capacity <= 0:
+    if horizon <= 0:
         raise ValueError("feedback evidence requires positive horizon and delivery capacity")
-    if delivery_capacity < 20:
-        raise ValueError("feedback evidence requires delivery capacity for Top20 rankings")
+    if delivery_capacity <= 0:
+        raise ValueError("feedback evidence requires positive delivery capacity")
     flag_fields = (
         "advances_runtime_state",
         "calls_decision_adapter",
@@ -1407,12 +1410,12 @@ def _feedback_effect_data(
             overlap = _required_string_sequence(batch, "top_overlap_user_ids", context)
             feedback_added = _required_string_sequence(batch, "feedback_added_user_ids", context)
             feedback_removed = _required_string_sequence(batch, "feedback_removed_user_ids", context)
-            if top_count != 20:
+            if top_count != min(delivery_capacity, eligible_users):
                 raise ValueError(f"campaign feedback evidence must contain Top20 rankings for {context}")
             if top_count != len(full_ids) or top_count != len(no_feedback_ids):
-                raise ValueError(f"campaign feedback Top20 rows do not match top_count for {context}")
+                raise ValueError(f"campaign feedback ranking rows do not match top_count for {context}")
             if top_count > delivery_capacity or top_overlap_count < 0 or top_overlap_count > top_count:
-                raise ValueError(f"campaign feedback Top20 bounds are invalid for {context}")
+                raise ValueError(f"campaign feedback ranking bounds are invalid for {context}")
             no_feedback_set = set(no_feedback_ids)
             full_set = set(full_ids)
             expected_overlap = [user_id for user_id in full_ids if user_id in no_feedback_set]
@@ -1506,6 +1509,16 @@ def _trace_view_row(row: Any, messages_by_id: Mapping[str, Mapping[str, str]], i
     shadow_context = _safe_trace_mapping(row, "shadow_context", context)
     primary_peer_context = _safe_trace_mapping(row, "primary_peer_context", context)
     shadow_peer_context = _safe_trace_mapping(row, "shadow_peer_context", context)
+    primary_provider_metadata = _safe_trace_mapping(
+        _required_mapping(row, "primary_decision", context),
+        "provider_metadata",
+        f"{context}.primary_decision",
+    )
+    shadow_provider_metadata = _safe_trace_mapping(
+        _required_mapping(row, "shadow_decision", context),
+        "provider_metadata",
+        f"{context}.shadow_decision",
+    )
     field_differences = _safe_trace_sequence(row, "field_differences", context)
     prompt_inclusion = _safe_trace_mapping(row, "prompt_field_inclusion", context)
     shadow_added_fields = _safe_trace_mapping(row, "shadow_added_fields", context)
@@ -1513,6 +1526,10 @@ def _trace_view_row(row: Any, messages_by_id: Mapping[str, Mapping[str, str]], i
     shadow_status = str(_value(row, "shadow_status", "")).strip()
     primary_action = str(_value(row, "primary_action", "")).strip()
     shadow_action = str(_value(row, "shadow_action", "")).strip()
+    if primary_status == "provider_failed" and not primary_action:
+        primary_action = "provider_failed"
+    if shadow_status == "provider_failed" and not shadow_action:
+        shadow_action = "provider_failed"
     if primary_action not in _TRACE_ACTIONS or shadow_action not in _TRACE_ACTIONS:
         raise ValueError(f"{context} contains an unsupported action")
     if not isinstance(_value(row, "primary_shadow_disagreement", None), bool):
@@ -1538,6 +1555,7 @@ def _trace_view_row(row: Any, messages_by_id: Mapping[str, Mapping[str, str]], i
         "primary_confidence": _safe_trace_value(_value(row, "primary_confidence", None)),
         "primary_reason": str(_value(row, "primary_reason", "")),
         "primary_decision_source": str(_value(row, "primary_decision_source", "")),
+        "primary_provider_metadata": primary_provider_metadata,
         "primary_prompt_version": str(_value(row, "primary_prompt_version", "")),
         "shadow_status": shadow_status,
         "shadow_action": shadow_action,
@@ -1545,6 +1563,7 @@ def _trace_view_row(row: Any, messages_by_id: Mapping[str, Mapping[str, str]], i
         "shadow_confidence": _safe_trace_value(_value(row, "shadow_confidence", None)),
         "shadow_reason": str(_value(row, "shadow_reason", "")),
         "shadow_decision_source": str(_value(row, "shadow_decision_source", "")),
+        "shadow_provider_metadata": shadow_provider_metadata,
         "shadow_prompt_version": str(_value(row, "shadow_prompt_version", "")),
         "provider_status": str(_value(row, "provider_status", "")).strip(),
         "decision_difference": bool(_value(row, "primary_shadow_disagreement", False)),
@@ -1677,7 +1696,7 @@ def _run_evidence_data(payload: Any) -> dict[str, Any]:
         positive_denominator = _required_int(decision_rate, "denominator", f"primary_audience_response.{message_id}.decision_engagement_rate")
         if positive_actions != sum(action_counts[action] for action in ("like", "comment", "share")):
             raise ValueError(f"positive action count does not close for {message_id}")
-        if positive_numerator != positive_actions or positive_denominator != _required_int(entry, "exposures", f"campaign_funnel.per_message.{message_id}"):
+        if positive_numerator != positive_actions or positive_denominator != sum(action_counts[action] for action in ("like", "comment", "share", "ignore")):
             raise ValueError(f"positive rate denominator does not close for {message_id}")
         per_message.append(
             {

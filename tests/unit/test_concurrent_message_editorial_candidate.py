@@ -214,6 +214,6 @@ def test_run_evidence_rejects_inconsistent_persisted_coverage(formal_payload: Co
 
 
 
-def test_editorial_candidate_does_not_enter_public_fixed_adapters() -> None:
-    assert all("Editorial" not in type(adapter).__name__ for adapter in _FIXED_ADAPTERS)
-    assert len(_FIXED_ADAPTERS) == 3
+def test_editorial_default_enters_public_fixed_adapters() -> None:
+    assert type(_FIXED_ADAPTERS[0]).__name__ == "_EditorialRendererAdapter"
+    assert len(_FIXED_ADAPTERS) == 4

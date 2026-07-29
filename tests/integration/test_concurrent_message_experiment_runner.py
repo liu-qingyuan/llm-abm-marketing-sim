@@ -535,7 +535,7 @@ def test_concurrent_message_report_rebuild_derives_immutable_destination(tmp_pat
 
 
 
-def test_concurrent_message_report_rebuild_destination_uses_current_renderer_for_legacy_source(
+def test_concurrent_message_report_rebuild_destination_uses_editorial_default_for_legacy_source(
     tmp_path: Path,
 ) -> None:
     source_dir = _make_validation_report_source(tmp_path, "legacy-source")
@@ -751,15 +751,15 @@ def test_concurrent_message_runner_writes_validation_runtime_artifacts(tmp_path:
         "primary": CONCURRENT_MESSAGE_PRIMARY_PROMPT_VERSION,
         "shadow": CONCURRENT_MESSAGE_SHADOW_PROMPT_VERSION,
     }
-    assert "Validation only · no deploy" in report_html
-    assert 'data-testid="validation-status"' in report_html
+    assert 'data-testid="editorial-report"' in report_html
+    assert 'data-testid="run-formal-status"' in report_html
     assert "Campaign Funnel" in report_html
-    assert "Message Allocation" in report_html
-    assert "Primary Audience Response" in report_html
-    assert "Campaign Feedback Effect" in report_html
-    assert "Demographic Decision Sensitivity" in report_html
-    assert "Exposure trace table" in report_html
-    assert "Safe downloads" in report_html
+    assert 'data-testid="run-sample-users"' in report_html
+    assert 'data-testid="run-llm-decision-section"' in report_html
+    assert 'data-testid="run-feedback-changed-total"' in report_html
+    assert 'data-testid="run-downloads-section"' in report_html
+    assert "Approved downloads" in report_html
+    assert 'data-testid="run-exposure-ranking-section"' in report_html
     assert all("nickname" not in row and "bio" not in row and "signature" not in row for row in sample_manifest)
     assert all("nickname" not in row and "bio" not in row and "signature" not in row for row in users_document["rows"])
     first_trace = decision_trace_document["rows"][0]
@@ -1312,8 +1312,8 @@ def test_concurrent_message_runner_marks_sdk_wrapper_path_as_formal_but_deploy_b
     assert validation["variant_provider_accounting"]["total"]["invocations"] == 6
     assert len(primary_client.calls) == 3
     assert len(shadow_client.calls) == 3
-    assert "Persisted Seed-First Formal Run" in report_html
-    assert "deploy blocked" in report_html
+    assert "Formal" in report_html
+    assert 'data-testid="run-formal-status"' in report_html
 
 
 def test_concurrent_message_runner_accounts_provider_retries_without_estimating_missing_usage(tmp_path: Path) -> None:
