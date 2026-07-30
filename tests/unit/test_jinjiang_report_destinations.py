@@ -7,7 +7,7 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from types import ModuleType
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
@@ -26,7 +26,7 @@ def load_script(name: str, filename: str) -> ModuleType:
 
 profiles = load_script("jinjiang_report_profiles", "collect_jinjiang_user_profiles.py")
 scope = load_script("jinjiang_report_scope", "derive_jinjiang_scope_change.py")
-topic = load_script("jinjiang_report_topic", "summarize_jinjiang_topic_distribution.py")
+topic = cast(Any, load_script("jinjiang_report_topic", "summarize_jinjiang_topic_distribution.py"))
 
 
 def write_csv(path: Path, fieldnames: list[str], rows: list[dict[str, Any]]) -> None:

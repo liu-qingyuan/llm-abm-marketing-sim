@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+from typing import Literal
 
 import pytest
 from pydantic import ValidationError
@@ -33,8 +34,13 @@ def _sha256(content: bytes) -> str:
 
 def _entry(
     root: str,
-    classification: str,
-    action: str,
+    classification: Literal[
+        "contract-protected",
+        "lineage-only",
+        "reproducible-ephemeral",
+        "unknown",
+    ],
+    action: Literal["retain", "human-review", "delete", "defer"],
     *,
     evidence: RetentionEvidenceReference | None = None,
     duplicate: DuplicateEvidence | None = None,

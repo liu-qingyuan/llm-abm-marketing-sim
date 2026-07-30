@@ -9,6 +9,7 @@
 - [锦江 final dataset latent-v1 本地验收记录](jinjiang-final-dataset-latent-v1-validation-20260705.md)：36,400 用户 synthetic latent-v1 variant 的当前验证入口。
 - [Repository retention audit baseline](retention-audit-baseline-20260730.md)：当前 retention manifest 的只读 dry-run aggregate、精确候选计数、保留 roots、human review roots 和 deferred unknowns。
 - [Repository retention cleanup execution](retention-cleanup-execution-20260730.md)：Ticket #130 的精确删除执行、manifest 状态更新、protected/lineage 保留核验和 post-audit aggregate evidence。
+- [Repository retention cleanup final evidence](retention-cleanup-final-evidence-20260730.md)：Ticket #131 的三组 v4 contract/source closure、最终 retention audit、aggregate cleanup measurements、文档/generator/GitNexus/quality gates。
 - [GitNexus index scope evidence](gitnexus-index-scope-20260730.md)：tracked `.gitnexusignore` 的 bounded source graph、exact cache reset、forced rebuild 和 symbol/query smoke。
 - [锦江 `interest_tags` 合同撤销聚合审计](jinjiang-interest-tags-contract-audit-20260723.md)：当前 ranking/Prompt 字段边界的聚合审计。
 
