@@ -2405,13 +2405,6 @@ def validation_report_markdown(report: Mapping[str, Any]) -> str:
     return "\n".join(lines) + "\n"
 
 
-def write_validation_doc(docs_dir: Path, report: Mapping[str, Any]) -> Path:
-    docs_dir.mkdir(parents=True, exist_ok=True)
-    path = docs_dir / f"jinjiang-douyin-profile-expansion-{datetime.now(timezone.utc).strftime('%Y%m%d')}.md"
-    path.write_text(validation_report_markdown(report), encoding="utf-8")
-    return path
-
-
 def write_curated_report(report_path: Path, report: Mapping[str, Any]) -> Path:
     report_path.parent.mkdir(parents=True, exist_ok=True)
     report_path.write_text(validation_report_markdown(report), encoding="utf-8")

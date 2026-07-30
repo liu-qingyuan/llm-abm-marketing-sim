@@ -209,7 +209,6 @@ classDiagram
     class AuditReporter {
       +write_target_audit()
       +write_collection_docs()
-      +write_validation_doc()
     }
     ProfileExpansionCLI --> SecUidEvidenceIndex
     ProfileExpansionCLI --> ProfileTargetBuilder
