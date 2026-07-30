@@ -37,6 +37,7 @@ llm-abm-marketing-sim/
 ├── playwright.config.ts              # 浏览器冒烟配置
 ├── pyproject.toml                    # Python 包、依赖、ruff、mypy、pytest marker
 ├── scripts/
+│   ├── audit_retention.py             # read-only retention dry-run CLI
 │   ├── run_concurrent_message_validation.py # 1,000-user mocked concurrent-message validation runner
 │   ├── validate_abm_report_release.py # v1/v2/v3/v4 persisted release evidence validator
 │   └── deploy_abm_report.sh           # formal-only production deploy Interface
@@ -68,6 +69,7 @@ src/llm_abm_sim/
 │   └── openai_compatible.py          # 可选 OpenAI-compatible adapter
 ├── report_i18n.py                    # 报告双语文案字典
 ├── report_payload.py                 # 报告 view-model 与图追踪 payload
+├── retention.py                      # tracked retention manifest audit and exact dry-run evidence
 ├── run.py                            # CLI 入口
 ├── runner.py                         # config -> graph/agents/model/output 编排
 ├── safe_serialization.py             # 安全序列化/秘密过滤
@@ -86,6 +88,7 @@ tests/
 ├── integration/                      # runner 确定性、指标合约、mock Provider
 ├── playwright/                       # report 和 Web 控制台浏览器冒烟
 ├── unit/                             # 小边界单元测试
+│   ├── test_retention_audit.py       # retention manifest/path/hash fail-closed contract
 └── web/                              # Web API 测试
 ```
 

@@ -24,6 +24,18 @@ from .final_research import FinalResearchConfig, FinalResearchModel, FinalResear
 from .final_research_report import rebuild_final_research_report
 from .model import SimulationModel
 from .runner import ExperimentRunner
+from .retention import (
+    CacheEvidence,
+    DuplicateEvidence,
+    RetentionAuditResult,
+    RetentionAuditor,
+    RetentionEntry,
+    RetentionEvidenceReference,
+    RetentionManifest,
+    audit_retention,
+    load_retention_manifest,
+    render_retention_report,
+)
 from .schemas import PlatformContext
 
 __all__ = [
@@ -32,9 +44,11 @@ __all__ = [
     "ExperimentalMessageDefinition",
     "PlatformContext",
     "CachedDecisionAdapter",
+    "CacheEvidence",
     "InMemoryDecisionCache",
     "DecisionCache",
     "DecisionInput",
+    "DuplicateEvidence",
     "ActionEvent",
     "DecisionEvent",
     "EngageDecision",
@@ -43,8 +57,16 @@ __all__ = [
     "FinalResearchConfig",
     "FinalResearchModel",
     "FinalResearchRunner",
+    "RetentionAuditResult",
+    "RetentionAuditor",
+    "RetentionEntry",
+    "RetentionEvidenceReference",
+    "RetentionManifest",
     "rebuild_concurrent_message_report",
     "rebuild_final_research_report",
+    "audit_retention",
+    "load_retention_manifest",
+    "render_retention_report",
     "LLMDecisionAdapter",
     "ProviderDecisionError",
     "PlatformEnvironment",

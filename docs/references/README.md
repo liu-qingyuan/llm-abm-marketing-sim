@@ -12,6 +12,7 @@
 
 - [锦江 final dataset 审计](jinjiang-final-dataset-audit-20260624.md)：最终数据集 lineage、聚合计数、验收结果、profile 指标口径和隐私边界。
 - [锦江 final dataset 清理记录](jinjiang-final-dataset-cleanup-20260624.md)：本地旧 run 和中间数据清理记录，只含聚合统计和路径。
+- [Repository retention audit baseline](retention-audit-baseline-20260730.md)：tracked manifest 的只读 dry-run aggregate、精确候选计数、保留 roots、human review roots 和 deferred unknowns。
 - [锦江 final dataset latent-v1 本地验收记录](jinjiang-final-dataset-latent-v1-validation-20260705.md)：36,400 用户 latent-v1 processed variant 的聚合验收、class counts、Table 11 profile counts 和隐私边界。
 - [锦江 `interest_tags` 合同撤销聚合审计](jinjiang-interest-tags-contract-audit-20260723.md)：记录权威 processed variant 的字段存在性与 0/36,400 语义覆盖，并说明 #72/#75 的 v5 合同边界。
 - [锦江 Prompt v2 mocked provider 验收摘要](jinjiang-prompt-v2-mock-validation-20260708.md)：#19 主 Prompt v2 的 prompt contract、mocked provider、ABM event/report 端到端 aggregate-only 验收摘要。
