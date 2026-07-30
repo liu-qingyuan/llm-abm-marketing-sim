@@ -69,7 +69,7 @@ src/llm_abm_sim/
 │   └── openai_compatible.py          # 可选 OpenAI-compatible adapter
 ├── report_i18n.py                    # 报告双语文案字典
 ├── report_payload.py                 # 报告 view-model 与图追踪 payload
-├── retention.py                      # tracked retention manifest audit and exact dry-run evidence
+├── retention.py                      # tracked manifest v2 audit and metadata-only evidence
 ├── run.py                            # CLI 入口
 ├── runner.py                         # config -> graph/agents/model/output 编排
 ├── safe_serialization.py             # 安全序列化/秘密过滤
@@ -88,7 +88,7 @@ tests/
 ├── integration/                      # runner 确定性、指标合约、mock Provider
 ├── playwright/                       # report 和 Web 控制台浏览器冒烟
 ├── unit/                             # 小边界单元测试
-│   ├── test_retention_audit.py       # retention manifest/path/hash fail-closed contract
+│   ├── test_retention_audit.py       # tracked manifest/path/evidence/metadata-only contract
 └── web/                              # Web API 测试
 ```
 
@@ -114,7 +114,7 @@ tests/
 
 ### `runs/`
 
-CLI 和 Web 运行产物目录，git 忽略。可随时删除重建。
+普通未受合同保护的 run 输出可以删除后重建；这不是对所有 `runs/` 路径的 blanket retention 规则。`configs/retention/manifest.json` 明确列出的 contract-protected Formal/release roots 不能仅按目录类型推断删除。当前 v2 audit 只报告 explicit roots 的 policy、evidence 和 filesystem metadata，永不授权删除。
 
 ## 入口点
 

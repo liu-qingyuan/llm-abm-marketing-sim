@@ -4,22 +4,30 @@ import hashlib
 import json
 import os
 import stat
-from collections.abc import Mapping
-from pathlib import Path, PurePosixPath, PureWindowsPath
-from typing import Any, Literal
+import subprocess
+from collections.abc import Mapping as _Mapping
+from pathlib import Path as _Path
+from pathlib import PurePosixPath as _PurePosixPath
+from pathlib import PureWindowsPath as _PureWindowsPath
+from typing import Any as _Any
+from typing import Literal as _Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel as _BaseModel
+from pydantic import ConfigDict as _ConfigDict
+from pydantic import Field as _Field
+from pydantic import ValidationError as _ValidationError
+from pydantic import field_validator as _field_validator
 
-RETENTION_MANIFEST_SCHEMA = "retention-manifest-v1"
-RETENTION_AUDIT_SCHEMA = "retention-audit-v1"
+__all__ = ["RetentionAuditResult", "audit_retention", "render_retention_report"]
 
-RetentionClassification = Literal[
+_MANIFEST_SCHEMA = "retention-manifest-v2"
+_AUDIT_SCHEMA = "retention-audit-v2"
+_RetentionClassification = _Literal[
     "contract-protected",
     "lineage-only",
     "reproducible-ephemeral",
     "unknown",
 ]
-RetentionPlannedAction = Literal["retain", "human-review", "delete", "defer"]
 
 
 def _non_empty(value: str) -> str:
@@ -28,188 +36,144 @@ def _non_empty(value: str) -> str:
     return value
 
 
-def _is_forbidden_secret_path(value: str) -> bool:
-    return any(part == ".env" or part.startswith(".env.") for part in value.replace("\\", "/").split("/"))
+def _is_secret_path(value: str) -> bool:
+    return any(part == ".env" or part.startswith(".env.") for part in value.lower().replace("\\", "/").split("/"))
 
 
-def _is_forbidden_content_path(value: str) -> bool:
-    forbidden = {"raw", "raw_payload", "raw_prompt", "raw_provider_payload", "provider_payload"}
-    parts = PurePosixPath(value.replace("\\", "/")).parts
-    return any(part.lower() in forbidden for part in parts)
+def _is_payload_path(value: str) -> bool:
+    forbidden = {
+        "raw",
+        "raw_payload",
+        "raw-payload",
+        "raw_prompt",
+        "raw-prompt",
+        "provider_payload",
+        "provider-payload",
+    }
+    return any(part in forbidden for part in _PurePosixPath(value.lower().replace("\\", "/")).parts)
 
 
-class RetentionEvidenceReference(BaseModel):
-    """A tracked reference that can prove a root identity without copying its facts."""
+class _RetentionEvidenceReference(_BaseModel):
+    """A human or structured reference that establishes a root's ownership."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = _ConfigDict(extra="forbid")
 
     path: str
     identity_field: str | None = None
-    expected_identity: str | None = None
+    expected_identity: _Any | None = None
 
-    _validate_path = field_validator("path")(_non_empty)
+    _validate_path = _field_validator("path")(_non_empty)
 
-    @field_validator("identity_field", "expected_identity")
+    @_field_validator("identity_field")
     @classmethod
-    def _validate_optional_text(cls, value: str | None) -> str | None:
+    def _validate_identity_field(cls, value: str | None) -> str | None:
         if value is not None and not value.strip():
-            raise ValueError("optional evidence identity values must not be empty")
+            raise ValueError("identity_field must not be empty")
         return value
 
 
-class DuplicateEvidence(BaseModel):
-    """Exact candidate/retained equality evidence for a dry-run delete allowlist."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    candidate_root: str
-    retained_root: str
-    relative_files: list[str]
-    sha256_map: dict[str, str]
-    expected_bytes: int = Field(ge=0)
-    approved_action: Literal["delete"]
-
-    _validate_roots = field_validator("candidate_root", "retained_root")(_non_empty)
-
-    @field_validator("relative_files")
-    @classmethod
-    def _validate_file_names(cls, value: list[str]) -> list[str]:
-        if any(not item.strip() for item in value):
-            raise ValueError("duplicate relative file names must not be empty")
-        return value
-
-    @field_validator("sha256_map")
-    @classmethod
-    def _validate_hash_values(cls, value: dict[str, str]) -> dict[str, str]:
-        for relative_path, digest in value.items():
-            if not relative_path.strip():
-                raise ValueError("duplicate hash map paths must not be empty")
-            if len(digest) != 64 or any(character not in "0123456789abcdefABCDEF" for character in digest):
-                raise ValueError(f"invalid SHA-256 value for {relative_path}")
-        return value
-
-
-class CacheEvidence(BaseModel):
-    """Evidence that an exact cache root can be rebuilt after review."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    exact_root: str
-    producer: str
-    rebuild_validation: str
-
-    _validate_text = field_validator("exact_root", "producer", "rebuild_validation")(_non_empty)
-
-
-class RetentionEntry(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+class _RetentionEntry(_BaseModel):
+    model_config = _ConfigDict(extra="forbid")
 
     root: str
-    root_type: Literal["file", "directory"]
+    root_type: _Literal["file", "directory"]
     ownership: str
-    classification: RetentionClassification
+    classification: _RetentionClassification
     basis: str
-    planned_action: RetentionPlannedAction
-    evidence_reference: RetentionEvidenceReference | None = None
-    duplicate_evidence: DuplicateEvidence | None = None
-    cache_evidence: CacheEvidence | None = None
+    evidence_reference: _RetentionEvidenceReference | None = None
 
-    _validate_text = field_validator("root", "ownership", "basis")(_non_empty)
+    _validate_text = _field_validator("root", "ownership", "basis")(_non_empty)
 
 
-class RetentionManifest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+class _RetentionManifest(_BaseModel):
+    model_config = _ConfigDict(extra="forbid")
 
-    schema_version: Literal["retention-manifest-v1"]
-    entries: list[RetentionEntry]
+    schema_version: _Literal["retention-manifest-v2"]
+    entries: list[_RetentionEntry]
 
 
-class RetentionViolation(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+class _RetentionViolation(_BaseModel):
+    model_config = _ConfigDict(extra="forbid")
 
     code: str
     root: str
     message: str
 
 
-class RetentionEntryAudit(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+class _RetentionEntryAudit(_BaseModel):
+    model_config = _ConfigDict(extra="forbid")
 
     root: str
-    classification: RetentionClassification
-    status: Literal["protected", "approved", "human-review", "deferred", "rejected"]
-    observed_bytes: int = Field(ge=0)
+    root_type: _Literal["file", "directory"]
+    classification: _RetentionClassification
+    status: _Literal["valid", "rejected"]
+    regular_file_count: int = _Field(ge=0)
+    directory_count: int = _Field(ge=0)
+    observed_bytes: int = _Field(ge=0)
     violations: list[str]
 
 
-class ExactCleanupEvidence(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+class _RetentionAggregateMetadata(_BaseModel):
+    model_config = _ConfigDict(extra="forbid")
 
-    source_root: str
-    path: str
-    action: Literal["delete"]
-    bytes: int = Field(ge=0)
-    sha256: str
-    evidence_kind: Literal["duplicate", "cache"]
-
-    @field_validator("source_root", "path", "sha256")
-    @classmethod
-    def _validate_non_empty(cls, value: str) -> str:
-        return _non_empty(value)
+    regular_file_count: int = _Field(ge=0)
+    directory_count: int = _Field(ge=0)
+    observed_bytes: int = _Field(ge=0)
 
 
-class DirectoryCleanupEvidence(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+class RetentionAuditResult(_BaseModel):
+    """Deterministic, read-only evidence for one tracked retention manifest.
 
-    path: str
-    action: Literal["delete"]
-    verified_empty_after_file_actions: bool
-    files_processed: list[str]
-    directories_processed: list[str]
+    ``audit_valid`` only means that the explicit roots and their evidence satisfy
+    the policy. It never grants deletion eligibility or authorizes a filesystem
+    action. Root contents are represented by metadata counts and bytes only.
+    """
 
+    model_config = _ConfigDict(extra="forbid")
 
-class RetentionAuditResult(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    schema_version: Literal["retention-audit-v1"]
-    entry_results: list[RetentionEntryAudit]
+    schema_version: _Literal["retention-audit-v2"]
+    manifest_sha256: str | None
+    audit_valid: bool
+    entry_results: list[_RetentionEntryAudit]
     protected_roots: list[str]
-    approved_candidates: list[str]
-    human_review_roots: list[str]
-    deferred_unknowns: list[str]
-    approved_actions: list[ExactCleanupEvidence]
-    approved_directories: list[DirectoryCleanupEvidence]
-    aggregate_bytes: int = Field(ge=0)
-    protected_bytes: int = Field(ge=0)
-    lineage_bytes: int = Field(ge=0)
-    unknown_bytes: int = Field(ge=0)
-    violations: list[RetentionViolation]
-    ready_for_cleanup: bool
+    lineage_roots: list[str]
+    ephemeral_roots: list[str]
+    unresolved_roots: list[str]
+    metadata: _RetentionAggregateMetadata
+    violations: list[_RetentionViolation]
+
+    @property
+    def aggregate_metadata(self) -> _RetentionAggregateMetadata:
+        """Return the single serialized aggregate metadata record."""
+
+        return self.metadata
+
+    @property
+    def regular_file_count(self) -> int:
+        return self.metadata.regular_file_count
+
+    @property
+    def directory_count(self) -> int:
+        return self.metadata.directory_count
+
+    @property
+    def observed_bytes(self) -> int:
+        return self.metadata.observed_bytes
 
 
-class _FileObservation:
-    def __init__(self, path: str, size: int, sha256: str | None) -> None:
-        self.path = path
-        self.size = size
-        self.sha256 = sha256
-
-
-class _DirectoryObservation:
-    def __init__(self, path: str) -> None:
-        self.path = path
-
-
-class _EntryOutcome:
-    def __init__(self, entry: RetentionEntry) -> None:
+class _EntryState:
+    def __init__(self, entry: _RetentionEntry) -> None:
         self.entry = entry
+        self.root_path: _Path | None = None
+        self.root_stat: os.stat_result | None = None
+        self.canonical_root: str | None = None
+        self.violations: list[_RetentionViolation] = []
+        self.regular_file_count = 0
+        self.directory_count = 0
         self.observed_bytes = 0
-        self.status: Literal["protected", "approved", "human-review", "deferred", "rejected"] = "rejected"
-        self.violations: list[RetentionViolation] = []
-        self.actions: list[ExactCleanupEvidence] = []
-        self.directories: list[DirectoryCleanupEvidence] = []
 
     def add_violation(self, code: str, message: str, *, root: str | None = None) -> None:
-        self.violations.append(RetentionViolation(code=code, root=root or self.entry.root, message=message))
+        self.violations.append(_RetentionViolation(code=code, root=root or self.entry.root, message=message))
 
 
 class _PathValidationError(ValueError):
@@ -218,644 +182,445 @@ class _PathValidationError(ValueError):
         self.code = code
 
 
-class RetentionAuditor:
-    """Read-only retention manifest auditor.
+def _invalid_result(
+    violations: list[_RetentionViolation],
+    *,
+    manifest_sha256: str | None = None,
+) -> RetentionAuditResult:
+    return RetentionAuditResult(
+        schema_version=_AUDIT_SCHEMA,
+        manifest_sha256=manifest_sha256,
+        audit_valid=False,
+        entry_results=[],
+        protected_roots=[],
+        lineage_roots=[],
+        ephemeral_roots=[],
+        unresolved_roots=[],
+        metadata=_RetentionAggregateMetadata(regular_file_count=0, directory_count=0, observed_bytes=0),
+        violations=sorted(violations, key=lambda item: (item.root, item.code, item.message)),
+    )
 
-    The Interface accepts a typed manifest and returns deterministic aggregate evidence.
-    It reads path metadata, referenced JSON identities, and hashes for explicitly
-    authorized duplicate/cache roots. It never mutates the filesystem or contacts a
-    provider/data source.
-    """
 
-    def __init__(self, repo_root: str | Path) -> None:
-        root = Path(repo_root)
-        if root.is_symlink():
-            raise ValueError("repository root must not be a symlink")
-        if not root.is_dir():
-            raise FileNotFoundError(f"repository root does not exist: {root}")
-        self.repo_root = root.resolve()
+def _violation(code: str, root: str, message: str) -> _RetentionViolation:
+    return _RetentionViolation(code=code, root=root, message=message)
 
-    def audit(
-        self,
-        manifest: RetentionManifest | Mapping[str, Any] | str | Path,
-    ) -> RetentionAuditResult:
-        typed_manifest = self._coerce_manifest(manifest)
-        entries = sorted(typed_manifest.entries, key=lambda entry: entry.root)
-        duplicate_roots = self._duplicate_roots(entries)
-        outcomes: list[_EntryOutcome] = []
 
-        for entry in entries:
-            outcome = _EntryOutcome(entry)
-            if entry.root in duplicate_roots:
-                outcome.add_violation(
-                    "classification-conflict",
-                    "the same root appears more than once in the retention manifest",
-                )
-            self._audit_entry(outcome)
-            outcomes.append(outcome)
+def _validate_relative(value: str, *, label: str) -> tuple[str, ...]:
+    if not value:
+        raise _PathValidationError("invalid-path", f"{label} must be a repository-relative path")
+    if "\x00" in value:
+        raise _PathValidationError("invalid-path", f"{label} must not contain NUL bytes")
+    windows_path = _PureWindowsPath(value)
+    if _PurePosixPath(value).is_absolute() or windows_path.is_absolute() or windows_path.drive:
+        raise _PathValidationError("absolute-path", f"{label} must not be absolute")
+    if "\\" in value:
+        raise _PathValidationError("invalid-path", f"{label} must use POSIX separators")
+    if ".." in value.split("/"):
+        raise _PathValidationError("path-escape", f"{label} must not contain path escape components")
+    if "//" in value or value.endswith("/"):
+        raise _PathValidationError("invalid-path", f"{label} must use one separator between components")
+    parts = tuple(value.split("/"))
+    if any(part in {"", "."} for part in parts):
+        raise _PathValidationError("invalid-path", f"{label} must use canonical components")
+    if "/".join(parts) != value:
+        raise _PathValidationError("invalid-path", f"{label} must be canonical")
+    return parts
 
-        violations = sorted(
-            [violation for outcome in outcomes for violation in outcome.violations],
-            key=lambda violation: (violation.root, violation.code, violation.message),
-        )
-        approved_actions = sorted(
-            [action for outcome in outcomes for action in outcome.actions],
-            key=lambda action: (action.path, action.sha256),
-        )
-        approved_directories = sorted(
-            [directory for outcome in outcomes for directory in outcome.directories],
-            key=lambda directory: (-directory.path.count("/"), directory.path),
-        )
-        entry_results = [
-            RetentionEntryAudit(
-                root=outcome.entry.root,
-                classification=outcome.entry.classification,
-                status=outcome.status,
-                observed_bytes=outcome.observed_bytes,
-                violations=sorted({violation.code for violation in outcome.violations}),
-            )
-            for outcome in outcomes
-        ]
-        protected_roots = sorted(
-            outcome.entry.root for outcome in outcomes if outcome.entry.classification == "contract-protected"
-        )
-        approved_candidates = sorted(
-            outcome.entry.root for outcome in outcomes if outcome.actions and outcome.status == "approved"
-        )
-        human_review_roots = sorted(
-            outcome.entry.root
-            for outcome in outcomes
-            if outcome.entry.classification in {"lineage-only", "unknown"}
-            or (outcome.entry.classification == "reproducible-ephemeral" and outcome.violations)
-        )
-        deferred_unknowns = sorted(
-            outcome.entry.root for outcome in outcomes if outcome.entry.classification == "unknown"
-        )
-        protected_bytes = sum(
-            outcome.observed_bytes for outcome in outcomes if outcome.entry.classification == "contract-protected"
-        )
-        lineage_bytes = sum(
-            outcome.observed_bytes for outcome in outcomes if outcome.entry.classification == "lineage-only"
-        )
-        unknown_bytes = sum(outcome.observed_bytes for outcome in outcomes if outcome.entry.classification == "unknown")
-        aggregate_bytes = sum(action.bytes for action in approved_actions)
-        ready_for_cleanup = not violations and not human_review_roots and not deferred_unknowns
 
-        return RetentionAuditResult(
-            schema_version=RETENTION_AUDIT_SCHEMA,
-            entry_results=entry_results,
-            protected_roots=protected_roots,
-            approved_candidates=approved_candidates,
-            human_review_roots=human_review_roots,
-            deferred_unknowns=deferred_unknowns,
-            approved_actions=approved_actions,
-            approved_directories=approved_directories,
-            aggregate_bytes=aggregate_bytes,
-            protected_bytes=protected_bytes,
-            lineage_bytes=lineage_bytes,
-            unknown_bytes=unknown_bytes,
-            violations=violations,
-            ready_for_cleanup=ready_for_cleanup,
-        )
-
-    def _coerce_manifest(
-        self,
-        manifest: RetentionManifest | Mapping[str, Any] | str | Path,
-    ) -> RetentionManifest:
-        if isinstance(manifest, RetentionManifest):
-            return manifest
-        if isinstance(manifest, (str, Path)):
-            return load_retention_manifest(manifest)
-        return RetentionManifest.model_validate(manifest)
-
-    @staticmethod
-    def _duplicate_roots(entries: list[RetentionEntry]) -> set[str]:
-        seen: set[str] = set()
-        duplicates: set[str] = set()
-        for entry in entries:
-            if entry.root in seen:
-                duplicates.add(entry.root)
-            seen.add(entry.root)
-        return duplicates
-
-    def _audit_entry(self, outcome: _EntryOutcome) -> None:
-        entry = outcome.entry
+def _safe_path(repo_root: _Path, parts: tuple[str, ...]) -> tuple[_Path, str | None]:
+    current = repo_root
+    missing = False
+    for part in parts:
+        current = current / part
+        if missing:
+            continue
         try:
-            root_path = self._safe_repo_path(entry.root)
-        except _PathValidationError as error:
-            outcome.add_violation(error.code, str(error))
-            outcome.status = "deferred" if entry.classification == "unknown" else "rejected"
-            return
-        if _is_forbidden_secret_path(entry.root):
-            outcome.add_violation("forbidden-secret-path", "retention manifest must not inspect environment files")
-            outcome.status = "deferred" if entry.classification == "unknown" else "rejected"
-            return
-        if entry.classification == "reproducible-ephemeral" and _is_forbidden_content_path(entry.root):
-            outcome.add_violation(
-                "forbidden-payload-path", "rebuild evidence must not hash raw or provider payload roots"
-            )
-            outcome.status = "rejected"
-            return
-
-        root_stat = self._lstat(root_path, outcome, missing_code="missing-root")
-        if root_stat is None:
-            outcome.status = "deferred" if entry.classification == "unknown" else "rejected"
-            return
-        if stat.S_ISLNK(root_stat.st_mode):
-            outcome.add_violation("symlink-component", "root must not be a symlink")
-            outcome.status = "deferred" if entry.classification == "unknown" else "rejected"
-            return
-        if not self._matches_root_type(entry, root_stat.st_mode, outcome):
-            outcome.status = "deferred" if entry.classification == "unknown" else "rejected"
-            return
-
-        observations, directories = self._inventory(root_path, entry.root, hash_files=False, outcome=outcome)
-        outcome.observed_bytes = sum(observation.size for observation in observations)
-        self._verify_evidence(entry, outcome)
-
-        if entry.classification == "contract-protected":
-            outcome.status = "protected"
-            if entry.planned_action != "retain":
-                outcome.add_violation("protected-action", "contract-protected roots may only be retained")
-            if entry.duplicate_evidence or entry.cache_evidence:
-                outcome.add_violation("classification-conflict", "protected roots cannot carry delete evidence")
-            if outcome.violations:
-                outcome.status = "rejected"
-            return
-
-        if entry.classification == "lineage-only":
-            outcome.status = "human-review"
-            if entry.planned_action not in {"retain", "human-review"}:
-                outcome.add_violation("lineage-action", "lineage-only roots require retain or human-review")
-            if entry.duplicate_evidence or entry.cache_evidence:
-                outcome.add_violation("classification-conflict", "lineage-only roots cannot carry delete evidence")
-            if outcome.violations:
-                outcome.status = "rejected"
-            return
-
-        if entry.classification == "unknown":
-            outcome.status = "deferred"
-            if entry.planned_action != "defer":
-                outcome.add_violation("unknown-action", "unknown roots must use the defer action")
-            if entry.duplicate_evidence or entry.cache_evidence:
-                outcome.add_violation("classification-conflict", "unknown roots cannot carry delete evidence")
-            if outcome.violations:
-                outcome.status = "rejected"
-            return
-
-        outcome.status = "rejected"
-        if entry.planned_action != "delete":
-            outcome.add_violation("ephemeral-action", "reproducible-ephemeral roots require the delete action")
-        if outcome.violations:
-            return
-        if entry.duplicate_evidence and entry.cache_evidence:
-            outcome.add_violation("classification-conflict", "a root cannot use duplicate and cache evidence together")
-        elif entry.duplicate_evidence:
-            self._authorize_duplicate(entry, root_path, observations, directories, outcome)
-        elif entry.cache_evidence:
-            self._authorize_cache(entry, observations, directories, outcome)
-        else:
-            outcome.add_violation(
-                "missing-rebuild-evidence",
-                "reproducible-ephemeral roots require duplicate or cache evidence",
-            )
-        if not outcome.violations and outcome.actions:
-            outcome.status = "approved"
-        elif not outcome.violations:
-            outcome.add_violation("empty-allowlist", "no regular files were authorized for the planned action")
-
-    def _matches_root_type(self, entry: RetentionEntry, mode: int, outcome: _EntryOutcome) -> bool:
-        expected_directory = entry.root_type == "directory"
-        actual_directory = stat.S_ISDIR(mode)
-        actual_file = stat.S_ISREG(mode)
-        if expected_directory and not actual_directory:
-            outcome.add_violation("unexpected-file-type", "manifest expects a regular directory")
-            return False
-        if not expected_directory and not actual_file:
-            outcome.add_violation("unexpected-file-type", "manifest expects a regular file")
-            return False
-        return True
-
-    def _verify_evidence(self, entry: RetentionEntry, outcome: _EntryOutcome) -> None:
-        reference = entry.evidence_reference
-        if reference is None:
-            if entry.classification in {"contract-protected", "lineage-only"}:
-                outcome.add_violation("missing-evidence", "protected and lineage roots require an evidence reference")
-            return
-        try:
-            reference_path = self._safe_repo_path(reference.path)
-        except _PathValidationError as error:
-            outcome.add_violation(error.code, str(error), root=reference.path)
-            return
-        if _is_forbidden_secret_path(reference.path):
-            outcome.add_violation("forbidden-secret-path", "evidence reference must not be an environment file")
-            return
-        reference_stat = self._lstat(reference_path, outcome, missing_code="missing-evidence", root=reference.path)
-        if reference_stat is None:
-            return
-        if stat.S_ISLNK(reference_stat.st_mode) or not stat.S_ISREG(reference_stat.st_mode):
-            outcome.add_violation(
-                "unexpected-file-type", "evidence reference must be a regular file", root=reference.path
-            )
-            return
-        if reference.identity_field is None and reference.expected_identity is None:
-            return
-        if reference.identity_field is None or reference.expected_identity is None:
-            outcome.add_violation("evidence-mismatch", "evidence identity field and expected value must be paired")
-            return
-        if reference_path.suffix.lower() != ".json":
-            outcome.add_violation(
-                "evidence-mismatch", "machine identity evidence must be a JSON file", root=reference.path
-            )
-            return
-        try:
-            evidence = json.loads(reference_path.read_text(encoding="utf-8"))
-            value: Any = evidence
-            for key in reference.identity_field.split("."):
-                if not isinstance(value, Mapping) or key not in value:
-                    raise KeyError(key)
-                value = value[key]
-        except (OSError, UnicodeDecodeError, json.JSONDecodeError, KeyError, TypeError) as error:
-            outcome.add_violation("evidence-mismatch", f"cannot read identity evidence: {error}", root=reference.path)
-            return
-        if value != reference.expected_identity:
-            outcome.add_violation(
-                "evidence-mismatch",
-                f"identity field {reference.identity_field} does not match the expected value",
-                root=reference.path,
-            )
-
-    def _authorize_duplicate(
-        self,
-        entry: RetentionEntry,
-        candidate_path: Path,
-        candidate_observations: list[_FileObservation],
-        candidate_directories: list[_DirectoryObservation],
-        outcome: _EntryOutcome,
-    ) -> None:
-        evidence = entry.duplicate_evidence
-        assert evidence is not None
-        if evidence.candidate_root != entry.root:
-            outcome.add_violation("duplicate-root-mismatch", "duplicate candidate_root must equal the manifest root")
-            return
-        if evidence.retained_root == entry.root:
-            outcome.add_violation("duplicate-root-mismatch", "candidate and retained roots must be different")
-            return
-        if _is_forbidden_secret_path(evidence.retained_root):
-            outcome.add_violation(
-                "forbidden-secret-path",
-                "retained duplicate roots must not inspect environment files",
-                root=evidence.retained_root,
-            )
-            return
-        if _is_forbidden_content_path(evidence.retained_root):
-            outcome.add_violation(
-                "forbidden-payload-path",
-                "retained duplicate roots containing raw or provider payloads cannot be hashed",
-                root=evidence.retained_root,
-            )
-            return
-        try:
-            retained_path = self._safe_repo_path(evidence.retained_root)
-        except _PathValidationError as error:
-            outcome.add_violation(error.code, str(error), root=evidence.retained_root)
-            return
-        retained_stat = self._lstat(
-            retained_path, outcome, missing_code="duplicate-mismatch", root=evidence.retained_root
-        )
-        if retained_stat is None:
-            return
-        if stat.S_ISLNK(retained_stat.st_mode):
-            outcome.add_violation(
-                "symlink-component", "retained duplicate root must not be a symlink", root=evidence.retained_root
-            )
-            return
-        if entry.root_type == "directory" and not stat.S_ISDIR(retained_stat.st_mode):
-            outcome.add_violation("duplicate-mismatch", "candidate and retained roots have different file types")
-            return
-        if entry.root_type == "file" and not stat.S_ISREG(retained_stat.st_mode):
-            outcome.add_violation("duplicate-mismatch", "candidate and retained roots have different file types")
-            return
-        if outcome.violations:
-            return
-        retained_observations, _ = self._inventory(
-            retained_path,
-            evidence.retained_root,
-            hash_files=True,
-            outcome=outcome,
-        )
-        if outcome.violations:
-            return
-        if any(_is_forbidden_content_path(observation.path) for observation in candidate_observations):
-            outcome.add_violation(
-                "forbidden-payload-path",
-                "candidate roots containing raw or provider payloads cannot be hashed",
-            )
-            return
-        self._rehash_observations(candidate_path, entry.root, candidate_observations, outcome)
-        if outcome.violations:
-            return
-        expected_files = list(evidence.relative_files)
-        expected_set = set(expected_files)
-        expected_hashes = set(evidence.sha256_map)
-        candidate_map = {
-            observation.path.removeprefix(f"{entry.root}/"): observation for observation in candidate_observations
-        }
-        retained_map = {
-            observation.path.removeprefix(f"{evidence.retained_root}/"): observation
-            for observation in retained_observations
-        }
-        invalid_paths = self._validate_relative_file_names(expected_files, outcome)
-        if invalid_paths or len(expected_set) != len(expected_files):
-            outcome.add_violation(
-                "duplicate-mismatch", "duplicate evidence contains duplicate or unsafe relative paths"
-            )
-        if expected_set != expected_hashes:
-            outcome.add_violation("duplicate-mismatch", "duplicate evidence file and hash sets are not identical")
-        if set(candidate_map) != expected_set or set(retained_map) != expected_set:
-            outcome.add_violation(
-                "duplicate-mismatch", "candidate or retained regular-file set differs from the expected set"
-            )
-        if sum(observation.size for observation in candidate_observations) != evidence.expected_bytes:
-            outcome.add_violation("duplicate-mismatch", "candidate bytes do not match expected_bytes")
-        if sum(observation.size for observation in retained_observations) != evidence.expected_bytes:
-            outcome.add_violation("duplicate-mismatch", "retained bytes do not match expected_bytes")
-        for relative_path in sorted(expected_set):
-            expected_hash = evidence.sha256_map.get(relative_path, "").lower()
-            candidate_hash = candidate_map.get(relative_path).sha256 if relative_path in candidate_map else None
-            retained_hash = retained_map.get(relative_path).sha256 if relative_path in retained_map else None
-            if candidate_hash != expected_hash or retained_hash != expected_hash:
-                outcome.add_violation("duplicate-mismatch", f"SHA-256 mismatch for {relative_path}")
-        if outcome.violations:
-            return
-        for observation in sorted(candidate_observations, key=lambda item: item.path):
-            assert observation.sha256 is not None
-            outcome.actions.append(
-                ExactCleanupEvidence(
-                    source_root=entry.root,
-                    path=observation.path,
-                    action="delete",
-                    bytes=observation.size,
-                    sha256=observation.sha256,
-                    evidence_kind="duplicate",
-                )
-            )
-        self._add_directory_action(candidate_directories, candidate_observations, outcome)
-
-    def _authorize_cache(
-        self,
-        entry: RetentionEntry,
-        observations: list[_FileObservation],
-        directories: list[_DirectoryObservation],
-        outcome: _EntryOutcome,
-    ) -> None:
-        evidence = entry.cache_evidence
-        assert evidence is not None
-        if evidence.exact_root != entry.root:
-            outcome.add_violation("cache-root-mismatch", "cache exact_root must equal the manifest root")
-            return
-        if not observations:
-            outcome.add_violation("empty-allowlist", "cache root contains no regular files")
-            return
-        for observation in sorted(observations, key=lambda item: item.path):
-            self._rehash_observation(observation, outcome)
-            if observation.sha256 is None:
-                continue
-            outcome.actions.append(
-                ExactCleanupEvidence(
-                    source_root=entry.root,
-                    path=observation.path,
-                    action="delete",
-                    bytes=observation.size,
-                    sha256=observation.sha256,
-                    evidence_kind="cache",
-                )
-            )
-        if outcome.violations:
-            outcome.actions.clear()
-            return
-        self._add_directory_action(directories, observations, outcome)
-
-    def _add_directory_action(
-        self,
-        directories: list[_DirectoryObservation],
-        observations: list[_FileObservation],
-        outcome: _EntryOutcome,
-    ) -> None:
-        if not directories:
-            return
-        file_paths = sorted(observation.path for observation in observations)
-        directory_paths = sorted(
-            (directory.path for directory in directories),
-            key=lambda path: (-path.count("/"), path),
-        )
-        for directory_path in directory_paths:
-            prefix = f"{directory_path}/"
-            files = [path for path in file_paths if path.startswith(prefix)]
-            children = [path for path in directory_paths if path != directory_path and path.startswith(prefix)]
-            outcome.directories.append(
-                DirectoryCleanupEvidence(
-                    path=directory_path,
-                    action="delete",
-                    verified_empty_after_file_actions=True,
-                    files_processed=files,
-                    directories_processed=children,
-                )
-            )
-
-    def _validate_relative_file_names(self, paths: list[str], outcome: _EntryOutcome) -> bool:
-        invalid = False
-        for path in paths:
-            try:
-                self._validate_relative(path)
-            except _PathValidationError as error:
-                outcome.add_violation(error.code, str(error))
-                invalid = True
-        return invalid
-
-    def _inventory(
-        self,
-        root_path: Path,
-        root_relative: str,
-        *,
-        hash_files: bool,
-        outcome: _EntryOutcome,
-    ) -> tuple[list[_FileObservation], list[_DirectoryObservation]]:
-        observations: list[_FileObservation] = []
-        directories: list[_DirectoryObservation] = []
-
-        def visit(path: Path, relative: str) -> None:
-            try:
-                with os.scandir(path) as iterator:
-                    entries = sorted(iterator, key=lambda entry: entry.name)
-            except OSError as error:
-                outcome.add_violation("read-error", f"cannot inspect directory metadata: {error}")
-                return
-            directories.append(_DirectoryObservation(relative))
-            for item in entries:
-                child = Path(item.path)
-                try:
-                    child_stat = item.stat(follow_symlinks=False)
-                except OSError as error:
-                    outcome.add_violation("read-error", f"cannot inspect filesystem metadata: {error}")
-                    continue
-                child_relative = f"{relative}/{item.name}"
-                if stat.S_ISLNK(child_stat.st_mode):
-                    outcome.add_violation(
-                        "symlink-component", "retention roots must not contain symlink entries", root=child_relative
-                    )
-                elif stat.S_ISDIR(child_stat.st_mode):
-                    visit(child, child_relative)
-                elif stat.S_ISREG(child_stat.st_mode):
-                    observation = _FileObservation(child_relative, child_stat.st_size, None)
-                    observations.append(observation)
-                    if hash_files:
-                        if _is_forbidden_content_path(child_relative):
-                            outcome.add_violation(
-                                "forbidden-payload-path",
-                                "raw or provider payload files must not be hashed",
-                                root=child_relative,
-                            )
-                        else:
-                            self._rehash_observation(observation, outcome, path=child)
-                else:
-                    outcome.add_violation(
-                        "unexpected-file-type", "retention roots may contain regular files only", root=child_relative
-                    )
-
-        try:
-            root_stat = root_path.stat()
-        except OSError as error:
-            outcome.add_violation("read-error", f"cannot inspect filesystem metadata: {error}")
-            return observations, directories
-        if stat.S_ISREG(root_stat.st_mode):
-            observation = _FileObservation(root_relative, root_stat.st_size, None)
-            observations.append(observation)
-            if hash_files:
-                self._rehash_observation(observation, outcome, path=root_path)
-        elif stat.S_ISDIR(root_stat.st_mode):
-            visit(root_path, root_relative)
-        return observations, directories
-
-    def _rehash_observations(
-        self,
-        root_path: Path,
-        root_relative: str,
-        observations: list[_FileObservation],
-        outcome: _EntryOutcome,
-    ) -> None:
-        prefix = f"{root_relative}/"
-        for observation in observations:
-            if observation.path == root_relative:
-                path = root_path
-            else:
-                relative_path = observation.path.removeprefix(prefix)
-                path = root_path / relative_path
-            self._rehash_observation(observation, outcome, path=path)
-
-    def _rehash_observation(
-        self,
-        observation: _FileObservation,
-        outcome: _EntryOutcome,
-        *,
-        path: Path | None = None,
-    ) -> None:
-        if observation.sha256 is not None:
-            return
-        if path is None:
-            path = self.repo_root / observation.path
-        digest = hashlib.sha256()
-        try:
-            with path.open("rb") as handle:
-                for chunk in iter(lambda: handle.read(65536), b""):
-                    digest.update(chunk)
-        except OSError as error:
-            outcome.add_violation("read-error", f"cannot hash regular file: {error}", root=observation.path)
-            return
-        observation.sha256 = digest.hexdigest()
-
-    def _lstat(
-        self,
-        path: Path,
-        outcome: _EntryOutcome,
-        *,
-        missing_code: str,
-        root: str | None = None,
-    ) -> os.stat_result | None:
-        try:
-            return path.lstat()
+            mode = current.lstat().st_mode
         except FileNotFoundError:
-            outcome.add_violation(missing_code, "path does not exist", root=root)
+            missing = True
+            continue
         except OSError as error:
-            outcome.add_violation("read-error", f"cannot inspect path metadata: {error}", root=root)
-        return None
-
-    def _safe_repo_path(self, value: str) -> Path:
-        parts = self._validate_relative(value)
-        current = self.repo_root
-        for part in parts:
-            current = current / part
-            try:
-                mode = current.lstat().st_mode
-            except FileNotFoundError:
-                break
-            if stat.S_ISLNK(mode):
-                raise _PathValidationError("symlink-component", "path contains a symlink component")
-        return current
-
-    @staticmethod
-    def _validate_relative(value: str) -> tuple[str, ...]:
-        if not value or value == ".":
-            raise _PathValidationError("invalid-path", "path must name a repository-relative root")
-        if "\x00" in value or "\\" in value:
-            raise _PathValidationError("invalid-path", "path must use safe POSIX-relative components")
-        if PurePosixPath(value).is_absolute() or PureWindowsPath(value).is_absolute() or PureWindowsPath(value).drive:
-            raise _PathValidationError("absolute-path", "absolute paths are not allowed")
-        parts = PurePosixPath(value).parts
-        if any(part == ".." for part in parts):
-            raise _PathValidationError("path-escape", "path escape components are not allowed")
-        if any(part in {"", "."} for part in parts):
-            raise _PathValidationError("invalid-path", "path contains an empty or current-directory component")
-        return parts
+            return current, f"cannot inspect path metadata: {error}"
+        if stat.S_ISLNK(mode):
+            return current, "path contains a symlink component"
+    return current, None
 
 
-def load_retention_manifest(path: str | Path) -> RetentionManifest:
-    manifest_path = Path(path)
-    if _is_forbidden_secret_path(manifest_path.name):
-        raise ValueError("retention manifest must not be an environment file")
-    if manifest_path.is_symlink():
-        raise ValueError("retention manifest must not be a symlink")
-    if not manifest_path.is_file():
-        raise FileNotFoundError(f"retention manifest does not exist: {manifest_path}")
+def _repo_root(value: str | _Path) -> _Path:
+    root = _Path(value)
+    if root.is_symlink():
+        raise ValueError("repository root must not be a symlink")
+    if not root.is_dir():
+        raise FileNotFoundError(f"repository root does not exist: {root}")
+    return root.resolve()
+
+
+def _manifest_path(repo_root: _Path, value: str | _Path) -> tuple[str, _Path]:
+    if not isinstance(value, (str, _Path)):
+        raise _PathValidationError("invalid-path", "manifest path must be a string or Path")
+    raw = str(value)
+    parts = _validate_relative(raw, label="manifest path")
+    path, error = _safe_path(repo_root, parts)
+    if error == "path contains a symlink component":
+        raise _PathValidationError("symlink-component", "manifest path must not contain symlink components")
+    if error is not None:
+        raise _PathValidationError("read-error", error)
+    return "/".join(parts), path
+
+
+def _tracked_manifest(repo_root: _Path, relative_path: str) -> bool:
+    completed = subprocess.run(
+        ["git", "-C", str(repo_root), "ls-files", "--error-unmatch", "--", relative_path],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if completed.returncode != 0:
+        return False
+    return completed.stdout.splitlines() == [relative_path]
+
+
+def _read_tracked_manifest(
+    repo_root: _Path,
+    manifest_path: str | _Path,
+) -> tuple[str, bytes, _RetentionManifest] | RetentionAuditResult:
     try:
-        payload = json.loads(manifest_path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
-        raise ValueError(f"invalid retention manifest: {error}") from error
-    return RetentionManifest.model_validate(payload)
+        relative_path, path = _manifest_path(repo_root, manifest_path)
+    except _PathValidationError as error:
+        return _invalid_result([_violation(error.code, str(manifest_path), str(error))])
+    try:
+        manifest_stat = path.lstat()
+    except FileNotFoundError:
+        return _invalid_result([_violation("missing-manifest", relative_path, "manifest does not exist")])
+    except OSError as error:
+        return _invalid_result([_violation("read-error", relative_path, f"cannot inspect manifest metadata: {error}")])
+    if stat.S_ISLNK(manifest_stat.st_mode):
+        return _invalid_result([_violation("symlink-component", relative_path, "manifest must not be a symlink")])
+    if not stat.S_ISREG(manifest_stat.st_mode):
+        return _invalid_result([_violation("unexpected-file-type", relative_path, "manifest must be a regular file")])
+    if not _tracked_manifest(repo_root, relative_path):
+        return _invalid_result([_violation("manifest-not-tracked", relative_path, "manifest must be tracked by Git")])
+    try:
+        raw = path.read_bytes()
+    except OSError as error:
+        return _invalid_result([_violation("read-error", relative_path, f"cannot read manifest: {error}")])
+    digest = hashlib.sha256(raw).hexdigest()
+    try:
+        payload = json.loads(raw)
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        return _invalid_result(
+            [_violation("manifest-invalid", relative_path, f"manifest is not valid JSON: {error}")],
+            manifest_sha256=digest,
+        )
+    if not isinstance(payload, _Mapping):
+        return _invalid_result(
+            [_violation("manifest-invalid", relative_path, "manifest root must be a JSON object")],
+            manifest_sha256=digest,
+        )
+    schema_version = payload.get("schema_version")
+    if schema_version != _MANIFEST_SCHEMA:
+        code = "unsupported-schema" if schema_version == "retention-manifest-v1" else "manifest-schema"
+        message = (
+            "retention-manifest-v1 is historical evidence and is not supported by the current CLI"
+            if code == "unsupported-schema"
+            else "manifest schema must be retention-manifest-v2"
+        )
+        return _invalid_result([_violation(code, relative_path, message)], manifest_sha256=digest)
+    try:
+        manifest = _RetentionManifest.model_validate(payload)
+    except _ValidationError as error:
+        return _invalid_result(
+            [_violation("manifest-invalid", relative_path, f"invalid retention-manifest-v2: {error}")],
+            manifest_sha256=digest,
+        )
+    return relative_path, raw, manifest
+
+
+def _verify_evidence(repo_root: _Path, state: _EntryState) -> None:
+    reference = state.entry.evidence_reference
+    if reference is None:
+        if state.entry.classification != "unknown":
+            state.add_violation(
+                "missing-evidence",
+                "non-unknown roots require an evidence reference",
+            )
+        return
+    try:
+        evidence_parts = _validate_relative(reference.path, label="evidence path")
+    except _PathValidationError as error:
+        state.add_violation(error.code, str(error), root=reference.path)
+        return
+    if _is_secret_path(reference.path) or _is_payload_path(reference.path):
+        state.add_violation(
+            "forbidden-evidence-path",
+            "evidence references must not point to secret or raw payload paths",
+            root=reference.path,
+        )
+        return
+    evidence_path, error = _safe_path(repo_root, evidence_parts)
+    if error == "path contains a symlink component":
+        state.add_violation(
+            "symlink-component",
+            "evidence reference must not contain symlink components",
+            root=reference.path,
+        )
+        return
+    if error is not None:
+        state.add_violation("read-error", error, root=reference.path)
+        return
+    try:
+        evidence_stat = evidence_path.lstat()
+    except FileNotFoundError:
+        state.add_violation("missing-evidence", "evidence reference does not exist", root=reference.path)
+        return
+    except OSError as error:
+        state.add_violation("read-error", f"cannot inspect evidence metadata: {error}", root=reference.path)
+        return
+    if stat.S_ISLNK(evidence_stat.st_mode) or not stat.S_ISREG(evidence_stat.st_mode):
+        state.add_violation(
+            "unexpected-file-type",
+            "evidence reference must be a regular non-symlink file",
+            root=reference.path,
+        )
+        return
+    identity_field = reference.identity_field
+    has_identity_field = identity_field is not None
+    has_expected_identity = "expected_identity" in reference.model_fields_set
+    if not has_identity_field and not has_expected_identity:
+        return
+    if not has_identity_field or not has_expected_identity:
+        state.add_violation(
+            "evidence-mismatch",
+            "identity_field and expected_identity must be provided together",
+            root=reference.path,
+        )
+        return
+    if evidence_path.suffix.lower() != ".json":
+        state.add_violation(
+            "evidence-mismatch",
+            "machine identity evidence must be a JSON file; Markdown is human reference only",
+            root=reference.path,
+        )
+        return
+    assert identity_field is not None
+    fields = identity_field.split(".")
+    if any(not field for field in fields):
+        state.add_violation("evidence-mismatch", "identity_field must use non-empty components", root=reference.path)
+        return
+    try:
+        evidence = json.loads(evidence_path.read_bytes())
+        value: _Any = evidence
+        for field in fields:
+            if not isinstance(value, _Mapping) or field not in value:
+                raise KeyError(field)
+            value = value[field]
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError, KeyError, TypeError) as error:
+        state.add_violation("evidence-mismatch", f"cannot read identity evidence: {error}", root=reference.path)
+        return
+    if type(value) is not type(reference.expected_identity) or value != reference.expected_identity:
+        state.add_violation(
+            "evidence-mismatch",
+            f"identity field {identity_field} does not match the expected value",
+            root=reference.path,
+        )
+
+
+def _inventory(state: _EntryState) -> None:
+    assert state.root_path is not None
+    assert state.root_stat is not None
+    if stat.S_ISREG(state.root_stat.st_mode):
+        state.regular_file_count = 1
+        state.observed_bytes = state.root_stat.st_size
+        return
+    if not stat.S_ISDIR(state.root_stat.st_mode):
+        return
+
+    state.directory_count = 1
+
+    def visit(path: _Path, relative: str) -> None:
+        try:
+            with os.scandir(path) as iterator:
+                children = sorted(iterator, key=lambda item: item.name)
+        except OSError as error:
+            state.add_violation("read-error", f"cannot inspect directory metadata: {error}", root=relative)
+            return
+        for child in children:
+            child_path = _Path(child.path)
+            child_relative = f"{relative}/{child.name}"
+            try:
+                child_stat = child.stat(follow_symlinks=False)
+            except OSError as error:
+                state.add_violation("read-error", f"cannot inspect filesystem metadata: {error}", root=child_relative)
+                continue
+            if stat.S_ISLNK(child_stat.st_mode):
+                state.add_violation(
+                    "symlink-component",
+                    "retention roots must not contain symlink entries",
+                    root=child_relative,
+                )
+            elif stat.S_ISDIR(child_stat.st_mode):
+                state.directory_count += 1
+                visit(child_path, child_relative)
+            elif stat.S_ISREG(child_stat.st_mode):
+                state.regular_file_count += 1
+                state.observed_bytes += child_stat.st_size
+            else:
+                state.add_violation(
+                    "unexpected-file-type",
+                    "retention roots may contain regular files and directories only",
+                    root=child_relative,
+                )
+
+    visit(state.root_path, state.entry.root)
+
+
+def _prepare_states(repo_root: _Path, manifest: _RetentionManifest) -> list[_EntryState]:
+    states = [_EntryState(entry) for entry in manifest.entries]
+    canonical_groups: dict[str, list[_EntryState]] = {}
+    inode_groups: dict[tuple[int, int], list[_EntryState]] = {}
+
+    for state in states:
+        try:
+            parts = _validate_relative(state.entry.root, label="root")
+        except _PathValidationError as error:
+            state.add_violation(error.code, str(error))
+            continue
+        state.canonical_root = "/".join(parts)
+        root_path, error = _safe_path(repo_root, parts)
+        state.root_path = root_path
+        if error == "path contains a symlink component":
+            state.add_violation("symlink-component", "retention roots must not contain symlink components")
+            continue
+        if error is not None:
+            state.add_violation("read-error", error)
+            continue
+        try:
+            state.root_stat = root_path.lstat()
+        except FileNotFoundError:
+            state.add_violation("missing-root", "retention root does not exist")
+            continue
+        except OSError as error:
+            state.add_violation("read-error", f"cannot inspect root metadata: {error}")
+            continue
+        if stat.S_ISLNK(state.root_stat.st_mode):
+            state.add_violation("symlink-component", "retention root must not be a symlink")
+            continue
+        canonical_groups.setdefault(state.canonical_root, []).append(state)
+        inode_groups.setdefault((state.root_stat.st_dev, state.root_stat.st_ino), []).append(state)
+
+    for group in canonical_groups.values():
+        if len(group) > 1:
+            for state in group:
+                state.add_violation(
+                    "classification-conflict",
+                    "the same canonical root appears more than once in the manifest",
+                )
+    for group in inode_groups.values():
+        if len(group) > 1:
+            for state in group:
+                state.add_violation(
+                    "classification-conflict",
+                    "multiple manifest roots identify the same filesystem entity",
+                )
+    return states
+
+
+def _audit_manifest(repo_root: _Path, manifest_sha256: str, manifest: _RetentionManifest) -> RetentionAuditResult:
+    states = _prepare_states(repo_root, manifest)
+    for state in states:
+        if state.root_stat is not None:
+            expected_directory = state.entry.root_type == "directory"
+            actual_directory = stat.S_ISDIR(state.root_stat.st_mode)
+            actual_file = stat.S_ISREG(state.root_stat.st_mode)
+            if (expected_directory and not actual_directory) or (not expected_directory and not actual_file):
+                state.add_violation(
+                    "unexpected-file-type",
+                    f"manifest expects a regular {state.entry.root_type}",
+                )
+        _verify_evidence(repo_root, state)
+        if not state.violations and state.root_stat is not None:
+            _inventory(state)
+
+    states.sort(key=lambda state: state.entry.root)
+    all_violations = sorted(
+        [violation for state in states for violation in state.violations],
+        key=lambda item: (item.root, item.code, item.message),
+    )
+    entry_results = [
+        _RetentionEntryAudit(
+            root=state.entry.root,
+            root_type=state.entry.root_type,
+            classification=state.entry.classification,
+            status="valid" if not state.violations else "rejected",
+            regular_file_count=state.regular_file_count,
+            directory_count=state.directory_count,
+            observed_bytes=state.observed_bytes,
+            violations=sorted({violation.code for violation in state.violations}),
+        )
+        for state in states
+    ]
+    protected_roots = sorted(state.entry.root for state in states if state.entry.classification == "contract-protected")
+    lineage_roots = sorted(state.entry.root for state in states if state.entry.classification == "lineage-only")
+    ephemeral_roots = sorted(
+        state.entry.root for state in states if state.entry.classification == "reproducible-ephemeral"
+    )
+    unresolved_roots = sorted(state.entry.root for state in states if state.entry.classification == "unknown")
+    metadata = _RetentionAggregateMetadata(
+        regular_file_count=sum(state.regular_file_count for state in states),
+        directory_count=sum(state.directory_count for state in states),
+        observed_bytes=sum(state.observed_bytes for state in states),
+    )
+    return RetentionAuditResult(
+        schema_version=_AUDIT_SCHEMA,
+        manifest_sha256=manifest_sha256,
+        audit_valid=not all_violations,
+        entry_results=entry_results,
+        protected_roots=protected_roots,
+        lineage_roots=lineage_roots,
+        ephemeral_roots=ephemeral_roots,
+        unresolved_roots=unresolved_roots,
+        metadata=metadata,
+        violations=all_violations,
+    )
 
 
 def audit_retention(
-    manifest: RetentionManifest | Mapping[str, Any] | str | Path,
+    manifest_path: str | _Path,
     *,
-    repo_root: str | Path = ".",
+    repo_root: str | _Path = ".",
 ) -> RetentionAuditResult:
-    return RetentionAuditor(repo_root).audit(manifest)
+    """Audit one tracked, repo-relative manifest without reading root contents.
+
+    The manifest itself and JSON fields explicitly named by evidence references may
+    be read. Every configured root is inspected through filesystem metadata only.
+    A valid result is policy evidence for explicit roots, never deletion authority.
+    """
+
+    try:
+        root = _repo_root(repo_root)
+    except (FileNotFoundError, OSError, TypeError, ValueError) as error:
+        return _invalid_result([_violation("invalid-repo-root", str(repo_root), str(error))])
+    loaded = _read_tracked_manifest(root, manifest_path)
+    if isinstance(loaded, RetentionAuditResult):
+        return loaded
+    _relative_path, raw, manifest = loaded
+    return _audit_manifest(root, hashlib.sha256(raw).hexdigest(), manifest)
 
 
 def render_retention_report(result: RetentionAuditResult) -> str:
+    """Render the same v2 audit semantics as a deterministic Markdown report."""
+
     lines = [
-        "# Retention Audit Dry Run",
+        "# Retention Audit",
         "",
         f"- schema: `{result.schema_version}`",
-        f"- ready_for_cleanup: `{str(result.ready_for_cleanup).lower()}`",
-        f"- aggregate_bytes: `{result.aggregate_bytes}`",
-        f"- protected_bytes: `{result.protected_bytes}`",
-        f"- lineage_bytes: `{result.lineage_bytes}`",
-        f"- unknown_bytes: `{result.unknown_bytes}`",
-        f"- protected_roots: `{len(result.protected_roots)}`",
-        f"- approved_candidates: `{len(result.approved_candidates)}`",
-        f"- human_review_roots: `{len(result.human_review_roots)}`",
-        f"- deferred_unknowns: `{len(result.deferred_unknowns)}`",
+        f"- audit_valid: `{str(result.audit_valid).lower()}`",
+        f"- manifest_sha256: `{result.manifest_sha256 or 'unavailable'}`",
+        f"- regular_file_count: `{result.metadata.regular_file_count}`",
+        f"- directory_count: `{result.metadata.directory_count}`",
+        f"- observed_bytes: `{result.metadata.observed_bytes}`",
+        "",
+        "This read-only audit never authorizes deletion or any other filesystem action.",
         "",
         "## Protected Roots",
         "",
@@ -863,48 +628,41 @@ def render_retention_report(result: RetentionAuditResult) -> str:
     lines.extend(f"- `{root}`" for root in result.protected_roots)
     if not result.protected_roots:
         lines.append("- none")
-    action_totals: dict[str, tuple[int, int, str]] = {}
-    for action in result.approved_actions:
-        total_bytes, file_count, action_name = action_totals.get(action.source_root, (0, 0, action.action))
-        action_totals[action.source_root] = (total_bytes + action.bytes, file_count + 1, action_name)
+    lines.extend(["", "## Lineage Roots", ""])
+    lines.extend(f"- `{root}`" for root in result.lineage_roots)
+    if not result.lineage_roots:
+        lines.append("- none")
+    lines.extend(["", "## Reproducible-Ephemeral Roots", ""])
+    lines.extend(f"- `{root}`" for root in result.ephemeral_roots)
+    if not result.ephemeral_roots:
+        lines.append("- none")
+    lines.extend(["", "## Unresolved Roots", ""])
+    lines.extend(f"- `{root}`" for root in result.unresolved_roots)
+    if not result.unresolved_roots:
+        lines.append("- none")
     lines.extend(
         [
             "",
-            "## Approved Candidates",
+            "## Aggregate Metadata",
             "",
-            f"Structured exact file actions: `{len(result.approved_actions)}`.",
+            "| regular files | directories | observed bytes |",
+            "|---:|---:|---:|",
+            f"| {result.metadata.regular_file_count} | {result.metadata.directory_count} | {result.metadata.observed_bytes} |",
             "",
-            "| candidate root | action | regular files | aggregate bytes |",
-            "|---|---|---:|---:|",
+            "## Entry Results",
+            "",
+            "| root | type | classification | status | regular files | directories | observed bytes | violations |",
+            "|---|---|---|---|---:|---:|---:|---|",
         ]
     )
-    for root in sorted(action_totals):
-        total_bytes, file_count, action = action_totals[root]
-        lines.append(f"| `{root}` | `{action}` | {file_count} | {total_bytes} |")
-    if not action_totals:
-        lines.append("| none | | 0 | 0 |")
-    lines.extend(["", "## Approved Directory Postconditions", ""])
-    lines.append("Structured directory postconditions are recorded per exact directory in the structured result.")
-    for root in sorted(result.approved_candidates):
-        directories = [
-            directory
-            for directory in result.approved_directories
-            if directory.path == root or directory.path.startswith(f"{root}/")
-        ]
-        if directories:
-            lines.append(
-                f"- `{root}`: {len(directories)} directory postcondition(s); all recorded files and child directories must be processed before removal."
-            )
-    if not result.approved_directories:
-        lines.append("- none")
-    lines.extend(["", "## Human Review Roots", ""])
-    lines.extend(f"- `{root}`" for root in result.human_review_roots)
-    if not result.human_review_roots:
-        lines.append("- none")
-    lines.extend(["", "## Deferred Unknowns", ""])
-    lines.extend(f"- `{root}`" for root in result.deferred_unknowns)
-    if not result.deferred_unknowns:
-        lines.append("- none")
+    for entry in result.entry_results:
+        violation_codes = ", ".join(entry.violations) if entry.violations else "none"
+        lines.append(
+            f"| `{entry.root}` | `{entry.root_type}` | `{entry.classification}` | `{entry.status}` | "
+            f"{entry.regular_file_count} | {entry.directory_count} | {entry.observed_bytes} | `{violation_codes}` |"
+        )
+    if not result.entry_results:
+        lines.append("| none | | | | 0 | 0 | 0 | none |")
     lines.extend(["", "## Violations", ""])
     for violation in result.violations:
         lines.append(f"- `{violation.code}` at `{violation.root}`: {violation.message}")

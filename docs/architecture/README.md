@@ -13,7 +13,7 @@
 - 核心架构仍在 [`../02-架构设计/architecture.md`](../02-架构设计/architecture.md)。
 - 仿真流程仍在 [`../02-架构设计/simulation-flow.md`](../02-架构设计/simulation-flow.md)。
 - Douyin 数据收集架构仍在 [`../02-架构设计/douyin-data-collection-architecture.md`](../02-架构设计/douyin-data-collection-architecture.md)。
-- [源码结构与入口点](source-tree-and-entrypoints.md)：仓库目录、入口点和文件组织方式。
+- [Retention Audit](retention-audit.md)：当前 v2 tracked-manifest 只读审计、metadata-only 结果和删除授权边界。
 - [运行时组件清单](runtime-component-inventory.md)：运行时、输出、Provider、Web 和测试组件职责。
 - [测试策略](testing-strategy.md)：离线默认测试分层、质量命令和 live LLM 手动门禁。
 - [锦江用户数据结构 Architecture Note](jinjiang-user-profile-data-structure.md)：说明 Observed Profile Attributes + Latent Attributes，并记录 Prompt v3、锦江 v5 移除 `interest_tags`、通用 `UserProfile` 兼容及 `historical_tags` Ranking-only 边界。

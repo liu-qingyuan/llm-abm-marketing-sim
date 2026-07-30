@@ -3,431 +3,391 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import subprocess
+import sys
 from pathlib import Path
-from typing import Literal
+from typing import Any
 
 import pytest
-from pydantic import ValidationError
 
-from llm_abm_sim.retention import (
-    CacheEvidence,
-    DuplicateEvidence,
-    RetentionAuditor,
-    RetentionAuditResult,
-    RetentionEntry,
-    RetentionEvidenceReference,
-    RetentionManifest,
-    load_retention_manifest,
-    render_retention_report,
-)
+from llm_abm_sim.retention import RetentionAuditResult, audit_retention, render_retention_report
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+CLI = REPO_ROOT / "scripts" / "audit_retention.py"
 
 
-def _write(root: Path, relative: str, content: bytes) -> None:
-    path = root / relative
+def _git(repo: Path, *args: str) -> None:
+    subprocess.run(["git", *args], cwd=repo, check=True, capture_output=True, text=True)
+
+
+def _repo(tmp_path: Path) -> Path:
+    _git(tmp_path, "init", "--quiet")
+    _git(tmp_path, "config", "user.email", "test@example.invalid")
+    _git(tmp_path, "config", "user.name", "Retention Test")
+    return tmp_path
+
+
+def _write(repo: Path, relative: str, content: bytes = b"fixture") -> Path:
+    path = repo / relative
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(content)
-
-
-def _sha256(content: bytes) -> str:
-    return hashlib.sha256(content).hexdigest()
+    return path
 
 
 def _entry(
     root: str,
-    classification: Literal[
-        "contract-protected",
-        "lineage-only",
-        "reproducible-ephemeral",
-        "unknown",
-    ],
-    action: Literal["retain", "human-review", "delete", "defer"],
+    classification: str,
     *,
-    evidence: RetentionEvidenceReference | None = None,
-    duplicate: DuplicateEvidence | None = None,
-    cache: CacheEvidence | None = None,
-) -> RetentionEntry:
-    return RetentionEntry(
-        root=root,
-        root_type="directory",
-        ownership="test",
-        classification=classification,
-        basis="test evidence",
-        planned_action=action,
-        evidence_reference=evidence,
-        duplicate_evidence=duplicate,
-        cache_evidence=cache,
+    root_type: str = "directory",
+    evidence: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    entry: dict[str, Any] = {
+        "root": root,
+        "root_type": root_type,
+        "ownership": "test ownership",
+        "classification": classification,
+        "basis": "test policy evidence",
+    }
+    if evidence is not None:
+        entry["evidence_reference"] = evidence
+    return entry
+
+
+def _manifest(*entries: dict[str, Any], schema: str = "retention-manifest-v2") -> dict[str, Any]:
+    return {"schema_version": schema, "entries": list(entries)}
+
+
+def _write_manifest(
+    repo: Path, payload: dict[str, Any], *, tracked: bool = True, relative: str = "manifest.json"
+) -> Path:
+    path = _write(repo, relative, json.dumps(payload, ensure_ascii=False, indent=2).encode() + b"\n")
+    if tracked:
+        _git(repo, "add", relative)
+    return path
+
+
+def _run_cli(repo: Path, *args: str) -> subprocess.CompletedProcess[str]:
+    env = os.environ.copy()
+    env["PYTHONPATH"] = str(REPO_ROOT / "src")
+    return subprocess.run(
+        [sys.executable, str(CLI), "--repo-root", str(repo), *args],
+        cwd=REPO_ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
     )
 
 
-def _manifest(*entries: RetentionEntry) -> RetentionManifest:
-    return RetentionManifest(schema_version="retention-manifest-v1", entries=list(entries))
+def _json_output(process: subprocess.CompletedProcess[str]) -> dict[str, Any]:
+    assert process.stdout, process.stderr
+    return json.loads(process.stdout)
 
 
-def test_audit_covers_four_classifications_and_is_deterministic(tmp_path: Path) -> None:
-    _write(tmp_path, "contract/evidence.json", b'{"source_directory":"contract"}')
-    _write(tmp_path, "contract/release.txt", b"protected")
-    _write(tmp_path, "lineage/archive.txt", b"lineage")
-    _write(tmp_path, "cache/pytest.bin", b"cache")
-    _write(tmp_path, "duplicate/a.txt", b"same")
-    _write(tmp_path, "retained/a.txt", b"same")
-    _write(tmp_path, "unknown/candidate.txt", b"unknown")
-
-    duplicate = DuplicateEvidence(
-        candidate_root="duplicate",
-        retained_root="retained",
-        relative_files=["a.txt"],
-        sha256_map={"a.txt": _sha256(b"same")},
-        expected_bytes=4,
-        approved_action="delete",
-    )
-    manifest = _manifest(
-        _entry(
-            "contract",
-            "contract-protected",
-            "retain",
-            evidence=RetentionEvidenceReference(
-                path="contract/evidence.json",
-                identity_field="source_directory",
-                expected_identity="contract",
+def test_v2_audit_is_metadata_only_valid_with_unresolved_roots_and_deterministic(tmp_path: Path, monkeypatch) -> None:
+    repo = _repo(tmp_path)
+    _write(repo, "protected/evidence.json", b'{"source_directory":"protected"}')
+    _write(repo, "protected/release.bin", b"protected bytes")
+    _write(repo, "protected/raw_prompt/unreadable-sentinel.txt", b"must never be opened")
+    _write(repo, "lineage/archive.txt", b"lineage")
+    _write(repo, "lineage-reference.md", b"human lineage reference")
+    _write(repo, "ephemeral/cache.bin", b"cache")
+    _write(repo, "ephemeral-reference.md", b"human rebuild reference")
+    _write(repo, "unknown/candidate.txt", b"unknown")
+    manifest_path = _write_manifest(
+        repo,
+        _manifest(
+            _entry(
+                "protected",
+                "contract-protected",
+                evidence={
+                    "path": "protected/evidence.json",
+                    "identity_field": "source_directory",
+                    "expected_identity": "protected",
+                },
             ),
+            _entry("lineage", "lineage-only", evidence={"path": "lineage-reference.md"}),
+            _entry("ephemeral", "reproducible-ephemeral", evidence={"path": "ephemeral-reference.md"}),
+            _entry("unknown", "unknown"),
         ),
-        _entry("lineage", "lineage-only", "human-review"),
-        _entry(
-            "cache",
-            "reproducible-ephemeral",
-            "delete",
-            cache=CacheEvidence(
-                exact_root="cache",
-                producer="pytest",
-                rebuild_validation="pytest -q",
-            ),
-        ),
-        _entry("duplicate", "reproducible-ephemeral", "delete", duplicate=duplicate),
-        _entry("unknown", "unknown", "defer"),
     )
 
-    first = RetentionAuditor(tmp_path).audit(manifest)
-    second = RetentionAuditor(tmp_path).audit(manifest)
+    original_read_bytes = Path.read_bytes
+
+    def fail_on_sentinel(path: Path) -> bytes:
+        if path.name == "unreadable-sentinel.txt":
+            raise AssertionError("retention auditor opened a root file")
+        return original_read_bytes(path)
+
+    monkeypatch.setattr(Path, "read_bytes", fail_on_sentinel)
+    first = audit_retention("manifest.json", repo_root=repo)
+    second = audit_retention("manifest.json", repo_root=repo)
 
     assert isinstance(first, RetentionAuditResult)
+    assert first.audit_valid is True
+    assert first.manifest_sha256 == hashlib.sha256(manifest_path.read_bytes()).hexdigest()
+    assert first.protected_roots == ["protected"]
+    assert first.lineage_roots == ["lineage"]
+    assert first.ephemeral_roots == ["ephemeral"]
+    assert first.unresolved_roots == ["unknown"]
+    assert first.metadata.regular_file_count == 6
+    assert first.metadata.directory_count == 5
+    assert first.metadata.observed_bytes == sum(
+        path.stat().st_size
+        for path in [
+            repo / "protected/evidence.json",
+            repo / "protected/release.bin",
+            repo / "protected/raw_prompt/unreadable-sentinel.txt",
+            repo / "lineage/archive.txt",
+            repo / "ephemeral/cache.bin",
+            repo / "unknown/candidate.txt",
+        ]
+    )
     assert first.model_dump(mode="json") == second.model_dump(mode="json")
-    assert first.ready_for_cleanup is False
-    assert first.protected_roots == ["contract"]
-    assert first.approved_candidates == ["cache", "duplicate"]
-    assert first.human_review_roots == ["lineage", "unknown"]
-    assert first.deferred_unknowns == ["unknown"]
-    assert first.aggregate_bytes == 9
-    assert {action.path for action in first.approved_actions} == {"cache/pytest.bin", "duplicate/a.txt"}
-    assert first.approved_directories[0].path == "cache"
-    assert "candidate.txt" not in render_retention_report(first)
     assert render_retention_report(first) == render_retention_report(second)
+    serialized = first.model_dump(mode="json")
+    assert "ready_for_cleanup" not in serialized
+    assert "approved_actions" not in serialized
+    assert "approved_directories" not in serialized
+    assert "planned_action" not in serialized
+    assert "sha256" not in json.dumps(serialized["entry_results"])
+    assert "unreadable-sentinel.txt" not in render_retention_report(first)
+    assert "This read-only audit never authorizes deletion" in render_retention_report(first)
 
 
-def test_manifest_rejects_unrecognized_classification() -> None:
-    with pytest.raises(ValidationError):
-        RetentionEntry(
-            root="root",
-            root_type="directory",
-            ownership="test",
-            classification="protected",  # type: ignore[arg-type]
-            basis="test",
-            planned_action="retain",
-        )
-
-
-def test_path_escape_and_absolute_paths_are_deferred_without_allowlist(tmp_path: Path) -> None:
-    manifest = _manifest(
-        _entry("../outside", "unknown", "defer"),
-        _entry(str(tmp_path / "absolute"), "unknown", "defer"),
-    )
-
-    result = RetentionAuditor(tmp_path).audit(manifest)
-
-    assert result.approved_actions == []
-    assert {violation.code for violation in result.violations} == {"path-escape", "absolute-path"}
-    assert result.ready_for_cleanup is False
-
-
-def test_symlink_component_is_rejected(tmp_path: Path) -> None:
-    target = tmp_path / "target"
-    target.mkdir()
-    _write(tmp_path, "target/file.txt", b"payload")
-    (tmp_path / "link").symlink_to(target, target_is_directory=True)
-
-    result = RetentionAuditor(tmp_path).audit(_manifest(_entry("link", "unknown", "defer")))
-
-    assert any(violation.code == "symlink-component" for violation in result.violations)
-    assert result.approved_actions == []
-
-
-def test_duplicate_missing_extra_and_hash_mismatch_fail_closed(tmp_path: Path) -> None:
-    _write(tmp_path, "candidate/a.txt", b"candidate")
-    _write(tmp_path, "candidate/extra.txt", b"extra")
-    _write(tmp_path, "retained/a.txt", b"retained")
-    duplicate = DuplicateEvidence(
-        candidate_root="candidate",
-        retained_root="retained",
-        relative_files=["a.txt"],
-        sha256_map={"a.txt": _sha256(b"candidate")},
-        expected_bytes=9,
-        approved_action="delete",
-    )
-
-    result = RetentionAuditor(tmp_path).audit(
-        _manifest(_entry("candidate", "reproducible-ephemeral", "delete", duplicate=duplicate))
-    )
-
-    assert result.approved_actions == []
-    assert any(violation.code == "duplicate-mismatch" for violation in result.violations)
-    assert result.ready_for_cleanup is False
-
-
-def test_cache_requires_exact_root_and_rebuild_evidence(tmp_path: Path) -> None:
-    _write(tmp_path, "cache/a.txt", b"cache")
-
-    without_evidence = RetentionAuditor(tmp_path).audit(_manifest(_entry("cache", "reproducible-ephemeral", "delete")))
-    assert without_evidence.approved_actions == []
-    assert any(violation.code == "missing-rebuild-evidence" for violation in without_evidence.violations)
-
-    wrong_root = RetentionAuditor(tmp_path).audit(
-        _manifest(
-            _entry(
-                "cache",
-                "reproducible-ephemeral",
-                "delete",
-                cache=CacheEvidence(
-                    exact_root="other-cache",
-                    producer="pytest",
-                    rebuild_validation="pytest -q",
-                ),
-            )
-        )
-    )
-    assert wrong_root.approved_actions == []
-    assert any(violation.code == "cache-root-mismatch" for violation in wrong_root.violations)
-
-
-def test_evidence_identity_mismatch_and_classification_conflict_are_rejected(tmp_path: Path) -> None:
-    _write(tmp_path, "evidence.json", b'{"source_directory":"other"}')
-    _write(tmp_path, "root/file.txt", b"root")
-    entries = [
-        _entry(
-            "root",
-            "contract-protected",
-            "retain",
-            evidence=RetentionEvidenceReference(
-                path="evidence.json",
-                identity_field="source_directory",
-                expected_identity="root",
-            ),
-        ),
-        _entry("root", "unknown", "defer"),
-    ]
-
-    result = RetentionAuditor(tmp_path).audit(_manifest(*entries))
-
-    assert result.approved_actions == []
-    assert any(violation.code == "classification-conflict" for violation in result.violations)
-    assert any(violation.code == "evidence-mismatch" for violation in result.violations)
-
-
-def test_directory_action_records_exact_files_and_empty_postcondition(tmp_path: Path) -> None:
-    _write(tmp_path, "cache/nested/item.txt", b"item")
-    manifest = _manifest(
-        _entry(
-            "cache",
-            "reproducible-ephemeral",
-            "delete",
-            cache=CacheEvidence(
-                exact_root="cache",
-                producer="test producer",
-                rebuild_validation="test rebuild",
-            ),
-        )
-    )
-
-    result = RetentionAuditor(tmp_path).audit(manifest)
-
-    assert [action.path for action in result.approved_actions] == ["cache/nested/item.txt"]
-    assert len(result.approved_directories) == 2
-    root_action = next(directory for directory in result.approved_directories if directory.path == "cache")
-    assert root_action.verified_empty_after_file_actions is True
-    assert root_action.files_processed == ["cache/nested/item.txt"]
-    assert root_action.directories_processed == ["cache/nested"]
-
-
-def test_load_manifest_round_trip_and_no_filesystem_mutation(tmp_path: Path) -> None:
-    _write(tmp_path, "root/file.txt", b"unchanged")
-    manifest_path = tmp_path / "manifest.json"
+def test_dirty_tracked_manifest_is_allowed_and_hash_binds_worktree_bytes(tmp_path: Path) -> None:
+    repo = _repo(tmp_path)
+    _write(repo, "root/file.txt", b"root")
+    manifest_path = _write_manifest(repo, _manifest(_entry("root", "unknown")))
     manifest_path.write_text(
-        json.dumps(
-            _manifest(_entry("root", "unknown", "defer")).model_dump(mode="json"),
-            sort_keys=True,
-        ),
+        json.dumps(_manifest(_entry("root", "unknown")), indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
     )
-    before = (tmp_path / "root/file.txt").read_bytes()
 
-    loaded = load_retention_manifest(manifest_path)
-    result = RetentionAuditor(tmp_path).audit(loaded)
+    result = audit_retention("manifest.json", repo_root=repo)
 
-    assert loaded == _manifest(_entry("root", "unknown", "defer"))
-    assert (tmp_path / "root/file.txt").read_bytes() == before
-    assert result.approved_actions == []
-
-
-def test_non_regular_file_is_rejected_for_cache(tmp_path: Path) -> None:
-    if not hasattr(os, "mkfifo"):
-        pytest.skip("FIFO is not available")
-    cache = tmp_path / "cache"
-    cache.mkdir()
-    os.mkfifo(cache / "pipe")
-    result = RetentionAuditor(tmp_path).audit(
-        _manifest(
-            _entry(
-                "cache",
-                "reproducible-ephemeral",
-                "delete",
-                cache=CacheEvidence(
-                    exact_root="cache",
-                    producer="test producer",
-                    rebuild_validation="test rebuild",
-                ),
-            )
-        )
+    assert result.audit_valid is True
+    assert result.manifest_sha256 == hashlib.sha256(manifest_path.read_bytes()).hexdigest()
+    assert (
+        "manifest.json"
+        in subprocess.run(["git", "status", "--short"], cwd=repo, check=True, capture_output=True, text=True).stdout
     )
 
-    assert result.approved_actions == []
-    assert any(violation.code == "unexpected-file-type" for violation in result.violations)
+
+def test_cli_json_markdown_and_exit_status_keep_valid_unknown_roots_successful(tmp_path: Path) -> None:
+    repo = _repo(tmp_path)
+    _write(repo, "root/file.txt", b"root")
+    _write_manifest(repo, _manifest(_entry("root", "unknown")))
+
+    json_result = _run_cli(repo, "--manifest", "manifest.json", "--format", "json")
+    markdown_result = _run_cli(repo, "--manifest", "manifest.json", "--format", "markdown")
+
+    assert json_result.returncode == 0, json_result.stderr
+    assert markdown_result.returncode == 0, markdown_result.stderr
+    payload = _json_output(json_result)
+    assert payload["schema_version"] == "retention-audit-v2"
+    assert payload["audit_valid"] is True
+    assert payload["unresolved_roots"] == ["root"]
+    assert "audit_valid: `true`" in markdown_result.stdout
+    assert "manifest_sha256: `" in markdown_result.stdout
+    assert "regular_file_count: `1`" in markdown_result.stdout
+    assert "ready_for_cleanup" not in json_result.stdout + markdown_result.stdout
 
 
-def test_missing_root_is_not_a_cleanup_allowlist(tmp_path: Path) -> None:
-    result = RetentionAuditor(tmp_path).audit(
+def test_cli_rejects_historical_v1_without_fallback(tmp_path: Path) -> None:
+    repo = _repo(tmp_path)
+    manifest_path = _write_manifest(
+        repo,
         _manifest(
-            _entry(
-                "missing-cache",
-                "reproducible-ephemeral",
-                "delete",
-                cache=CacheEvidence(
-                    exact_root="missing-cache",
-                    producer="test producer",
-                    rebuild_validation="test rebuild",
-                ),
-            )
-        )
+            _entry("root", "unknown"),
+            schema="retention-manifest-v1",
+        ),
+    )
+    _write(repo, "root/file.txt", b"root")
+
+    result = _run_cli(repo, "--manifest", "manifest.json", "--format", "json")
+    payload = _json_output(result)
+
+    assert result.returncode == 2
+    assert payload["audit_valid"] is False
+    assert payload["manifest_sha256"] == hashlib.sha256(manifest_path.read_bytes()).hexdigest()
+    assert payload["violations"][0]["code"] == "unsupported-schema"
+    assert "retention-manifest-v1" in payload["violations"][0]["message"]
+    assert "ready_for_cleanup" not in result.stdout
+
+
+@pytest.mark.parametrize(
+    ("manifest_path", "expected_code"),
+    [
+        ("../manifest.json", "path-escape"),
+        ("/tmp/manifest.json", "absolute-path"),
+        ("configs//manifest.json", "invalid-path"),
+        ("configs/./manifest.json", "invalid-path"),
+    ],
+)
+def test_manifest_path_must_be_canonical_and_repo_relative(
+    tmp_path: Path, manifest_path: str, expected_code: str
+) -> None:
+    repo = _repo(tmp_path)
+    _write_manifest(repo, _manifest(_entry("root", "unknown")), relative="configs/manifest.json")
+    _write(repo, "root/file.txt", b"root")
+
+    result = _run_cli(repo, "--manifest", manifest_path, "--format", "json")
+    payload = _json_output(result)
+
+    assert result.returncode == 2
+    assert payload["violations"][0]["code"] == expected_code
+    assert payload["entry_results"] == []
+
+
+def test_untracked_manifest_symlink_and_symlink_parent_fail_before_root_inventory(tmp_path: Path) -> None:
+    repo = _repo(tmp_path)
+    _write(repo, "root/unreadable-sentinel.txt", b"must never be opened")
+    untracked = _write_manifest(repo, _manifest(_entry("root", "unknown")), tracked=False)
+    assert untracked.exists()
+    untracked_result = _run_cli(repo, "--manifest", "manifest.json", "--format", "json")
+    assert untracked_result.returncode == 2
+    assert _json_output(untracked_result)["violations"][0]["code"] == "manifest-not-tracked"
+
+    _git(repo, "add", "manifest.json")
+    target = _write(repo, "tracked-manifest.json", json.dumps(_manifest(_entry("root", "unknown"))).encode())
+    link = repo / "manifest-link.json"
+    link.symlink_to(target)
+    _git(repo, "add", "manifest-link.json")
+    symlink_result = _run_cli(repo, "--manifest", "manifest-link.json", "--format", "json")
+    assert symlink_result.returncode == 2
+    assert _json_output(symlink_result)["violations"][0]["code"] == "symlink-component"
+
+    alias = repo / "alias"
+    alias.symlink_to(repo / "nested", target_is_directory=True)
+    _write(repo, "nested/manifest.json", json.dumps(_manifest(_entry("root", "unknown"))).encode())
+    _git(repo, "add", "nested/manifest.json")
+    parent_result = _run_cli(repo, "--manifest", "alias/manifest.json", "--format", "json")
+    assert parent_result.returncode == 2
+    assert _json_output(parent_result)["violations"][0]["code"] == "symlink-component"
+
+
+def test_root_canonical_identity_and_symlink_components_fail_closed(tmp_path: Path) -> None:
+    repo = _repo(tmp_path)
+    _write(repo, "root/file.txt", b"root")
+    _write_manifest(
+        repo,
+        _manifest(
+            _entry("root", "contract-protected", evidence={"path": "root/file.txt"}),
+            _entry("root", "unknown"),
+            _entry("root/.", "unknown"),
+            _entry("root//file.txt", "unknown"),
+        ),
     )
 
-    assert result.approved_actions == []
-    assert any(violation.code == "missing-root" for violation in result.violations)
+    result = audit_retention("manifest.json", repo_root=repo)
+
+    assert result.audit_valid is False
+    codes = {violation.code for violation in result.violations}
+    assert "classification-conflict" in codes
+    assert "invalid-path" in codes
+    assert result.entry_results[0].regular_file_count == 0
+
+    (repo / "linked").symlink_to(repo / "root", target_is_directory=True)
+    _write_manifest(repo, _manifest(_entry("linked", "unknown")))
+    symlink_result = audit_retention("manifest.json", repo_root=repo)
+    assert symlink_result.audit_valid is False
+    assert any(item.code == "symlink-component" for item in symlink_result.violations)
 
 
-def test_protected_root_requires_evidence_and_secret_paths_are_rejected(tmp_path: Path) -> None:
-    _write(tmp_path, "protected/file.txt", b"protected")
-    _write(tmp_path, "config/.env", b"must not be inspected")
-    result = RetentionAuditor(tmp_path).audit(
+def test_evidence_contract_requires_valid_reference_and_exact_structured_identity(tmp_path: Path) -> None:
+    repo = _repo(tmp_path)
+    _write(repo, "protected/file.txt", b"protected")
+    _write(repo, "evidence.json", b'{"source_directory":"other"}')
+    _write(repo, "reference.md", b"human reference")
+
+    _write_manifest(
+        repo,
         _manifest(
-            _entry("protected", "contract-protected", "retain"),
+            _entry("protected", "contract-protected"),
             _entry(
-                "config/.env",
-                "unknown",
-                "defer",
-                evidence=RetentionEvidenceReference(path="config/.env"),
+                "protected",
+                "lineage-only",
+                evidence={
+                    "path": "evidence.json",
+                    "identity_field": "source_directory",
+                    "expected_identity": "protected",
+                },
             ),
-        )
-    )
-
-    assert result.approved_actions == []
-    assert any(violation.code == "missing-evidence" for violation in result.violations)
-    assert any(violation.code == "forbidden-secret-path" for violation in result.violations)
-
-
-def test_duplicate_candidate_cannot_equal_retained_root(tmp_path: Path) -> None:
-    _write(tmp_path, "candidate/file.txt", b"same")
-    duplicate = DuplicateEvidence(
-        candidate_root="candidate",
-        retained_root="candidate",
-        relative_files=["file.txt"],
-        sha256_map={"file.txt": _sha256(b"same")},
-        expected_bytes=4,
-        approved_action="delete",
-    )
-
-    result = RetentionAuditor(tmp_path).audit(
-        _manifest(_entry("candidate", "reproducible-ephemeral", "delete", duplicate=duplicate))
-    )
-
-    assert result.approved_actions == []
-    assert any(violation.code == "duplicate-root-mismatch" for violation in result.violations)
-
-
-def test_raw_cache_root_and_retained_raw_root_are_not_hashed(tmp_path: Path) -> None:
-    _write(tmp_path, "data/raw/cache/payload.json", b"raw payload")
-    _write(tmp_path, "candidate/file.txt", b"safe")
-    duplicate = DuplicateEvidence(
-        candidate_root="candidate",
-        retained_root="data/raw/cache",
-        relative_files=["file.txt"],
-        sha256_map={"file.txt": _sha256(b"safe")},
-        expected_bytes=4,
-        approved_action="delete",
-    )
-
-    cache_result = RetentionAuditor(tmp_path).audit(
-        _manifest(
             _entry(
-                "data/raw/cache",
+                "protected",
                 "reproducible-ephemeral",
-                "delete",
-                cache=CacheEvidence(
-                    exact_root="data/raw/cache",
-                    producer="test producer",
-                    rebuild_validation="test rebuild",
-                ),
-            )
-        )
-    )
-    duplicate_result = RetentionAuditor(tmp_path).audit(
-        _manifest(_entry("candidate", "reproducible-ephemeral", "delete", duplicate=duplicate))
+                evidence={
+                    "path": "reference.md",
+                    "identity_field": "source_directory",
+                    "expected_identity": "protected",
+                },
+            ),
+        ),
     )
 
-    assert cache_result.approved_actions == []
-    assert any(violation.code == "forbidden-payload-path" for violation in cache_result.violations)
-    assert duplicate_result.approved_actions == []
-    assert any(violation.code == "forbidden-payload-path" for violation in duplicate_result.violations)
+    result = audit_retention("manifest.json", repo_root=repo)
+
+    assert result.audit_valid is False
+    assert {item.code for item in result.violations} >= {
+        "missing-evidence",
+        "evidence-mismatch",
+        "classification-conflict",
+    }
 
 
-def test_lineage_human_review_always_blocks_cleanup_ready(tmp_path: Path) -> None:
-    _write(tmp_path, "lineage/file.txt", b"lineage")
-    manifest = _manifest(
-        _entry(
-            "lineage",
+def test_root_type_violation_is_nonzero_but_unknown_and_lineage_do_not_imply_cleanup(tmp_path: Path) -> None:
+    repo = _repo(tmp_path)
+    _write(repo, "file.txt", b"file")
+    _write(repo, "reference.md", b"reference")
+    _write_manifest(
+        repo,
+        _manifest(
+            _entry("file.txt", "contract-protected", root_type="directory", evidence={"path": "reference.md"}),
+            _entry("lineage", "lineage-only", evidence={"path": "reference.md"}),
+            _entry("unknown", "unknown"),
+        ),
+    )
+
+    result = audit_retention("manifest.json", repo_root=repo)
+
+    assert result.audit_valid is False
+    assert any(item.code == "unexpected-file-type" for item in result.violations)
+    assert result.unresolved_roots == ["unknown"]
+    assert not hasattr(result, "ready_for_cleanup")
+
+
+def test_retention_module_and_package_root_expose_only_supported_surface() -> None:
+    import llm_abm_sim
+    import llm_abm_sim.retention as retention
+
+    assert retention.__all__ == ["RetentionAuditResult", "audit_retention", "render_retention_report"]
+    assert not hasattr(llm_abm_sim, "RetentionAuditResult")
+    assert not hasattr(llm_abm_sim, "RetentionManifest")
+    assert not hasattr(retention, "RetentionAuditor")
+    assert not hasattr(retention, "DuplicateEvidence")
+    assert not hasattr(retention, "CacheEvidence")
+    assert not hasattr(retention, "load_retention_manifest")
+
+
+def test_current_tracked_manifest_keeps_required_classification_shape() -> None:
+    payload = json.loads((REPO_ROOT / "configs/retention/manifest.json").read_text(encoding="utf-8"))
+    entries = payload["entries"]
+    counts = {
+        classification: sum(entry["classification"] == classification for entry in entries)
+        for classification in {
+            "contract-protected",
             "lineage-only",
-            "human-review",
-            evidence=RetentionEvidenceReference(path="lineage/file.txt"),
-        )
-    )
+            "reproducible-ephemeral",
+            "unknown",
+        }
+    }
 
-    result = RetentionAuditor(tmp_path).audit(manifest)
-
-    assert result.violations == []
-    assert result.human_review_roots == ["lineage"]
-    assert result.ready_for_cleanup is False
-
-
-def test_retained_duplicate_env_path_is_rejected_before_hash(tmp_path: Path) -> None:
-    _write(tmp_path, "candidate/file.txt", b"safe")
-    duplicate = DuplicateEvidence(
-        candidate_root="candidate",
-        retained_root="safe/.env",
-        relative_files=["file.txt"],
-        sha256_map={"file.txt": _sha256(b"safe")},
-        expected_bytes=4,
-        approved_action="delete",
-    )
-
-    result = RetentionAuditor(tmp_path).audit(
-        _manifest(_entry("candidate", "reproducible-ephemeral", "delete", duplicate=duplicate))
-    )
-
-    assert result.approved_actions == []
-    assert any(violation.code == "forbidden-secret-path" for violation in result.violations)
+    assert payload["schema_version"] == "retention-manifest-v2"
+    assert counts == {
+        "contract-protected": 6,
+        "lineage-only": 2,
+        "reproducible-ephemeral": 1,
+        "unknown": 3,
+    }
+    assert all("planned_action" not in entry for entry in entries)
+    assert all("duplicate_evidence" not in entry and "cache_evidence" not in entry for entry in entries)

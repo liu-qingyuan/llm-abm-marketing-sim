@@ -160,3 +160,24 @@ def test_current_and_historical_document_status_contract():
     }
     for path, marker in historical_documents.items():
         assert marker in _read(path), f"{path} should expose {marker!r}"
+
+
+def test_retention_current_truth_navigation_contract():
+    retention_note = DOCS_ROOT / "architecture" / "retention-audit.md"
+    source_tree = DOCS_ROOT / "architecture" / "source-tree-and-entrypoints.md"
+    references = DOCS_ROOT / "references" / "README.md"
+
+    assert retention_note.exists()
+    assert _linked_from(DOCS_ROOT / "architecture" / "README.md", retention_note)
+    retention_text = _read(retention_note)
+    source_text = _read(source_tree)
+    references_text = _read(references)
+
+    assert "Status: Implemented current architecture note" in retention_text
+    assert "retention-manifest-v2" in retention_text
+    assert "audit_valid=true" in retention_text
+    assert "永不授权删除" in retention_text
+    assert "contract-protected Formal/release roots" in source_text
+    assert "不能仅按目录类型推断删除" in source_text
+    assert "可随时删除重建" not in source_text
+    assert "Historical repository retention audit baseline" in references_text

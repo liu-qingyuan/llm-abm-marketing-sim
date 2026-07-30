@@ -7,7 +7,8 @@
 - [锦江 final dataset 审计](jinjiang-final-dataset-audit-20260624.md)：最终真实 processed dataset 的 lineage、聚合计数、验收结果、profile 指标口径和隐私边界。
 - [锦江 final dataset 清理记录](jinjiang-final-dataset-cleanup-20260624.md)：最终真实数据的保留与清理 lineage。
 - [锦江 final dataset latent-v1 本地验收记录](jinjiang-final-dataset-latent-v1-validation-20260705.md)：36,400 用户 synthetic latent-v1 variant 的当前验证入口。
-- [Repository retention audit baseline](retention-audit-baseline-20260730.md)：当前 retention manifest 的只读 dry-run aggregate、精确候选计数、保留 roots、human review roots 和 deferred unknowns。
+- [Retention v2 audit architecture](../architecture/retention-audit.md)：当前 tracked-manifest 只读审计合同；历史 v1 baseline 仅作为不可重执行 lineage。
+- [Historical repository retention audit baseline](retention-audit-baseline-20260730.md)：历史 v1 dry-run evidence，不是当前 CLI 输入。
 - [Repository retention cleanup execution](retention-cleanup-execution-20260730.md)：Ticket #130 的精确删除执行、manifest 状态更新、protected/lineage 保留核验和 post-audit aggregate evidence。
 - [Repository retention cleanup final evidence](retention-cleanup-final-evidence-20260730.md)：Ticket #131 的三组 v4 contract/source closure、最终 retention audit、aggregate cleanup measurements、文档/generator/GitNexus/quality gates。
 - [GitNexus index scope evidence](gitnexus-index-scope-20260730.md)：tracked `.gitnexusignore` 的 bounded source graph、exact cache reset、forced rebuild 和 symbol/query smoke。
