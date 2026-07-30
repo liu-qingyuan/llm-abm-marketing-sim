@@ -205,6 +205,7 @@ npx playwright test
 - `playwright.config.ts`：浏览器测试配置。
 - `configs/default.yaml`：默认仿真输入。
 - `.gitignore`：运行产物、本地缓存、依赖、数据输出。
+- `.gitnexusignore`：forced GitNexus analyze 使用的 tracked index scope；保留 source、tests、configs、scripts 和 durable docs，只排除 payload 与 generated scratch。重建与 query evidence 见 [`../references/gitnexus-index-scope-20260730.md`](../references/gitnexus-index-scope-20260730.md)。
 
 ## 开发注意事项
 
