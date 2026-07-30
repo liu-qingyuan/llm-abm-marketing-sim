@@ -7,6 +7,7 @@
 - Attached branch: `main`
 - Policy: tracked root `.gitnexusignore`
 - Exact regenerable cache root: `.gitnexus/`
+- Retention manifest: `configs/retention/manifest.json` (`.gitnexus` cache evidence)
 - Producer: `GITNEXUS_NO_GITIGNORE=1 gitnexus analyze <repo-root> --name llm-abm-marketing-sim --skip-agents-md --force`
 
 This evidence is aggregate-only. It records paths, counts, graph metadata and
@@ -16,7 +17,7 @@ provider payloads, prompts, headers or secrets.
 ## Scope Contract
 
 The forced project command deliberately bypasses `.gitignore`. GitNexus
-confirmed during all three rebuilds:
+confirmed during all four rebuilds:
 
 > GITNEXUS_NO_GITIGNORE is set - skipping .gitignore (still reading .gitnexusignore)
 
@@ -52,6 +53,9 @@ Before reset:
   `symlink=no`;
 - the retention auditor baseline recorded 20 regular files and
   `6,125,569,188` aggregate bytes for this exact root;
+- the manifest entry sets `classification=reproducible-ephemeral`,
+  `planned_action=delete`, `cache_evidence.exact_root=.gitnexus`, and records
+  the GitNexus producer plus status/query rebuild validation;
 - `gitnexus clean -f` reported only:
   `Deleted: /Users/liuqingyuan/work/llm-abm-marketing-sim/.gitnexus`.
 
@@ -61,38 +65,41 @@ No `archive/`, `data/`, `runs/`, release or dataset root was passed to cleanup.
 
 The existing index was stale and indexed commit `d8f0432`. The bounded rebuild
 ran at policy commit `0a49440`; the repeat rebuild used the same exact command
-and commit. A final forced rebuild ran after the evidence commit `f8df887` so the
-tracked evidence itself is part of the current index. `communities` and
-`processes` are the GitNexus metadata names for the Ticket's clusters and flows.
+and commit. The evidence commit rebuild ran at `f8df887`, and the final
+measurement rebuild ran at `0e591e8`; both included the tracked evidence. A
+subsequent current-HEAD rebuild reproduced the final graph metrics. `communities`
+and `processes` are the GitNexus metadata names for the Ticket's clusters and
+flows.
 
-| Measure | Before reset | First bounded rebuild | Repeat bounded rebuild | Final evidence commit rebuild |
-|---|---:|---:|---:|---:|
-| Indexed commit | `d8f0432` | `0a49440` | `0a49440` | `f8df887` |
-| Regular index files | 20 | 14 | 14 | 14 |
-| Regular-file aggregate bytes | 6,125,569,188 | 125,779,188 | 125,779,188 | 125,857,260 |
-| Nodes | 49,614 | 8,359 | 8,359 | 8,366 |
-| Edges | 55,132 | 14,123 | 14,123 | 14,132 |
-| Clusters (`communities`) | 198 | 208 | 208 | 208 |
-| Flows (`processes`) | 300 | 300 | 300 | 300 |
-| Hashed repository files | not recorded in baseline | 224 | 224 | 225 |
+| Measure | Before reset | Policy rebuild | Repeat policy rebuild | Evidence commit rebuild | Final measurement rebuild |
+|---|---:|---:|---:|---:|---:|
+| Indexed commit | `d8f0432` | `0a49440` | `0a49440` | `f8df887` | `0e591e8` |
+| Regular index files | 20 | 14 | 14 | 14 | 14 |
+| Regular-file aggregate bytes | 6,125,569,188 | 125,779,188 | 125,779,188 | 125,857,260 | 125,857,260 |
+| Nodes | 49,614 | 8,359 | 8,359 | 8,366 | 8,366 |
+| Edges | 55,132 | 14,123 | 14,123 | 14,132 | 14,132 |
+| Clusters (`communities`) | 198 | 208 | 208 | 208 | 208 |
+| Flows (`processes`) | 300 | 300 | 300 | 300 | 300 |
+| Hashed repository files | not recorded in baseline | 224 | 224 | 225 | 225 |
 
-The first policy rebuild reclaimed `5,999,790,000` bytes; the final evidence
-commit rebuild reclaimed `5,999,711,928` bytes. Filesystem block allocation
-(`du -sk`) was `5,982,040 KiB` before reset and varied between `130,556 KiB` and
-`130,796 KiB` across rebuilds; that allocation detail is volatile and is not
-used as a fixed test constant.
+The policy rebuild reclaimed `5,999,790,000` bytes; the final measurement
+rebuild reclaimed `5,999,711,928` bytes. A later read-only context/auditor
+observation measured `125,853,164` regular-file bytes after database lifecycle
+compaction, with the same 14 files and graph counts. Filesystem block
+allocation (`du -sk`) was `5,982,040 KiB` before reset and varied between
+`130,556 KiB` and `130,796 KiB` across rebuilds; these storage observations are
+volatile and are not fixed test constants.
 
-The 224 hashed files were distributed as follows during the first bounded
-rebuild: `src=57`, `tests=57`, `configs=16`, `scripts=9`, and `docs=72`. The
-final evidence commit had 225 hashed files with `docs=73`; the other root counts
-were unchanged.
+The first policy rebuild had 224 hashed files: `src=57`, `tests=57`, `configs=16`,
+`scripts=9`, and `docs=72`. The evidence and final measurement commits had 225
+hashed files with `docs=73`; the other root counts were unchanged.
 A path-key scan found zero payload-like raw/processed JSON, JSONL, CSV, TSV or
 ZIP entries. The only keys under those high-level roots were the five explicit
 README/manifest exceptions listed above.
 
 ## Rebuild Validation
 
-All three runs used the current-workspace form of the project command:
+Four runs used the current-workspace form of the project command:
 
 ```bash
 GITNEXUS_NO_GITIGNORE=1 gitnexus analyze \
@@ -100,23 +107,36 @@ GITNEXUS_NO_GITIGNORE=1 gitnexus analyze \
   --name llm-abm-marketing-sim --skip-agents-md --force
 ```
 
-The first run completed in 9.7 seconds, the repeat in 7.0 seconds and the
-final evidence-commit rebuild in 6.9 seconds. The first two reported
-`8,359 nodes | 14,123 edges | 208 clusters | 300 flows`; the final run reported
-`8,366 nodes | 14,132 edges | 208 clusters | 300 flows`. All three explicitly
-reported that `.gitnexusignore` was still read. `gitnexus status` after the
-final run reported:
+The policy run completed in 9.7 seconds, the repeat in 7.0 seconds, the
+evidence-commit rebuild in 6.9 seconds and the final measurement rebuild in
+6.9 seconds. The first two reported `8,359 nodes | 14,123 edges | 208 clusters |
+300 flows`; the last two reported `8,366 nodes | 14,132 edges | 208 clusters |
+300 flows`. All four explicitly reported that `.gitnexusignore` was still read.
+`gitnexus status` after the final measurement run reported:
 
 ```text
-Indexed commit: f8df887
-Current commit: f8df887
+Indexed commit: 0e591e8
+Current commit: 0e591e8
 Status: up-to-date
 ```
 
-The repeat and final forced rebuilds did not re-absorb `runs/`, raw/processed
-payload, archive payload or generated scratch. The source graph remained
-queryable. Because the local GitNexus registry contains multiple repositories,
-symbol and query commands use the explicit alias `-r llm-abm-marketing-sim`.
+The repeat, final measurement and current-HEAD forced rebuilds did not
+re-absorb `runs/`, raw/processed payload, archive payload or generated scratch.
+The source graph remained queryable. Because the local GitNexus registry contains
+multiple repositories, symbol and query commands use the explicit alias
+`-r llm-abm-marketing-sim`.
+
+The post-rebuild retention audit command was:
+
+```bash
+. .venv/bin/activate
+python scripts/audit_retention.py --repo-root . --manifest configs/retention/manifest.json
+```
+
+It returned exit code `2` because three `unknown` roots remain deferred and
+`ready_for_cleanup=false`; the structured output reported `Violations - none`.
+Its exact `.gitnexus` approved cache action observed 14 regular files and
+`125,853,164` aggregate bytes. No delete/apply operation was performed.
 
 Successful exact context smoke results:
 
