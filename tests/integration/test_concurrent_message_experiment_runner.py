@@ -490,7 +490,6 @@ def test_concurrent_message_artifact_closure_is_read_only_and_renderer_hash_disp
     assert (output_dir / "report.html").read_bytes() == report_before_failure
 
 
-
 def test_concurrent_message_report_rebuild_derives_immutable_destination(tmp_path: Path) -> None:
     dataset_dir = _make_concurrent_fixture(tmp_path)
     config = ConcurrentMessageExperimentConfig(
@@ -532,7 +531,6 @@ def test_concurrent_message_report_rebuild_derives_immutable_destination(tmp_pat
     assert destination_manifest["sha256"]["report_html"] == _sha256(destination_dir / "report.html")
     close_concurrent_message_artifacts(destination_dir)
     assert rebuild_concurrent_message_report(destination_dir) == destination_dir / "report.html"
-
 
 
 def test_concurrent_message_report_rebuild_destination_uses_editorial_default_for_legacy_source(
@@ -865,8 +863,6 @@ def test_concurrent_message_runner_writes_validation_runtime_artifacts(tmp_path:
         "visible_comments": 0,
         "visible_shares": 0,
     }
-
-
 
 
 def test_concurrent_message_runner_persists_operational_journal_and_status(tmp_path: Path) -> None:
@@ -1457,7 +1453,6 @@ def test_concurrent_message_config_rejects_non_production_shape_on_default_profi
     assert validation_config.configuration_profile == "validation"
 
 
-
 def test_concurrent_message_runner_resumes_crashed_batch_and_matches_baseline(tmp_path: Path) -> None:
     dataset_dir = _make_concurrent_fixture(tmp_path)
     config = ConcurrentMessageExperimentConfig(
@@ -1539,12 +1534,8 @@ def test_concurrent_message_runner_resumes_crashed_batch_and_matches_baseline(tm
         ],
     )
 
-    resumed_primary_calls = {
-        (call["time_step"], call["message_id"], call["user_id"]) for call in resumed_primary.calls
-    }
-    resumed_shadow_calls = {
-        (call["time_step"], call["message_id"], call["user_id"]) for call in resumed_shadow.calls
-    }
+    resumed_primary_calls = {(call["time_step"], call["message_id"], call["user_id"]) for call in resumed_primary.calls}
+    resumed_shadow_calls = {(call["time_step"], call["message_id"], call["user_id"]) for call in resumed_shadow.calls}
     for record in replay["records"]:
         if record["record_type"] != "event" or record["event_type"] != "variant_terminal":
             continue
@@ -1557,7 +1548,6 @@ def test_concurrent_message_runner_resumes_crashed_batch_and_matches_baseline(tm
             assert call_key not in resumed_primary_calls
         else:
             assert call_key not in resumed_shadow_calls
-
 
 
 def test_concurrent_message_runner_resume_after_finalization_is_idempotent(tmp_path: Path) -> None:
@@ -1720,3 +1710,146 @@ def test_concurrent_message_runner_recovers_when_publish_marker_crashes_after_re
         ],
     )
     assert ConcurrentExecutionJournal.open_existing(workspace_dir).status()["lifecycle"] == "published"
+
+
+@pytest.mark.parametrize("crash_point", ["before_shadow_terminal", "before_pair_closed"])
+def test_concurrent_message_runner_resumes_partial_pair_without_duplicate_terminals(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    crash_point: str,
+) -> None:
+    dataset_dir = _make_concurrent_fixture(tmp_path)
+    config = ConcurrentMessageExperimentConfig(
+        dataset_dir=dataset_dir,
+        sample_size=30,
+        horizon=2,
+        delivery_capacity=10,
+        configuration_profile="validation",
+    )
+
+    baseline_output = ConcurrentMessageExperimentRunner(
+        config,
+        _ScriptedConcurrentAdapter(
+            name="primary",
+            prompt_version=CONCURRENT_MESSAGE_PRIMARY_PROMPT_VERSION,
+            positive_user_ids={"u1"},
+            fail_pairs=set(),
+        ),
+        _ScriptedConcurrentAdapter(
+            name="shadow",
+            prompt_version=CONCURRENT_MESSAGE_SHADOW_PROMPT_VERSION,
+            positive_user_ids={"u2"},
+            fail_pairs=set(),
+        ),
+    ).run_and_write(tmp_path / "partial-pair-baseline")
+
+    output_dir = tmp_path / "partial-pair-crash-run"
+    original_append = ConcurrentExecutionJournal.append
+    crash_state = {"triggered": False}
+
+    def _crashing_append(
+        self: ConcurrentExecutionJournal,
+        *,
+        event_type: str,
+        event_identity: dict[str, object],
+        payload: dict[str, object],
+        batch_snapshot_hash: str | None = None,
+    ) -> dict[str, object]:
+        before_shadow_terminal = (
+            crash_point == "before_shadow_terminal"
+            and event_type == "variant_terminal"
+            and event_identity.get("decision_variant") == "shadow"
+        )
+        before_pair_closed = crash_point == "before_pair_closed" and event_type == "pair_closed"
+        if (before_shadow_terminal or before_pair_closed) and not crash_state["triggered"]:
+            crash_state["triggered"] = True
+            raise RuntimeError(f"crash at {crash_point}")
+        return original_append(
+            self,
+            event_type=event_type,
+            event_identity=event_identity,
+            payload=payload,
+            batch_snapshot_hash=batch_snapshot_hash,
+        )
+
+    monkeypatch.setattr(ConcurrentExecutionJournal, "append", _crashing_append)
+    crashing_primary = _ScriptedConcurrentAdapter(
+        name="primary",
+        prompt_version=CONCURRENT_MESSAGE_PRIMARY_PROMPT_VERSION,
+        positive_user_ids={"u1"},
+        fail_pairs=set(),
+    )
+    crashing_shadow = _ScriptedConcurrentAdapter(
+        name="shadow",
+        prompt_version=CONCURRENT_MESSAGE_SHADOW_PROMPT_VERSION,
+        positive_user_ids={"u2"},
+        fail_pairs=set(),
+    )
+    with pytest.raises(RuntimeError, match=f"crash at {crash_point}"):
+        ConcurrentMessageExperimentRunner(config, crashing_primary, crashing_shadow).run_and_write(output_dir)
+
+    workspace_dir = derive_concurrent_execution_workspace(output_dir)
+    replay = ConcurrentExecutionJournal.open_existing(workspace_dir).replay()
+    terminal_events = [
+        record
+        for record in replay["records"]
+        if record["record_type"] == "event" and record["event_type"] == "variant_terminal"
+    ]
+    terminal_keys = [
+        (record["event_identity"]["pair_id"], record["event_identity"]["decision_variant"])
+        for record in terminal_events
+    ]
+    assert len(terminal_keys) == len(set(terminal_keys))
+
+    resumed_primary = _ScriptedConcurrentAdapter(
+        name="primary",
+        prompt_version=CONCURRENT_MESSAGE_PRIMARY_PROMPT_VERSION,
+        positive_user_ids={"u1"},
+        fail_pairs=set(),
+    )
+    resumed_shadow = _ScriptedConcurrentAdapter(
+        name="shadow",
+        prompt_version=CONCURRENT_MESSAGE_SHADOW_PROMPT_VERSION,
+        positive_user_ids={"u2"},
+        fail_pairs=set(),
+    )
+    resumed_output = ConcurrentMessageExperimentRunner(config, resumed_primary, resumed_shadow).run_and_write(
+        output_dir, mode="resume"
+    )
+
+    assert resumed_output == output_dir
+    _assert_same_files(
+        baseline_output,
+        resumed_output,
+        [
+            "concurrent_runtime_candidates.csv",
+            "concurrent_runtime_pairs.csv",
+            "concurrent_runtime_terminal_rows.csv",
+            "concurrent_runtime_steps.json",
+            "concurrent_message_decision_trace.json",
+            "concurrent_validation.json",
+            "concurrent_campaign_diagnostics.json",
+            "artifact_manifest.json",
+            "report.html",
+        ],
+    )
+    resumed_primary_calls = {(call["time_step"], call["message_id"], call["user_id"]) for call in resumed_primary.calls}
+    resumed_shadow_calls = {(call["time_step"], call["message_id"], call["user_id"]) for call in resumed_shadow.calls}
+    for record in terminal_events:
+        call_key = (
+            record["event_identity"]["time_step"],
+            record["payload"]["message_id"],
+            record["payload"]["user_id"],
+        )
+        if record["event_identity"]["decision_variant"] == "primary":
+            assert call_key not in resumed_primary_calls
+        else:
+            assert call_key not in resumed_shadow_calls
+
+    resumed_replay = ConcurrentExecutionJournal.open_existing(workspace_dir).replay()
+    resumed_terminal_keys = [
+        (record["event_identity"]["pair_id"], record["event_identity"]["decision_variant"])
+        for record in resumed_replay["records"]
+        if record["record_type"] == "event" and record["event_type"] == "variant_terminal"
+    ]
+    assert len(resumed_terminal_keys) == len(set(resumed_terminal_keys))
