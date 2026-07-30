@@ -17,7 +17,6 @@ from llm_abm_sim.concurrent_campaign_diagnostics import (
     ConcurrentCampaignDiagnostics,
     validate_concurrent_validation_summary,
 )
-from llm_abm_sim.concurrent_message_experiment import authoritative_message_definitions
 from llm_abm_sim.concurrent_message_report import (
     ConcurrentMessageArtifactClosure,
     close_concurrent_message_artifacts,
@@ -378,10 +377,10 @@ class _ReleaseContractV4(BaseModel):
 
     @model_validator(mode="after")
     def _validate_formal_contract(self) -> _ReleaseContractV4:
-        authoritative_messages = authoritative_message_definitions()
-        authoritative_by_id = {message.message_id: message for message in authoritative_messages}
-        if set(self.per_message) != set(authoritative_by_id):
-            raise ValueError("per_message must cover the exact authoritative three-message contract")
+        if set(self.per_message) != {"message_1", "message_2", "message_3"}:
+            raise ValueError("per_message must cover exactly the approved three message ids")
+        if any(not message_id.strip() for message_id in self.per_message):
+            raise ValueError("per_message message ids must be non-empty")
         if self.timeout_seconds != 30.0:
             raise ValueError("timeout_seconds must remain the approved 30.0 seconds contract")
         if set(self.variant_provider_accounting) != {"primary", "shadow", "total"}:
@@ -397,12 +396,7 @@ class _ReleaseContractV4(BaseModel):
 
         per_message_exposures = 0
         per_message_below_capacity = 0
-        for message_id, contract_payload in self.per_message.items():
-            authoritative = authoritative_by_id[message_id]
-            if contract_payload.message_title != authoritative.title:
-                raise ValueError(f"per_message[{message_id}] title does not match the authoritative contract")
-            if contract_payload.intended_audience_segment != authoritative.intended_audience_segment:
-                raise ValueError(f"per_message[{message_id}] audience segment does not match the authoritative contract")
+        for contract_payload in self.per_message.values():
             per_message_exposures += contract_payload.exposures
             per_message_below_capacity += contract_payload.below_delivery_capacity
         if per_message_exposures != self.counts.actual_exposures:
@@ -1075,10 +1069,41 @@ def _validate_v4(
     if not isinstance(sample_audit, dict):
         raise ReleaseValidationError("v4 sample_audit must be a JSON object")
 
-    authoritative_messages = [message.model_dump(mode="json") for message in authoritative_message_definitions()]
-    _expect_equal(message_snapshot, authoritative_messages, "v4 message snapshot")
-    _expect_equal(config_snapshot.get("messages"), authoritative_messages, "v4 config message contract")
-    _expect_equal(validation_summary.get("messages"), authoritative_messages, "v4 validation message contract")
+    contract_message_identity = {
+        message_id: {
+            "title": contract_payload.message_title,
+            "intended_audience_segment": contract_payload.intended_audience_segment,
+        }
+        for message_id, contract_payload in contract.per_message.items()
+    }
+    message_snapshot_by_id: dict[str, dict[str, Any]] = {}
+    for message in message_snapshot:
+        message_id = message.get("message_id")
+        if not isinstance(message_id, str) or not message_id.strip():
+            raise ReleaseValidationError("v4 message snapshot rows require a non-empty message_id")
+        if message_id in message_snapshot_by_id:
+            raise ReleaseValidationError(f"duplicate v4 message snapshot identity: {message_id}")
+        message_snapshot_by_id[message_id] = message
+    if set(message_snapshot_by_id) != set(contract_message_identity):
+        raise ReleaseValidationError(
+            "v4 message snapshot identity domain must equal contract per_message keys; "
+            f"missing={sorted(set(contract_message_identity) - set(message_snapshot_by_id))}, "
+            f"extra={sorted(set(message_snapshot_by_id) - set(contract_message_identity))}"
+        )
+    for message_id, identity in contract_message_identity.items():
+        persisted_message = message_snapshot_by_id[message_id]
+        _expect_equal(
+            persisted_message.get("title"),
+            identity["title"],
+            f"v4 message snapshot {message_id} title",
+        )
+        _expect_equal(
+            persisted_message.get("intended_audience_segment"),
+            identity["intended_audience_segment"],
+            f"v4 message snapshot {message_id} intended audience segment",
+        )
+    _expect_equal(config_snapshot.get("messages"), message_snapshot, "v4 config message snapshot")
+    _expect_equal(validation_summary.get("messages"), message_snapshot, "v4 validation message snapshot")
     _expect_equal(config_snapshot, runtime_document.configuration, "v4 config snapshot")
 
     try:
@@ -1088,6 +1113,40 @@ def _validate_v4(
         validate_concurrent_validation_summary(validation_summary, rebuilt_diagnostics)
     except ValueError as exc:
         raise ReleaseValidationError(f"v4 concurrent campaign diagnostics do not close to source rows: {exc}") from exc
+    rebuilt_campaign_funnel = rebuilt_diagnostics.payload.get("campaign_funnel")
+    if not isinstance(rebuilt_campaign_funnel, dict):
+        raise ReleaseValidationError("v4 rebuilt campaign diagnostics must contain campaign_funnel")
+    rebuilt_per_message = rebuilt_campaign_funnel.get("per_message")
+    if not isinstance(rebuilt_per_message, dict):
+        raise ReleaseValidationError("v4 rebuilt campaign diagnostics must contain per_message")
+    if set(rebuilt_per_message) != set(contract.per_message):
+        raise ReleaseValidationError(
+            "v4 diagnostics per_message domain must equal contract per_message keys; "
+            f"missing={sorted(set(contract.per_message) - set(rebuilt_per_message))}, "
+            f"extra={sorted(set(rebuilt_per_message) - set(contract.per_message))}"
+        )
+    for message_id, contract_payload in contract.per_message.items():
+        diagnostic_payload = rebuilt_per_message[message_id]
+        if not isinstance(diagnostic_payload, dict):
+            raise ReleaseValidationError(f"v4 diagnostics per_message[{message_id}] must be an object")
+        _expect_equal(
+            diagnostic_payload.get("message_title"),
+            contract_payload.message_title,
+            f"v4 diagnostics per_message[{message_id}] title",
+        )
+        for field_name in (
+            "exposures",
+            "primary_successes",
+            "primary_failures",
+            "shadow_successes",
+            "shadow_failures",
+            "below_delivery_capacity",
+        ):
+            _expect_equal(
+                diagnostic_payload.get(field_name),
+                getattr(contract_payload, field_name),
+                f"v4 diagnostics per_message[{message_id}].{field_name}",
+            )
     _expect_equal(campaign_diagnostics, rebuilt_diagnostics.payload, "v4 campaign diagnostics")
     _expect_equal(
         validation_summary.get("campaign_diagnostics_summary"),

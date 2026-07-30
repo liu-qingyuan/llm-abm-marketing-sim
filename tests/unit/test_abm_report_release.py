@@ -13,7 +13,11 @@ from pathlib import Path
 import pytest
 
 from llm_abm_sim import ConcurrentMessageExperimentConfig, ConcurrentMessageExperimentRunner
-from llm_abm_sim.concurrent_message_report import write_concurrent_message_report_artifacts
+from llm_abm_sim.concurrent_message_renderer import _legacy_render_report, _render_two_mode_report, render_report
+from llm_abm_sim.concurrent_message_report import (
+    ConcurrentMessageReportPayload,
+    write_concurrent_message_report_artifacts,
+)
 from llm_abm_sim.prompt_field_summary import (
     CONCURRENT_MESSAGE_PRIMARY_PROMPT_VERSION,
     CONCURRENT_MESSAGE_SHADOW_PROMPT_VERSION,
@@ -191,11 +195,22 @@ def _rewrite_concurrent_manifest_hashes(run_dir: Path, *artifact_keys: str) -> N
 def _refresh_v4_contract_hashes(contract_path: Path, source: Path) -> None:
     contract = json.loads(contract_path.read_text(encoding="utf-8"))
     contract["artifact_sha256"] = {
-        relative_path: _sha256(source / relative_path)
-        for relative_path in sorted(contract["artifact_sha256"].keys())
+        relative_path: _sha256(source / relative_path) for relative_path in sorted(contract["artifact_sha256"].keys())
     }
     _write_json(contract_path, contract)
 
+
+def _write_v4_report_variant(source: Path, contract: Path, renderer) -> None:
+    payload = ConcurrentMessageReportPayload.model_validate(
+        json.loads((source / "concurrent_message_report_payload.json").read_text(encoding="utf-8"))
+    )
+    report = renderer(payload)
+    (source / "report.html").write_text(report, encoding="utf-8")
+    manifest_path = source / "artifact_manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["sha256"]["report_html"] = _sha256(source / "report.html")
+    _write_json(manifest_path, manifest)
+    _refresh_v4_contract_hashes(contract, source)
 
 
 def _write_v4_release_contract(repo_root: Path, run_dir: Path, contract_path: Path) -> Path:
@@ -250,7 +265,6 @@ def _write_v4_release_contract(repo_root: Path, run_dir: Path, contract_path: Pa
     return contract_path
 
 
-
 def _promote_concurrent_output_to_formal_release(run_dir: Path) -> None:
     config_snapshot = json.loads((run_dir / "config_snapshot.json").read_text(encoding="utf-8"))
     config_snapshot["sampling_status"] = CONCURRENT_FORMAL_STATUS
@@ -276,7 +290,6 @@ def _promote_concurrent_output_to_formal_release(run_dir: Path) -> None:
     )
 
 
-
 def _rewrite_concurrent_release_artifacts(
     run_dir: Path,
     *,
@@ -299,7 +312,6 @@ def _rewrite_concurrent_release_artifacts(
         validation_summary=validation_summary,
         campaign_diagnostics=json.loads((run_dir / "concurrent_campaign_diagnostics.json").read_text(encoding="utf-8")),
     )
-
 
 
 def _make_concurrent_v4_release(repo_root: Path, work_dir: Path) -> tuple[Path, Path]:
@@ -370,7 +382,6 @@ def concurrent_v4_release_baseline(tmp_path_factory: pytest.TempPathFactory) -> 
     return repo_root, source, contract
 
 
-
 def _copy_concurrent_release(repo_root: Path, baseline_source: Path, baseline_contract: Path) -> tuple[Path, Path]:
     copied_source = repo_root / "runs" / baseline_source.name
     shutil.copytree(baseline_source, copied_source)
@@ -379,7 +390,6 @@ def _copy_concurrent_release(repo_root: Path, baseline_source: Path, baseline_co
     contract_document["source_directory"] = copied_source.relative_to(repo_root).as_posix()
     _write_json(copied_contract, contract_document)
     return copied_source, copied_contract
-
 
 
 def _make_repo_concurrent_release_from_baseline(
@@ -486,7 +496,6 @@ def test_release_validator_rejects_symlinked_artifacts(tmp_path: Path):
     assert "source directory contains symlink" in completed.stderr
 
 
-
 def test_release_v4_accepts_synthetic_concurrent_formal_fixture(
     tmp_path: Path,
     concurrent_v4_release_baseline: tuple[Path, Path, Path],
@@ -500,6 +509,123 @@ def test_release_v4_accepts_synthetic_concurrent_formal_fixture(
     assert "abm-report-release-contract-v4" in completed.stdout
     assert "persisted_seed_first_formal_run" in completed.stdout
 
+
+@pytest.mark.parametrize(
+    ("renderer_role", "renderer"),
+    [
+        ("original-formal", _legacy_render_report),
+        ("two-mode-rollback", _render_two_mode_report),
+        ("editorial", render_report),
+    ],
+)
+def test_release_v4_offline_fixture_matrix(
+    tmp_path: Path,
+    concurrent_v4_release_baseline: tuple[Path, Path, Path],
+    renderer_role: str,
+    renderer,
+):
+    _, baseline_source, baseline_contract = concurrent_v4_release_baseline
+    source, contract = _copy_concurrent_release(tmp_path, baseline_source, baseline_contract)
+    _write_v4_report_variant(source, contract, renderer)
+
+    completed = _validate(tmp_path, source, contract)
+
+    assert completed.returncode == 0, f"{renderer_role}: {completed.stderr}"
+    assert "abm-report-release-contract-v4" in completed.stdout
+
+
+def test_release_v4_accepts_when_current_runtime_catalog_drifts(
+    tmp_path: Path,
+    concurrent_v4_release_baseline: tuple[Path, Path, Path],
+):
+    _, baseline_source, baseline_contract = concurrent_v4_release_baseline
+    source, contract = _copy_concurrent_release(tmp_path, baseline_source, baseline_contract)
+
+    drifted_src = tmp_path / "drifted-src"
+    shutil.copytree(REPO_ROOT / "src", drifted_src)
+    runtime_module = drifted_src / "llm_abm_sim" / "concurrent_message_experiment.py"
+    runtime_text = runtime_module.read_text(encoding="utf-8")
+    assert runtime_text.count('title="Message for Class 1"') == 1
+    runtime_module.write_text(
+        runtime_text.replace('title="Message for Class 1"', 'title="Drifted current catalog"'),
+        encoding="utf-8",
+    )
+    validator_copy = tmp_path / "validate_abm_report_release.py"
+    validator_copy.write_text(VALIDATOR.read_text(encoding="utf-8"), encoding="utf-8")
+    env = os.environ.copy()
+    env["PYTHONPATH"] = f"{drifted_src}{os.pathsep}{env.get('PYTHONPATH', '')}"
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            str(validator_copy),
+            "--repo-root",
+            str(tmp_path),
+            "--contract",
+            str(contract),
+            "--source-dir",
+            str(source),
+        ],
+        text=True,
+        capture_output=True,
+        env=env,
+        cwd=tmp_path,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert "abm-report-release-contract-v4" in completed.stdout
+
+
+def test_release_v4_rejects_contract_message_identity_change(
+    tmp_path: Path,
+    concurrent_v4_release_baseline: tuple[Path, Path, Path],
+):
+    _, baseline_source, baseline_contract = concurrent_v4_release_baseline
+    source, contract = _copy_concurrent_release(tmp_path, baseline_source, baseline_contract)
+    contract_document = json.loads(contract.read_text(encoding="utf-8"))
+    contract_document["per_message"]["message_1"]["message_title"] = "Altered contract title"
+    _write_json(contract, contract_document)
+
+    completed = _validate(tmp_path, source, contract)
+
+    assert completed.returncode == 1
+    assert "message" in completed.stderr
+    assert "mismatch" in completed.stderr or "identity" in completed.stderr
+
+
+def test_release_v4_rejects_contract_message_id_domain_change(
+    tmp_path: Path,
+    concurrent_v4_release_baseline: tuple[Path, Path, Path],
+):
+    _, baseline_source, baseline_contract = concurrent_v4_release_baseline
+    source, contract = _copy_concurrent_release(tmp_path, baseline_source, baseline_contract)
+    contract_document = json.loads(contract.read_text(encoding="utf-8"))
+    message_contract = contract_document["per_message"]
+    message_contract["message_renamed"] = message_contract.pop("message_1")
+    _write_json(contract, contract_document)
+
+    completed = _validate(tmp_path, source, contract)
+
+    assert completed.returncode == 1
+    assert "message ids" in completed.stderr or "per_message" in completed.stderr
+
+
+
+def test_release_v4_rejects_persisted_message_snapshot_bytes_change(
+    tmp_path: Path,
+    concurrent_v4_release_baseline: tuple[Path, Path, Path],
+):
+    _, baseline_source, baseline_contract = concurrent_v4_release_baseline
+    source, contract = _copy_concurrent_release(tmp_path, baseline_source, baseline_contract)
+    message_snapshot_path = source / "message_snapshot.json"
+    message_snapshot = json.loads(message_snapshot_path.read_text(encoding="utf-8"))
+    message_snapshot[0]["body"] += " tampered"
+    _write_json(message_snapshot_path, message_snapshot)
+
+    completed = _validate(tmp_path, source, contract)
+
+    assert completed.returncode == 1
+    assert "message_snapshot" in completed.stderr or "artifact hash mismatch" in completed.stderr
 
 
 def test_release_v4_rejects_crossed_prompt_token(
@@ -520,7 +646,6 @@ def test_release_v4_rejects_crossed_prompt_token(
 
     assert completed.returncode == 1
     assert "prompt token" in completed.stderr or "crossed" in completed.stderr
-
 
 
 def test_release_v4_rejects_extra_file_and_path_escape(
@@ -559,7 +684,6 @@ def test_release_v4_rejects_extra_file_and_path_escape(
     )
 
 
-
 def test_release_v4_rejects_missing_terminal_row(
     tmp_path: Path,
     concurrent_v4_release_baseline: tuple[Path, Path, Path],
@@ -581,7 +705,6 @@ def test_release_v4_rejects_missing_terminal_row(
 
     assert completed.returncode == 1
     assert "terminal row count" in completed.stderr or "both primary and shadow entries" in completed.stderr
-
 
 
 def test_release_v4_rejects_terminal_accounting_mismatch(
@@ -606,7 +729,6 @@ def test_release_v4_rejects_terminal_accounting_mismatch(
 
     assert completed.returncode == 1
     assert "terminal provider accounting primary mismatch" in completed.stderr
-
 
 
 def test_release_v4_rejects_incomplete_usage_and_model_mismatch(
@@ -657,7 +779,6 @@ def test_release_v4_rejects_incomplete_usage_and_model_mismatch(
 
     assert model_failed.returncode == 1
     assert "observed_model" in model_failed.stderr or "requested model" in model_failed.stderr
-
 
 
 def test_deploy_rejects_v4_validation_candidate_before_any_remote_action(
