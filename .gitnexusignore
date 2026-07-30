@@ -1,0 +1,74 @@
+# Repository-specific GitNexus index boundary.
+# The project forced command bypasses .gitignore, so payload and local-tool
+# exclusions live here. Durable README/manifest files remain searchable.
+
+# Research runs and historical payloads.
+/runs/
+/archive/**
+!/archive/
+!/archive/*/
+!/archive/*/README.md
+!/archive/*/archive_manifest.json
+
+/data/raw/*
+!/data/raw/.gitkeep
+!/data/raw/README.md
+/data/processed/*
+!/data/processed/.gitkeep
+!/data/processed/README.md
+!/data/processed/jinjiang_douyin/
+/data/processed/jinjiang_douyin/*
+!/data/processed/jinjiang_douyin/README.md
+
+# Local environments, package installations, and generated tool output.
+/.env
+/.env.*
+/.venv/
+/venv/
+/env/
+/node_modules/
+*.egg-info/
+/__pycache__/
+__pycache__/
+/.gitnexus/
+/.mypy_cache/
+/.pytest_cache/
+/.ruff_cache/
+/.coverage
+/.coverage.*
+/coverage/
+/htmlcov/
+/test-results/
+/playwright-report/
+/blob-report/
+/.playwright-cli/
+/dist/
+/build/
+/out/
+/tmp/
+/temp/
+*.log
+*.trace
+
+# Generated agent/tool scratch. Tracked durable Markdown under .omx remains indexed.
+/.agents/
+/.claude/
+/.omx/cache/
+/.omx/context/
+/.omx/drafts/
+/.omx/interviews/
+/.omx/logs/
+/.omx/plans/
+/.omx/prompts/
+/.omx/qa/
+/.omx/ralph-orch/
+/.omx/ralphy/
+/.omx/run-logs/
+/.omx/scripts/
+/.omx/specs/
+/.omx/state/
+/.omx/ultragoal/
+/.omx/workspaces/
+/.omx/metrics.json
+/.omx/phase-handoffs/logs/
+/.omx/phase-handoffs/templates/
