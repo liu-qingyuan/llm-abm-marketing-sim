@@ -249,6 +249,14 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--top12-metadata-run-id", default="", help="Optional processed run id containing #锦江都城酒店吉安 videos.csv")
     parser.add_argument("--top12-comments-run-id", default="", help="Optional processed run id containing #锦江都城酒店吉安 comments/replies")
     parser.add_argument("--live-api-authorized", action="store_true", help="Marks provenance that upstream top12 runs were collected after user live API authorization")
+    parser.add_argument(
+        "--report-destination",
+        "--report-path",
+        "--output-report",
+        dest="report_destination",
+        type=Path,
+        help="Optional Markdown audit destination; defaults to scope_change_audit.md inside the derived run.",
+    )
     return parser
 
 
@@ -256,12 +264,13 @@ def prefixed_sha_inputs(paths: dict[str, Path]) -> dict[str, str]:
     return {key: sha256_file(path) for key, path in paths.items() if path.exists()}
 
 
-def main() -> None:
-    args = build_parser().parse_args()
+def main(argv: list[str] | None = None) -> None:
+    args = build_parser().parse_args(argv)
     now = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     new_run_id = f"jinjiang-caption-hashtag-comments-excluding-binguan-adding-jian-derived-{now}"
     out_dir = PROCESSED_ROOT / new_run_id
     out_dir.mkdir(parents=True, exist_ok=False)
+    report_path = args.report_destination or (out_dir / "scope_change_audit.md")
 
     manifest = read_csv(OLD_RUN / "target_video_manifest.csv")
     source_rows = read_csv(SOURCE_RUN / "videos.csv")
@@ -654,8 +663,8 @@ See `scope_change_audit.json`, `needs_comment_fetch_manifest.csv`, and `source_m
 """,
         encoding="utf-8",
     )
-    doc_path = Path("docs/04-开发验证/jinjiang-douyin-caption-hashtag-scope-change-remove-jinjiang-binguan-add-jian-20260620.md")
-    doc_path.write_text(
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    report_path.write_text(
         f"""# 锦江 Douyin caption hashtag 口径二次修正审计
 
 - generated_at: `{now}`
@@ -719,13 +728,23 @@ See `scope_change_audit.json`, `needs_comment_fetch_manifest.csv`, and `source_m
 Derived processed path:
 
 `{out_dir}`
+
+Report destination:
+
+`{report_path}`
+
+## 复现
+
+```bash
+python scripts/derive_jinjiang_scope_change.py --report-destination {report_path}
+```
 """,
         encoding="utf-8",
     )
     print(json.dumps({
         "new_run_id": new_run_id,
         "out_dir": str(out_dir),
-        "doc_path": str(doc_path),
+        "report_path": str(report_path),
         "current_unique_target_videos": len(old_target_vids),
         "old_comment_covered_unique_videos": len(old_comment_covered_vids),
         "removed_jinjiang_binguan_unique_videos": len(remove_vids),

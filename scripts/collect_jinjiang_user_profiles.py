@@ -6,6 +6,7 @@ import csv
 import json
 import math
 import re
+import shlex
 import sys
 from collections import Counter, defaultdict
 from collections.abc import Iterable, Mapping, Sequence
@@ -2332,9 +2333,7 @@ def write_collection_docs(processed_dir: Path, report: Mapping[str, Any]) -> Non
     (processed_dir / "README.md").write_text("\n".join(readme) + "\n", encoding="utf-8")
 
 
-def write_validation_doc(docs_dir: Path, report: Mapping[str, Any]) -> Path:
-    docs_dir.mkdir(parents=True, exist_ok=True)
-    path = docs_dir / f"jinjiang-douyin-profile-expansion-{datetime.now(timezone.utc).strftime('%Y%m%d')}.md"
+def validation_report_markdown(report: Mapping[str, Any]) -> str:
     lines = [
         "# 锦江酒店 Douyin 用户 Profile 扩展验证小结",
         "",
@@ -2354,6 +2353,7 @@ def write_validation_doc(docs_dir: Path, report: Mapping[str, Any]) -> Path:
         f"- current_run_success_delta: {report.get('current_run_success_delta')}",
         f"- cost_guard_triggered: {report.get('cost_guard_triggered')}",
         f"- recommended_resume_mode: {report.get('recommended_resume_mode')}",
+        f"- curated report destination: `{report.get('curated_report_path') or 'not requested'}`",
         "- quota/rate limit: see partial_reason and endpoint_call_counts",
         "- secrets read/printed/written: no",
         "- raw/processed large data committed: no",
@@ -2388,8 +2388,35 @@ def write_validation_doc(docs_dir: Path, report: Mapping[str, Any]) -> Path:
         "",
         "说明：本文档只展示聚合统计，不展开昵称、bio、signature 等用户明细。`brand_attitude`、`like_tendency`、`comment_tendency`、`share_tendency` 是已移除的历史 demo preset 字段，不再写入新的 processed profile 输出。",
     ])
-    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    curated_report_path = report.get("curated_report_path")
+    if curated_report_path:
+        processed_dir = Path(str(report.get("processed_dir")))
+        raw_dir = Path(str(report.get("raw_dir")))
+        reproduction = " ".join([
+            "python scripts/collect_jinjiang_user_profiles.py",
+            "--source-run", shlex.quote(str(report.get("source_dataset_path"))),
+            "--processed-root", shlex.quote(str(processed_dir.parent)),
+            "--raw-root", shlex.quote(str(raw_dir.parent)),
+            "--output-run-id", shlex.quote(str(report.get("run_id"))),
+            "--resume",
+            "--curated-report", shlex.quote(str(curated_report_path)),
+        ])
+        lines.extend(["", "## 复现", "", "```bash", reproduction, "```"])
+    return "\n".join(lines) + "\n"
+
+
+def write_validation_doc(docs_dir: Path, report: Mapping[str, Any]) -> Path:
+    docs_dir.mkdir(parents=True, exist_ok=True)
+    path = docs_dir / f"jinjiang-douyin-profile-expansion-{datetime.now(timezone.utc).strftime('%Y%m%d')}.md"
+    path.write_text(validation_report_markdown(report), encoding="utf-8")
     return path
+
+
+def write_curated_report(report_path: Path, report: Mapping[str, Any]) -> Path:
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    report_path.write_text(validation_report_markdown(report), encoding="utf-8")
+    return report_path
+
 
 
 def scan_report_safety(paths: Iterable[Path]) -> list[str]:
@@ -2451,7 +2478,18 @@ def main(argv: list[str] | None = None) -> int:
         default=[],
         help="Additional raw evidence run glob rooted at --raw-root. Can be repeated; matches are sorted.",
     )
-    parser.add_argument("--docs-dir", type=Path, default=Path("docs/04-开发验证"))
+    parser.add_argument(
+        "--curated-report",
+        "--curated-report-path",
+        dest="curated_report",
+        type=Path,
+        help="Optional explicit Markdown destination for a reviewed aggregate-only profile report.",
+    )
+    parser.add_argument(
+        "--docs-dir",
+        type=Path,
+        help="Compatibility directory destination; omitted by default so no curated document is written.",
+    )
     parser.add_argument("--audit-only", action="store_true")
     parser.add_argument(
         "--recompute-profile-indices-only",
@@ -2464,7 +2502,11 @@ def main(argv: list[str] | None = None) -> int:
         help="Offline-only in-place recompute of profile_target_users.csv comment/reply metrics, then refresh profile index columns.",
     )
     args = parser.parse_args(argv)
-
+    if args.curated_report and args.docs_dir:
+        parser.error("--curated-report and --docs-dir are mutually exclusive")
+    curated_report_path = args.curated_report
+    if args.docs_dir:
+        curated_report_path = args.docs_dir / f"jinjiang-douyin-profile-expansion-{datetime.now(timezone.utc).strftime('%Y%m%d')}.md"
     source_run = args.source_run
     if not source_run.exists():
         print(f"source run not found: {source_run}", file=sys.stderr)
@@ -2569,9 +2611,12 @@ def main(argv: list[str] | None = None) -> int:
         stats=stats,
         settings=settings,
     )
+    report["curated_report_path"] = str(curated_report_path) if curated_report_path else None
+    report["curated_report_written"] = curated_report_path is not None
     write_collection_docs(processed_dir, report)
-    doc_path = write_validation_doc(args.docs_dir, report)
-    safety_findings = scan_report_safety([
+    if curated_report_path:
+        write_curated_report(curated_report_path, report)
+    report_paths = [
         processed_dir / "profile_target_audit.md",
         processed_dir / "sec_uid_evidence_audit.md",
         processed_dir / "profile_collection_audit.md",
@@ -2579,12 +2624,21 @@ def main(argv: list[str] | None = None) -> int:
         processed_dir / "sec_uid_evidence_audit.json",
         processed_dir / "profile_collection_report.json",
         processed_dir / "profile_collection_audit.json",
-        doc_path,
-    ])
+    ]
+    if curated_report_path:
+        report_paths.append(curated_report_path)
+    safety_findings = scan_report_safety(report_paths)
     if safety_findings:
         print(f"unsafe report content: {safety_findings}", file=sys.stderr)
         return 3
-    print(json.dumps({"processed_dir": str(processed_dir), "raw_dir": str(raw_dir), "doc_path": str(doc_path), "report": report}, ensure_ascii=False))
+    result = {
+        "processed_dir": str(processed_dir),
+        "raw_dir": str(raw_dir),
+        "curated_report_path": str(curated_report_path) if curated_report_path else None,
+        "doc_path": str(curated_report_path) if curated_report_path else None,
+        "report": report,
+    }
+    print(json.dumps(result, ensure_ascii=False))
     return 0
 
 

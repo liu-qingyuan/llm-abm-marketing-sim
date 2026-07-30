@@ -8,6 +8,7 @@ Markdown report. It does not import or call any TikHub client and does not read
 """
 from __future__ import annotations
 
+import argparse
 import json
 import re
 from collections import Counter, defaultdict
@@ -33,7 +34,6 @@ PROCESSED_DIR = REPO_ROOT / "data/processed/jinjiang_douyin"
 RELATED_REPORT = PROCESSED_DIR / RUN_ID_RELATED / "collection_report.json"
 CAPPED_REPORT = PROCESSED_DIR / RUN_ID_CAPPED / "collection_report.json"
 EXACT_ONLY_REPORT = PROCESSED_DIR / RUN_ID_EXACT_ONLY / "collection_report.json"
-OUTPUT_REPORT = REPO_ROOT / "docs/04-开发验证/jinjiang-douyin-existing-topic-distribution.md"
 
 FILENAME_RE = re.compile(r"hashtag_video_list_(?P<cid>\d+)_cursor_(?P<cursor>\d+)\.json$")
 HASHTAG_RE = re.compile(r"#([^#\s,，。；;：:！!？?、/\\|\[\]（）(){}<>《》\"'“”‘’]+)")
@@ -320,7 +320,8 @@ def limits_text(report: dict[str, Any]) -> str:
     return "; ".join(parts) if parts else "未在 report 中找到 limits"
 
 
-def generate_markdown(agg: Aggregation) -> str:
+def generate_markdown(agg: Aggregation, report_destination: Path | None = None) -> str:
+    destination = str(report_destination) if report_destination else "<explicit-output-report>"
     related_report = load_json(RELATED_REPORT)
     capped_report = load_json(CAPPED_REPORT)
     exact_only_report = load_json(EXACT_ONLY_REPORT)
@@ -497,11 +498,10 @@ def generate_markdown(agg: Aggregation) -> str:
 ## 9. 复现命令
 
 ```bash
-python scripts/summarize_jinjiang_topic_distribution.py
+python scripts/summarize_jinjiang_topic_distribution.py --output-report {destination}
 python -m py_compile scripts/summarize_jinjiang_topic_distribution.py
 ```
-
-生成报告：`docs/04-开发验证/jinjiang-douyin-existing-topic-distribution.md`
+生成报告：`{destination}`
 """
     return md
 
@@ -528,22 +528,38 @@ def validate(agg: Aggregation, markdown: str) -> None:
     require(EXACT_NAME in markdown and EXACT_CID in markdown, "exact challenge name/cid missing")
 
 
-def main() -> None:
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="Summarize existing Jinjiang Douyin topic/challenge/tag distribution")
+    parser.add_argument(
+        "--output-report",
+        "--report-destination",
+        "--report-path",
+        dest="output_report",
+        type=Path,
+        required=True,
+        help="Explicit Markdown destination for the aggregate report.",
+    )
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = build_parser().parse_args(argv)
     for path in (PAGES_DIR, RELATED_CHALLENGES, RELATED_REPORT, CAPPED_REPORT, EXACT_ONLY_REPORT):
         if not path.exists():
             raise FileNotFoundError(path)
     agg = aggregate()
-    markdown = generate_markdown(agg)
+    markdown = generate_markdown(agg, args.output_report)
     validate(agg, markdown)
-    OUTPUT_REPORT.parent.mkdir(parents=True, exist_ok=True)
-    OUTPUT_REPORT.write_text(markdown, encoding="utf-8")
-    print(f"wrote {OUTPUT_REPORT.relative_to(REPO_ROOT)}")
+    args.output_report.parent.mkdir(parents=True, exist_ok=True)
+    args.output_report.write_text(markdown, encoding="utf-8")
+    print(f"wrote {args.output_report}")
     print(f"related_challenges={agg.related_challenges_count}")
     print(f"page_files={agg.page_files}")
     print(f"global_raw_rows={agg.global_raw_rows}")
     print(f"global_unique_videos={len(agg.global_unique_videos)}")
     print(f"global_in_window_unique_videos={len(agg.global_in_window_unique_videos)}")
     print(f"exact_pages={len(agg.exact_page_files)} exact_rows={agg.exact_raw_rows} exact_unique={len(agg.exact_unique_videos)} exact_in_window={len(agg.exact_in_window_unique_videos)}")
+    return 0
 
 
 if __name__ == "__main__":
