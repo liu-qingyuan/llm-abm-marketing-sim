@@ -17,7 +17,7 @@ provider payloads, prompts, headers or secrets.
 ## Scope Contract
 
 The forced project command deliberately bypasses `.gitignore`. GitNexus
-confirmed during all four rebuilds:
+confirmed during every forced rebuild recorded in this evidence:
 
 > GITNEXUS_NO_GITIGNORE is set - skipping .gitignore (still reading .gitnexusignore)
 
@@ -107,23 +107,18 @@ GITNEXUS_NO_GITIGNORE=1 gitnexus analyze \
   --name llm-abm-marketing-sim --skip-agents-md --force
 ```
 
-The policy run completed in 9.7 seconds, the repeat in 7.0 seconds, the
-evidence-commit rebuild in 6.9 seconds and the final measurement rebuild in
-6.9 seconds. The first two reported `8,359 nodes | 14,123 edges | 208 clusters |
-300 flows`; the last two reported `8,366 nodes | 14,132 edges | 208 clusters |
-300 flows`. All four explicitly reported that `.gitnexusignore` was still read.
-`gitnexus status` after the final measurement run reported:
+The policy command and every subsequent forced rebuild explicitly reported that
+`.gitnexusignore` was still read. The final current-HEAD rebuild reported
+`8,366 nodes | 14,132 edges | 208 clusters | 300 flows`; immediately after it,
+`gitnexus status` reported `Status: up-to-date`. The exact indexed/current commit
+for the closing rebuild is recorded in the closing issue comment, because this
+tracked evidence file is itself part of the indexed tree and a later evidence
+commit would otherwise make a hard-coded hash stale.
 
-```text
-Indexed commit: 0e591e8
-Current commit: 0e591e8
-Status: up-to-date
-```
-
-The repeat, final measurement and current-HEAD forced rebuilds did not
-re-absorb `runs/`, raw/processed payload, archive payload or generated scratch.
-The source graph remained queryable. Because the local GitNexus registry contains
-multiple repositories, symbol and query commands use the explicit alias
+The repeat and each subsequent forced rebuild did not re-absorb `runs/`,
+raw/processed payload, archive payload or generated scratch. The source graph
+remained queryable. Because the local GitNexus registry contains multiple
+repositories, symbol and query commands use the explicit alias
 `-r llm-abm-marketing-sim`.
 
 The post-rebuild retention audit command was:
