@@ -1,6 +1,10 @@
 # 04-开发验证（迁移索引）
 
-本目录是旧开发验证入口和迁移索引。新 PRD、Reference、Architecture Note 和 ADR 不再新增到本目录。
+Status: Legacy migration index only
+Current replacement: [`../index.md`](../index.md) and the role-specific PRD, Reference, Architecture and ADR READMEs.
+
+本目录只允许保留迁移索引；不新增正文、实现规格或 validation/release evidence。生成器默认也不得向这里写入新文件。
+
 
 保留本目录的目的只有一个：说明历史开发验证文档迁移到了哪些 canonical 目录。已迁移的正文文件和 redirect 文件不再保留；后续维护只改新目录中的 canonical 文档。
 

@@ -1,6 +1,18 @@
-# 产品演示说明：90% 本地原型
+# 产品演示说明：本地离线/Web Demo 与 Multi-Message Formal Research
 
-这个里程碑把仿真器整理成一个可以本地评审的产品原型：非开发者也可以检查输入、运行确定性 demo、打开双语报告，并理解每个决策来自离线规则基线还是显式 Provider 路径。
+通用本地 demo 用于评审输入、确定性 ABM runtime、双语静态报告和本地 Web 控制台；它不等同于当前 Multi-Message Formal research report。后者使用独立的 persisted Formal evidence、v4 contract 和 canonical release，阅读入口见下方 Demo 5。
+
+## Demo 5：当前 Multi-Message Formal research report
+
+这是当前已发布的研究报告，不由 Demo 1-4 的 toy/realistic fixture 生成，也不能用 mock、rule-based 或 offline validation 结果替代：
+
+- Canonical endpoint：[https://abm.q1ngyuan.top/](https://abm.q1ngyuan.top/)
+- Architecture：[Concurrent Message Competition Experiment](../architecture/concurrent-message-competition-experiment.md)
+- Aggregate release evidence：[Editorial Formal 发布与验收记录](../references/jinjiang-concurrent-message-editorial-formal-release-20260729.md)
+- Data lineage：[锦江 final dataset 审计](../references/jinjiang-final-dataset-audit-20260624.md)、[latent-v1 validation](../references/jinjiang-final-dataset-latent-v1-validation-20260705.md)
+
+报告当前只覆盖 1,000 位 Research Sample users、3 条 message、30 个 batch 和每条 message 600 次曝光；36,400 用户完整 provider-backed experiment 是后续独立研究范围。报告中的分母、Decision、trace、diagnostics 和发布状态必须以 persisted artifacts 与 release contract 为准。
+
 
 ## Demo 1：默认离线运行
 

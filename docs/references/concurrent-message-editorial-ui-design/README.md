@@ -3,7 +3,9 @@
 - 生成日期：2026-07-29
 - 生成工具：`openai_imagegen`，`gpt-image-2`
 - 目标：Multi-Message 双模式研究报告的 image-first desktop 视觉与交互设计证据
-- 状态：Design Reference only；renderer 尚未实现，未发布、未部署
+- 状态：Design Reference；renderer 已实现并已发布到 canonical endpoint
+- Current release evidence：[`../jinjiang-concurrent-message-editorial-formal-release-20260729.md`](../jinjiang-concurrent-message-editorial-formal-release-20260729.md)
+- 当前 renderer / persisted report 是 runtime evidence 的 owner；本目录图片仍只承担 creation-time design/media source 角色
 - 画布：全部 `1536 × 1024` PNG
 - Accepted set：11 张 desktop section/drawer references + 5 张 text-free mechanism media sources
 
@@ -13,7 +15,7 @@
 
 1. `mechanism-*-desktop.png` 与 `run-*-desktop.png` 约束 section 的信息层级、grid、typography、spacing、controls、color 和 media framing。
 2. `trace-drawer-desktop.png` 约束 drawer 的宽度、首屏优先级、tabs 与 modal treatment。
-3. `media-mechanism-*.png` 是五个 mechanism anchors 的 text-free production media source。后续实现从它们生成受控 WebP derivatives，由 semantic HTML 提供精确 labels、hotspots、legend、alt text 和双语 copy。
+3. `media-mechanism-*.png` 是五个 mechanism anchors 的 text-free production media source。当前 renderer 从它们生成受控 WebP derivatives；semantic HTML 提供精确 labels、hotspots、legend、alt text 和双语 copy。
 
 Persisted payload、Spec 和现有 Formal artifact 是术语、数值、authoritative message、Decision reason 与研究语义的 source of truth。图片中的排版性缩写和 message topic preview 不能覆盖这些 source。若图片与 Spec 或 persisted payload 冲突，以后两者为准；实现不得照抄冲突内容。
 
@@ -282,4 +284,4 @@ Rejected/intermediate generations 不在仓库 Reference 目录。Accepted 图�
 
 ## Delivery Boundary
 
-本 Reference 的创建没有修改 renderer、schemas、tests、release artifacts、Formal source、current two-mode destination 或 canonical endpoint；没有重跑 Decisions，没有调用 live Provider/TikHub/Douyin/profile API，也没有读取、打印或写入 secrets、raw Prompt、raw provider request/response、headers 或 raw payload。
+本 Reference 记录 creation-time design generation 没有修改 renderer、schemas、tests、release artifacts、Formal source、current two-mode destination 或 canonical endpoint；随后 renderer implementation 和 Editorial publication 由 #118/#123 完成。图片仍不是截图 golden 或 persisted research evidence；没有重跑 Decisions，没有调用 live Provider/TikHub/Douyin/profile API，也没有读取、打印或写入 secrets、raw Prompt、raw provider request/response、headers 或 raw payload。

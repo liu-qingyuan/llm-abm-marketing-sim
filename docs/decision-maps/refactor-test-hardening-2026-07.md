@@ -1,5 +1,8 @@
 # Refactor And Test Hardening Decision Map
 
+Status: Completed historical decision map; superseded
+Current replacement: [`docs/index.md`](../index.md) and the current role-specific Architecture Notes, PRDs, ADRs and GitHub `Spec:` issues.
+
 本决策图用于规划 `llm-abm-marketing-sim` 的一轮重构与测试补强。目标是降低模块耦合、明确数据收集边界，并让测试保护核心行为。
 
 ## Confirmed Boundaries

@@ -1,9 +1,8 @@
 # PRD: 文档架构重组与锦江 Latent Attributes 迁移试点
 
-Status: Published to GitHub issue tracker
-Triage label: `ready-for-agent`
-Decision map: `docs/decision-maps/refactor-test-hardening-2026-07.md`
-GitHub issue: https://github.com/liu-qingyuan/llm-abm-marketing-sim/issues/1
+Status: Completed historical PRD; superseded as executable source
+Current replacement: [`docs/index.md`](../index.md), role READMEs under [`../architecture/`](../architecture/), [`../references/`](../references/) and [`../prds/`](../prds/); current executable requirements live in GitHub `Spec:` issues.
+Decision map: `docs/decision-maps/refactor-test-hardening-2026-07.md` (historical; superseded)
 
 ## 问题陈述
 

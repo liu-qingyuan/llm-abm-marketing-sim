@@ -2,6 +2,15 @@
 
 本文件是项目文档的唯一总入口。后续新增长期维护文档时，先判断它属于哪个职责型目录；编号目录主要作为阅读路径、历史入口或迁移索引保留。
 
+## Current Truth
+
+当前读者应从以下入口理解项目，而不是从历史离线验证或早期设计目标推断状态：
+
+- **Canonical endpoint：** [Multi-Message Editorial Formal Presentation](https://abm.q1ngyuan.top/)。这是当前已发布的研究报告页面；部署身份、hash、回滚和公网验收见[Editorial Formal 发布与验收记录](references/jinjiang-concurrent-message-editorial-formal-release-20260729.md)。
+- **Current architecture：** [Concurrent Message Competition Experiment](architecture/concurrent-message-competition-experiment.md) 记录已实现的三 message queues、Primary/Shadow decisions、report UI 和发布边界。
+- **Current authoritative data：** [锦江 final dataset 审计](references/jinjiang-final-dataset-audit-20260624.md) 是真实 processed dataset 的 lineage 与聚合验收入口；[latent-v1 validation](references/jinjiang-final-dataset-latent-v1-validation-20260705.md) 是可确定性重建的合成实验标签验证入口。
+- **Historical lineage：** 单视频 Final Research runtime、旧 Interactive target、迁移 PRD、Decision Map、初始 scan 和旧 release evidence 继续保留，但必须按各文档的 Status 和 current replacement 阅读。
+
 ## 目录职责
 
 ```text
@@ -41,6 +50,14 @@ docs/
 - `99-参考资料/` 是低频历史参考和机器扫描产物入口；新的研究先验、外部资料和数据口径参考优先放 `references/`。
 
 ## 推荐阅读路径
+
+### 当前 Multi-Message Formal Research
+
+1. [Current Concurrent Message architecture](architecture/concurrent-message-competition-experiment.md)
+2. [Editorial Formal release evidence](references/jinjiang-concurrent-message-editorial-formal-release-20260729.md)
+3. [Canonical Editorial report](https://abm.q1ngyuan.top/)
+4. [真实 final dataset audit](references/jinjiang-final-dataset-audit-20260624.md)
+5. [latent-v1 validation](references/jinjiang-final-dataset-latent-v1-validation-20260705.md)
 
 ### 只想快速了解项目
 

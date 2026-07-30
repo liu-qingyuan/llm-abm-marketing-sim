@@ -1,8 +1,12 @@
 # Interactive Mechanism Report
 
-Status: Target Interaction Design
+Status: Superseded historical target
+Current replacement: [`Multi-Message Editorial UI Design Reference`](../references/concurrent-message-editorial-ui-design/README.md) and [`Concurrent Message Competition Experiment`](concurrent-message-competition-experiment.md)
+Current published report: [`https://abm.q1ngyuan.top/`](https://abm.q1ngyuan.top/)
 
-## 目标
+本文保留早期单视频 Target Delivery Ranking 交互目标和信息架构，作为 historical lineage；它不描述当前 Multi-Message Editorial renderer、persisted contract 或 canonical release。
+
+## 历史目标
 
 用一个可交互的单页报告让非技术读者先看懂 Target Delivery Ranking 机制，再按需检查本次 Final Research Report Run 的真实证据。页面必须区分稳定机制与本次运行结果。
 

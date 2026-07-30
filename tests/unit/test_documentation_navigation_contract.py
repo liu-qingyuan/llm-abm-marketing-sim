@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import subprocess
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -9,6 +10,17 @@ DOCS_ROOT = REPO_ROOT / "docs"
 
 def _read(path: Path) -> str:
     return path.read_text(encoding="utf-8")
+
+
+def _tracked_markdown_files() -> list[Path]:
+    result = subprocess.run(
+        ["git", "ls-files", "-z", "--", "*.md"],
+        cwd=REPO_ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return [REPO_ROOT / relative_path for relative_path in result.stdout.split("\0") if relative_path]
 
 
 def _local_markdown_links(source: Path) -> list[tuple[str, Path]]:
@@ -102,3 +114,49 @@ def test_jinjiang_latent_attribute_prd_keeps_status_and_planning_sections():
     assert "非目标" in headings
     assert "审计与验收" in headings
     assert "后续 issue plan" in headings
+
+
+def test_tracked_docs_markdown_links_resolve():
+    for source in _tracked_markdown_files():
+        for label, target in _local_markdown_links(source):
+            assert target.exists(), f"{source} link {label!r} targets missing {target}"
+
+
+def test_current_research_navigation_contract():
+    docs_index = DOCS_ROOT / "index.md"
+    index_text = _read(docs_index)
+    expected_targets = [
+        DOCS_ROOT / "architecture" / "concurrent-message-competition-experiment.md",
+        DOCS_ROOT / "references" / "jinjiang-concurrent-message-editorial-formal-release-20260729.md",
+        DOCS_ROOT / "references" / "jinjiang-final-dataset-audit-20260624.md",
+        DOCS_ROOT / "references" / "jinjiang-final-dataset-latent-v1-validation-20260705.md",
+    ]
+
+    for target in expected_targets:
+        assert _linked_from(docs_index, target), f"{docs_index} should link to {target}"
+    assert "https://abm.q1ngyuan.top/" in index_text
+
+
+def test_current_and_historical_document_status_contract():
+    current_architecture = _read(DOCS_ROOT / "architecture" / "concurrent-message-competition-experiment.md")
+    assert "Status: Implemented and published architecture note" in current_architecture
+    assert "Ready for Spec" not in current_architecture
+    assert "queues 未实现" not in current_architecture
+
+    editorial_design = _read(DOCS_ROOT / "references" / "concurrent-message-editorial-ui-design" / "README.md")
+    assert "renderer 已实现并已发布" in editorial_design
+    assert "renderer 尚未实现" not in editorial_design
+
+    historical_documents = {
+        DOCS_ROOT / "architecture" / "interactive-mechanism-report.md": "Status: Superseded historical target",
+        DOCS_ROOT
+        / "prds"
+        / "docs-architecture-and-jinjiang-latent-attributes-migration.md": "Status: Completed historical PRD; superseded",
+        DOCS_ROOT
+        / "decision-maps"
+        / "refactor-test-hardening-2026-07.md": "Status: Completed historical decision map; superseded",
+        DOCS_ROOT / "99-参考资料" / "README.md": "Status: Historical completed initial scan",
+        DOCS_ROOT / "architecture" / "final-research-runtime.md": "Status: Historical single-message runtime baseline",
+    }
+    for path, marker in historical_documents.items():
+        assert marker in _read(path), f"{path} should expose {marker!r}"

@@ -10,4 +10,4 @@
 
 ## 当前入口
 
-- [Refactor And Test Hardening Decision Map](refactor-test-hardening-2026-07.md)：规划文档迁移、重构和测试补强的多会话决策图。
+- [Refactor And Test Hardening Decision Map](refactor-test-hardening-2026-07.md)：Status: Completed historical decision map; superseded。当前架构/PRD/ADR 和 executable requirements 以 role READMEs 与 GitHub `Spec:` issues 为准。

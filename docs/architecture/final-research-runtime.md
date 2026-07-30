@@ -1,8 +1,9 @@
 # Final Research 30 批次 Runtime
 
-Status: Architecture Note
+Status: Historical single-message runtime baseline
+Current replacement: [`concurrent-message-competition-experiment.md`](concurrent-message-competition-experiment.md) and [`../references/jinjiang-concurrent-message-editorial-formal-release-20260729.md`](../references/jinjiang-concurrent-message-editorial-formal-release-20260729.md)
 
-本说明记录锦江 Final Research 的 mocked/live provider 运行路径。它建立在[离线基线](final-research-offline-baseline.md)之上，复用同一个公开 Interface：
+本说明保留锦江 Final Research 单视频 v3-v6 mocked/live provider 运行路径、只读合同和重建边界；它是 historical lineage，不代表当前 Multi-Message Editorial canonical report。
 
 ```python
 FinalResearchRunner(config: FinalResearchConfig, decision_adapter: LLMDecisionAdapter)

@@ -1,8 +1,9 @@
 # Final Research 离线基线
 
-Status: Architecture Note
+Status: Historical single-message offline baseline
+Current replacement: [`concurrent-message-competition-experiment.md`](concurrent-message-competition-experiment.md) and [`../references/jinjiang-concurrent-message-complete-offline-validation-20260726.md`](../references/jinjiang-concurrent-message-complete-offline-validation-20260726.md)
 
-本说明记录锦江 Final Research Report Run 的 Target Delivery Ranking 离线准备 Module。它只负责在真实 processed 数据上建立可复现的 Seed-First Research Sample 与推荐 diagnostic，不执行 LLM 决策，也不代表完整的 30 批次 live provider 正式运行。
+本说明保留锦江 Final Research 单视频 Target Delivery Ranking 的离线准备、Target Holdout、sample 和旧 artifacts lineage；当前 Multi-Message research/runtime 不以本文件作为 canonical contract。
 
 ## 公开 Interface
 

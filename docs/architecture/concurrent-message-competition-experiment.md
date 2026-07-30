@@ -1,16 +1,19 @@
 # Concurrent Message Competition Experiment
 
-Status: Design Consensus; Ready for Spec
+Status: Implemented and published architecture note
+Current release evidence: [`../references/jinjiang-concurrent-message-editorial-formal-release-20260729.md`](../references/jinjiang-concurrent-message-editorial-formal-release-20260729.md)
+Canonical endpoint: [`https://abm.q1ngyuan.top/`](https://abm.q1ngyuan.top/)
 
-本文记录“三个营销 message 同时投放”已经达成共识的目标领域行为。它不是实现 spec，不授权修改 runtime、schema、Prompt、报告合同、启动 live API 或部署。
+本文记录“三个营销 message 同时投放”的目标领域行为、当前 runtime 覆盖和已发布报告边界。它保留设计 rationale，不替代 GitHub `Spec:` issue 的 executable requirements；新的 Formal Run、Provider 和 deploy 仍必须经过各自显式授权。
 
 ## 参考边界
 
 - 三条文案原文及研究对象约定：[`../references/PostContent.md`](../references/PostContent.md)
-- 当前单视频投放决策：[`../adr/0002-use-target-delivery-ranking.md`](../adr/0002-use-target-delivery-ranking.md)
+- 当前单视频投放决策（历史合同）：[`../adr/0002-use-target-delivery-ranking.md`](../adr/0002-use-target-delivery-ranking.md)
 - 当前 Seed-First 样本决策：[`../adr/0003-use-seed-first-research-sampling.md`](../adr/0003-use-seed-first-research-sampling.md)
 - 多 message 独立个性化 Top20 决策：[`../adr/0004-use-per-message-personalized-top20.md`](../adr/0004-use-per-message-personalized-top20.md)
-- 当前单视频 runtime 和报告合同：[`final-research-runtime.md`](final-research-runtime.md)
+- 历史单视频 runtime 和报告合同：[`final-research-runtime.md`](final-research-runtime.md)
+- 当前 Editorial release evidence：[`../references/jinjiang-concurrent-message-editorial-formal-release-20260729.md`](../references/jinjiang-concurrent-message-editorial-formal-release-20260729.md)
 - 稳定领域语言：[`../../CONTEXT.md`](../../CONTEXT.md)
 
 ## 当前合同与目标设计
@@ -148,7 +151,9 @@ Message-User Fit 使用该向量与用户原始六维系数的余弦相似度，
 
 每条 message 的最终候选排序使用完整浮点精度的 Personalized Delivery Score，不按报告展示位数预先取整；分数完全相同时按 `user_id` 升序稳定处理。三个队列按稳定 `message_id` 顺序执行和持久化，但该顺序不提供 Ranking 优先权。系统不使用随机数、当前曝光份额或 action 多样性处理同分。
 
-### 当前实现覆盖审计
+### 设计阶段实现覆盖审计（历史快照）
+
+以下表格保留 2026-07-26 Design Consensus 阶段的实现快照；它说明当时为什么需要实现 Ticket，不代表当前 runtime、renderer 或发布状态。
 
 | 边界 | 当前状态 | 这组六维系数的实际用途 |
 |---|---|---|
@@ -157,11 +162,19 @@ Message-User Fit 使用该向量与用户原始六维系数的余弦相似度，
 | dataset loader/runtime profile | 已实现 | 扁平 CSV 字段恢复为 `UserProfile.latent_attributes.value_weights` |
 | Prompt v3 用户摘要 | 已实现 | 按系数降序展示前三个消费价值及数值，不展示 `latent_class` |
 | 通用 RuleBasedDecisionAdapter | 可选实现 | 只有显式设置 `latent_value_weight > 0` 才把旧 clipped dot-product 加入 Decision；默认权重为 `0.0` |
-| 当前 Final Research PostContent | 未接入内容向量 | 只从单条真实 TargetVideo 构造 caption 和 hashtags，`value_dimensions` 保持默认全 0 |
-| 当前 Target Delivery Ranking | 未使用 | 只使用 base network、engaged-neighbor 和 historical-tag affinity，不读取 Class 六维系数 |
-| 三 message personalized queues | 未实现 | 当前没有独立 `user × message` eligibility、Per-Message Top20 或 Message-User Fit Ranking |
+| 当前 Final Research PostContent（历史单视频路径） | 未接入内容向量 | 只从单条真实 TargetVideo 构造 caption 和 hashtags，`value_dimensions` 保持默认全 0 |
+| 历史单视频 Target Delivery Ranking | 未使用 | 只使用 base network、engaged-neighbor 和 historical-tag affinity，不读取 Class 六维系数 |
+| 三 message personalized queues（设计阶段快照） | 设计阶段未实现 | 当前实现已提供独立 `user × message` eligibility、Per-Message Top20 和 Message-User Fit Ranking |
 
-因此当前实现符合历史单视频合同，但没有按新的多 message 目标使用这组六维系数进行推荐分流。新设计不能把“数据中已有字段”误写成“Ranking 已使用该字段”。
+设计阶段快照对应的是历史单视频合同；当前多 message path 已使用这组六维系数完成推荐分流。
+
+### 当前实现与发布闭合
+
+- 三条 message 已各自运行独立 `user × message` eligibility、Per-Message Personalized Top20、30 batches 和每条 600 次曝光。
+- Primary/Shadow Decision、逐曝光 trace、五组核心指标、campaign diagnostics 和双模式 Editorial report 已写入 persisted artifacts，并通过 v4 contract validation。
+- 当前 Editorial renderer 已从 design/media source 生成受控 derivatives，已完成 candidate/public acceptance 并切换 canonical `current`；详细 hash、rollback 和公网证据见当前 release evidence。
+- 当前首次发布仍只覆盖 1,000 位 Research Sample users；36,400 用户完整 provider-backed experiment 是后续独立研究范围，不推定其批次、容量、调用量或结果。
+
 
 ## 研究主张边界
 
@@ -283,19 +296,19 @@ user × message × exposure context
 
 ## Multi-Message Formal Contract
 
-新实验采用独立 additive contract，而不是扩写或重解释历史单视频 schema。新 tuple 必须共同覆盖三个 Experimental Message Videos、三条 Per-Message Personalized Top20 队列、Primary/Shadow Decisions、逐曝光 traces、五组核心指标、报告 UI 和 production eligibility evidence。具体 schema token 和版本号留给后续 spec，不在本 Architecture Note 中预先硬编码。
+新实验采用独立 additive contract，而不是扩写或重解释历史单视频 schema。设计阶段没有在本 Note 预先硬编码 schema token；当前实现使用 `abm-report-release-contract-v4`，由 validator 和 Editorial release evidence 拥有三个 Experimental Message Videos、三条 Per-Message Personalized Top20 队列、Primary/Shadow Decisions、逐曝光 traces、五组核心指标、报告 UI 和 production eligibility evidence 的精确闭合。
 
 历史 Final Research v3-v6 contracts、artifacts、Prompt tokens 和 readers 完全冻结，并继续支持旧报告的只读重建。新 Formal Run 写入独立目录，不迁移或改写旧 run；reader 和 deploy gate 对任何新旧 token 交叉失败关闭。可复用现有数据加载、Provider Adapter 和 release infrastructure，但复用实现不代表复用历史 persisted contract。
 
-## Canonical 发布目标
+## Canonical 发布边界（设计目标已完成）
 
-本实验的 Definition of Done 包含将通过正式验收的新多 message 报告发布到 `https://abm.q1ngyuan.top/`。这不是当前 Design Consensus 阶段的部署动作，也不允许用 offline/mock/rule-based/Validation artifact 替换线上版本。
+设计阶段目标已由当前 Multi-Message Formal release 完成：经过独立 v4 contract validation、candidate deployment、health check、atomic `current` switch 和公网 evidence 验收后，Editorial report 已发布到 `https://abm.q1ngyuan.top/`。offline/mock/rule-based/Validation artifact 不能替换该线上版本。
 
-后续必须使用新的显式 Formal release contract、明确 source directory 和 release id，完成本地 contract validation、candidate deployment、health check 和公网 evidence 验收后，才能原子切换 canonical `current`；失败时回退上一 release。现有线上报告和历史 v3-v6 artifacts 在切换前保持不变。当前已确认 canonical endpoint 目标，但真实 Formal Run 仍需明确 Provider、模型、调用/费用预算和独立输出目录。
+后续 release 仍必须使用显式 Formal release contract、明确 source directory 和 release id，完成本地 contract validation、candidate deployment、health check 和公网 evidence 验收后，才能原子切换 canonical `current`；失败时回退上一 release。现有 release evidence 和历史 v3-v6 artifacts 保持只读 lineage。
 
-## 当前验证与首次发布边界
+## 首次验证与发布边界（历史记录）
 
-当前阶段和首次 canonical release 都只使用 1,000 位 Research Sample users，不运行 36,400 用户完整实验。每条 message 独立使用 30 个批次和 Top20 Delivery Capacity，每批合计最多形成 60 个 `user × message` exposures。
+首次验证和首次 canonical release 只使用 1,000 位 Research Sample users，不运行 36,400 用户完整实验。以下容量与调用量是已发布首次 release 的合同边界，不是 36,400 用户的推断结果。
 
 每条 message 在 30 批后各完成 600 次实际曝光，总计 1,800 条 Primary Campaign Decisions；每条实际曝光必须再形成一条 report-only Demographic Shadow Decision，因此形成 1,800 条 Shadow Decision opportunities 和 3,600 个逻辑 Decision calls。三个受众集合允许重叠，distinct exposed users 和 0/1/2/3-message coverage 由实际 Ranking 结果决定。每个 message 仍有 400 个未曝光 pairs，三个队列合计 1,200 个 Message-Level Below Delivery Capacity pairs。
 
@@ -303,4 +316,4 @@ user × message × exposure context
 
 36,400 用户完整实验是后续独立研究范围，不属于首次 canonical release；当前不推定其批次数、Delivery Capacity、Primary/Shadow 调用量或结果。
 
-当前领域行为已形成共识。本文仍不是实现 spec，不授权运行 live API 或部署；下一步应通过 `$to-spec-lqy` 将现有共识整理到 issue tracker。
+当前领域行为、runtime、report UI 和 canonical release 已经闭合。本文不替代 GitHub `Spec:` issue，也不自动授权新的 live API 或部署；当前 release 的真实 Provider、模型、预算、source directory 和 release id 由独立 evidence/contract 明确记录。36,400 用户完整实验仍是后续独立研究范围。

@@ -6,7 +6,7 @@
 
 ## 一句话说明
 
-本项目用于模拟一条营销帖子在社交网络中的传播过程。每个社交用户 Agent 会根据帖子内容、个人偏好和邻居影响，做出结构化的 `engage / not engage` 决策。
+本项目提供一个通用的、可复现的 LLM-supported ABM 仿真器，用于研究营销内容如何在社交网络中扩散。当前研究产品还包含独立的 Multi-Message Formal report：三条营销 message 在同一 Research Sample 上各自排序、曝光并记录 Primary/Shadow Decision；它与通用本地 demo 是不同的证据层级。
 
 默认运行路径是离线、确定性、无需 API key 的；真实 LLM Provider 只是可选决策适配器，必须显式开启。
 
@@ -21,6 +21,14 @@
 - 输出 JSON/CSV 机器可读文件和本地静态 `report.html`。
 - 提供本地 Web 控制台，用于上传数据、配置场景、运行仿真和查看结果。
 - 默认测试不需要真实 LLM、网络或密钥。
+
+## Current Multi-Message Research
+
+- canonical report：[Multi-Message Editorial Formal Presentation](https://abm.q1ngyuan.top/)
+- current architecture：[Concurrent Message Competition Experiment](../architecture/concurrent-message-competition-experiment.md)
+- release evidence：[Editorial Formal 发布与验收记录](../references/jinjiang-concurrent-message-editorial-formal-release-20260729.md)
+- 当前首次 release 使用 1,000 位 Research Sample users、3 条 message、30 个 batch 和每条 600 次曝光；36,400 用户完整 provider-backed experiment 尚未执行。
+- 该 Formal report 的 persisted evidence、contract 和公网验收不能由默认 toy/realistic local demo 替代。
 
 ## 技术栈
 

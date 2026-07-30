@@ -4,7 +4,12 @@ A lightweight agent-based modeling project for simulating how a marketing post d
 
 The design goal is not a generic autonomous agent framework. The core is a reproducible ABM simulation engine where each social user agent makes a binary `engage / not engage` decision with an LLM-supported decision boundary.
 
+## Current Research Release
+
+当前公开研究入口是 [Multi-Message Editorial Formal Presentation](https://abm.q1ngyuan.top/)，不是默认 toy/realistic fixture 的替代名称。三 message runtime、v4 contract、release hash、rollback 和公网验收见 [`docs/references/jinjiang-concurrent-message-editorial-formal-release-20260729.md`](docs/references/jinjiang-concurrent-message-editorial-formal-release-20260729.md)；研究架构见 [`docs/architecture/concurrent-message-competition-experiment.md`](docs/architecture/concurrent-message-competition-experiment.md)。当前 release 只覆盖 1,000 位 Research Sample users，36,400 用户完整 provider-backed experiment 尚未执行。
+
 ## Core Modeling Contract
+
 
 - **Agent**: social-media user with individual preference, history, and neighbor context.
 - **Environment**: simulation scenario built on a social network graph.
