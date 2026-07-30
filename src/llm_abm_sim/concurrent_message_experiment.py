@@ -25,7 +25,7 @@ from .concurrent_execution_journal import (
     derive_concurrent_execution_workspace,
 )
 from .concurrent_message_report import (
-    CONCURRENT_MESSAGE_ARTIFACT_MANIFEST_JSON,
+    close_concurrent_message_artifacts,
     rebuild_concurrent_message_report,
     write_concurrent_message_report_artifacts,
 )
@@ -70,18 +70,6 @@ from .schemas import (
 
 CONCURRENT_MESSAGE_RUNTIME_VERSION = "concurrent-message-validation-runtime-v1"
 CONCURRENT_MESSAGE_VALIDATION_VERSION = "concurrent-message-validation-v1"
-CONCURRENT_MESSAGE_STEP_JSON = "concurrent_runtime_steps.json"
-CONCURRENT_MESSAGE_CANDIDATE_CSV = "concurrent_runtime_candidates.csv"
-CONCURRENT_MESSAGE_PAIR_CSV = "concurrent_runtime_pairs.csv"
-CONCURRENT_MESSAGE_TERMINAL_CSV = "concurrent_runtime_terminal_rows.csv"
-CONCURRENT_MESSAGE_VALIDATION_JSON = "concurrent_validation.json"
-CONCURRENT_MESSAGE_CAMPAIGN_DIAGNOSTICS_JSON = "concurrent_campaign_diagnostics.json"
-CONCURRENT_MESSAGE_REPORT_HTML = "report.html"
-CONCURRENT_MESSAGE_MESSAGE_JSON = "message_snapshot.json"
-CONCURRENT_MESSAGE_SAMPLE_JSON = "sample_manifest.json"
-CONCURRENT_MESSAGE_SAMPLE_CSV = "sample_manifest.csv"
-CONCURRENT_MESSAGE_CONFIG_JSON = "config_snapshot.json"
-CONCURRENT_MESSAGE_SEED_AUDIT_JSON = "seed_first_sample_audit.json"
 CONCURRENT_MESSAGE_HOLDOUT_VIDEO_ID = TARGET_VIDEO_ID
 CONCURRENT_MESSAGE_PRODUCTION_SAMPLE_SIZE = 1000
 CONCURRENT_MESSAGE_PRODUCTION_HORIZON = 30
@@ -1868,13 +1856,13 @@ class ConcurrentMessageExperimentRunner:
     ) -> Path:
         staging_path = derive_concurrent_execution_publish_staging_dir(output_path, run_id=journal.run_id)
 
-        def _publish_payload(final_source_hash: str) -> dict[str, object]:
+        def _publish_payload(final_source_hash: str, report_path: Path) -> dict[str, object]:
             return {
                 "output_target": str(output_path),
                 "staging_path": str(staging_path),
                 "final_source_path": str(output_path),
                 "final_source_hash": final_source_hash,
-                "report_path": str(output_path / CONCURRENT_MESSAGE_REPORT_HTML),
+                "report_path": str(report_path),
                 "deploy_eligibility": False,
                 "sampling_status": sampling_status,
             }
@@ -1882,8 +1870,9 @@ class ConcurrentMessageExperimentRunner:
         if output_path.exists():
             if not output_path.is_dir():
                 raise FileExistsError(f"final concurrent message output already exists as a file: {output_path}")
-            rebuild_concurrent_message_report(output_path)
-            manifest_hash = _sha256_file(output_path / CONCURRENT_MESSAGE_ARTIFACT_MANIFEST_JSON)
+            report_path = rebuild_concurrent_message_report(output_path)
+            closure = close_concurrent_message_artifacts(output_path)
+            manifest_hash = _sha256_file(closure.artifact_paths["artifact_manifest"])
             if not journal.finalized:
                 journal.append(
                     event_type="run_published",
@@ -1892,7 +1881,7 @@ class ConcurrentMessageExperimentRunner:
                         "output_target": str(output_path),
                         "finalization_stage": "published",
                     },
-                    payload=_publish_payload(manifest_hash),
+                    payload=_publish_payload(manifest_hash, report_path),
                 )
             return output_path
 
@@ -1915,8 +1904,9 @@ class ConcurrentMessageExperimentRunner:
             validation_summary=validation_summary,
             campaign_diagnostics=campaign_diagnostics.payload,
         )
-        rebuild_concurrent_message_report(staging_path)
-        manifest_hash = _sha256_file(staging_path / CONCURRENT_MESSAGE_ARTIFACT_MANIFEST_JSON)
+        report_path = rebuild_concurrent_message_report(staging_path)
+        closure = close_concurrent_message_artifacts(staging_path)
+        manifest_hash = _sha256_file(closure.artifact_paths["artifact_manifest"])
         if not journal.finalization_started:
             journal.append(
                 event_type="run_finalized",
@@ -1925,7 +1915,7 @@ class ConcurrentMessageExperimentRunner:
                     "output_target": str(output_path),
                     "finalization_stage": "finalized",
                 },
-                payload=_publish_payload(manifest_hash),
+                payload=_publish_payload(manifest_hash, report_path),
             )
         staging_path.replace(output_path)
         journal.append(
@@ -1935,7 +1925,7 @@ class ConcurrentMessageExperimentRunner:
                 "output_target": str(output_path),
                 "finalization_stage": "published",
             },
-            payload=_publish_payload(manifest_hash),
+            payload=_publish_payload(manifest_hash, report_path),
         )
         return output_path
 

@@ -162,6 +162,23 @@ def test_current_and_historical_document_status_contract():
         assert marker in _read(path), f"{path} should expose {marker!r}"
 
 
+def test_concurrent_report_navigation_preserves_presentation_and_retention_semantics():
+    durable_note = DOCS_ROOT / "architecture" / "concurrent-message-durable-execution.md"
+    source_tree = DOCS_ROOT / "architecture" / "source-tree-and-entrypoints.md"
+    durable_text = _read(durable_note)
+    source_text = _read(source_tree)
+
+    assert "explicit presentation destination 始终使用 Editorial default" in durable_text
+    assert "in-place rebuild 仍按 persisted source report hash 选择历史兼容 bytes" in durable_text
+    assert "普通 run 与 `contract-protected` Formal/release run" in durable_text
+    assert "普通未受合同保护的 run 输出可以删除后重建" in source_text
+    assert "contract-protected Formal/release roots 不能仅按目录类型推断删除" in source_text
+    assert durable_text.count("```mermaid") == 8
+    for heading in ("当前架构与调用关系", "目标架构与调用关系", "当前时序", "目标时序", "当前状态", "目标状态", "当前类关系", "目标类关系"):
+        assert f"### {heading}" in durable_text
+
+
+
 def test_retention_current_truth_navigation_contract():
     retention_note = DOCS_ROOT / "architecture" / "retention-audit.md"
     source_tree = DOCS_ROOT / "architecture" / "source-tree-and-entrypoints.md"

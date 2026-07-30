@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 import html
 import json
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from typing import Any
 
 from .concurrent_message_current_renderer import render_current_report as _render_current_report
@@ -951,47 +951,28 @@ def _three_part(payload: object) -> str:
     return f"{_as_int(mapping.get('attempted'))} / {_as_int(mapping.get('succeeded'))} / {_as_int(mapping.get('provider_failed'))}"
 
 
-class _EditorialRendererAdapter:
-    """Editorial default adapter for the public concurrent report."""
-
-    def render(self, payload: Any) -> str:
-        return _render_editorial_candidate(payload)
+def _render_two_mode_report(payload: Any) -> str:
+    return _render_current_report(payload, _legacy_render_report)
 
 
-class _LegacyRendererAdapter:
-    """Compatibility adapter for the existing single-flow Concurrent HTML."""
-
-    def render(self, payload: Any) -> str:
-        return _legacy_render_report(payload)
+def _render_historical_report(payload: Any) -> str:
+    return _legacy_render_report(payload, include_pagination=False)
 
 
-class _CurrentRendererAdapter:
-    """Mechanism-first two-mode adapter for new Concurrent Message artifacts."""
-
-    def render(self, payload: Any) -> str:
-        return _render_current_report(payload, _legacy_render_report)
-
-
-class _HistoricalRendererAdapter:
-    """Frozen adapter for persisted Concurrent reports before trace pagination."""
-
-    def render(self, payload: Any) -> str:
-        return _legacy_render_report(payload, include_pagination=False)
-
-
-_EDITORIAL_ADAPTER = _EditorialRendererAdapter()
-_CURRENT_ADAPTER = _CurrentRendererAdapter()
-_LEGACY_ADAPTER = _LegacyRendererAdapter()
-_HISTORICAL_ADAPTER = _HistoricalRendererAdapter()
-_FIXED_ADAPTERS = (_EDITORIAL_ADAPTER, _CURRENT_ADAPTER, _LEGACY_ADAPTER, _HISTORICAL_ADAPTER)
+_FIXED_RENDERERS: tuple[Callable[[Any], str], ...] = (
+    _render_editorial_candidate,
+    _render_two_mode_report,
+    _legacy_render_report,
+    _render_historical_report,
+)
 
 
 def render_report(payload: Any, *, expected_sha256: str | None = None) -> str:
-    """Render the Editorial default, or dispatch to a fixed exact adapter by hash."""
+    """Render the Editorial default, or dispatch to a fixed exact callable by hash."""
     if expected_sha256 is None:
-        return _EDITORIAL_ADAPTER.render(payload)
-    for adapter in _FIXED_ADAPTERS:
-        rendered = adapter.render(payload)
+        return _render_editorial_candidate(payload)
+    for renderer in _FIXED_RENDERERS:
+        rendered = renderer(payload)
         if _sha256_text(rendered) == expected_sha256:
             return rendered
     raise ValueError(

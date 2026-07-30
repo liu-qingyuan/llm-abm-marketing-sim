@@ -21,7 +21,176 @@ Status: Implemented runtime architecture note
 | final source directory | runner 的显式 `output_dir`，例如 `runs/<persisted-run>` | `config_snapshot`、runtime rows、diagnostics、report payload、HTML、downloads 和 manifest；staging 通过 `Path.replace` 成为该目录 | 仅是本地 release validator 的 source；只有匹配且通过显式 Formal contract 才能进入 candidate deploy |
 | canonical release | deploy script 使用的显式 contract、final source snapshot 和 release id | candidate deployment、health/host checks、atomic `current` switch、public acceptance 和失败回退 | canonical endpoint 的唯一发布边界；不能从 workspace 或 staging 推断授权 |
 
-`rebuild_concurrent_message_report(run_dir, *, destination_dir=None)` 是报告 Module 的唯一公开重建 Interface。省略或显式传入 `None` 时，它先完成 typed artifact closure，再以 persisted report hash 选择冻结的 renderer bytes，并只原子替换 source 的 `report.html`；manifest、payload、runtime、diagnostics、downloads 和其他 source artifacts 不会被重建写入。显式 destination 时，source closure 在任何 staging 创建前完成；Module 只按 canonical artifact table 复制 approved persisted views 到 destination sibling 的唯一 staging directory，使用 current two-mode renderer 生成新的 `report.html`，重建 manifest，并再次通过 closure 与默认 exact rebuild 验证后才 atomic rename。destination 必须原先不存在且与 source 不重叠、无 symlink/path escape，并与 staging 保持同一 filesystem；任何 copy、render、hash、closure 或 rename 失败都会清理 staging，source 和最终 destination 保持不变。该 Interface 返回 source 或 candidate 的 `report.html` 路径，不创建 release contract、不调用 `validate_release(...)`，Formal eligibility 与 deploy policy 仍归 release Module。
+`rebuild_concurrent_message_report(run_dir, *, destination_dir=None)` 是报告 Module 的唯一公开重建 Interface。省略或显式传入 `None` 时，它先完成 typed artifact closure，再以 persisted report hash 选择冻结的 renderer bytes，并只原子替换 source 的 `report.html`；manifest、payload、runtime、diagnostics、downloads 和其他 source artifacts 不会被重建写入。显式 destination 时，source closure 在任何 staging 创建前完成；Module 只按 canonical artifact table 复制 approved persisted views 到 destination sibling 的唯一 staging directory，使用 Editorial default renderer 生成新的 `report.html`，重建 manifest，并再次通过 closure 与默认 exact rebuild 验证后才 atomic rename。destination 必须原先不存在且与 source 不重叠、无 symlink/path escape，并与 staging 保持同一 filesystem；任何 copy、render、hash、closure 或 rename 失败都会清理 staging，source 和最终 destination 保持不变。该 Interface 返回 source 或 candidate 的 `report.html` 路径，不创建 release contract、不调用 `validate_release(...)`，Formal eligibility 与 deploy policy 仍归 release Module。换言之，in-place rebuild 仍按 persisted source report hash 选择历史兼容 bytes；explicit presentation destination 始终使用 Editorial default，作为当前展示真相。普通 run 与 `contract-protected` Formal/release run 都遵守同一语义：前者可以删除后重建，后者仍必须按显式 contract 保留和验证，不能由 presentation rebuild 改写其 persisted evidence。
+
+
+## Report Ownership 变更图
+
+以下图只覆盖 Concurrent Report/renderer 的局部接缝。当前版记录 filename/path knowledge 分散在 Runner 和 Report Module 的状态；目标版把 artifact table、closure、rebuild 和四个固定 renderer callable 收敛到 Report Module 的现有 Interface。显式 presentation destination 使用 Editorial default，而 in-place rebuild 仍按 persisted report hash 选择兼容 bytes。
+
+### 当前架构与调用关系
+
+```mermaid
+flowchart LR
+    Runner["Concurrent Runner"] --> RunnerNames["duplicate filename constants"]
+    RunnerNames --> Writer["report writer"]
+    Report["Report Module"] --> Table["canonical artifact table"]
+    Table --> Writer
+    Table --> Close["typed closure"]
+    Table --> Rebuild["report rebuild"]
+    Rebuild --> Render["render_report"]
+    Render --> EditorialClass["Editorial adapter class"]
+    Render --> OtherClasses["three compatibility adapter classes"]
+```
+
+### 目标架构与调用关系
+
+```mermaid
+flowchart LR
+    Runner["Concurrent Runner"] --> Report["existing Report Interface"]
+    Table["one canonical artifact table"] --> Writer["writer"]
+    Table --> Close["typed closure"]
+    Table --> Rebuild["report rebuild"]
+    Report --> Writer
+    Report --> Close
+    Report --> Rebuild
+    Rebuild --> Render["render_report"]
+    Render --> Editorial["Editorial callable"]
+    Render --> TwoMode["two-mode callable"]
+    Render --> Legacy["legacy callable"]
+    Render --> Historical["historical callable"]
+```
+
+### 当前时序
+
+```mermaid
+sequenceDiagram
+    participant R as Runner
+    participant N as Runner filename constants
+    participant W as Report writer
+    participant T as Canonical table
+    participant C as Closure
+    participant X as Renderer adapters
+    R->>N: construct runtime artifact paths
+    R->>W: write rows and report inputs
+    W->>T: build manifest views
+    R->>C: rebuild using selected paths
+    C->>T: validate persisted artifact set
+    C->>X: render through adapter instance
+    X-->>R: report and manifest path
+```
+
+### 目标时序
+
+```mermaid
+sequenceDiagram
+    participant R as Runner
+    participant W as Report writer
+    participant T as Canonical table
+    participant C as Typed closure
+    participant B as Rebuild
+    participant X as Fixed renderer callable
+    R->>W: submit runtime evidence
+    W->>T: derive every persisted path
+    W-->>R: report result owned by Report Module
+    R->>B: rebuild final source or destination
+    B->>C: close source from canonical table
+    C->>T: verify required optional and hashes
+    B->>X: render default or exact hash variant
+    X-->>R: stable report bytes
+```
+
+### 当前状态
+
+```mermaid
+stateDiagram-v2
+    [*] --> RuntimeEvidence
+    RuntimeEvidence --> PathsFromRunner
+    PathsFromRunner --> ArtifactsWritten
+    ArtifactsWritten --> TableValidated
+    TableValidated --> AdapterSelected
+    AdapterSelected --> ReportRendered
+    ReportRendered --> ManifestClosed
+    PathsFromRunner --> OwnershipDrift: filename sets differ
+    OwnershipDrift --> Failed
+    ManifestClosed --> [*]
+```
+
+### 目标状态
+
+```mermaid
+stateDiagram-v2
+    [*] --> RuntimeEvidence
+    RuntimeEvidence --> PathsFromCanonicalTable
+    PathsFromCanonicalTable --> ArtifactsWritten
+    ArtifactsWritten --> ClosureValidated
+    ClosureValidated --> RendererSelected
+    RendererSelected --> ReportRendered
+    ReportRendered --> ManifestClosed
+    ClosureValidated --> Failed: missing extra unsafe or hash mismatch
+    RendererSelected --> Failed: unknown expected hash
+    ManifestClosed --> [*]
+    Failed --> [*]
+```
+
+### 当前类关系
+
+```mermaid
+classDiagram
+    class ConcurrentMessageExperimentRunner {
+        +artifact_filename_constants
+        +run_and_write()
+        -finalize_output()
+    }
+    class ConcurrentMessageReportModule {
+        -canonical_artifact_table
+        +write_artifacts()
+        +close_artifacts()
+        +rebuild_report()
+    }
+    class EditorialRendererAdapter {
+        +render(payload)
+    }
+    class CurrentRendererAdapter {
+        +render(payload)
+    }
+    class LegacyRendererAdapter {
+        +render(payload)
+    }
+    class HistoricalRendererAdapter {
+        +render(payload)
+    }
+    ConcurrentMessageExperimentRunner --> ConcurrentMessageReportModule
+    ConcurrentMessageReportModule --> EditorialRendererAdapter
+    ConcurrentMessageReportModule --> CurrentRendererAdapter
+    ConcurrentMessageReportModule --> LegacyRendererAdapter
+    ConcurrentMessageReportModule --> HistoricalRendererAdapter
+```
+
+### 目标类关系
+
+```mermaid
+classDiagram
+    class ConcurrentMessageExperimentRunner {
+        +run_and_write()
+        -finalize_output()
+    }
+    class ConcurrentMessageReportModule {
+        -canonical_artifact_table
+        +write_artifacts()
+        +close_artifacts()
+        +rebuild_report()
+    }
+    class ConcurrentMessageRendererModule {
+        +render_report(payload, expected_sha256)
+        -render_editorial(payload)
+        -render_two_mode(payload)
+        -render_legacy(payload)
+        -render_historical(payload)
+    }
+    ConcurrentMessageExperimentRunner --> ConcurrentMessageReportModule
+    ConcurrentMessageReportModule --> ConcurrentMessageRendererModule
+```
 
 
 Operational workspace 是私有运行状态，不是报告 source。它与 final source 位于不同路径，默认被 git 忽略，可能包含恢复所需的用户/run evidence；不得复制到报告目录或部署包。Status JSON 是 operational observation，`ConcurrentExecutionJournal.status()` 会重新执行 validated replay，不把旧 status 文件当作事实来源。

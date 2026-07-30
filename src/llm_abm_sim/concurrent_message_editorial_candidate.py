@@ -24,32 +24,10 @@ _EDITORIAL_DOWNLOAD_GROUPS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("decision", ("decision_trace_json", "decision_trace_csv", "primary_actions_csv", "provider_failures_csv")),
     ("runtime-diagnostics", ("runtime_contract", "diagnostics_contract", "field_lineage", "rankings_csv", "exposures_csv", "terminals_csv")),
 )
-_EDITORIAL_DOWNLOAD_PATHS: dict[str, str] = {
-    "report_payload": "concurrent_message_report_payload.json",
-    "users_json": "concurrent_message_users.json",
-    "users_csv": "concurrent_message_users.csv",
-    "decision_trace_json": "concurrent_message_decision_trace.json",
-    "decision_trace_csv": "concurrent_message_decision_trace.csv",
-    "runtime_contract": "concurrent_message_runtime.json",
-    "diagnostics_contract": "concurrent_message_diagnostics.json",
-    "field_lineage": "concurrent_message_field_lineage.json",
-    "validation_evidence": "concurrent_validation.json",
-    "sample_manifest_json": "sample_manifest.json",
-    "sample_manifest_csv": "sample_manifest.csv",
-    "rankings_csv": "concurrent_runtime_candidates.csv",
-    "exposures_csv": "concurrent_runtime_pairs.csv",
-    "terminals_csv": "concurrent_runtime_terminal_rows.csv",
-    "primary_actions_csv": "concurrent_message_primary_actions.csv",
-    "provider_failures_csv": "concurrent_message_provider_failures.csv",
-    "manifest": "artifact_manifest.json",
-}
 _EDITORIAL_DOWNLOAD_KEYS = tuple(key for _, keys in _EDITORIAL_DOWNLOAD_GROUPS for key in keys)
 
 
-# The candidate owns the presentation grouping, but every path remains the
-# persisted artifact layout used by the closure and manifest contracts.
-# This catalog belongs to the candidate. The general report dictionary does not own
-# Concurrent-specific terms, source-language boundaries, or mechanism explanations.
+# The candidate owns presentation grouping; the Report Module owns the persisted download paths.
 _EDITORIAL_CATALOG: dict[str, dict[str, str]] = {
     "zh-CN": {
         "shell.brand": "Multi-Message 研究报告",
@@ -1307,19 +1285,22 @@ def _required_string_sequence(source: object, key: str, context: str) -> list[st
 
 
 def _validated_downloads(payload: Any) -> dict[str, str]:
+    from .concurrent_message_report import ConcurrentMessageDownloadLinks
+
     raw_downloads = _value(payload, "downloads", None)
     if raw_downloads is None:
         raise ValueError("payload.downloads is required")
+    canonical = ConcurrentMessageDownloadLinks().model_dump(mode="json")
     if isinstance(raw_downloads, Mapping):
         actual = dict(raw_downloads)
     else:
-        actual = {key: _value(raw_downloads, key, None) for key in _EDITORIAL_DOWNLOAD_KEYS}
-    if set(actual) != set(_EDITORIAL_DOWNLOAD_KEYS):
+        actual = {key: _value(raw_downloads, key, None) for key in canonical}
+    if set(actual) != set(canonical):
         raise ValueError("approved downloads do not match the canonical artifact keys")
     normalized: dict[str, str] = {}
     for key in _EDITORIAL_DOWNLOAD_KEYS:
         value = actual.get(key)
-        if not isinstance(value, str) or value != _EDITORIAL_DOWNLOAD_PATHS[key]:
+        if not isinstance(value, str) or value != canonical[key]:
             raise ValueError(f"approved download {key} does not match the canonical artifact layout")
         path = Path(value)
         if path.is_absolute() or ".." in path.parts or "\\" in value:

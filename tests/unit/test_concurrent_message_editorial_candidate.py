@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from llm_abm_sim import concurrent_message_editorial_candidate as candidate
-from llm_abm_sim.concurrent_message_renderer import _FIXED_ADAPTERS
+from llm_abm_sim.concurrent_message_renderer import _FIXED_RENDERERS
 from llm_abm_sim.concurrent_message_report import ConcurrentMessageReportPayload
 
 FIXTURE_DIR = Path(__file__).resolve().parents[1] / "fixtures" / "concurrent_message_renderer"
@@ -147,7 +147,7 @@ def test_run_evidence_recomputes_persisted_formal_fixture(formal_payload: Concur
         )
         for batch in data["feedback"]["per_message"][0]["batches"][1:6]
     ] == [(15, 5, 5), (10, 10, 10), (19, 1, 1), (5, 15, 15), (19, 1, 1)]
-    assert data["downloads"] == candidate._EDITORIAL_DOWNLOAD_PATHS
+    assert data["downloads"] == formal_payload.downloads.model_dump(mode="json")
     assert len(candidate._EDITORIAL_DOWNLOAD_KEYS) == 17
 
     html = candidate._render_editorial_candidate(formal_payload)
@@ -214,6 +214,7 @@ def test_run_evidence_rejects_inconsistent_persisted_coverage(formal_payload: Co
 
 
 
-def test_editorial_default_enters_public_fixed_adapters() -> None:
-    assert type(_FIXED_ADAPTERS[0]).__name__ == "_EditorialRendererAdapter"
-    assert len(_FIXED_ADAPTERS) == 4
+def test_editorial_default_uses_fixed_renderer_callables() -> None:
+    assert _FIXED_RENDERERS[0].__name__ == "_render_editorial_candidate"
+    assert len(_FIXED_RENDERERS) == 4
+    assert all(callable(renderer) for renderer in _FIXED_RENDERERS)

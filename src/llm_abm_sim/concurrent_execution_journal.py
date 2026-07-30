@@ -9,6 +9,7 @@ from pathlib import Path
 from tempfile import NamedTemporaryFile
 from typing import Any
 
+from .concurrent_message_report import CONCURRENT_MESSAGE_ARTIFACT_MANIFEST_JSON
 from .safe_serialization import safe_data
 
 CONCURRENT_MESSAGE_EXECUTION_RUN_IDENTITY_SCHEMA = "concurrent-message-execution-run-identity-v1"
@@ -408,13 +409,13 @@ class ConcurrentExecutionJournal:
         staging_exists = staging_path.is_dir()
         final_source_hash: str | None = None
         if output_exists:
-            manifest_path = output_target / "artifact_manifest.json"
+            manifest_path = output_target / CONCURRENT_MESSAGE_ARTIFACT_MANIFEST_JSON
             if manifest_path.is_file():
                 final_source_hash = _sha256_file(manifest_path)
             elif self.finalized:
                 raise FileNotFoundError(f"published concurrent message output is missing {manifest_path.name}")
         elif staging_exists:
-            manifest_path = staging_path / "artifact_manifest.json"
+            manifest_path = staging_path / CONCURRENT_MESSAGE_ARTIFACT_MANIFEST_JSON
             if manifest_path.is_file():
                 final_source_hash = _sha256_file(manifest_path)
         lifecycle = "published" if self.finalized else (
@@ -860,7 +861,7 @@ def _replay_workspace(workspace_dir: Path) -> dict[str, Any]:
             raise ValueError("finalized journal does not close the terminal variant count")
         if not output_exists:
             raise FileNotFoundError(f"published concurrent message output is missing: {output_target}")
-        manifest_path = output_target / "artifact_manifest.json"
+        manifest_path = output_target / CONCURRENT_MESSAGE_ARTIFACT_MANIFEST_JSON
         if not manifest_path.is_file():
             raise FileNotFoundError(f"published concurrent message output is missing {manifest_path.name}")
         manifest_hash = _sha256_file(manifest_path)
@@ -869,11 +870,11 @@ def _replay_workspace(workspace_dir: Path) -> dict[str, Any]:
         elif final_source_hash != manifest_hash:
             raise ValueError("published concurrent message final source hash mismatch")
     elif output_exists:
-        manifest_path = output_target / "artifact_manifest.json"
+        manifest_path = output_target / CONCURRENT_MESSAGE_ARTIFACT_MANIFEST_JSON
         if manifest_path.is_file() and final_source_hash is None:
             final_source_hash = _sha256_file(manifest_path)
     elif staging_path.is_dir():
-        manifest_path = staging_path / "artifact_manifest.json"
+        manifest_path = staging_path / CONCURRENT_MESSAGE_ARTIFACT_MANIFEST_JSON
         if manifest_path.is_file() and final_source_hash is None:
             final_source_hash = _sha256_file(manifest_path)
 
