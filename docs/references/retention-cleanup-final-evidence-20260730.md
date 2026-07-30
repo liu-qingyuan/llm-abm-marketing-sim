@@ -28,7 +28,7 @@
 | #130 cache/duplicate exact cleanup | `475,726,860` | `125,853,164` | `349,873,696` | exact allowlist file hashes, sizes and empty-directory postconditions |
 | cleanup phases observed total | n/a | n/a | `6,349,589,720` | sum of the two independent execution windows above |
 
-#130 removed `5,161` regular files and `263` verified-empty directories across `8/8` applied roots. No partial or failed-closed action was reported. The closing retention audit observes `14` approved `.gitnexus` files and `125,853,164` approved bytes; the cache remains rebuildable and is not a deletion target in this Ticket.
+#130 removed `5,161` regular files and `263` verified-empty directories across `8/8` applied roots. No partial or failed-closed action was reported. The closing retention audit observes `14` approved `.gitnexus` files and `125,928,016` approved bytes; the cache remains rebuildable and is not a deletion target in this Ticket.
 
 ## Closing Retention Audit
 
