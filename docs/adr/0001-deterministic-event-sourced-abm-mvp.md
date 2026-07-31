@@ -2,7 +2,6 @@
 
 Status: Accepted
 Date: 2026-06
-Legacy source: `docs/04-开发验证/01-development-plan.md`（已删除；迁移索引见 [`../04-开发验证/README.md`](../04-开发验证/README.md)）
 
 ## Context
 

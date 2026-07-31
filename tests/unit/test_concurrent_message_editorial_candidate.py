@@ -12,7 +12,7 @@ from llm_abm_sim.concurrent_message_report import ConcurrentMessageReportPayload
 
 FIXTURE_DIR = Path(__file__).resolve().parents[1] / "fixtures" / "concurrent_message_renderer"
 ASSET_DIR = Path(__file__).resolve().parents[2] / "src" / "llm_abm_sim" / "report_assets"
-SOURCE_DIR = Path(__file__).resolve().parents[2] / "docs" / "references" / "concurrent-message-editorial-ui-design"
+SOURCE_DIR = Path(__file__).resolve().parents[2] / "src" / "llm_abm_sim" / "report_assets"
 
 _OLD_ASSET_HASHES = {
     "multi-message-mechanism-overview.webp": "b2733d4e1bd4bb7790b980f10588fa399cc0d5ddaf5a4a7a7c31faccaacaa0e0",

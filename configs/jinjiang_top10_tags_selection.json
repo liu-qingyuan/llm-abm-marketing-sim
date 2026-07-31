@@ -1,5 +1,5 @@
 {
-  "selection_source": "docs/04-开发验证/jinjiang-douyin-existing-topic-distribution.md section 6.1 top10; cid resolved from related_challenges.json or existing structured tag cid frequency",
+  "selection_source": "docs/architecture/douyin-data-collection-architecture.md; selected top tags and existing structured tag frequency",
   "challenge_selections": [
     {
       "rank": 1,

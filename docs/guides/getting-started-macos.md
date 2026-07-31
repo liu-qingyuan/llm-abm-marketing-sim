@@ -213,7 +213,7 @@ Live Provider 执行是手动且显式 opt-in 的。除非你确实要发起真�
 先阅读完整 Provider 指南：
 
 ```text
-docs/03-使用指南/provider-config.md
+docs/guides/provider-config.md
 ```
 
 手动 live smoke 形态：

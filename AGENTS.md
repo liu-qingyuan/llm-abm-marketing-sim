@@ -8,9 +8,9 @@
 不要一进入仓库就全量读取 `docs/`、`data/`、raw 产物。按任务读取最小入口：
 
 - 项目总览 / 架构 / 使用：先读 `docs/index.md`。
-- 仿真核心 / ABM runtime：再读 `docs/02-架构设计/` 中相关文档。
-- TikHub / Douyin 数据收集：先读 `data/README.md` 和 `docs/02-架构设计/douyin-data-collection-architecture.md`。
-- 锦江酒店最终数据集 / 验证记录：读 `docs/references/jinjiang-final-dataset-audit-20260624.md` 和 `docs/references/jinjiang-final-dataset-cleanup-20260624.md`；旧入口只通过 `docs/04-开发验证/README.md` 追溯。
+- 仿真核心 / ABM runtime：再读 `docs/architecture/` 中相关文档。
+- TikHub / Douyin 数据收集：先读 `data/README.md` 和 `docs/architecture/douyin-data-collection-architecture.md`。
+- 锦江酒店最终数据集 / 验证记录：读 `docs/references/jinjiang-final-dataset-audit-20260624.md` 和 `docs/references/jinjiang-final-dataset-cleanup-20260624.md`。
 - 只有需要实现、排错或验证时，才读 `src/llm_abm_sim/data_sources/`、`scripts/` 和对应测试。
 
 ## 2. 项目定位

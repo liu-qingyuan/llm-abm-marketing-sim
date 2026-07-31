@@ -6,6 +6,21 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DOCS_ROOT = REPO_ROOT / "docs"
+ROLE_DIRECTORIES = {"guides", "architecture", "adr", "references", "agents", "weekly"}
+IMMUTABLE_DATASET_EVIDENCE = {
+    DOCS_ROOT / "references" / "jinjiang-final-dataset-audit-20260624.md",
+    DOCS_ROOT / "references" / "jinjiang-final-dataset-cleanup-20260624.md",
+}
+RETIRED_PATHS = (
+    "01-项目概览",
+    "02-架构设计",
+    "03-使用指南",
+    "04-开发验证",
+    "05-周报",
+    "99-参考资料",
+    "prds",
+    "decision-maps",
+)
 
 
 def _read(path: Path) -> str:
@@ -32,6 +47,10 @@ def _local_markdown_links(source: Path) -> list[tuple[str, Path]]:
         if "://" in raw_target or raw_target.startswith("mailto:"):
             continue
 
+        # Protected dataset evidence keeps its historical source annotation byte-identical.
+        if source in IMMUTABLE_DATASET_EVIDENCE and raw_target == "../04-开发验证/README.md":
+            continue
+
         target = (source.parent / raw_target).resolve()
         if target.is_dir():
             target = target / "README.md"
@@ -40,161 +59,149 @@ def _local_markdown_links(source: Path) -> list[tuple[str, Path]]:
     return links
 
 
-def _local_markdown_targets(source: Path) -> set[Path]:
-    return {target for _, target in _local_markdown_links(source)}
-
-
 def _linked_from(source: Path, target: Path) -> bool:
-    return target.resolve() in _local_markdown_targets(source)
+    return target.resolve() in {target for _, target in _local_markdown_links(source)}
 
 
-def _level_two_headings(path: Path) -> set[str]:
-    return set(re.findall(r"^##\s+(.+?)\s*$", _read(path), flags=re.MULTILINE))
-
-
-def test_documentation_role_directories_have_stable_entrypoints():
-    expected_entrypoints = [
-        DOCS_ROOT / "index.md",
-        DOCS_ROOT / "prds" / "README.md",
-        DOCS_ROOT / "references" / "README.md",
-        DOCS_ROOT / "architecture" / "README.md",
-        DOCS_ROOT / "adr" / "README.md",
-        DOCS_ROOT / "agents" / "README.md",
-        DOCS_ROOT / "04-开发验证" / "README.md",
-    ]
-
-    for entrypoint in expected_entrypoints:
-        assert entrypoint.exists(), entrypoint
+def test_documentation_root_has_one_entrypoint_and_six_role_directories() -> None:
+    directories = {path.name for path in DOCS_ROOT.iterdir() if path.is_dir()}
+    assert directories == ROLE_DIRECTORIES
+    assert (DOCS_ROOT / "index.md").exists()
 
     docs_index = DOCS_ROOT / "index.md"
-    for entrypoint in expected_entrypoints[1:6]:
+    for role in sorted(ROLE_DIRECTORIES):
+        entrypoint = DOCS_ROOT / role / "README.md"
+        assert entrypoint.exists(), entrypoint
         assert _linked_from(docs_index, entrypoint), f"{docs_index} should link to {entrypoint}"
 
-
-def test_legacy_development_validation_readme_redirects_to_role_directories():
-    legacy_readme = DOCS_ROOT / "04-开发验证" / "README.md"
-    legacy_text = _read(legacy_readme)
-
-    assert "迁移索引" in legacy_text or "legacy redirect" in legacy_text.lower()
-
-    for target in [
-        DOCS_ROOT / "prds" / "README.md",
-        DOCS_ROOT / "references" / "README.md",
-        DOCS_ROOT / "architecture" / "README.md",
-        DOCS_ROOT / "adr" / "README.md",
-    ]:
-        assert _linked_from(legacy_readme, target), f"{legacy_readme} should redirect to {target}"
+    for retired in RETIRED_PATHS:
+        assert not (DOCS_ROOT / retired).exists(), retired
 
 
-def test_jinjiang_latent_attribute_documents_are_discoverable_from_navigation_hubs():
-    navigation_hubs = [
-        DOCS_ROOT / "index.md",
-        DOCS_ROOT / "04-开发验证" / "README.md",
-    ]
-    discoverable_targets = set().union(*[_local_markdown_targets(hub) for hub in navigation_hubs])
-
+def test_current_entrypoints_are_discoverable_from_the_single_index() -> None:
+    docs_index = DOCS_ROOT / "index.md"
     expected_targets = [
-        DOCS_ROOT / "references" / "jinjiang-user-latent-attributes-reference-zh.md",
+        DOCS_ROOT / "guides" / "getting-started-macos.md",
+        DOCS_ROOT / "architecture" / "abm-runtime.md",
+        DOCS_ROOT / "architecture" / "concurrent-message-competition-experiment.md",
         DOCS_ROOT / "architecture" / "jinjiang-user-profile-data-structure.md",
-        DOCS_ROOT / "prds" / "jinjiang-user-latent-attributes-v1.md",
+        DOCS_ROOT / "architecture" / "douyin-data-collection-architecture.md",
+        DOCS_ROOT / "architecture" / "retention-audit.md",
+        DOCS_ROOT / "references" / "jinjiang-final-dataset-audit-20260624.md",
+        DOCS_ROOT / "references" / "jinjiang-final-dataset-latent-v1-validation-20260705.md",
+        DOCS_ROOT / "references" / "jinjiang-concurrent-message-editorial-formal-release-20260729.md",
+        DOCS_ROOT / "weekly" / "README.md",
+        DOCS_ROOT / "agents" / "README.md",
     ]
-
     for target in expected_targets:
-        assert target.exists(), target
-        assert target.resolve() in discoverable_targets, f"{target} should be linked from docs index or legacy entry"
+        assert _linked_from(docs_index, target), f"{docs_index} should link to {target}"
+
+    index_text = _read(docs_index)
+    assert "https://abm.q1ngyuan.top/" in index_text
+    assert "23 步" not in index_text
+    assert "迁移索引" not in index_text
+    assert "redirect tree" in index_text
 
 
-def test_jinjiang_latent_attribute_prd_keeps_status_and_planning_sections():
-    prd = DOCS_ROOT / "prds" / "jinjiang-user-latent-attributes-v1.md"
-    prd_text = _read(prd)
-    headings = _level_two_headings(prd)
-
-    assert "Implementation status:" in prd_text
-    assert "当前实现状态" in headings
-    assert "非目标" in headings
-    assert "审计与验收" in headings
-    assert "后续 issue plan" in headings
-
-
-def test_tracked_docs_markdown_links_resolve():
+def test_tracked_docs_markdown_links_resolve() -> None:
     for source in _tracked_markdown_files():
         for label, target in _local_markdown_links(source):
             assert target.exists(), f"{source} link {label!r} targets missing {target}"
 
 
-def test_current_research_navigation_contract():
-    docs_index = DOCS_ROOT / "index.md"
-    index_text = _read(docs_index)
-    expected_targets = [
-        DOCS_ROOT / "architecture" / "concurrent-message-competition-experiment.md",
-        DOCS_ROOT / "references" / "jinjiang-concurrent-message-editorial-formal-release-20260729.md",
-        DOCS_ROOT / "references" / "jinjiang-final-dataset-audit-20260624.md",
-        DOCS_ROOT / "references" / "jinjiang-final-dataset-latent-v1-validation-20260705.md",
-    ]
+def test_architecture_notes_keep_current_truth_without_ticket_gate_diagrams() -> None:
+    runtime = _read(DOCS_ROOT / "architecture" / "abm-runtime.md")
+    concurrent = _read(DOCS_ROOT / "architecture" / "concurrent-message-competition-experiment.md")
+    user_profile = _read(DOCS_ROOT / "architecture" / "jinjiang-user-profile-data-structure.md")
 
-    for target in expected_targets:
-        assert _linked_from(docs_index, target), f"{docs_index} should link to {target}"
-    assert "https://abm.q1ngyuan.top/" in index_text
-
-
-def test_current_and_historical_document_status_contract():
-    current_architecture = _read(DOCS_ROOT / "architecture" / "concurrent-message-competition-experiment.md")
-    assert "Status: Implemented and published architecture note" in current_architecture
-    assert "Ready for Spec" not in current_architecture
-    assert "queues 未实现" not in current_architecture
-
-    editorial_design = _read(DOCS_ROOT / "references" / "concurrent-message-editorial-ui-design" / "README.md")
-    assert "renderer 已实现并已发布" in editorial_design
-    assert "renderer 尚未实现" not in editorial_design
-
-    historical_documents = {
-        DOCS_ROOT / "architecture" / "interactive-mechanism-report.md": "Status: Superseded historical target",
-        DOCS_ROOT
-        / "prds"
-        / "docs-architecture-and-jinjiang-latent-attributes-migration.md": "Status: Completed historical PRD; superseded",
-        DOCS_ROOT
-        / "decision-maps"
-        / "refactor-test-hardening-2026-07.md": "Status: Completed historical decision map; superseded",
-        DOCS_ROOT / "99-参考资料" / "README.md": "Status: Historical completed initial scan",
-        DOCS_ROOT / "architecture" / "final-research-runtime.md": "Status: Historical single-message runtime baseline",
-    }
-    for path, marker in historical_documents.items():
-        assert marker in _read(path), f"{path} should expose {marker!r}"
+    assert "LLM 不是仿真调度器" in runtime
+    assert "EngageDecision" in runtime
+    assert "Status: Implemented and published architecture note" in concurrent
+    assert "explicit presentation destination 始终使用 Editorial default" in concurrent
+    assert "in-place rebuild 仍按 persisted source report hash 选择历史兼容 bytes" in concurrent
+    assert "普通 run 与 `contract-protected` Formal/release run" in concurrent
+    assert "ConcurrentCampaignDiagnostics" in concurrent
+    assert "interest_tags" in user_profile
+    assert "Prompt v2 mocked" not in user_profile
+    assert "```mermaid" not in concurrent
 
 
-def test_concurrent_report_navigation_preserves_presentation_and_retention_semantics():
-    durable_note = DOCS_ROOT / "architecture" / "concurrent-message-durable-execution.md"
-    source_tree = DOCS_ROOT / "architecture" / "source-tree-and-entrypoints.md"
-    durable_text = _read(durable_note)
-    source_text = _read(source_tree)
+def test_historical_narrative_and_creation_screenshots_are_removed() -> None:
+    removed_architecture = (
+        "final-research-offline-baseline.md",
+        "final-research-runtime.md",
+        "interactive-mechanism-report.md",
+        "runtime-component-inventory.md",
+        "source-tree-and-entrypoints.md",
+        "testing-strategy.md",
+        "concurrent-message-campaign-diagnostics.md",
+        "concurrent-message-durable-execution.md",
+    )
+    for name in removed_architecture:
+        assert not (DOCS_ROOT / "architecture" / name).exists(), name
 
-    assert "explicit presentation destination 始终使用 Editorial default" in durable_text
-    assert "in-place rebuild 仍按 persisted source report hash 选择历史兼容 bytes" in durable_text
-    assert "普通 run 与 `contract-protected` Formal/release run" in durable_text
-    assert "普通未受合同保护的 run 输出可以删除后重建" in source_text
-    assert "contract-protected Formal/release roots 不能仅按目录类型推断删除" in source_text
-    assert durable_text.count("```mermaid") == 8
-    for heading in ("当前架构与调用关系", "目标架构与调用关系", "当前时序", "目标时序", "当前状态", "目标状态", "当前类关系", "目标类关系"):
-        assert f"### {heading}" in durable_text
+    removed_references = (
+        "jinjiang-concurrent-message-complete-offline-validation-20260726.md",
+        "jinjiang-final-research-live-validation-20260713.md",
+        "jinjiang-target-delivery-ranking-final-validation-20260715.md",
+        "jinjiang-field-lineage-trace-validation-20260720.md",
+        "jinjiang-runtime-field-trace-validation-20260720.md",
+        "jinjiang-seed-first-complete-offline-report-validation-20260720.md",
+        "jinjiang-seed-first-offline-validation-20260720.md",
+        "jinjiang-prompt-v2-mock-validation-20260708.md",
+        "jinjiang-interest-tags-contract-audit-20260723.md",
+    )
+    for name in removed_references:
+        assert not (DOCS_ROOT / "references" / name).exists(), name
+
+    source_assets = Path(__file__).resolve().parents[2] / "src" / "llm_abm_sim" / "report_assets"
+    for name in (
+        "media-mechanism-overview.png",
+        "media-mechanism-sample.png",
+        "media-mechanism-exposure-ranking.png",
+        "media-mechanism-llm-decision.png",
+        "media-mechanism-network-feedback.png",
+    ):
+        assert (source_assets / name).exists(), name
+    assert not (DOCS_ROOT / "references" / "concurrent-message-editorial-ui-design").exists()
+    assert not any(DOCS_ROOT.rglob("*desktop.png"))
+    assert not any(DOCS_ROOT.rglob("*trace*.png"))
 
 
+def test_required_evidence_and_weekly_navigation_remain() -> None:
+    required = (
+        "jinjiang-final-dataset-audit-20260624.md",
+        "jinjiang-final-dataset-cleanup-20260624.md",
+        "jinjiang-final-dataset-latent-v1-validation-20260705.md",
+        "jinjiang-concurrent-message-formal-release-20260727.md",
+        "jinjiang-concurrent-message-two-mode-formal-release-20260728.md",
+        "jinjiang-concurrent-message-editorial-formal-release-20260729.md",
+        "retention-audit-baseline-20260730.md",
+        "retention-cleanup-execution-20260730.md",
+        "retention-cleanup-execution-20260730.json",
+        "retention-cleanup-final-evidence-20260730.md",
+        "gitnexus-index-scope-20260730.md",
+        "jinjiang-user-latent-attributes-reference-zh.md",
+        "PostContent.md",
+    )
+    for name in required:
+        assert (DOCS_ROOT / "references" / name).exists(), name
 
-def test_retention_current_truth_navigation_contract():
+    weekly_text = _read(DOCS_ROOT / "weekly" / "README.md")
+    assert "不覆盖 current Architecture" in weekly_text
+    assert len(list((DOCS_ROOT / "weekly").glob("*.md"))) == 6
+
+
+def test_retention_current_truth_uses_gitnexus_scope_evidence() -> None:
     retention_note = DOCS_ROOT / "architecture" / "retention-audit.md"
-    source_tree = DOCS_ROOT / "architecture" / "source-tree-and-entrypoints.md"
+    architecture_readme = DOCS_ROOT / "architecture" / "README.md"
     references = DOCS_ROOT / "references" / "README.md"
+    manifest = _read(REPO_ROOT / "configs" / "retention" / "manifest.json")
 
-    assert retention_note.exists()
-    assert _linked_from(DOCS_ROOT / "architecture" / "README.md", retention_note)
-    retention_text = _read(retention_note)
-    source_text = _read(source_tree)
-    references_text = _read(references)
-
-    assert "Status: Implemented current architecture note" in retention_text
-    assert "retention-manifest-v2" in retention_text
-    assert "audit_valid=true" in retention_text
-    assert "永不授权删除" in retention_text
-    assert "contract-protected Formal/release roots" in source_text
-    assert "不能仅按目录类型推断删除" in source_text
-    assert "可随时删除重建" not in source_text
-    assert "Historical repository retention audit baseline" in references_text
+    assert _linked_from(architecture_readme, retention_note)
+    assert "retention-manifest-v2" in _read(retention_note)
+    assert "audit_valid=true" in _read(retention_note)
+    assert "gitnexus-index-scope-20260730.md" in _read(retention_note)
+    assert "Retention baseline" in _read(references)
+    assert "docs/references/gitnexus-index-scope-20260730.md" in manifest
+    assert "source-tree-and-entrypoints.md" not in manifest

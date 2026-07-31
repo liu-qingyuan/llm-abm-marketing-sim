@@ -1,27 +1,18 @@
-# Architecture Notes
+# Architecture
 
-本目录保存当前/目标架构说明、模块边界、数据结构图和测试架构说明。
-
-## 使用规则
-
-- 写这里：系统结构、模块职责、数据流、目标架构、测试策略。
-- 不写这里：外部研究资料、一次性审计报告、具体实现任务、issue 计划。
-- 如果文档记录的是“为什么选择这个架构”，并且未来读者缺少上下文会疑惑，应改写为 ADR 放到 `docs/adr/`。
+本目录只保存当前系统结构、Module 边界、数据流、运行生命周期和 Retention 规则。可执行需求属于 GitHub `Spec:` issues；架构选择属于 [`docs/adr/`](../adr/README.md)；一次性验证结果属于 [`docs/references/`](../references/README.md)。
 
 ## 当前入口
 
-- 核心架构仍在 [`../02-架构设计/architecture.md`](../02-架构设计/architecture.md)。
-- 仿真流程仍在 [`../02-架构设计/simulation-flow.md`](../02-架构设计/simulation-flow.md)。
-- Douyin 数据收集架构仍在 [`../02-架构设计/douyin-data-collection-architecture.md`](../02-架构设计/douyin-data-collection-architecture.md)。
-- [Retention Audit](retention-audit.md)：当前 v2 tracked-manifest 只读审计、metadata-only 结果和删除授权边界。
-- [运行时组件清单](runtime-component-inventory.md)：运行时、输出、Provider、Web 和测试组件职责。
-- [测试策略](testing-strategy.md)：离线默认测试分层、质量命令和 live LLM 手动门禁。
-- [锦江用户数据结构 Architecture Note](jinjiang-user-profile-data-structure.md)：说明 Observed Profile Attributes + Latent Attributes，并记录 Prompt v3、锦江 v5 移除 `interest_tags`、通用 `UserProfile` 兼容及 `historical_tags` Ranking-only 边界。
-- [Final Research 离线基线](final-research-offline-baseline.md)：历史单视频研究的离线基线，保留 Target Holdout、holdout-safe 画像投影、研究样本、静态平台推荐和旧 artifacts 的 lineage；当前多 message 研究以 Concurrent Message Note 为准。
-- [Final Research 30 批次 Runtime](final-research-runtime.md)：历史单视频 runtime baseline，保留 v3/v4/v5/v6 的只读合同与重建边界；当前 canonical release 以 Concurrent Message Formal evidence 为准。
-- [Concurrent Message Competition Experiment](concurrent-message-competition-experiment.md)：**已实现并发布**的三个营销 message 并发运行、Per-Message Personalized Top20、Primary/Shadow Decision Trace、报告 UI 和 canonical 发布边界；当前 release evidence 见 [`../references/jinjiang-concurrent-message-editorial-formal-release-20260729.md`](../references/jinjiang-concurrent-message-editorial-formal-release-20260729.md)。
-- [Concurrent Message Campaign Diagnostics](concurrent-message-campaign-diagnostics.md)：记录并发三 message validation runtime 中从 persisted source rows 重建 campaign diagnostics、校验 summary、生成 report sections 和 release-time rebuild 的当前实现边界。
-- [Concurrent Message Durable Execution](concurrent-message-durable-execution.md)：区分 private operational workspace、publish staging、final source directory 和 canonical release，记录 journal replay、resume、atomic publication 与 deploy gate 边界。
-- [Interactive Mechanism Report](interactive-mechanism-report.md)：历史单视频交互目标，已被当前 Editorial report 替代。
+- [ABM Runtime 与仿真流程](abm-runtime.md)：通用 SimulationModel、PlatformEnvironment、SocialUserAgent、Decision Adapter、事件和输出边界。
+- [Concurrent Message Competition Experiment](concurrent-message-competition-experiment.md)：当前三 message runtime、ranking、Primary/Shadow、diagnostics、report rebuild 和发布边界。
+- [锦江用户数据结构](jinjiang-user-profile-data-structure.md)：Observed Profile Attributes、latent attributes、`interest_tags` 当前边界和 `PostContent` runtime contract。
+- [TikHub / Douyin 数据收集架构](douyin-data-collection-architecture.md)：阶段化 collector、视频 metadata 分母、profile evidence recovery 和 quota guard。
+- [Retention Audit](retention-audit.md)：tracked manifest v2、metadata-only audit、evidence reference 和删除授权边界。
 
-`../02-架构设计/` 继续作为核心系统阅读路径保留；新增或迁移的长期架构说明默认放在本目录，并从 `../index.md` 或相关 README 指向。
+## 使用规则
+
+- 新增 current system behavior 时更新对应 Architecture Note，并保持它与实现和 release contract 一致。
+- 难以逆转且存在真实替代方案的选择写入 ADR；不要在 Architecture 复制相同 rationale。
+- Ticket Mermaid Gate 图只属于对应 GitHub issue；长期 Architecture 不复制 Ticket 图或强制其数量。
+- 删除的 source-tree inventory、component inventory、testing strategy 和历史 single-message narrative 不再建立兼容入口。

@@ -2,10 +2,9 @@
 
 本目录保存锦江酒店 Douyin 相关清洗结果。后续 AI Agent 进入时，优先读：
 
-1. `docs/02-架构设计/douyin-data-collection-architecture.md`
+1. `docs/architecture/douyin-data-collection-architecture.md`
 2. `data/README.md`
-3. `docs/04-开发验证/jinjiang-douyin-video-metadata-validation-20260617T035450Z.md`
-4. 对应 run 的 `collection_report.json`
+3. 当前视频 metadata 基线由 `data/README.md` 和对应 run 的 `collection_report.json` 解释；不存在的历史 validation 文件不再作为入口。
 
 ## 当前推荐基线
 

@@ -19,7 +19,7 @@ The design goal is not a generic autonomous agent framework. The core is a repro
 
 ## Quickstart on macOS
 
-For a true from-zero macOS walkthrough, use the canonical guide: [`docs/03-使用指南/getting-started-macos.md`](docs/03-使用指南/getting-started-macos.md). The short path for a fresh clone is:
+For a true from-zero macOS walkthrough, use the canonical guide: [`docs/guides/getting-started-macos.md`](docs/guides/getting-started-macos.md). The short path for a fresh clone is:
 
 ```bash
 python3 -m venv .venv
@@ -94,7 +94,7 @@ Dataset-backed fixture run:
 python -m llm_abm_sim.run --config configs/fixtures/realistic_marketing_dataset.yaml --output runs/realistic-sample
 ```
 
-Dataset-backed runs also write `dataset_validation.json`, which records resolved edge/profile paths, graph/profile counts, validation policies, and missing/extra profile diagnostics. Relative `dataset.edge_list_path` and `dataset.profile_path` values are resolved against the directory containing the config file; absolute paths are normalized and remain absolute. See `docs/03-使用指南/dataset-ingestion.md` for CSV/JSON schema examples.
+Dataset-backed runs also write `dataset_validation.json`, which records resolved edge/profile paths, graph/profile counts, validation policies, and missing/extra profile diagnostics. Relative `dataset.edge_list_path` and `dataset.profile_path` values are resolved against the directory containing the config file; absolute paths are normalized and remain absolute. See `docs/guides/dataset-ingestion.md` for CSV/JSON schema examples.
 
 
 ## Local Web console
@@ -107,14 +107,14 @@ python -m llm_abm_sim.web --host 127.0.0.1 --port 8000 --artifact-root runs/web
 # or after install: llm-abm-web --host 127.0.0.1 --port 8000
 ```
 
-The browser flow supports users CSV/JSON plus edges CSV/JSON upload, dataset validation, provider readiness preflight, POST-and-poll run contracts, bilingual result panels, and allowlisted artifact downloads. Product-mode Web runs require real provider readiness and block visibly when the live gate or credentials are missing; the explicit mock-provider mode is for tests/dev only and is labeled in the UI and payloads. See `docs/01-项目概览/product-demo.md` for API contracts, templates, and safety notes.
+The browser flow supports users CSV/JSON plus edges CSV/JSON upload, dataset validation, provider readiness preflight, POST-and-poll run contracts, bilingual result panels, and allowlisted artifact downloads. Product-mode Web runs require real provider readiness and block visibly when the live gate or credentials are missing; the explicit mock-provider mode is for tests/dev only and is labeled in the UI and payloads. See `docs/guides/product-demo.md` for API contracts, templates, and safety notes.
 
 
 ## Douyin Data Collection Docs
 
 For TikHub / Douyin / 锦江酒店 data collection work, start with the staged architecture docs instead of inspecting raw runs first:
 
-- [`docs/02-架构设计/douyin-data-collection-architecture.md`](docs/02-架构设计/douyin-data-collection-architecture.md): current staged collector architecture, Mermaid architecture diagram, and sequence diagram.
+- [`docs/architecture/douyin-data-collection-architecture.md`](docs/architecture/douyin-data-collection-architecture.md): current staged collector architecture, Mermaid architecture diagram, and sequence diagram.
 - [`data/README.md`](data/README.md): raw/processed directory semantics, current metadata baseline, and safety boundaries.
 - [`docs/references/jinjiang-final-dataset-audit-20260624.md`](docs/references/jinjiang-final-dataset-audit-20260624.md): current final dataset audit, aggregate validation evidence, and privacy boundaries.
 
@@ -145,7 +145,7 @@ LLM_ABM_RUN_LIVE_LLM=1 pytest -q -m live_llm
 # Current scaffold validates readiness/schema and xfails before real provider calls until an adapter is added.
 ```
 
-The live gate may reuse local Codex/sub2api-compatible provider metadata at runtime, but secrets must never be committed, logged, documented, or snapshotted. See `docs/03-使用指南/provider-config.md`.
+The live gate may reuse local Codex/sub2api-compatible provider metadata at runtime, but secrets must never be committed, logged, documented, or snapshotted. See `docs/guides/provider-config.md`.
 
 
 ## Obsidian Requirement Alignment
@@ -164,13 +164,13 @@ This scaffold maps the Obsidian knowledge-base requirements into executable code
 
 See:
 
-- `docs/03-使用指南/getting-started-macos.md`
-- `docs/02-架构设计/architecture.md`
-- `docs/02-架构设计/simulation-flow.md`
-- `docs/02-架构设计/framework-analysis.md`
-- `docs/prds/initial-abm-mvp-development-plan.md`
-- `docs/03-使用指南/dataset-ingestion.md`
-- `docs/architecture/testing-strategy.md`
-- `docs/03-使用指南/provider-config.md`
-- `docs/01-项目概览/product-demo.md`
-- `docs/01-项目概览/requirements-alignment.md`
+- `docs/guides/getting-started-macos.md`
+- `docs/architecture/abm-runtime.md`
+- `docs/architecture/concurrent-message-competition-experiment.md`
+- `docs/guides/dataset-ingestion.md`
+- `docs/guides/provider-config.md`
+- `docs/guides/product-demo.md`
+- `docs/architecture/douyin-data-collection-architecture.md`
+- `docs/architecture/jinjiang-user-profile-data-structure.md`
+- `docs/architecture/retention-audit.md`
+- `docs/adr/README.md`

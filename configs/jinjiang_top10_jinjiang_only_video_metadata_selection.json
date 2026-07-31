@@ -1,6 +1,6 @@
 {
   "scope": "jinjiang_top10_jinjiang_only_video_metadata_unbounded",
-  "source": "docs/04-开发验证/jinjiang-douyin-existing-topic-distribution.md; deep-interview spec .omx/specs/deep-interview-top10-jinjiang-video-scope.md; only challenge/tag names containing 锦江",
+  "source": "docs/architecture/douyin-data-collection-architecture.md; Jinjiang-only challenge/tag selection",
   "notes": [
     "Caption hashtag matching for this scope counts only the 10 explicit #锦江... hashtags listed here.",
     "酒店, 住宿, 高性价比酒店推荐 are excluded because they do not contain 锦江 and are generic/weakly related for this pass.",

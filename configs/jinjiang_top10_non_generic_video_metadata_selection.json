@@ -1,6 +1,6 @@
 {
   "scope": "jinjiang_top10_non_generic_video_metadata_validation",
-  "source": "docs/04-开发验证/jinjiang-douyin-existing-topic-distribution.md section 6.1 top10; excludes generic #酒店 for metadata validation",
+  "source": "docs/architecture/douyin-data-collection-architecture.md; selected non-generic top tags for metadata validation",
   "challenge_selections": [
     {
       "rank": 1,

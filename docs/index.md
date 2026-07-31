@@ -1,160 +1,93 @@
 # llm-abm-marketing-sim 文档索引
 
-本文件是项目文档的唯一总入口。后续新增长期维护文档时，先判断它属于哪个职责型目录；编号目录主要作为阅读路径、历史入口或迁移索引保留。
+本文件是项目文档的唯一总入口。文档只保留当前运行方式、系统设计、稳定架构决策、必要 evidence、教师周报和 Agent workflow；可执行需求与过程讨论以 GitHub `Spec:` issues 为准。
 
-## Current Truth
+## Current Research
 
-当前读者应从以下入口理解项目，而不是从历史离线验证或早期设计目标推断状态：
+- **Canonical endpoint：** [Multi-Message Editorial Formal Presentation](https://abm.q1ngyuan.top/)。
+- **Current architecture：** [Concurrent Message Competition Experiment](architecture/concurrent-message-competition-experiment.md)。
+- **Current release evidence：** [Editorial Formal 发布与验收记录](references/jinjiang-concurrent-message-editorial-formal-release-20260729.md)。
+- **Dataset lineage：** [锦江 final dataset 审计](references/jinjiang-final-dataset-audit-20260624.md) 和 [latent-v1 validation](references/jinjiang-final-dataset-latent-v1-validation-20260705.md)。
 
-- **Canonical endpoint：** [Multi-Message Editorial Formal Presentation](https://abm.q1ngyuan.top/)。这是当前已发布的研究报告页面；部署身份、hash、回滚和公网验收见[Editorial Formal 发布与验收记录](references/jinjiang-concurrent-message-editorial-formal-release-20260729.md)。
-- **Current architecture：** [Concurrent Message Competition Experiment](architecture/concurrent-message-competition-experiment.md) 记录已实现的三 message queues、Primary/Shadow decisions、report UI 和发布边界。
-- **Current authoritative data：** [锦江 final dataset 审计](references/jinjiang-final-dataset-audit-20260624.md) 是真实 processed dataset 的 lineage 与聚合验收入口；[latent-v1 validation](references/jinjiang-final-dataset-latent-v1-validation-20260705.md) 是可确定性重建的合成实验标签验证入口。
-- **Historical lineage：** 单视频 Final Research runtime、旧 Interactive target、迁移 PRD、Decision Map、初始 scan 和旧 release evidence 继续保留，但必须按各文档的 Status 和 current replacement 阅读。
+当前 Editorial release 覆盖 1,000 位 Research Sample users、3 条 message、30 个 batch 和每条 message 600 次曝光。默认 toy/realistic fixture、offline/mock validation 和 rule-based run 都不能替代 persisted Formal evidence 或 canonical release。
 
-## 目录职责
+## 运行与演示
 
-```text
-docs/
-├── 01-项目概览/      # 阅读路径：项目是什么、能演示什么、与 Obsidian 设计如何对齐
-├── 02-架构设计/      # 阅读路径：核心架构、仿真流程、框架取舍；新架构说明优先放 architecture/
-├── 03-使用指南/      # 阅读路径：安装运行、数据导入、Provider/LLM 配置
-├── 04-开发验证/      # Legacy：旧验证入口和迁移索引；新规格不再放这里
-├── 05-周报/          # Reports archive：面向老师快速阅读的周期小结
-├── agents/           # 工程 skills 的 issue tracker、triage 和领域文档约定
-├── architecture/     # 当前/目标架构说明、数据结构图、边界说明
-├── adr/              # 架构决策记录
-├── decision-maps/    # 多会话决策图
-├── prds/             # PRD 与 GitHub issue 父任务副本
-├── references/       # 外部资料整理、研究先验、不可执行参考
-└── 99-参考资料/      # Legacy：自动扫描报告等低频参考资料；新参考资料优先放 references/
-```
+- [Guides 总览](guides/README.md)
+- [macOS 从零开始运行指南](guides/getting-started-macos.md)
+- [本地离线/Web Demo](guides/product-demo.md)
+- [开发指南](guides/development-guide.md)
+- [数据集与用户画像导入](guides/dataset-ingestion.md)
+- [Provider 配置与 Live LLM 闸门](guides/provider-config.md)
 
-根目录 [`../CONTEXT.md`](../CONTEXT.md) 保存稳定领域术语，不记录实现计划、任务状态或架构决策。
+默认 CLI、测试和 mock provider 路径离线、确定且无需凭证；真实 Provider 只能通过显式 live gate 运行。
 
-## Canonical 入口
+## 系统设计
 
-新增或迁移文档时优先使用这些入口：
+- [Architecture 总览](architecture/README.md)
+- [ABM Runtime 与仿真流程](architecture/abm-runtime.md)
+- [Concurrent Message Competition Experiment](architecture/concurrent-message-competition-experiment.md)
+- [锦江用户数据结构](architecture/jinjiang-user-profile-data-structure.md)
+- [TikHub / Douyin 数据收集架构](architecture/douyin-data-collection-architecture.md)
+- [Retention Audit](architecture/retention-audit.md)
+- [Architecture Decision Records](adr/README.md)
 
-- [PRDs](prds/README.md)：产品需求、用户故事、验收标准和后续 issue plan。
-- [References](references/README.md)：外部资料、研究先验和数据口径参考，不代表实现状态。
-- [Architecture Notes](architecture/README.md)：当前/目标架构、模块边界、数据结构图和测试架构。
-- [ADRs](adr/README.md)：难以逆转且有真实权衡的架构决策。
-- [Agent skills](agents/README.md)：工程 skills 的 issue tracker、triage labels 和 domain docs 约定。
-- [Decision maps](decision-maps/README.md)：需要多轮推进的规划图。
+Architecture 描述当前 Module、数据边界和稳定运行语义；ADR 记录难以逆转且有真实权衡的选择。Ticket 的 executable requirements 不复制到长期 Architecture。
 
-## Reading Path 和 Legacy
+## Required Evidence
 
-- `01-项目概览/`、`02-架构设计/`、`03-使用指南/` 是读者快速理解和运行项目的路径，可以继续维护现有入口；新增长期 PRD、Reference、Architecture Note 或 ADR 不默认放入这些目录。
-- `04-开发验证/` 是历史开发验证入口和迁移索引；新 PRD、Reference、Architecture Note 和 ADR 不再新增到这里。
-- `05-周报/` 是 reports archive，只放面向老师快速阅读的周期小结，不作为实现规格或当前架构入口。
-- `99-参考资料/` 是低频历史参考和机器扫描产物入口；新的研究先验、外部资料和数据口径参考优先放 `references/`。
+- [References 总览](references/README.md)
 
-## 推荐阅读路径
+### 数据与研究
 
-### 当前 Multi-Message Formal Research
+- [final dataset 审计](references/jinjiang-final-dataset-audit-20260624.md)
+- [final dataset cleanup](references/jinjiang-final-dataset-cleanup-20260624.md)
+- [latent-v1 validation](references/jinjiang-final-dataset-latent-v1-validation-20260705.md)
+- [Latent Attributes 研究先验](references/jinjiang-user-latent-attributes-reference-zh.md)
+- [PostContent](references/PostContent.md)
 
-1. [Current Concurrent Message architecture](architecture/concurrent-message-competition-experiment.md)
-2. [Editorial Formal release evidence](references/jinjiang-concurrent-message-editorial-formal-release-20260729.md)
-3. [Canonical Editorial report](https://abm.q1ngyuan.top/)
-4. [真实 final dataset audit](references/jinjiang-final-dataset-audit-20260624.md)
-5. [latent-v1 validation](references/jinjiang-final-dataset-latent-v1-validation-20260705.md)
+### Formal release
 
-### 只想快速了解项目
+- [Original Formal release](references/jinjiang-concurrent-message-formal-release-20260727.md)
+- [Two-mode rollback release](references/jinjiang-concurrent-message-two-mode-formal-release-20260728.md)
+- [Editorial Formal release](references/jinjiang-concurrent-message-editorial-formal-release-20260729.md)
 
-1. [项目总览](01-项目概览/project-overview.md)
-2. [产品演示说明](01-项目概览/product-demo.md)
-3. [与 Obsidian 设计笔记的需求对齐](01-项目概览/requirements-alignment.md)
+### Retention 与 GitNexus
 
-### 想在本机跑起来
+- [Retention baseline](references/retention-audit-baseline-20260730.md)
+- [Retention cleanup execution](references/retention-cleanup-execution-20260730.md)
+- [Retention cleanup machine evidence](references/retention-cleanup-execution-20260730.json)
+- [Retention final evidence](references/retention-cleanup-final-evidence-20260730.md)
+- [GitNexus retention evidence](references/gitnexus-index-scope-20260730.md)
 
-1. [macOS 从零开始运行指南](03-使用指南/getting-started-macos.md)
-2. [开发指南](03-使用指南/development-guide.md)
-3. [数据集与用户画像导入](03-使用指南/dataset-ingestion.md)
-4. [Provider 配置与 Live LLM 闸门](03-使用指南/provider-config.md)
+References README 只导航以上必须保留的 data、release、retention、GitNexus 和 research evidence。5 张 Editorial mechanism source PNG 由 `src/llm_abm_sim/report_assets/` 统一拥有；generated WebP 和 candidate contract 继续由代码与测试保护。
 
-### 想理解系统怎么设计
+## 周报与 Agent workflow
 
-1. [架构说明](02-架构设计/architecture.md)
-2. [仿真流程](02-架构设计/simulation-flow.md)
-3. [框架选型分析](02-架构设计/framework-analysis.md)
-4. [TikHub / Douyin 数据收集架构](02-架构设计/douyin-data-collection-architecture.md)
+- [教师周报](weekly/README.md)：按周期汇总成果和下一步，不覆盖 current Architecture、contract 或 Formal evidence。
+- [Agent workflow](agents/README.md)：issue tracker、triage labels 和领域文档约定。
 
-### 想继续开发或验收
+## 文档合同
 
-1. [PRD：文档架构重组与锦江 Latent Attributes 迁移试点](prds/docs-architecture-and-jinjiang-latent-attributes-migration.md)
-2. [Decision map：重构与测试补强](decision-maps/refactor-test-hardening-2026-07.md)
-3. [TikHub / Douyin 数据收集架构](02-架构设计/douyin-data-collection-architecture.md)
-4. [锦江用户数据结构 Architecture Note](architecture/jinjiang-user-profile-data-structure.md)
-5. [锦江用户潜在属性研究先验整理](references/jinjiang-user-latent-attributes-reference-zh.md)
-6. [PRD：锦江用户 Latent Attributes v1](prds/jinjiang-user-latent-attributes-v1.md)
-7. [锦江 final dataset latent-v1 本地验收记录](references/jinjiang-final-dataset-latent-v1-validation-20260705.md)
-8. [PRD：锦江 ABM 用户画像合同收敛与 LLM Prompt v2](prds/jinjiang-abm-profile-contract-and-llm-prompt-v2.md)
-9. [锦江 Prompt v2 mocked provider 验收摘要](references/jinjiang-prompt-v2-mock-validation-20260708.md)
-10. [锦江 Final Research 真实 Provider 验收记录](references/jinjiang-final-research-live-validation-20260713.md)
-11. [锦江 Target Delivery Ranking 正式研究验收记录](references/jinjiang-target-delivery-ranking-final-validation-20260715.md)
-12. [锦江 Seed-First Research Sample 离线验证记录](references/jinjiang-seed-first-offline-validation-20260720.md)
-13. [锦江用户字段血缘与逐用户追溯离线验证记录](references/jinjiang-field-lineage-trace-validation-20260720.md)
-14. [锦江 Runtime、Decision 与 diagnostics 字段追溯离线验证记录](references/jinjiang-runtime-field-trace-validation-20260720.md)
-15. [锦江 Seed-First 完整离线报告验收记录](references/jinjiang-seed-first-complete-offline-report-validation-20260720.md)
-16. [锦江 `interest_tags` 合同撤销聚合审计](references/jinjiang-interest-tags-contract-audit-20260723.md)
-17. [锦江酒店 Douyin 最终数据集审计](references/jinjiang-final-dataset-audit-20260624.md)
-18. [Final Research 离线基线](architecture/final-research-offline-baseline.md)
-19. [Final Research 30 批次 Runtime 与报告合同](architecture/final-research-runtime.md)
-20. [锦江 Concurrent Message 完整离线验证记录](references/jinjiang-concurrent-message-complete-offline-validation-20260726.md)
-21. [源码结构分析](architecture/source-tree-and-entrypoints.md)
-22. [组件清单](architecture/runtime-component-inventory.md)
-23. [测试策略](architecture/testing-strategy.md)
+- GitHub `Spec:` issues 是 executable requirements 和历史讨论的 canonical source。
+- `CONTEXT.md`、Architecture 和 ADR 只持有稳定领域语言、当前系统边界和架构决策。
+- 周报是面向教师的阅读摘要，不是实现规格、数据合同或当前架构入口。
+- 删除的过程叙事由 Git history 和 GitHub issue history 保留；文档树不创建 archive、redirect tree 或兼容索引。
 
-## 快速命令
+## 常用离线命令
 
 ```bash
-# 安装开发环境
 python3 -m venv .venv
 . .venv/bin/activate
-python -m pip install -U pip
 python -m pip install -e ".[dev,web,llm]"
-npm ci
-npx playwright install chromium
 
-# 离线运行默认仿真
 python -m llm_abm_sim.run --config configs/default.yaml --output runs/sample
-
-# 离线运行真实感营销数据样例
 python -m llm_abm_sim.run --config configs/fixtures/realistic_marketing_dataset.yaml --output runs/realistic-sample
-
-# 启动本地 Web 控制台
 python -m llm_abm_sim.web --host 127.0.0.1 --port 8000 --artifact-root runs/web
 
-# 常规验证
-ruff check .
-ruff format --check .
-mypy src
-pytest -q
 python -m py_compile $(find src tests -name '*.py' -print)
+pytest -q
+ruff check .
 ```
 
-## 数据收集快速入口
-
-- 当前数据收集架构：[`02-架构设计/douyin-data-collection-architecture.md`](02-架构设计/douyin-data-collection-architecture.md)
-- 数据目录语义：[`../data/README.md`](../data/README.md)
-- 当前最终数据集审计：[`references/jinjiang-final-dataset-audit-20260624.md`](references/jinjiang-final-dataset-audit-20260624.md)
-- 当前最终数据集清理记录：[`references/jinjiang-final-dataset-cleanup-20260624.md`](references/jinjiang-final-dataset-cleanup-20260624.md)
-- 锦江 final dataset latent-v1 本地验收记录：[`references/jinjiang-final-dataset-latent-v1-validation-20260705.md`](references/jinjiang-final-dataset-latent-v1-validation-20260705.md)
-- 锦江 `interest_tags` 合同撤销聚合审计：[`references/jinjiang-interest-tags-contract-audit-20260723.md`](references/jinjiang-interest-tags-contract-audit-20260723.md)
-- 锦江用户数据结构 Architecture Note：[`architecture/jinjiang-user-profile-data-structure.md`](architecture/jinjiang-user-profile-data-structure.md)
-- 锦江 latent attributes 研究先验：[`references/jinjiang-user-latent-attributes-reference-zh.md`](references/jinjiang-user-latent-attributes-reference-zh.md)
-- 锦江 latent attributes 迁移计划：[`prds/docs-architecture-and-jinjiang-latent-attributes-migration.md`](prds/docs-architecture-and-jinjiang-latent-attributes-migration.md)
-- 锦江 latent attributes v1 PRD：[`prds/jinjiang-user-latent-attributes-v1.md`](prds/jinjiang-user-latent-attributes-v1.md)
-- 锦江 Prompt v2 PRD：[`prds/jinjiang-abm-profile-contract-and-llm-prompt-v2.md`](prds/jinjiang-abm-profile-contract-and-llm-prompt-v2.md)
-- 锦江 Prompt v2 mocked provider 验收摘要：[`references/jinjiang-prompt-v2-mock-validation-20260708.md`](references/jinjiang-prompt-v2-mock-validation-20260708.md)
-- 锦江 Final Research 真实 Provider 验收记录：[`references/jinjiang-final-research-live-validation-20260713.md`](references/jinjiang-final-research-live-validation-20260713.md)
-- 锦江 Target Delivery Ranking 正式研究验收记录：[`references/jinjiang-target-delivery-ranking-final-validation-20260715.md`](references/jinjiang-target-delivery-ranking-final-validation-20260715.md)
-- 后续 AI Agent 应优先看最终数据集审计；如需追溯旧文件名，再查看 `04-开发验证/README.md` 的迁移索引。
-
-## 核心约定
-
-- 默认路径必须离线、确定性、无 API 凭证、无外部网络依赖。
-- LLM 是可替换的决策函数，不是仿真调度器。
-- ABM 循环负责时间、状态、扩散和可复现性。
-- 所有输入、输出、事件和 Provider 响应都通过 Pydantic/安全序列化边界约束。
-- 不提交真实私密数据、API 凭证、会话凭证、鉴权头、原始 Prompt 或原始 Provider 响应。
+默认验证不调用 Provider、TikHub、Douyin 或 profile API，不读取 secrets、raw Prompt 或 raw provider payload。
