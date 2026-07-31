@@ -6,8 +6,6 @@
 
 - **Canonical endpoint：** [Multi-Message Editorial Formal Presentation](https://abm.q1ngyuan.top/)。
 - **Current architecture：** [Concurrent Message Competition Experiment](architecture/concurrent-message-competition-experiment.md)。
-- **Current release evidence：** [Editorial Formal 发布与验收记录](references/jinjiang-concurrent-message-editorial-formal-release-20260729.md)。
-- **Dataset lineage：** [锦江 final dataset 审计](references/jinjiang-final-dataset-audit-20260624.md) 和 [latent-v1 validation](references/jinjiang-final-dataset-latent-v1-validation-20260705.md)。
 
 当前 Editorial release 覆盖 1,000 位 Research Sample users、3 条 message、30 个 batch 和每条 message 600 次曝光。默认 toy/realistic fixture、offline/mock validation 和 rule-based run 都不能替代 persisted Formal evidence 或 canonical release。
 
@@ -37,30 +35,11 @@ Architecture 描述当前 Module、数据边界和稳定运行语义；ADR 记�
 ## Required Evidence
 
 - [References 总览](references/README.md)
+- [current dataset：锦江 final dataset 审计](references/jinjiang-final-dataset-audit-20260624.md)
+- [current Editorial：Editorial Formal 发布与验收记录](references/jinjiang-concurrent-message-editorial-formal-release-20260729.md)
+- [current Retention：Retention final evidence](references/retention-cleanup-final-evidence-20260730.md)
 
-### 数据与研究
-
-- [final dataset 审计](references/jinjiang-final-dataset-audit-20260624.md)
-- [final dataset cleanup](references/jinjiang-final-dataset-cleanup-20260624.md)
-- [latent-v1 validation](references/jinjiang-final-dataset-latent-v1-validation-20260705.md)
-- [Latent Attributes 研究先验](references/jinjiang-user-latent-attributes-reference-zh.md)
-- [PostContent](references/PostContent.md)
-
-### Formal release
-
-- [Original Formal release](references/jinjiang-concurrent-message-formal-release-20260727.md)
-- [Two-mode rollback release](references/jinjiang-concurrent-message-two-mode-formal-release-20260728.md)
-- [Editorial Formal release](references/jinjiang-concurrent-message-editorial-formal-release-20260729.md)
-
-### Retention 与 GitNexus
-
-- [Retention baseline](references/retention-audit-baseline-20260730.md)
-- [Retention cleanup execution](references/retention-cleanup-execution-20260730.md)
-- [Retention cleanup machine evidence](references/retention-cleanup-execution-20260730.json)
-- [Retention final evidence](references/retention-cleanup-final-evidence-20260730.md)
-- [GitNexus retention evidence](references/gitnexus-index-scope-20260730.md)
-
-References README 只导航以上必须保留的 data、release、retention、GitNexus 和 research evidence。5 张 Editorial mechanism source PNG 由 `src/llm_abm_sim/report_assets/` 统一拥有；generated WebP 和 candidate contract 继续由代码与测试保护。
+References README 使用决策表区分默认读取、按需 research、按需 rollback 和 forensic-only evidence。5 张 Editorial mechanism source PNG 由 `src/llm_abm_sim/report_assets/` 统一拥有；generated WebP 和 candidate contract 继续由代码与测试保护。
 
 ## 周报与 Agent workflow
 

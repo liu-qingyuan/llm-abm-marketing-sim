@@ -1,28 +1,17 @@
 # References
 
-本目录只导航必须保留的数据 lineage、Formal release、Retention/GitNexus evidence 和研究先验。Reference 不替代代码、Architecture、ADR 或 GitHub `Spec:` issue；它也不把历史过程报告重新包装为 current truth。
+本目录只保留必须读取的数据 lineage、Formal release、Retention evidence 和研究先验。Reference 不替代代码、Architecture、ADR 或 GitHub `Spec:` issue；删除的过程叙事由 Git history 和 issue history 保留，不在这里建立 archive、redirect 或兼容索引。
 
-## 数据与研究
+## AI 阅读决策表
 
-- [锦江 final dataset 审计](jinjiang-final-dataset-audit-20260624.md)：真实 processed dataset lineage、聚合计数和隐私边界。
-- [锦江 final dataset cleanup](jinjiang-final-dataset-cleanup-20260624.md)：最终真实数据的保留与清理 lineage。
-- [锦江 final dataset latent-v1 validation](jinjiang-final-dataset-latent-v1-validation-20260705.md)：合成 latent variant 的确定性重建和聚合验收。
-- [锦江用户 latent attributes 研究先验](jinjiang-user-latent-attributes-reference-zh.md)：latent class、value weights、Table 11 分布和使用限制。
-- [PostContent](PostContent.md)：三条原始 message 文案 source，不包含 runtime evidence。
+默认 AI 阅读顺序不超过 `current dataset`、`current Editorial`、`current Retention` 三个入口；只有问题需要时才进入 research prior 或 rollback evidence，machine evidence 仅用于 forensic-only 核验。
 
-## Formal release
-
-- [Original Concurrent Message Formal release](jinjiang-concurrent-message-formal-release-20260727.md)：原始 Multi-Message Formal source 与首次 release lineage。
-- [Two-mode rollback release](jinjiang-concurrent-message-two-mode-formal-release-20260728.md)：Editorial 之前的 immutable rollback lineage。
-- [Editorial Formal release](jinjiang-concurrent-message-editorial-formal-release-20260729.md)：当前 canonical endpoint、release id、contract/hash、rollback 和公网 acceptance。
-
-## Retention 与 GitNexus
-
-- [Retention baseline](retention-audit-baseline-20260730.md)：历史 v1 dry-run aggregate evidence。
-- [Retention cleanup execution](retention-cleanup-execution-20260730.md)：精确 cleanup execution 与保留核验。
-- [Retention cleanup machine evidence](retention-cleanup-execution-20260730.json)：机器可读的 cleanup evidence，bytes 保持不变。
-- [Retention cleanup final evidence](retention-cleanup-final-evidence-20260730.md)：release、retention、documentation 和 quality gates 的最终 aggregate closure。
-- [GitNexus index scope evidence](gitnexus-index-scope-20260730.md)：tracked `.gitnexusignore`、bounded rebuild 和 retention scope evidence。
+| 模式 | 入口 | 读取场景 |
+|---|---|---|
+| 默认读取 | [current dataset：锦江 final dataset 审计](jinjiang-final-dataset-audit-20260624.md)、[current Editorial：Editorial Formal release](jinjiang-concurrent-message-editorial-formal-release-20260729.md)、[current Retention：Retention final evidence](retention-cleanup-final-evidence-20260730.md) | 先确定数据 lineage、当前发布身份和保留/质量 closure。 |
+| 按需 research | [final dataset cleanup](jinjiang-final-dataset-cleanup-20260624.md)、[latent-v1 validation](jinjiang-final-dataset-latent-v1-validation-20260705.md)、[Latent Attributes 研究先验](jinjiang-user-latent-attributes-reference-zh.md) | 需要追溯数据清理、合成 variant 或研究先验时读取。 |
+| 按需 rollback | [Original Formal release](jinjiang-concurrent-message-formal-release-20260727.md)、[Two-mode rollback release](jinjiang-concurrent-message-two-mode-formal-release-20260728.md) | 需要检查当前 Editorial 之前的 release lineage 或回滚身份时读取。 |
+| forensic-only | [Retention machine evidence](retention-cleanup-execution-20260730.json) | 需要核对 exact machine-readable cleanup evidence、文件 bytes 或目录 postcondition 时读取；不要把它当作默认叙事入口。 |
 
 ## Asset ownership
 

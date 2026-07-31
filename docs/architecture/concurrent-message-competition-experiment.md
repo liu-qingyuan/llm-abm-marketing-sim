@@ -32,7 +32,7 @@ personalized_delivery_score
 
 平台不会在曝光前为候选调用 LLM。每个实际 pair 只在 exposure 后形成 Primary 和配对 Shadow；pair 一旦曝光就从该 message queue 移除，但同一 user 仍可进入其他 message queue。
 
-三条 message 的原文和研究对象由 [`../references/PostContent.md`](../references/PostContent.md) 持有；latent attributes 的研究先验由 [`../references/jinjiang-user-latent-attributes-reference-zh.md`](../references/jinjiang-user-latent-attributes-reference-zh.md) 持有。
+三条 message 的定义由 `src/llm_abm_sim/concurrent_message_experiment.py` 中的 `authoritative_message_definitions()` 提供；每个 run 把这组定义持久化为 `message_snapshot.json`，报告 rebuild 和 execution replay 都以该 snapshot 作为 message source of truth。Markdown 不再复制 message 文案或另建 alias；latent attributes 的研究先验由 [`../references/jinjiang-user-latent-attributes-reference-zh.md`](../references/jinjiang-user-latent-attributes-reference-zh.md) 持有。
 
 ## Module ownership
 

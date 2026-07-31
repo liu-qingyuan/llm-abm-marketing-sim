@@ -2,7 +2,7 @@
 
 Status: Implemented current architecture note
 
-本 Note 记录 Retention Module 的只读审计合同。历史 baseline、cleanup execution、final evidence 和 GitNexus evidence 作为不可重新执行的 Reference 保留；它们不属于当前 CLI 的输入或输出合同。
+本 Note 记录 Retention Module 的只读审计合同。历史 baseline、cleanup execution 和 GitNexus measurements 已收敛到唯一 human-readable 的 [Retention final evidence](../references/retention-cleanup-final-evidence-20260730.md)；exact cleanup machine JSON 只作为 forensic-only 入口保留，不属于当前 CLI 的输入或输出合同。
 
 ## Supported Interface
 
@@ -26,7 +26,7 @@ result = audit_retention("configs/retention/manifest.json", repo_root=".")
 
 ## Current Classification
 
-当前 manifest 保持：6 个 `contract-protected` roots、2 个 `lineage-only` roots、1 个 `reproducible-ephemeral` root、3 个 `unknown` roots。`.gitnexus` 的 evidence reference 直接指向 [`GitNexus index scope evidence`](../references/gitnexus-index-scope-20260730.md)，由 tracked `.gitnexusignore` 持有 index boundary；不依赖易过期的 source-tree inventory。
+当前 manifest 保持：6 个 `contract-protected` roots、2 个 `lineage-only` roots、1 个 `reproducible-ephemeral` root、3 个 `unknown` roots。`.gitnexus` 的 evidence reference 直接指向 tracked [`.gitnexusignore`](../../.gitnexusignore)，由该文件持有 index boundary；必要历史 measurements 收敛在 Retention final evidence，不依赖易过期的 source-tree inventory。
 
 Formal/release roots 不能仅按其位于 `runs/` 目录而删除；普通未受合同保护的 run 输出可以删除后重建，但必须由独立 exact-path、明确授权的 Ticket 决定任何 cleanup action。Retention Module 不提供 apply、delete、move、storage 或 cleanup adapter。
 
@@ -42,4 +42,4 @@ python scripts/audit_retention.py \
   --format json
 ```
 
-通过标准是 `audit_valid=true`、`violations=[]`、exit 0，并保留上述四类 root 的数量。机器 JSON、baseline、execution 和 final evidence 的历史测量不写入测试常量；完成报告只记录本次观察值。
+通过标准是 `audit_valid=true`、`violations=[]`、exit 0，并保留 6 个 `contract-protected`、2 个 `lineage-only`、1 个 `reproducible-ephemeral` 和 3 个 `unknown` roots。unknown roots 继续 retain，但不因 deferred classification 使当前只读 audit 失败。machine JSON、baseline、execution 和 final evidence 的历史测量不写入测试常量；完成报告只记录本次观察值。

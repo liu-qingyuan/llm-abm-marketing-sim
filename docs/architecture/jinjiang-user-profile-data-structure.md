@@ -62,7 +62,7 @@ latent_attributes:
 - 六维 value weights 只适用于锦江酒店秸秆产品或相关绿色服务语境，不代表长期人格或整体消费观。
 - Table 11 labels 不等同真实人口属性；当前 rule-based probability 不直接使用这些 labels。
 - 36,400 用户完整 provider-backed LLM experiment 尚未执行；任何新的 Formal Run 都必须有独立授权。
-- `PostContent.value_dimensions` 的字段定义和三条 message source 由 [`../references/PostContent.md`](../references/PostContent.md) 持有。
+- `PostContent.value_dimensions` 的字段定义由 `src/llm_abm_sim/schemas.py` 持有；三条 current message 由 `authoritative_message_definitions()` 持有，并在每个 run 的 `message_snapshot.json` 中固化。
 
 ## 相关实现
 

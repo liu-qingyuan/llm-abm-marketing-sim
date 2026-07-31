@@ -21,6 +21,24 @@ RETIRED_PATHS = (
     "prds",
     "decision-maps",
 )
+EXPECTED_REFERENCE_FILES = {
+    "docs/references/README.md",
+    "docs/references/jinjiang-final-dataset-audit-20260624.md",
+    "docs/references/jinjiang-final-dataset-cleanup-20260624.md",
+    "docs/references/jinjiang-final-dataset-latent-v1-validation-20260705.md",
+    "docs/references/jinjiang-user-latent-attributes-reference-zh.md",
+    "docs/references/jinjiang-concurrent-message-formal-release-20260727.md",
+    "docs/references/jinjiang-concurrent-message-two-mode-formal-release-20260728.md",
+    "docs/references/jinjiang-concurrent-message-editorial-formal-release-20260729.md",
+    "docs/references/retention-cleanup-final-evidence-20260730.md",
+    "docs/references/retention-cleanup-execution-20260730.json",
+}
+REMOVED_REFERENCE_FILES = {
+    "docs/references/PostContent.md",
+    "docs/references/retention-audit-baseline-20260730.md",
+    "docs/references/retention-cleanup-execution-20260730.md",
+    "docs/references/gitnexus-index-scope-20260730.md",
+}
 
 
 def _read(path: Path) -> str:
@@ -81,6 +99,7 @@ def test_documentation_root_has_one_entrypoint_and_six_role_directories() -> Non
 def test_current_entrypoints_are_discoverable_from_the_single_index() -> None:
     docs_index = DOCS_ROOT / "index.md"
     expected_targets = [
+        DOCS_ROOT / "references" / "README.md",
         DOCS_ROOT / "guides" / "getting-started-macos.md",
         DOCS_ROOT / "architecture" / "abm-runtime.md",
         DOCS_ROOT / "architecture" / "concurrent-message-competition-experiment.md",
@@ -88,7 +107,7 @@ def test_current_entrypoints_are_discoverable_from_the_single_index() -> None:
         DOCS_ROOT / "architecture" / "douyin-data-collection-architecture.md",
         DOCS_ROOT / "architecture" / "retention-audit.md",
         DOCS_ROOT / "references" / "jinjiang-final-dataset-audit-20260624.md",
-        DOCS_ROOT / "references" / "jinjiang-final-dataset-latent-v1-validation-20260705.md",
+        DOCS_ROOT / "references" / "retention-cleanup-final-evidence-20260730.md",
         DOCS_ROOT / "references" / "jinjiang-concurrent-message-editorial-formal-release-20260729.md",
         DOCS_ROOT / "weekly" / "README.md",
         DOCS_ROOT / "agents" / "README.md",
@@ -121,6 +140,8 @@ def test_architecture_notes_keep_current_truth_without_ticket_gate_diagrams() ->
     assert "in-place rebuild 仍按 persisted source report hash 选择历史兼容 bytes" in concurrent
     assert "普通 run 与 `contract-protected` Formal/release run" in concurrent
     assert "ConcurrentCampaignDiagnostics" in concurrent
+    assert "authoritative_message_definitions()" in concurrent
+    assert "message_snapshot.json" in concurrent
     assert "interest_tags" in user_profile
     assert "Prompt v2 mocked" not in user_profile
     assert "```mermaid" not in concurrent
@@ -169,39 +190,67 @@ def test_historical_narrative_and_creation_screenshots_are_removed() -> None:
 
 
 def test_required_evidence_and_weekly_navigation_remain() -> None:
-    required = (
-        "jinjiang-final-dataset-audit-20260624.md",
-        "jinjiang-final-dataset-cleanup-20260624.md",
-        "jinjiang-final-dataset-latent-v1-validation-20260705.md",
-        "jinjiang-concurrent-message-formal-release-20260727.md",
-        "jinjiang-concurrent-message-two-mode-formal-release-20260728.md",
-        "jinjiang-concurrent-message-editorial-formal-release-20260729.md",
-        "retention-audit-baseline-20260730.md",
-        "retention-cleanup-execution-20260730.md",
-        "retention-cleanup-execution-20260730.json",
-        "retention-cleanup-final-evidence-20260730.md",
-        "gitnexus-index-scope-20260730.md",
-        "jinjiang-user-latent-attributes-reference-zh.md",
-        "PostContent.md",
-    )
-    for name in required:
-        assert (DOCS_ROOT / "references" / name).exists(), name
+    for relative_path in EXPECTED_REFERENCE_FILES:
+        assert (REPO_ROOT / relative_path).exists(), relative_path
+    for relative_path in REMOVED_REFERENCE_FILES:
+        assert not (REPO_ROOT / relative_path).exists(), relative_path
 
     weekly_text = _read(DOCS_ROOT / "weekly" / "README.md")
     assert "不覆盖 current Architecture" in weekly_text
     assert len(list((DOCS_ROOT / "weekly").glob("*.md"))) == 6
 
 
-def test_retention_current_truth_uses_gitnexus_scope_evidence() -> None:
+def test_references_reading_order_and_root_navigation_contract() -> None:
+    references = _read(DOCS_ROOT / "references" / "README.md")
+    for marker in ("默认读取", "按需 research", "按需 rollback", "forensic-only"):
+        assert marker in references
+    assert "默认 AI 阅读顺序不超过" in references
+
+    default_markers = ("current dataset", "current Editorial", "current Retention")
+    default_positions = [references.index(marker) for marker in default_markers]
+    assert default_positions == sorted(default_positions)
+
+    docs_index = DOCS_ROOT / "index.md"
+    root_reference_targets = {
+        target.resolve()
+        for _, target in _local_markdown_links(docs_index)
+        if target.parent == (DOCS_ROOT / "references").resolve()
+    }
+    assert root_reference_targets == {
+        (DOCS_ROOT / "references" / "README.md").resolve(),
+        (DOCS_ROOT / "references" / "jinjiang-final-dataset-audit-20260624.md").resolve(),
+        (DOCS_ROOT / "references" / "jinjiang-concurrent-message-editorial-formal-release-20260729.md").resolve(),
+        (DOCS_ROOT / "references" / "retention-cleanup-final-evidence-20260730.md").resolve(),
+    }
+
+
+def test_tracked_references_are_exactly_the_current_evidence_set() -> None:
+    result = subprocess.run(
+        ["git", "ls-files", "-z", "--", "docs/references"],
+        cwd=REPO_ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    tracked = {path for path in result.stdout.split("\0") if path}
+    assert tracked == EXPECTED_REFERENCE_FILES
+
+
+def test_retention_current_truth_uses_the_final_evidence_and_tracked_policy() -> None:
     retention_note = DOCS_ROOT / "architecture" / "retention-audit.md"
     architecture_readme = DOCS_ROOT / "architecture" / "README.md"
     references = DOCS_ROOT / "references" / "README.md"
+    final_evidence = _read(DOCS_ROOT / "references" / "retention-cleanup-final-evidence-20260730.md")
     manifest = _read(REPO_ROOT / "configs" / "retention" / "manifest.json")
 
     assert _linked_from(architecture_readme, retention_note)
     assert "retention-manifest-v2" in _read(retention_note)
     assert "audit_valid=true" in _read(retention_note)
-    assert "gitnexus-index-scope-20260730.md" in _read(retention_note)
-    assert "Retention baseline" in _read(references)
-    assert "docs/references/gitnexus-index-scope-20260730.md" in manifest
+    assert "retention-cleanup-final-evidence-20260730.md" in _read(retention_note)
+    assert ".gitnexusignore" in _read(retention_note)
+    assert "Retention baseline" not in _read(references)
+    assert "docs/references/gitnexus-index-scope-20260730.md" not in manifest
+    assert '"path": ".gitnexusignore"' in manifest
     assert "source-tree-and-entrypoints.md" not in manifest
+    for relative_path in REMOVED_REFERENCE_FILES:
+        assert relative_path.removeprefix("docs/references/") not in final_evidence
