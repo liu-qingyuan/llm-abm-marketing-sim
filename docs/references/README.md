@@ -1,6 +1,6 @@
 # References
 
-本目录只保留必须读取的数据 lineage、Formal release、Retention evidence 和研究先验。Reference 不替代代码、Architecture、ADR 或 GitHub `Spec:` issue；删除的过程叙事由 Git history 和 issue history 保留，不在这里建立 archive、redirect 或兼容索引。
+本目录只保留必须读取的数据 lineage、Formal release、Retention evidence、研究先验和按需 presentation audit。Reference 不替代代码、Architecture、ADR 或 GitHub `Spec:` issue；删除的过程叙事由 Git history 和 issue history 保留，不在这里建立 archive、redirect 或兼容索引。
 
 ## AI 阅读决策表
 
@@ -10,6 +10,7 @@
 |---|---|---|
 | 默认读取 | [current dataset：锦江 final dataset 审计](jinjiang-final-dataset-audit-20260624.md)、[current Editorial：Editorial Formal release](jinjiang-concurrent-message-editorial-formal-release-20260729.md)、[current Retention：Retention final evidence](retention-cleanup-final-evidence-20260730.md) | 先确定数据 lineage、当前发布身份和保留/质量 closure。 |
 | 按需 research | [final dataset cleanup](jinjiang-final-dataset-cleanup-20260624.md)、[latent-v1 validation](jinjiang-final-dataset-latent-v1-validation-20260705.md)、[Latent Attributes 研究先验](jinjiang-user-latent-attributes-reference-zh.md) | 需要追溯数据清理、合成 variant 或研究先验时读取。 |
+| 按需 presentation audit | [Concurrent Message legend 与视觉语义调查](concurrent-message-legend-visual-semantics-audit-20260803.md) | 需要核对当前 Editorial 机制图的 Legend item、Visual mark、Data field/series、Interaction state、Narrative annotation 和已确认修正规则时读取；它不是实现 Spec 或部署授权。 |
 | 按需 rollback | [Original Formal release](jinjiang-concurrent-message-formal-release-20260727.md)、[Two-mode rollback release](jinjiang-concurrent-message-two-mode-formal-release-20260728.md) | 需要检查当前 Editorial 之前的 release lineage 或回滚身份时读取。 |
 | forensic-only | [Retention machine evidence](retention-cleanup-execution-20260730.json) | 需要核对 exact machine-readable cleanup evidence、文件 bytes 或目录 postcondition 时读取；不要把它当作默认叙事入口。 |
 

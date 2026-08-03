@@ -300,6 +300,14 @@ Final Research Report Run 生成的研究展示产物集合。它至少包含网
 
 在同一个页面叙事中同时提供通俗机制概览和可按需展开的本次运行证据的研究展示产物。它必须持续区分稳定研究规则与某次 Final Research Report Run 的观测结果，不能把预设权重或信号纳入误述为已观测效果。
 
+### Editorial Legend Contract
+
+Interactive Mechanism Report 中每个 Legend item 必须对应当前 Interaction State 内真实、可辨认的 Visual mark，并明确该 mark 是否绑定 Data field/series；当前状态没有对应 mark 时隐藏该 item，并用 Narrative annotation 说明无数据。Narrative annotation、公式和边界说明不能使用 series swatch 伪装成 Legend item。
+
+### Visual Encoding Reference
+
+Editorial 机制图完整资产生成前批准的视觉编码依据，逐项固定 Legend item、Visual mark、Data field/series、Interaction State 和 Narrative annotation 边界；完整图必须按该依据生成并反向核对。
+
 ### Mechanism Explanation Mode
 
 Interactive Mechanism Report 的默认阅读模式，用通俗视觉和稳定术语解释研究机制，不展示或暗示某次运行才成立的结果。

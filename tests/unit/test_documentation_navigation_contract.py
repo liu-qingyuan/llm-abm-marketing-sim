@@ -30,6 +30,7 @@ EXPECTED_REFERENCE_FILES = {
     "docs/references/jinjiang-concurrent-message-formal-release-20260727.md",
     "docs/references/jinjiang-concurrent-message-two-mode-formal-release-20260728.md",
     "docs/references/jinjiang-concurrent-message-editorial-formal-release-20260729.md",
+    "docs/references/concurrent-message-legend-visual-semantics-audit-20260803.md",
     "docs/references/retention-cleanup-final-evidence-20260730.md",
     "docs/references/retention-cleanup-execution-20260730.json",
 }
@@ -197,12 +198,12 @@ def test_required_evidence_and_weekly_navigation_remain() -> None:
 
     weekly_text = _read(DOCS_ROOT / "weekly" / "README.md")
     assert "不覆盖 current Architecture" in weekly_text
-    assert len(list((DOCS_ROOT / "weekly").glob("*.md"))) == 6
+    assert len(list((DOCS_ROOT / "weekly").glob("*.md"))) == 7
 
 
 def test_references_reading_order_and_root_navigation_contract() -> None:
     references = _read(DOCS_ROOT / "references" / "README.md")
-    for marker in ("默认读取", "按需 research", "按需 rollback", "forensic-only"):
+    for marker in ("默认读取", "按需 research", "按需 presentation audit", "按需 rollback", "forensic-only"):
         assert marker in references
     assert "默认 AI 阅读顺序不超过" in references
 
