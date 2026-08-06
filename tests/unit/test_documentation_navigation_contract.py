@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import re
 import subprocess
 from pathlib import Path
@@ -33,6 +34,12 @@ EXPECTED_REFERENCE_FILES = {
     "docs/references/concurrent-message-legend-visual-semantics-audit-20260803.md",
     "docs/references/concurrent-message-sensitivity-curve-visual-reference-20260803.md",
     "docs/references/concurrent-message-sensitivity-curve-visual-reference-20260803.jpg",
+    "docs/references/concurrent-message-editorial-v2-visual-encoding-references/README.md",
+    "docs/references/concurrent-message-editorial-v2-visual-encoding-references/visual-encoding-reference-overview-v2.png",
+    "docs/references/concurrent-message-editorial-v2-visual-encoding-references/visual-encoding-reference-sample-v2.png",
+    "docs/references/concurrent-message-editorial-v2-visual-encoding-references/visual-encoding-reference-exposure-ranking-v2.png",
+    "docs/references/concurrent-message-editorial-v2-visual-encoding-references/visual-encoding-reference-llm-decision-v2.png",
+    "docs/references/concurrent-message-editorial-v2-visual-encoding-references/visual-encoding-reference-network-feedback-v2.png",
     "docs/references/retention-cleanup-final-evidence-20260730.md",
     "docs/references/retention-cleanup-execution-20260730.json",
 }
@@ -41,6 +48,16 @@ REMOVED_REFERENCE_FILES = {
     "docs/references/retention-audit-baseline-20260730.md",
     "docs/references/retention-cleanup-execution-20260730.md",
     "docs/references/gitnexus-index-scope-20260730.md",
+}
+VISUAL_ENCODING_REFERENCE_ROOT = (
+    DOCS_ROOT / "references" / "concurrent-message-editorial-v2-visual-encoding-references"
+)
+VISUAL_ENCODING_REFERENCE_SHA256 = {
+    "visual-encoding-reference-overview-v2.png": "67a0444523475bcc198e2fe0b5005f72d97149228e00d074f045a95c3aca54ee",
+    "visual-encoding-reference-sample-v2.png": "b5f66ad6c378657acbee7d70e3408ff9eb9808c55aa1c97330ffdd41d0571d5c",
+    "visual-encoding-reference-exposure-ranking-v2.png": "9960f63d90255212cea8dbb41239deec853f1935330147c89205f99075f4822e",
+    "visual-encoding-reference-llm-decision-v2.png": "a116891f063fd3249e58ef00c96a15aacf8942a932d499232d52414fdd671574",
+    "visual-encoding-reference-network-feedback-v2.png": "2b95f0f0ed14d30a884cacf6e24f96c9f15129d1e859843ce54f8cf4b69fdae0",
 }
 
 
@@ -225,6 +242,27 @@ def test_references_reading_order_and_root_navigation_contract() -> None:
         (DOCS_ROOT / "references" / "jinjiang-concurrent-message-editorial-formal-release-20260729.md").resolve(),
         (DOCS_ROOT / "references" / "retention-cleanup-final-evidence-20260730.md").resolve(),
     }
+
+
+def test_visual_encoding_reference_approval_package_is_exact() -> None:
+    readme = _read(VISUAL_ENCODING_REFERENCE_ROOT / "README.md")
+    png_files = {path.name for path in VISUAL_ENCODING_REFERENCE_ROOT.glob("*.png")}
+
+    assert png_files == set(VISUAL_ENCODING_REFERENCE_SHA256)
+    assert readme.count("- 统一批准状态：") == 1
+    assert "等待用户一次性确认全部五张 Reference" in readme
+    assert "Generation model: none" in readme
+    assert "**27**" in readme
+
+    for filename, expected_sha256 in VISUAL_ENCODING_REFERENCE_SHA256.items():
+        asset = VISUAL_ENCODING_REFERENCE_ROOT / filename
+        payload = asset.read_bytes()
+        assert payload[:8] == b"\x89PNG\r\n\x1a\n", filename
+        assert int.from_bytes(payload[16:20], "big") == 1536, filename
+        assert int.from_bytes(payload[20:24], "big") == 1024, filename
+        assert hashlib.sha256(payload).hexdigest() == expected_sha256, filename
+        assert filename in readme
+        assert expected_sha256 in readme
 
 
 def test_tracked_references_are_exactly_the_current_evidence_set() -> None:
