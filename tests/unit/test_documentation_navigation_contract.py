@@ -31,6 +31,8 @@ EXPECTED_REFERENCE_FILES = {
     "docs/references/jinjiang-concurrent-message-two-mode-formal-release-20260728.md",
     "docs/references/jinjiang-concurrent-message-editorial-formal-release-20260729.md",
     "docs/references/concurrent-message-legend-visual-semantics-audit-20260803.md",
+    "docs/references/concurrent-message-sensitivity-curve-visual-reference-20260803.md",
+    "docs/references/concurrent-message-sensitivity-curve-visual-reference-20260803.jpg",
     "docs/references/retention-cleanup-final-evidence-20260730.md",
     "docs/references/retention-cleanup-execution-20260730.json",
 }

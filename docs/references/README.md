@@ -10,10 +10,12 @@
 |---|---|---|
 | 默认读取 | [current dataset：锦江 final dataset 审计](jinjiang-final-dataset-audit-20260624.md)、[current Editorial：Editorial Formal release](jinjiang-concurrent-message-editorial-formal-release-20260729.md)、[current Retention：Retention final evidence](retention-cleanup-final-evidence-20260730.md) | 先确定数据 lineage、当前发布身份和保留/质量 closure。 |
 | 按需 research | [final dataset cleanup](jinjiang-final-dataset-cleanup-20260624.md)、[latent-v1 validation](jinjiang-final-dataset-latent-v1-validation-20260705.md)、[Latent Attributes 研究先验](jinjiang-user-latent-attributes-reference-zh.md) | 需要追溯数据清理、合成 variant 或研究先验时读取。 |
-| 按需 presentation audit | [Concurrent Message legend 与视觉语义调查](concurrent-message-legend-visual-semantics-audit-20260803.md) | 需要核对当前 Editorial 机制图的 Legend item、Visual mark、Data field/series、Interaction state、Narrative annotation 和已确认修正规则时读取；它不是实现 Spec 或部署授权。 |
+| 按需 presentation audit | [Concurrent Message legend 与视觉语义调查](concurrent-message-legend-visual-semantics-audit-20260803.md)、[Sensitivity 多曲线视觉参考](concurrent-message-sensitivity-curve-visual-reference-20260803.md) | 前者用于核对 Editorial 机制图的图例语义；后者只提供 sensitivity 结果图的宽幅多曲线 composition、外置图例和线型 grammar，不提供数据、参数或研究结论。两者都不是实现 Spec 或部署授权。 |
 | 按需 rollback | [Original Formal release](jinjiang-concurrent-message-formal-release-20260727.md)、[Two-mode rollback release](jinjiang-concurrent-message-two-mode-formal-release-20260728.md) | 需要检查当前 Editorial 之前的 release lineage 或回滚身份时读取。 |
 | forensic-only | [Retention machine evidence](retention-cleanup-execution-20260730.json) | 需要核对 exact machine-readable cleanup evidence、文件 bytes 或目录 postcondition 时读取；不要把它当作默认叙事入口。 |
 
 ## Asset ownership
 
-五张 `media-mechanism-*.png` 是 Editorial candidate 的 exact source assets，现由 `src/llm_abm_sim/report_assets/` 与同目录 generated WebP 共同拥有。source SHA-256、candidate contract、generated assets 和 published report bytes 由代码、测试和 Formal evidence 持续验证；creation-time desktop/run/trace screenshots 不属于当前 References。
+五张 `media-mechanism-*.png` 是 Editorial candidate 的 exact source assets，现由 `src/llm_abm_sim/report_assets/` 与同目录 generated WebP 共同拥有。source SHA-256、candidate contract、generated assets 和 published report bytes 由代码、测试和 Formal evidence 持续验证。
+
+`concurrent-message-sensitivity-curve-visual-reference-20260803.jpg` 是用户提供的 presentation-only 构图参考，原始 publication metadata 未记录；它不得作为研究证据或 production chart 直接发布。creation-time desktop/run/trace screenshots 仍不属于当前 References。
