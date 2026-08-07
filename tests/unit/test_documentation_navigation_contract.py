@@ -250,7 +250,8 @@ def test_visual_encoding_reference_approval_package_is_exact() -> None:
 
     assert png_files == set(VISUAL_ENCODING_REFERENCE_SHA256)
     assert readme.count("- 统一批准状态：") == 1
-    assert "等待用户一次性确认全部五张 Reference" in readme
+    assert "已一次性批准全部五张 Reference" in readme
+    assert "issues/149#issuecomment-5213188829" in readme
     assert "Generation model: none" in readme
     assert "**27**" in readme
 

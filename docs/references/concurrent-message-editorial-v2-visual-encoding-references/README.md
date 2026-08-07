@@ -6,8 +6,8 @@
 - Canvas: five independent `1536 × 1024` (3:2) RGB PNG files
 - Generation tool: local deterministic HTML/SVG render with Playwright `1.60.0` and Chromium `148.0.7778.96`
 - Generation model: none; exact vector marks and typography were rendered without a generative model
-- 统一批准状态：**等待用户一次性确认全部五张 Reference**
-- 批准证据：尚无；批准后应记录为 issue #149 的单条全套确认评论，不建立逐图状态
+- 统一批准状态：**已一次性批准全部五张 Reference**
+- 批准证据：[issue #149 全套确认评论](https://github.com/liu-qingyuan/llm-abm-marketing-sim/issues/149#issuecomment-5213188829)；不建立逐图状态
 
 本目录是完整机制图生成前的 Reference 审批包。五张图片分别固定一个 Mechanism section 的 message color、figure-local role palette、shape、connection、fill、line style，以及 Legend item 与 Narrative annotation 的边界。它们不是完整机制图、运行数据图、renderer asset 或 deployment artifact。
 
