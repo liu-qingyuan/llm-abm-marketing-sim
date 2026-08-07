@@ -1018,6 +1018,23 @@ def test_deploy_rejects_symlink_contract_before_any_remote_action(tmp_path: Path
         temporary.cleanup()
 
 
+def test_deploy_preserves_empty_previous_release_across_ssh_boundaries():
+    deploy_script = REPO_ROOT / "scripts" / "deploy_abm_report.sh"
+    script = deploy_script.read_text(encoding="utf-8")
+
+    assert 'PREVIOUS_RELEASE_ARG="${PREVIOUS_RELEASE:-__ABM_NO_PREVIOUS_RELEASE__}"' in script
+    assert script.count('[[ "${previous_release}" != "__ABM_NO_PREVIOUS_RELEASE__" ]] || previous_release=""') == 2
+    assert script.count('"${PREVIOUS_RELEASE_ARG}"') == 2
+
+
+def test_deploy_retries_transient_public_transport_errors_without_weakening_checks():
+    deploy_script = REPO_ROOT / "scripts" / "deploy_abm_report.sh"
+    script = deploy_script.read_text(encoding="utf-8")
+
+    assert "PUBLIC_CURL_RETRY=(--retry 4 --retry-all-errors --retry-delay 2 --retry-max-time 120)" in script
+    assert script.count('curl "${PUBLIC_CURL_RETRY[@]}"') == 6
+
+
 def test_deploy_preserves_candidate_checks_atomic_switch_and_transaction_rollback_order():
     deploy_script = REPO_ROOT / "scripts" / "deploy_abm_report.sh"
     script = deploy_script.read_text(encoding="utf-8")

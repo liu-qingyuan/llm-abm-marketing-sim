@@ -8,7 +8,7 @@
 
 - Canonical endpoint：[https://abm.q1ngyuan.top/](https://abm.q1ngyuan.top/)
 - Architecture：[Concurrent Message Competition Experiment](../architecture/concurrent-message-competition-experiment.md)
-- Aggregate release evidence：[Editorial Formal 发布与验收记录](../references/jinjiang-concurrent-message-editorial-formal-release-20260729.md)
+- Aggregate release evidence：[Editorial v2 Formal 发布与主机迁移记录](../references/jinjiang-concurrent-message-editorial-v2-formal-release-20260807.md)
 - Data lineage：[锦江 final dataset 审计](../references/jinjiang-final-dataset-audit-20260624.md)、[latent-v1 validation](../references/jinjiang-final-dataset-latent-v1-validation-20260705.md)
 
 报告当前只覆盖 1,000 位 Research Sample users、3 条 message、30 个 batch 和每条 message 600 次曝光；36,400 用户完整 provider-backed experiment 是后续独立研究范围。报告中的分母、Decision、trace、diagnostics 和发布状态必须以 persisted artifacts 与 release contract 为准。

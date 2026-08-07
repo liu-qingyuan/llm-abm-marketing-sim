@@ -42,8 +42,22 @@ async function expectNoHorizontalOverflow(page: Page): Promise<void> {
 async function expectArtifactHeads(request: APIRequestContext): Promise<void> {
   const artifacts = artifactPaths ?? fallbackArtifactsByKind[reportKind] ?? fallbackArtifactsByKind['final-research'];
   for (const artifact of artifacts) {
-    const response = await request.head(`${publicUrl}/${artifact}`);
-    expect(response.ok(), artifact).toBeTruthy();
+    for (let attempt = 1; attempt <= 4; attempt += 1) {
+      let response;
+      try {
+        response = await request.head(`${publicUrl}/${artifact}`, { timeout: 30_000 });
+      } catch (error) {
+        if (attempt === 4) throw error;
+        await new Promise((resolve) => setTimeout(resolve, 2_000));
+        continue;
+      }
+      try {
+        expect(response.ok(), artifact).toBeTruthy();
+      } finally {
+        await response.dispose();
+      }
+      break;
+    }
   }
 }
 
@@ -145,7 +159,7 @@ test.describe('deployed Seed-First report', () => {
   test.skip(!publicUrl, 'ABM_DEPLOY_PUBLIC_URL is required for explicit public deployment acceptance');
 
   test('serves the approved report and artifacts without responsive errors', async ({ page, request }) => {
-    test.setTimeout(180_000);
+    test.setTimeout(300_000);
     const consoleErrors: string[] = [];
     page.on('console', (message) => {
       if (message.type() === 'error') consoleErrors.push(message.text());

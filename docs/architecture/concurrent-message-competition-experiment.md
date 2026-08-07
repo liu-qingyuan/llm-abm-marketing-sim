@@ -1,7 +1,7 @@
 # Concurrent Message Competition Experiment
 
 Status: Implemented and published architecture note
-Current release evidence: [`../references/jinjiang-concurrent-message-editorial-formal-release-20260729.md`](../references/jinjiang-concurrent-message-editorial-formal-release-20260729.md)
+Current release evidence: [`../references/jinjiang-concurrent-message-editorial-v2-formal-release-20260807.md`](../references/jinjiang-concurrent-message-editorial-v2-formal-release-20260807.md)
 Canonical endpoint: [`https://abm.q1ngyuan.top/`](https://abm.q1ngyuan.top/)
 
 本文是当前三 message runtime、报告和发布边界的唯一 Architecture Note。它不替代 GitHub `Spec:` issue 的 executable requirements，也不授权新的 Formal Run、Provider 或 deployment。

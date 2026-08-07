@@ -159,6 +159,7 @@ else
 fi
 PREVIOUS_RELEASE="$(<"${PREVIOUS_RELEASE_FILE}")"
 rm -f "${PREVIOUS_RELEASE_FILE}"
+PREVIOUS_RELEASE_ARG="${PREVIOUS_RELEASE:-__ABM_NO_PREVIOUS_RELEASE__}"
 
 printf 'Uploading %s to %s:%s\n' "${SOURCE_DIR}" "${DEPLOY_HOST}" "${REMOTE_RELEASE}"
 ssh "${DEPLOY_HOST}" bash -s -- "${REMOTE_RELEASE}" <<'PREPARE_RELEASE'
@@ -195,7 +196,7 @@ trap cleanup_local_snapshot EXIT
 ssh "${DEPLOY_HOST}" bash -s -- \
   "${REMOTE_ROOT}" \
   "${REMOTE_RELEASE}" \
-  "${PREVIOUS_RELEASE}" \
+  "${PREVIOUS_RELEASE_ARG}" \
   "${DOMAIN}" \
   "${PORT}" \
   "${CONTAINER_NAME}" \
@@ -206,6 +207,7 @@ set -euo pipefail
 remote_root="$1"
 remote_release="$2"
 previous_release="$3"
+[[ "${previous_release}" != "__ABM_NO_PREVIOUS_RELEASE__" ]] || previous_release=""
 domain="$4"
 port="$5"
 container_name="$6"
@@ -456,10 +458,11 @@ REMOTE_DEPLOY
 cutover_complete=1
 rollback_remote() {
   ssh "${DEPLOY_HOST}" bash -s -- \
-    "${REMOTE_ROOT}" "${PREVIOUS_RELEASE}" "${CONTAINER_NAME}" <<'REMOTE_ROLLBACK'
+    "${REMOTE_ROOT}" "${PREVIOUS_RELEASE_ARG}" "${CONTAINER_NAME}" <<'REMOTE_ROLLBACK'
 set -euo pipefail
 remote_root="$1"
 previous_release="$2"
+[[ "${previous_release}" != "__ABM_NO_PREVIOUS_RELEASE__" ]] || previous_release=""
 container_name="$3"
 if [[ -n "${previous_release}" ]]; then
   previous_report_sha="$(sha256sum "${previous_release}/report.html" | awk '{print $1}')"
@@ -496,15 +499,16 @@ rollback_on_failure() {
 }
 trap rollback_on_failure EXIT
 
+PUBLIC_CURL_RETRY=(--retry 4 --retry-all-errors --retry-delay 2 --retry-max-time 120)
 for _attempt in 1 2 3 4 5 6 7 8; do
-  if curl -fsS --max-time 20 "https://${DOMAIN}/healthz" >/dev/null; then
+  if curl "${PUBLIC_CURL_RETRY[@]}" -fsS --max-time 20 "https://${DOMAIN}/healthz" >/dev/null; then
     break
   fi
   sleep 2
 done
-curl -fsS --max-time 20 "https://${DOMAIN}/healthz" >/dev/null || fail "public health check failed"
+curl "${PUBLIC_CURL_RETRY[@]}" -fsS --max-time 20 "https://${DOMAIN}/healthz" >/dev/null || fail "public health check failed"
 
-PUBLIC_REPORT_HEADERS="$(curl -fsSIL --max-time 30 \
+PUBLIC_REPORT_HEADERS="$(curl "${PUBLIC_CURL_RETRY[@]}" -fsSIL --max-time 30 \
   -H 'Cache-Control: no-cache' \
   "https://${DOMAIN}/report.html?release=${RELEASE_ID}")"
 REMOTE_REPORT_HEADER_SHA="$(printf '%s\n' "${PUBLIC_REPORT_HEADERS}" \
@@ -523,14 +527,14 @@ cleanup_and_rollback_on_failure() {
   rollback_on_failure "${status}"
 }
 trap cleanup_and_rollback_on_failure EXIT
-curl -fsSL --compressed --max-time 180 \
+curl "${PUBLIC_CURL_RETRY[@]}" -fsSL --compressed --max-time 180 \
   -H 'Cache-Control: no-cache' \
   "https://${DOMAIN}/report.html?release=${RELEASE_ID}" \
   -o "${PUBLIC_REPORT}"
 REMOTE_REPORT_SHA="$(shasum -a 256 "${PUBLIC_REPORT}" | awk '{print $1}')"
 [[ "${REMOTE_REPORT_SHA}" == "${LOCAL_REPORT_SHA}" ]] || fail "public report checksum mismatch"
 
-curl -fsSL --max-time 30 \
+curl "${PUBLIC_CURL_RETRY[@]}" -fsSL --max-time 30 \
   -H 'Cache-Control: no-cache' \
   "https://${DOMAIN}/artifact_manifest.json?release=${RELEASE_ID}" \
   -o "${PUBLIC_MANIFEST}"
@@ -538,7 +542,7 @@ REMOTE_MANIFEST_SHA="$(shasum -a 256 "${PUBLIC_MANIFEST}" | awk '{print $1}')"
 [[ "${REMOTE_MANIFEST_SHA}" == "${LOCAL_MANIFEST_SHA}" ]] || fail "public manifest checksum mismatch"
 
 for artifact in "${PUBLIC_ACCEPTANCE_ARTIFACTS[@]}"; do
-  curl -fsSIL --max-time 30 "https://${DOMAIN}/${artifact}" >/dev/null || \
+  curl "${PUBLIC_CURL_RETRY[@]}" -fsSIL --max-time 30 "https://${DOMAIN}/${artifact}" >/dev/null || \
     fail "public artifact check failed: ${artifact}"
 done
 
