@@ -39,6 +39,14 @@ _EDITORIAL_V2_ASSET_HASHES = {
     "editorial-mechanism-network-feedback-v2.webp": "548f0d601e84291125fac1926ea1304f723ad8fff37c013297b1f4e54719df50",
 }
 
+_EDITORIAL_V3_ASSET_HASHES = {
+    "editorial-mechanism-overview-v3.webp": "fe112e7d898e881dd7d379333e2192e87c62278820a52ea4b0f6bd39fee550bc",
+    "editorial-mechanism-sample-v3.webp": "a01d8ea31980568b06bf8a03a42592e83387883ed0f60ea097218879bb120b37",
+    "editorial-mechanism-exposure-ranking-v3.webp": "0866e463948e95329d3949ebe7f41edfa3f5e9c708e55f309b6877b7df2b9367",
+    "editorial-mechanism-llm-decision-v3.webp": "96a5a87a01da39ef73a8c2a1cb510bcd008697cf595b760acc891e911ff53368",
+    "editorial-mechanism-network-feedback-v3.webp": "d28d30437865965b3b72a6be2cfa5b516f6e6741208bc250232695b9b1f38b14",
+}
+
 _V2_LEGEND_ITEMS = {
     "overview": {
         "overview-first-message-channel",
@@ -89,10 +97,12 @@ def formal_payload() -> ConcurrentMessageReportPayload:
 def test_editorial_catalog_has_zh_en_key_parity() -> None:
     assert set(candidate._EDITORIAL_CATALOG["zh-CN"]) == set(candidate._EDITORIAL_CATALOG["en-US"])
     assert set(candidate._EDITORIAL_V2_CATALOG["zh-CN"]) == set(candidate._EDITORIAL_V2_CATALOG["en-US"])
+    assert set(candidate._EDITORIAL_V3_CATALOG["zh-CN"]) == set(candidate._EDITORIAL_V3_CATALOG["en-US"])
     assert candidate._EDITORIAL_DETAILS
-    for detail in candidate._EDITORIAL_DETAILS.values():
-        assert set(detail) == {"zh-CN", "en-US"}
-        assert set(detail["zh-CN"]) == set(detail["en-US"])
+    for details in (candidate._EDITORIAL_DETAILS, candidate._EDITORIAL_V3_DETAILS):
+        for detail in details.values():
+            assert set(detail) == {"zh-CN", "en-US"}
+            assert set(detail["zh-CN"]) == set(detail["en-US"])
 
 
 def test_editorial_assets_are_versioned_packaged_and_nonblank() -> None:
@@ -165,6 +175,27 @@ def test_editorial_v2_assets_and_legend_close_the_audited_mark_contract(
         "feedback-same-batch-frozen",
     ):
         assert f'data-legend-item="{annotation_only}"' not in html
+
+
+def test_editorial_v3_assets_are_versioned_packaged_and_nonblank() -> None:
+    assert set(candidate._EDITORIAL_V3_ASSET_CATALOG) == set(_V2_LEGEND_ITEMS)
+    for asset in candidate._EDITORIAL_V3_ASSET_CATALOG.values():
+        source_path = SOURCE_DIR / asset["source"]
+        source_data = source_path.read_bytes()
+        derivative_path = ASSET_DIR / asset["file"]
+        derivative_data = derivative_path.read_bytes()
+
+        assert asset["version"] == "v3"
+        assert source_path.name.endswith("-v3.png")
+        assert derivative_path.name.endswith("-v3.webp")
+        assert source_data.startswith(b"\x89PNG\r\n\x1a\n")
+        assert int.from_bytes(source_data[16:20], "big") == 1536
+        assert int.from_bytes(source_data[20:24], "big") == 1024
+        assert hashlib.sha256(source_data).hexdigest() == asset["source_sha256"]
+        assert derivative_data.startswith(b"RIFF") and derivative_data[8:12] == b"WEBP"
+        assert len(derivative_data) > 1_000
+        assert hashlib.sha256(derivative_data).hexdigest() == asset["sha256"]
+        assert asset["sha256"] == _EDITORIAL_V3_ASSET_HASHES[derivative_path.name]
 
 
 def test_editorial_candidate_is_deterministic_private_and_direct(formal_payload: ConcurrentMessageReportPayload) -> None:
@@ -310,17 +341,50 @@ def test_run_evidence_rejects_inconsistent_persisted_coverage(formal_payload: Co
 
 
 
-def test_editorial_v2_is_default_while_v1_stays_exact(
+def test_editorial_v3_closes_three_channel_overlap_and_campaign_feedback_semantics(
+    formal_payload: ConcurrentMessageReportPayload,
+) -> None:
+    html = candidate._render_editorial_v3(formal_payload)
+
+    assert 'data-editorial-version="v3"' in html
+    assert html.count('data-legend-item="ranking-cross-message-overlap"') == 1
+    assert 'editorial-mark-overlap-three' in html
+    assert "同一 user 可以进入任意两条或全部三条 queue，但不要求发生 overlap" in html
+    assert "the same user may enter any two or all three queues; overlap is allowed, not required" in html
+    assert "相同 user × message pair 最多 exposure 一次" in html
+    assert "the same user × message pair can be exposed at most once" in html.lower()
+
+    assert 'editorial-mark-dedup-three' in html
+    assert 'editorial-mark-shared-context' in html
+    assert "terminal `succeeded` 且 action 为 like / comment / share" in html
+    assert "terminal `succeeded` with action like / comment / share" in html
+    assert "按 `user_id` 跨 message 汇聚为唯一 campaign engaged-user set" in html
+    assert "deduplicated by `user_id` across messages into one campaign engaged-user set" in html
+    assert "不把用户直接注入任何 queue" in html
+    assert "does not inject those users into any queue" in html
+    assert "Shadow、ignore、provider_failed" in html
+    assert "Shadow, ignore, and provider_failed" in html
+
+
+def test_editorial_v3_is_default_while_v1_and_v2_stay_exact(
     formal_payload: ConcurrentMessageReportPayload,
 ) -> None:
     v1 = candidate._render_editorial_candidate(formal_payload)
     v2 = candidate._render_editorial_v2(formal_payload)
+    v3 = candidate._render_editorial_v3(formal_payload)
 
     assert hashlib.sha256(v1.encode("utf-8")).hexdigest() == (
         "1d1e1ead3691aa275c74ff723a79960019c42fd58f179d8b74619f0a0b218ea9"
     )
-    assert render_report(formal_payload) == v2
+    assert hashlib.sha256(v2.encode("utf-8")).hexdigest() == (
+        "4e6680caf8476aa2b7839a20a985c320ce423c64b974d592b449ee2afa0ddbd8"
+    )
+    assert hashlib.sha256(v3.encode("utf-8")).hexdigest() == (
+        "ed661dcc53304b33a37c52e7540db5422c8206bec0e823991e22d7b8c3b46073"
+    )
+    assert render_report(formal_payload) == v3
     assert [renderer.__name__ for renderer in _FIXED_RENDERERS] == [
+        "_render_editorial_v3",
         "_render_editorial_v2",
         "_render_editorial_candidate",
         "_render_two_mode_report",

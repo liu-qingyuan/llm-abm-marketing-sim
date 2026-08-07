@@ -7,9 +7,11 @@ renderer paths. They do not contain raw prompts, provider requests, provider
 responses, credentials, or request headers.
 
 `compatibility_goldens.json` is the source of truth for the fixture schema and
-SHA-256 values. The `editorial_v2_default` golden is the current local default
-`4e6680caf8476aa2b7839a20a985c320ce423c64b974d592b449ee2afa0ddbd8`.
-The frozen `editorial_v1` golden remains the published report hash
+SHA-256 values. The `editorial_v3_default` golden is the current local default
+`ed661dcc53304b33a37c52e7540db5422c8206bec0e823991e22d7b8c3b46073`.
+The frozen `editorial_v2_default` golden preserves the previously published report hash
+`4e6680caf8476aa2b7839a20a985c320ce423c64b974d592b449ee2afa0ddbd8`. The
+frozen `editorial_v1` golden remains the published report hash
 `1d1e1ead3691aa275c74ff723a79960019c42fd58f179d8b74619f0a0b218ea9`. The
 `pre_pagination_historical` golden is the published source report hash
 `740f55a30bc4183a75724592496c6b6aa809a85ab385ccf96bc53093cb49a76d`. The

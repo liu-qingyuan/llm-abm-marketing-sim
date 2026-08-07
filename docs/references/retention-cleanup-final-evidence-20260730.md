@@ -11,7 +11,8 @@
 本记录是 aggregate-only final evidence。它组合 Ticket #126 的只读 manifest audit、#127 的 documentation current-truth evidence、#128 的三个 generator output contract、#129 的 bounded GitNexus evidence、#130 的 exact cleanup execution 和本 Ticket 的 documentation consolidation。每个 release validation 都使用显式的 v4 contract/source pair；没有 latest discovery、contract rewrite、schema rewrite 或新的 cleanup registry。
 
 - [Retention machine evidence](retention-cleanup-execution-20260730.json)：exact cleanup file/directory evidence，作为 forensic-only machine entry 保留。
-- [Current Editorial v2 release evidence](jinjiang-concurrent-message-editorial-v2-formal-release-20260807.md)
+- [Current Editorial v3 release evidence](jinjiang-concurrent-message-editorial-v3-formal-release-20260807.md)
+- [Editorial v2 rollback release evidence](jinjiang-concurrent-message-editorial-v2-formal-release-20260807.md)
 - [Editorial v1 rollback release evidence](jinjiang-concurrent-message-editorial-formal-release-20260729.md)
 - [Original Formal release evidence](jinjiang-concurrent-message-formal-release-20260727.md)
 - [Two-mode rollback release evidence](jinjiang-concurrent-message-two-mode-formal-release-20260728.md)

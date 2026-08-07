@@ -78,6 +78,7 @@ async function expectEditorialReport(page: Page): Promise<void> {
   await expect(page.locator('html')).toHaveAttribute('lang', 'zh-CN');
   await expect(root).toHaveAttribute('data-report-mode', 'mechanism');
   await expect(root).toHaveAttribute('data-report-language', 'zh-CN');
+  await expect(root).toHaveAttribute('data-editorial-version', 'v3');
   await expect(page.getByTestId('mechanism-mode-panel')).toBeVisible();
   for (const anchor of ['overview', 'sample', 'exposure-ranking', 'llm-decision', 'network-feedback']) {
     await expect(page.locator(`[data-report-anchor="${anchor}"]`)).toHaveAttribute('href', `#${anchor}`);
@@ -85,10 +86,18 @@ async function expectEditorialReport(page: Page): Promise<void> {
   }
   await expect(page.getByTestId('mechanism-sample-size')).toContainText('1,000');
   await expect(page.getByTestId('mechanism-eligible-pairs')).toContainText('3,000');
+  await expect(page.locator('[data-legend-item="ranking-cross-message-overlap"]')).toHaveCount(1);
+  await expect(page.locator('[data-legend-item="ranking-cross-message-overlap"] .editorial-mark-overlap-three')).toBeVisible();
+  await expect(page.getByTestId('mechanism-exposure-ranking-section')).toContainText('任意两条或全部三条 queue');
+  await expect(page.locator('[data-legend-item="feedback-engaged-user-dedup"] .editorial-mark-dedup-three')).toBeVisible();
+  await expect(page.locator('[data-legend-item="feedback-next-batch-reranking"] .editorial-mark-shared-context')).toBeVisible();
+  await expect(page.getByTestId('mechanism-network-feedback-section')).toContainText('不把用户直接注入任何 queue');
 
   await page.getByRole('button', { name: 'English', exact: true }).click();
   await expect(page.locator('html')).toHaveAttribute('lang', 'en-US');
   await expect(root).toHaveAttribute('data-report-language', 'en-US');
+  await expect(page.locator('[data-legend-item="ranking-cross-message-overlap"]')).toContainText('any two or all three queues');
+  await expect(page.getByTestId('mechanism-network-feedback-section')).toContainText('does not inject those users into any queue');
   await page.getByRole('button', { name: '中文', exact: true }).click();
   await expect(page.locator('html')).toHaveAttribute('lang', 'zh-CN');
   await expect(root).toHaveAttribute('data-report-language', 'zh-CN');

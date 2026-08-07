@@ -1,7 +1,7 @@
 # Concurrent Message Competition Experiment
 
 Status: Implemented and published architecture note
-Current release evidence: [`../references/jinjiang-concurrent-message-editorial-v2-formal-release-20260807.md`](../references/jinjiang-concurrent-message-editorial-v2-formal-release-20260807.md)
+Current release evidence: [`../references/jinjiang-concurrent-message-editorial-v3-formal-release-20260807.md`](../references/jinjiang-concurrent-message-editorial-v3-formal-release-20260807.md)
 Canonical endpoint: [`https://abm.q1ngyuan.top/`](https://abm.q1ngyuan.top/)
 
 本文是当前三 message runtime、报告和发布边界的唯一 Architecture Note。它不替代 GitHub `Spec:` issue 的 executable requirements，也不授权新的 Formal Run、Provider 或 deployment。
@@ -74,4 +74,4 @@ Primary 与 Shadow 的 PeerContext 保持中性；campaign ranking signal 只改
 
 报告必须分别展示 campaign funnel、message allocation、Primary response、campaign feedback effect 和 demographic sensitivity，并给出明确 numerator/denominator。受众 overlap 和 action rate 只能作 descriptive comparison，不生成 winner 或综合分数。
 
-Canonical report 的 source/hash、model、budget、release id、rollback 和公网验收以三组 Formal evidence 为准：Original Formal、Two-mode rollback 和 Editorial Formal。代码、Validation/mock/rule-based artifact、`ready-for-agent` 状态和 issue 本身都不表示 production authorization。
+Canonical report 的 source/hash、model、budget、release id、rollback 和公网验收以 Original Formal、Two-mode rollback、Editorial rollback 和 current Editorial Formal evidence 为准。代码、Validation/mock/rule-based artifact、`ready-for-agent` 状态和 issue 本身都不表示 production authorization。

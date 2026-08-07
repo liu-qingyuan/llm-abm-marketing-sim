@@ -3,8 +3,14 @@
   "payload": "formal_report_payload.json.gz",
   "variants": [
     {
+      "name": "editorial_v3_default",
+      "adapter": "default Editorial v3",
+      "sha256": "ed661dcc53304b33a37c52e7540db5422c8206bec0e823991e22d7b8c3b46073",
+      "golden": "editorial_v3_default.html.gz"
+    },
+    {
       "name": "editorial_v2_default",
-      "adapter": "default Editorial v2",
+      "adapter": "frozen Editorial v2",
       "sha256": "4e6680caf8476aa2b7839a20a985c320ce423c64b974d592b449ee2afa0ddbd8",
       "golden": "editorial_v2_default.html.gz"
     },

@@ -47,10 +47,10 @@ def test_fixed_formal_renderer_goldens_match_exact_bytes(
     assert hashlib.sha256(expected_bytes).hexdigest() == variant["sha256"]
 
 
-def test_default_render_is_bound_to_editorial_v2_golden(
+def test_default_render_is_bound_to_editorial_v3_golden(
     formal_payload: ConcurrentMessageReportPayload,
 ) -> None:
-    variant = _variant("editorial_v2_default")
+    variant = _variant("editorial_v3_default")
     expected_bytes = _read_gzip(variant["golden"])
 
     rendered = render_report(formal_payload)

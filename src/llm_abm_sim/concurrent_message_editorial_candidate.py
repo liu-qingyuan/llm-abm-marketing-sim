@@ -1122,6 +1122,123 @@ _EDITORIAL_DETAILS: dict[str, dict[str, dict[str, str]]] = {
 }
 
 
+_EDITORIAL_V3_DETAILS = {
+    **_EDITORIAL_DETAILS,
+    "ranking-pair": {
+        "zh-CN": {
+            "title": "same user × message pair at most once",
+            "definition": "Message-Level Single Exposure 只约束相同 user × message pair；该 pair 曝光后退出对应 queue。",
+            "provenance": "Runtime Contract（运行时合同）",
+            "usage": "Eligibility（资格） / Exposure（曝光）",
+            "limitation": "这不是 campaign-level single exposure；同一用户仍可进入其他 message queue。",
+        },
+        "en-US": {
+            "title": "same user × message pair at most once",
+            "definition": "Message-Level Single Exposure constrains only the same user × message pair; that pair leaves its queue after exposure.",
+            "provenance": "Runtime Contract",
+            "usage": "Eligibility / Exposure",
+            "limitation": "This is not campaign-level single exposure; the same user may remain in other message queues.",
+        },
+    },
+    "ranking-overlap": {
+        "zh-CN": {
+            "title": "cross-message overlap permission",
+            "definition": "同一 user 可以进入任意两条或全部三条独立 message queue；overlap 允许发生，但不是必须发生。",
+            "provenance": "Per-Message Queue Contract",
+            "usage": "Ranking（排序） / Campaign Coverage（活动覆盖）",
+            "limitation": "关系标记表达允许的 queue membership，不表示本次或每次都出现 overlap。",
+        },
+        "en-US": {
+            "title": "cross-message overlap permission",
+            "definition": "The same user may enter any two or all three independent message queues; overlap is allowed, not required.",
+            "provenance": "Per-Message Queue Contract",
+            "usage": "Ranking / Campaign Coverage",
+            "limitation": "The relationship mark expresses permitted queue membership, not overlap in every run or batch.",
+        },
+    },
+    "feedback-primary": {
+        "zh-CN": {
+            "title": "terminal succeeded Primary positive action",
+            "definition": "只有 terminal `succeeded` 且 action 为 like / comment / share 的 Primary 才成为 campaign feedback source。",
+            "provenance": "Primary Decision Contract（主路径决策合同）",
+            "usage": "Campaign Feedback（活动反馈）",
+            "limitation": "Primary ignore、provider_failed 和全部 Shadow 都不会传播。",
+        },
+        "en-US": {
+            "title": "terminal succeeded Primary positive action",
+            "definition": "Only a Primary that is terminal `succeeded` with action like / comment / share becomes a campaign feedback source.",
+            "provenance": "Primary Decision Contract",
+            "usage": "Campaign Feedback",
+            "limitation": "Primary ignore, provider_failed, and every Shadow path do not propagate.",
+        },
+    },
+    "feedback-dedup": {
+        "zh-CN": {
+            "title": "campaign user deduplication",
+            "definition": "三条 message 的成功 Primary 用户按 `user_id` 跨 message 汇聚为唯一 campaign engaged-user set。",
+            "provenance": "Campaign Feedback Contract",
+            "usage": "Feedback（反馈） / Ranking Context（排序上下文）",
+            "limitation": "同一 user 在多条 message 成功仍只贡献一个 campaign user。",
+        },
+        "en-US": {
+            "title": "campaign user deduplication",
+            "definition": "Successful Primary users from all three messages are deduplicated by `user_id` across messages into one campaign engaged-user set.",
+            "provenance": "Campaign Feedback Contract",
+            "usage": "Feedback / Ranking Context",
+            "limitation": "The same user succeeding on multiple messages still contributes one campaign user.",
+        },
+    },
+    "feedback-next": {
+        "zh-CN": {
+            "title": "next-batch shared ranking context",
+            "definition": "下一批三条独立 rankings 读取同一份 frozen campaign engaged-user set 来计算 engaged-neighbor signal。",
+            "provenance": "Runtime Contract（运行时合同）",
+            "usage": "Next-batch Ranking Context（下一批排序上下文）",
+            "limitation": "共享的是 context；系统不把 engaged users 直接注入任何 eligible queue。",
+        },
+        "en-US": {
+            "title": "next-batch shared ranking context",
+            "definition": "The next batch's three independent rankings read the same frozen campaign engaged-user set to compute engaged-neighbor signal.",
+            "provenance": "Runtime Contract",
+            "usage": "Next-batch Ranking Context",
+            "limitation": "The shared object is context; the system does not inject engaged users into any eligible queue.",
+        },
+    },
+    "feedback-stop": {
+        "zh-CN": {
+            "title": "Shadow / ignore / provider_failed",
+            "definition": "Shadow、ignore、provider_failed 都在 campaign feedback 边界停止。",
+            "provenance": "Runtime Contract（运行时合同）",
+            "usage": "Feedback boundary（反馈边界）",
+            "limitation": "这些路径不提交 campaign engaged-user set，也不回写同批 ranking。",
+        },
+        "en-US": {
+            "title": "Shadow / ignore / provider_failed",
+            "definition": "Shadow, ignore, and provider_failed all stop at the campaign feedback boundary.",
+            "provenance": "Runtime Contract",
+            "usage": "Feedback boundary",
+            "limitation": "These paths do not commit to the campaign engaged-user set or write back into same-batch ranking.",
+        },
+    },
+    "feedback-freeze": {
+        "zh-CN": {
+            "title": "same-batch snapshot freeze",
+            "definition": "同批开始前冻结 campaign engaged-user snapshot；三路 Primary 全部 terminal 后才提交本批新增用户。",
+            "provenance": "Runtime Contract（运行时合同）",
+            "usage": "Batch boundary（批次边界）",
+            "limitation": "同批成功 action 不会改变当前三条 rankings。",
+        },
+        "en-US": {
+            "title": "same-batch snapshot freeze",
+            "definition": "The campaign engaged-user snapshot freezes before the batch; new users commit only after all three Primary paths are terminal.",
+            "provenance": "Runtime Contract",
+            "usage": "Batch boundary",
+            "limitation": "A same-batch successful action cannot change the current three rankings.",
+        },
+    },
+}
+
+
 for _detail_key, _localized_detail in _EDITORIAL_DETAILS.items():
     for _language in _EDITORIAL_LANGUAGES:
         for _field, _value_text in _localized_detail[_language].items():
@@ -1218,6 +1335,46 @@ _EDITORIAL_V2_ASSET_CATALOG: dict[str, dict[str, str]] = {
 }
 
 
+_EDITORIAL_V3_ASSET_VERSION = "v3"
+_EDITORIAL_V3_ASSET_CATALOG: dict[str, dict[str, str]] = {
+    "overview": {
+        "file": "editorial-mechanism-overview-v3.webp",
+        "sha256": "fe112e7d898e881dd7d379333e2192e87c62278820a52ea4b0f6bd39fee550bc",
+        "source": "editorial-mechanism-overview-v3.png",
+        "source_sha256": "769f6168d278bd9e6080631fab7b0411aa578f8cea6d7fbeba17aa04b33b6019",
+        "version": _EDITORIAL_V3_ASSET_VERSION,
+    },
+    "sample": {
+        "file": "editorial-mechanism-sample-v3.webp",
+        "sha256": "a01d8ea31980568b06bf8a03a42592e83387883ed0f60ea097218879bb120b37",
+        "source": "editorial-mechanism-sample-v3.png",
+        "source_sha256": "1981001fda541d15cf87fbc52cbedd787e831c6f066717d670e68d2d7f02fba3",
+        "version": _EDITORIAL_V3_ASSET_VERSION,
+    },
+    "exposure-ranking": {
+        "file": "editorial-mechanism-exposure-ranking-v3.webp",
+        "sha256": "0866e463948e95329d3949ebe7f41edfa3f5e9c708e55f309b6877b7df2b9367",
+        "source": "editorial-mechanism-exposure-ranking-v3.png",
+        "source_sha256": "b64a9d257e47acbd471592a9cb1da4a904d4c1cd63727c5b2acc9c6c2e377320",
+        "version": _EDITORIAL_V3_ASSET_VERSION,
+    },
+    "llm-decision": {
+        "file": "editorial-mechanism-llm-decision-v3.webp",
+        "sha256": "96a5a87a01da39ef73a8c2a1cb510bcd008697cf595b760acc891e911ff53368",
+        "source": "editorial-mechanism-llm-decision-v3.png",
+        "source_sha256": "2653f6e55e8098cbde6550269ba062d39aba9013fcbe764dc8d9c32a40d41795",
+        "version": _EDITORIAL_V3_ASSET_VERSION,
+    },
+    "network-feedback": {
+        "file": "editorial-mechanism-network-feedback-v3.webp",
+        "sha256": "d28d30437865965b3b72a6be2cfa5b516f6e6741208bc250232695b9b1f38b14",
+        "source": "editorial-mechanism-network-feedback-v3.png",
+        "source_sha256": "4174db517ae3d9543cec7f63cca1382b9689c274235164753fa68e2145ce61d4",
+        "version": _EDITORIAL_V3_ASSET_VERSION,
+    },
+}
+
+
 _EDITORIAL_V2_COPY: dict[str, dict[str, str]] = {
     "zh-CN": {
         "v2.legend.channel.first": "第一条 message 通道",
@@ -1268,6 +1425,70 @@ _EDITORIAL_V2_CATALOG = {
     language: {**_EDITORIAL_CATALOG[language], **_EDITORIAL_V2_COPY[language]}
     for language in _EDITORIAL_LANGUAGES
 }
+
+
+_EDITORIAL_V3_COPY: dict[str, dict[str, str]] = {
+    "zh-CN": {
+        "ranking.lead": "Platform Environment 先执行 Shared Seed Launch。Batch 1 起，三条 message 只在各自 eligible user-message pairs 上独立进行 Per-Message Top20 reranking；同一 user 可以进入任意两条或全部三条 queue，但不要求发生 overlap；相同 user × message pair 最多 exposure 一次。",
+        "ranking.figure.alt": "三条独立 message queue 上，同一 user 的关系标记同时覆盖 cobalt、green 和 amber channel，表示可跨任意两条或全部三条 queue overlap；每个 user × message pair 仍只通过一次 exposure gate 的机制示意图",
+        "ranking.figure.caption": "跨 message 重复是允许关系，不是必然事件：同一 user 可位于任意两条或全部三条 queue；Message-Level Single Exposure 只禁止相同 user × message pair 再次曝光。",
+        "ranking.contract.pair.body": "相同 user × message pair 一旦 exposure 就退出该 message 的 eligible queue；这不阻止该 user 保留在另外两条 message queue。",
+        "detail.ranking-pair.caption": "相同 user × message pair 最多 exposure 一次",
+        "detail.ranking-overlap.caption": "同一 user 可进入任意两条或全部三条 queue；overlap 不要求发生",
+        "feedback.title": "三路成功 Primary 按 user_id 去重，下一批只共享 ranking context",
+        "feedback.lead": "每条 message 中 terminal `succeeded` 且 action 为 like / comment / share 的 Primary，先按 `user_id` 跨 message 汇聚为唯一 campaign engaged-user set；同批 snapshot 保持冻结。下一批三条独立 rankings 只读取这份 set 计算 engaged-neighbor signal，不把用户直接注入任何 queue。Shadow、ignore、provider_failed 在边界停止。",
+        "feedback.figure.alt": "三条 message 的 terminal succeeded Primary positive actions 按 user_id 汇聚为一个 campaign engaged-user set；跨过 same-batch frozen divider 后，该 set 以共享 engaged-neighbor context 连接三条独立 next-batch rankings，而不是把用户注入 queue；Shadow、ignore、provider_failed 在 divider 前停止的机制示意图",
+        "feedback.figure.caption": "同一 user 在多条 message 成功仍只进入 campaign set 一次。同批 snapshot 冻结；下一批三条独立 rankings 共享 set 作为 engaged-neighbor context，不共享 queue membership。",
+        "feedback.source.body": "只有 terminal `succeeded` 且 action 为 like / comment / share 的 Primary 提交 campaign feedback；三条 message 的用户按 `user_id` 唯一化。",
+        "feedback.stop.body": "Shadow、ignore、provider_failed 不提交 campaign engaged-user set，也不回写同批 ranking。",
+        "feedback.time.body": "同批 snapshot/context 冻结；全批 terminal 后才提交。下一批三条独立 rankings 各自在 eligible pairs 上读取共享 set 计算 engaged-neighbor signal，不把用户直接注入任何 queue。",
+        "detail.feedback-primary.caption": "仅 terminal succeeded 的 Primary like / comment / share 传播",
+        "detail.feedback-dedup.caption": "跨三条 message 按 user_id 唯一化为一个 campaign set",
+        "detail.feedback-next.caption": "共享 engaged-neighbor context，不注入 queue",
+        "detail.feedback-stop.caption": "Shadow、ignore、provider_failed 不传播",
+        "detail.feedback-freeze.caption": "全批 terminal 前保持同批 snapshot 冻结",
+        "v3.legend.cross_message_overlap": "Allowed overlap · 任意两条或全部三条 queue",
+        "v3.legend.single_exposure": "Message-Level Single Exposure · 每个 user × message pair",
+        "v3.legend.propagating_primary": "Terminal succeeded Primary · like / comment / share",
+        "v3.legend.engaged_user_dedup": "Campaign engaged-user set · 按 user_id 跨 message 唯一化",
+        "v3.legend.next_batch_reranking": "Shared engaged-neighbor context → 三条独立 next-batch rankings",
+        "v3.legend.no_campaign_feedback": "No feedback · Shadow / ignore / provider_failed",
+    },
+    "en-US": {
+        "ranking.lead": "The Platform Environment runs the Shared Seed Launch first. From Batch 1, each message independently reranks only its eligible user-message pairs with Per-Message Top20; the same user may enter any two or all three queues; overlap is allowed, not required. The same user × message pair can be exposed at most once.",
+        "ranking.figure.alt": "Three independent message queues where one user's relationship marks cover the cobalt, green, and amber channels, showing permitted overlap across any two or all three queues while each user × message pair passes its exposure gate at most once",
+        "ranking.figure.caption": "Cross-message repetition is permitted, not inevitable: the same user may occupy any two or all three queues. Message-Level Single Exposure only prevents another exposure of the same user × message pair.",
+        "ranking.contract.pair.body": "The same user × message pair leaves that message's eligible queue after exposure; this does not prevent the user from remaining in the other two message queues.",
+        "detail.ranking-pair.caption": "The same user × message pair can be exposed at most once",
+        "detail.ranking-overlap.caption": "The same user may enter any two or all three queues; overlap is not required",
+        "feedback.title": "Three successful Primary paths deduplicate by user_id; the next batch shares ranking context only",
+        "feedback.lead": "A Primary in each message must be terminal `succeeded` with action like / comment / share before users are deduplicated by `user_id` across messages into one campaign engaged-user set; the same-batch snapshot stays frozen. The next batch's three independent rankings only read that set to compute engaged-neighbor signal; it does not inject those users into any queue. Shadow, ignore, and provider_failed stop at the boundary.",
+        "feedback.figure.alt": "Terminal succeeded Primary positive actions from three messages deduplicate by user_id into one campaign engaged-user set; after the same-batch frozen divider, that set connects as shared engaged-neighbor context to three independent next-batch rankings rather than injecting users into queues, while Shadow, ignore, and provider_failed stop before the divider",
+        "feedback.figure.caption": "The same user succeeding on multiple messages enters the campaign set once. The same-batch snapshot is frozen; the next batch's three independent rankings share the set as engaged-neighbor context, not queue membership.",
+        "feedback.source.body": "Only a Primary that is terminal `succeeded` with action like / comment / share commits campaign feedback; users from all three messages are unique by `user_id`.",
+        "feedback.stop.body": "Shadow, ignore, and provider_failed do not commit to the campaign engaged-user set or write back into same-batch ranking.",
+        "feedback.time.body": "The same-batch snapshot and context stay frozen; commit occurs only after the full batch is terminal. The next batch's three independent rankings read the shared set over their own eligible pairs to compute engaged-neighbor signal; the system does not inject those users into any queue.",
+        "detail.feedback-primary.caption": "Only terminal succeeded Primary like / comment / share propagates",
+        "detail.feedback-dedup.caption": "One campaign set, unique by user_id across all three messages",
+        "detail.feedback-next.caption": "Shared engaged-neighbor context, not queue injection",
+        "detail.feedback-stop.caption": "Shadow, ignore, and provider_failed do not propagate",
+        "detail.feedback-freeze.caption": "The same-batch snapshot stays frozen until every path is terminal",
+        "v3.legend.cross_message_overlap": "Allowed overlap · any two or all three queues",
+        "v3.legend.single_exposure": "Message-Level Single Exposure · each user × message pair",
+        "v3.legend.propagating_primary": "Terminal succeeded Primary · like / comment / share",
+        "v3.legend.engaged_user_dedup": "Campaign engaged-user set · unique by user_id across messages",
+        "v3.legend.next_batch_reranking": "Shared engaged-neighbor context → three independent next-batch rankings",
+        "v3.legend.no_campaign_feedback": "No feedback · Shadow / ignore / provider_failed",
+    },
+}
+_EDITORIAL_V3_CATALOG = {
+    language: {**_EDITORIAL_V2_CATALOG[language], **_EDITORIAL_V3_COPY[language]}
+    for language in _EDITORIAL_LANGUAGES
+}
+for _detail_key, _localized_detail in _EDITORIAL_V3_DETAILS.items():
+    for _language in _EDITORIAL_LANGUAGES:
+        for _field, _value_text in _localized_detail[_language].items():
+            _EDITORIAL_V3_CATALOG[_language][f"drawer.{_detail_key}.{_field}"] = _value_text
 
 
 _EDITORIAL_V1_LEGEND_ITEMS: dict[str, tuple[tuple[str, str], ...]] = {
@@ -1343,6 +1564,53 @@ _EDITORIAL_V2_LEGEND_ITEMS: dict[str, tuple[tuple[str, str, str, str], ...]] = {
         ("feedback-engaged-user-dedup", "v2.legend.engaged_user_dedup", "dedup", "feedback-grammar"),
         ("feedback-next-batch-reranking", "v2.legend.next_batch_reranking", "reranking", "feedback-grammar"),
         ("feedback-no-campaign-feedback", "v2.legend.no_campaign_feedback", "no-feedback", "neutral-role-state"),
+    ),
+}
+
+
+_EDITORIAL_V3_LEGEND_ITEMS: dict[str, tuple[tuple[str, str, str, str], ...]] = {
+    **_EDITORIAL_V2_LEGEND_ITEMS,
+    "exposure-ranking": (
+        ("ranking-first-message-channel", "v2.legend.channel.first", "channel cobalt", "message-identity"),
+        ("ranking-second-message-channel", "v2.legend.channel.second", "channel green", "message-identity"),
+        ("ranking-third-message-channel", "v2.legend.channel.third", "channel amber", "message-identity"),
+        ("ranking-personalized-top20", "v2.legend.personalized_top20", "top20", "mark-grammar"),
+        (
+            "ranking-cross-message-overlap",
+            "v3.legend.cross_message_overlap",
+            "overlap-three",
+            "mark-grammar",
+        ),
+        ("ranking-single-exposure", "v3.legend.single_exposure", "single-exposure", "mark-grammar"),
+    ),
+    "network-feedback": (
+        ("feedback-first-message-channel", "v2.legend.channel.first", "channel cobalt", "message-identity"),
+        ("feedback-second-message-channel", "v2.legend.channel.second", "channel green", "message-identity"),
+        ("feedback-third-message-channel", "v2.legend.channel.third", "channel amber", "message-identity"),
+        (
+            "feedback-propagating-primary",
+            "v3.legend.propagating_primary",
+            "propagating",
+            "feedback-grammar",
+        ),
+        (
+            "feedback-engaged-user-dedup",
+            "v3.legend.engaged_user_dedup",
+            "dedup-three",
+            "feedback-grammar",
+        ),
+        (
+            "feedback-next-batch-reranking",
+            "v3.legend.next_batch_reranking",
+            "shared-context",
+            "feedback-grammar",
+        ),
+        (
+            "feedback-no-campaign-feedback",
+            "v3.legend.no_campaign_feedback",
+            "no-feedback",
+            "neutral-role-state",
+        ),
     ),
 }
 
@@ -2036,6 +2304,10 @@ def _v2_copy(key: str, language: str = "zh-CN") -> str:
     return _EDITORIAL_V2_CATALOG[language][key]
 
 
+def _v3_copy(key: str, language: str = "zh-CN") -> str:
+    return _EDITORIAL_V3_CATALOG[language][key]
+
+
 def _i18n(key: str, *, tag: str = "span", class_name: str = "", attrs: str = "") -> str:
     classes = f' class="{_escaped(class_name, quote=True)}"' if class_name else ""
     return (
@@ -2059,6 +2331,14 @@ def _v2_i18n(key: str, *, class_name: str = "") -> str:
     )
 
 
+def _v3_i18n(key: str, *, class_name: str = "") -> str:
+    classes = f' class="{_escaped(class_name, quote=True)}"' if class_name else ""
+    return (
+        f'<span{classes} data-i18n="{_escaped(key, quote=True)}">'
+        f"{_escaped(_v3_copy(key), quote=False)}</span>"
+    )
+
+
 def _asset_bytes(asset_key: str) -> bytes:
     asset = _EDITORIAL_ASSET_CATALOG[asset_key]
     return files("llm_abm_sim").joinpath("report_assets").joinpath(asset["file"]).read_bytes()
@@ -2070,6 +2350,12 @@ def _embedded_asset(asset_key: str) -> str:
 
 def _v2_embedded_asset(asset_key: str) -> str:
     asset = _EDITORIAL_V2_ASSET_CATALOG[asset_key]
+    payload = files("llm_abm_sim").joinpath("report_assets").joinpath(asset["file"]).read_bytes()
+    return "data:image/webp;base64," + b64encode(payload).decode("ascii")
+
+
+def _v3_embedded_asset(asset_key: str) -> str:
+    asset = _EDITORIAL_V3_ASSET_CATALOG[asset_key]
     payload = files("llm_abm_sim").joinpath("report_assets").joinpath(asset["file"]).read_bytes()
     return "data:image/webp;base64," + b64encode(payload).decode("ascii")
 
@@ -2129,6 +2415,27 @@ def _v2_legend(section: str) -> str:
         )
     return (
         f'<div class="editorial-legend editorial-legend-v2" data-testid="mechanism-{_escaped(section, quote=True)}-legend" '
+        f'data-legend-section="{_escaped(section, quote=True)}" role="list" '
+        f'{_attribute_i18n("shell.legend_aria", "aria-label")}>'
+        + "".join(rows)
+        + "</div>"
+    )
+
+
+def _v3_legend(section: str) -> str:
+    rows: list[str] = []
+    for item_id, copy_key, mark_tokens, encoding_axis in _EDITORIAL_V3_LEGEND_ITEMS[section]:
+        mark_classes = " ".join(f"editorial-mark-{token}" for token in mark_tokens.split())
+        rows.append(
+            f'<span class="editorial-legend-item" role="listitem" '
+            f'data-legend-item="{_escaped(item_id, quote=True)}" '
+            f'data-encoding-axis="{_escaped(encoding_axis, quote=True)}">'
+            f'<i class="editorial-mark {mark_classes}" aria-hidden="true"><b></b><b></b><b></b></i>'
+            f'{_v3_i18n(copy_key, class_name="editorial-legend-label")}</span>'
+        )
+    return (
+        f'<div class="editorial-legend editorial-legend-v2 editorial-legend-v3" '
+        f'data-testid="mechanism-{_escaped(section, quote=True)}-legend" '
         f'data-legend-section="{_escaped(section, quote=True)}" role="list" '
         f'{_attribute_i18n("shell.legend_aria", "aria-label")}>'
         + "".join(rows)
@@ -3358,6 +3665,132 @@ _EDITORIAL_V2_CSS = r"""
 """
 
 
+_EDITORIAL_V3_CSS = r"""
+.editorial-report[data-editorial-version="v3"] .editorial-figure > img { background: #f8fafc; }
+.editorial-report[data-editorial-version="v3"] .editorial-hotspot-layer {
+  position: static;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  gap: 8px;
+  width: auto;
+  height: auto;
+  aspect-ratio: auto;
+  padding-top: 10px;
+}
+.editorial-report[data-editorial-version="v3"] .editorial-hotspot {
+  position: static;
+  min-width: 0;
+  max-width: none;
+  min-height: 56px;
+  box-shadow: none;
+}
+.editorial-mark-overlap-three {
+  background:
+    linear-gradient(#175cd3, #175cd3) 2px 4px / 48px 3px no-repeat,
+    linear-gradient(#00875a, #00875a) 2px 13px / 48px 3px no-repeat,
+    linear-gradient(#c76a00, #c76a00) 2px 22px / 48px 3px no-repeat;
+}
+.editorial-mark-overlap-three::before {
+  position: absolute;
+  top: 3px;
+  left: 27px;
+  height: 23px;
+  border-left: 2px dashed #5b6878;
+  content: "";
+}
+.editorial-mark-overlap-three b {
+  left: 22px;
+  width: 11px;
+  height: 11px;
+  border: 2px solid #5b6878;
+  border-radius: 50%;
+  background: var(--editorial-paper);
+}
+.editorial-mark-overlap-three b:nth-child(1) { top: 0; }
+.editorial-mark-overlap-three b:nth-child(2) { top: 9px; }
+.editorial-mark-overlap-three b:nth-child(3) { top: 18px; }
+.editorial-mark-dedup-three {
+  background:
+    linear-gradient(24deg, transparent 45%, #5b6878 46% 54%, transparent 55%) 10px 1px / 25px 13px no-repeat,
+    linear-gradient(#5b6878, #5b6878) 10px 13px / 25px 2px no-repeat,
+    linear-gradient(-24deg, transparent 45%, #5b6878 46% 54%, transparent 55%) 10px 14px / 25px 13px no-repeat;
+}
+.editorial-mark-dedup-three::after {
+  position: absolute;
+  top: 4px;
+  right: 1px;
+  width: 20px;
+  height: 20px;
+  border: 5px double #5b6878;
+  border-radius: 50%;
+  background: var(--editorial-paper);
+  content: "";
+}
+.editorial-mark-dedup-three b {
+  left: 1px;
+  width: 10px;
+  height: 10px;
+  border: 2px solid #5b6878;
+  border-radius: 50%;
+  background: var(--editorial-paper);
+}
+.editorial-mark-dedup-three b:nth-child(1) { top: 0; }
+.editorial-mark-dedup-three b:nth-child(2) { top: 9px; }
+.editorial-mark-dedup-three b:nth-child(3) { top: 18px; }
+.editorial-mark-shared-context {
+  background:
+    linear-gradient(#175cd3, #175cd3) 31px 4px / 20px 3px no-repeat,
+    linear-gradient(#00875a, #00875a) 31px 13px / 20px 3px no-repeat,
+    linear-gradient(#c76a00, #c76a00) 31px 22px / 20px 3px no-repeat;
+}
+.editorial-mark-shared-context::before {
+  position: absolute;
+  top: 5px;
+  left: 15px;
+  width: 13px;
+  height: 18px;
+  border-top: 2px dashed #5b6878;
+  border-right: 2px dashed #5b6878;
+  border-bottom: 2px dashed #5b6878;
+  content: "";
+}
+.editorial-mark-shared-context::after {
+  position: absolute;
+  top: 10px;
+  left: 25px;
+  width: 8px;
+  height: 8px;
+  border: 2px solid #5b6878;
+  background: var(--editorial-paper);
+  transform: rotate(45deg);
+  content: "";
+}
+.editorial-mark-shared-context b:nth-child(1) {
+  top: 6px;
+  left: 0;
+  width: 16px;
+  height: 16px;
+  border: 4px double #5b6878;
+  border-radius: 50%;
+  background: var(--editorial-paper);
+}
+.editorial-mark-shared-context b:nth-child(2),
+.editorial-mark-shared-context b:nth-child(3) {
+  left: 26px;
+  width: 7px;
+  height: 7px;
+  border: 1.5px solid #5b6878;
+  background: var(--editorial-paper);
+  transform: rotate(45deg);
+}
+.editorial-mark-shared-context b:nth-child(2) { top: 1px; }
+.editorial-mark-shared-context b:nth-child(3) { top: 20px; }
+@media (max-width: 680px) {
+  .editorial-report[data-editorial-version="v3"] .editorial-hotspot-layer { grid-template-columns: 1fr; }
+}
+"""
+
+
 _EDITORIAL_SCRIPT = r"""
 (() => {
   const root = document.querySelector('[data-testid="editorial-report"]');
@@ -4353,6 +4786,107 @@ def _render_editorial_v2(payload: ConcurrentMessageReportPayload) -> str:
     return rendered
 
 
+def _replace_v3_fragment(value: str, old: str, new: str, *, expected: int, label: str) -> str:
+    actual = value.count(old)
+    if actual != expected:
+        raise ValueError(f"Editorial v3 could not replace frozen {label}: expected {expected}, found {actual}")
+    return value.replace(old, new)
+
+
+def _render_editorial_v3(payload: ConcurrentMessageReportPayload) -> str:
+    """Render the private Editorial v3 presentation from the frozen v2 successor."""
+    rendered = _render_editorial_v2(payload)
+    rendered = _replace_v3_fragment(
+        rendered,
+        'class="editorial-report" data-testid="editorial-report" data-editorial-version="v2"',
+        'class="editorial-report" data-testid="editorial-report" data-editorial-version="v3"',
+        expected=1,
+        label="root",
+    )
+    rendered = _replace_v3_fragment(
+        rendered,
+        f"<style>{_EDITORIAL_CSS}{_EDITORIAL_V2_CSS}</style>",
+        f"<style>{_EDITORIAL_CSS}{_EDITORIAL_V2_CSS}{_EDITORIAL_V3_CSS}</style>",
+        expected=1,
+        label="stylesheet",
+    )
+
+    v2_catalog_json = json.dumps(_EDITORIAL_V2_CATALOG, ensure_ascii=False, separators=(",", ":")).replace(
+        "</", "<\\/"
+    )
+    v3_catalog_json = json.dumps(_EDITORIAL_V3_CATALOG, ensure_ascii=False, separators=(",", ":")).replace(
+        "</", "<\\/"
+    )
+    rendered = _replace_v3_fragment(
+        rendered,
+        v2_catalog_json,
+        v3_catalog_json,
+        expected=1,
+        label="language catalog",
+    )
+
+    v2_details_json = json.dumps(_EDITORIAL_DETAILS, ensure_ascii=False, separators=(",", ":")).replace(
+        "</", "<\\/"
+    )
+    v3_details_json = json.dumps(_EDITORIAL_V3_DETAILS, ensure_ascii=False, separators=(",", ":")).replace(
+        "</", "<\\/"
+    )
+    rendered = _replace_v3_fragment(
+        rendered,
+        v2_details_json,
+        v3_details_json,
+        expected=1,
+        label="mechanism details",
+    )
+
+    for asset_key, v3_asset in _EDITORIAL_V3_ASSET_CATALOG.items():
+        v2_asset = _EDITORIAL_V2_ASSET_CATALOG[asset_key]
+        rendered = _replace_v3_fragment(
+            rendered,
+            v2_asset["file"],
+            v3_asset["file"],
+            expected=2,
+            label=f"{asset_key} filename",
+        )
+        if v2_asset["source_sha256"] != v3_asset["source_sha256"]:
+            rendered = _replace_v3_fragment(
+                rendered,
+                v2_asset["source_sha256"],
+                v3_asset["source_sha256"],
+                expected=1,
+                label=f"{asset_key} source hash",
+            )
+        v2_embedded = _v2_embedded_asset(asset_key)
+        v3_embedded = _v3_embedded_asset(asset_key)
+        if v2_embedded != v3_embedded:
+            rendered = _replace_v3_fragment(
+                rendered,
+                v2_embedded,
+                v3_embedded,
+                expected=1,
+                label=f"{asset_key} embedded media",
+            )
+        rendered = _replace_v3_fragment(
+            rendered,
+            _v2_legend(asset_key),
+            _v3_legend(asset_key),
+            expected=1,
+            label=f"{asset_key} legend",
+        )
+
+    for copy_key, replacement in _EDITORIAL_V3_COPY["zh-CN"].items():
+        if copy_key.startswith("v3.legend."):
+            continue
+        rendered = _replace_v3_fragment(
+            rendered,
+            _escaped(_EDITORIAL_V2_CATALOG["zh-CN"][copy_key]),
+            _escaped(replacement),
+            expected=1,
+            label=f"{copy_key} static copy",
+        )
+    return rendered
+
+
 # Alias stays private so tests and design validation can call the default Editorial
 # seam without adding a public renderer selector or a persisted renderer token.
-_render_editorial_report = _render_editorial_v2
+_render_editorial_report = _render_editorial_v3

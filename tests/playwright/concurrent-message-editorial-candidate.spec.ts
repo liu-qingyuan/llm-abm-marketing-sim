@@ -87,19 +87,29 @@ test('Editorial candidate keeps the mechanism contract visible at desktop and na
 
     await expect(page.locator('html')).toHaveAttribute('lang', 'zh-CN');
     await expect(page.getByTestId('editorial-report')).toHaveAttribute('data-report-mode', 'mechanism');
-    await expect(page.getByTestId('editorial-report')).toHaveAttribute('data-editorial-version', 'v2');
+    await expect(page.getByTestId('editorial-report')).toHaveAttribute('data-editorial-version', 'v3');
     await expect(page.getByTestId('mechanism-mode-panel')).toBeVisible();
     await expect(page.getByTestId('run-evidence-mode-panel')).toBeHidden();
     await expect(page.locator('[data-report-anchor]')).toHaveCount(5);
     await expect(page.getByTestId('mechanism-sample-size')).toContainText('1,000');
     await expect(page.getByTestId('mechanism-eligible-pairs')).toContainText('3,000');
     await expect(page.getByTestId('mechanism-batch-contract')).toContainText('30 × Top20');
-    await expect(page.locator('img[data-asset-file$="-v2.webp"]')).toHaveCount(5);
+    await expect(page.locator('img[data-asset-file$="-v3.webp"]')).toHaveCount(5);
+    await expect(page.locator('img[data-asset-file$="-v2.webp"]')).toHaveCount(0);
     await expect(page.locator('img[data-asset-file$="-v1.webp"]')).toHaveCount(0);
-    await expect(page.locator('.editorial-legend-v2:visible')).toHaveCount(5);
+    await expect(page.locator('.editorial-legend-v3:visible')).toHaveCount(5);
     await expect(page.locator('[data-legend-item]:visible')).toHaveCount(27);
 
-    const imageDimensions = await page.locator('img[data-asset-file$="-v2.webp"]').evaluateAll((images) =>
+    const overlapLegend = page.locator('[data-legend-item="ranking-cross-message-overlap"]');
+    await expect(overlapLegend).toHaveCount(1);
+    await expect(overlapLegend.locator('.editorial-mark-overlap-three')).toBeVisible();
+    await expect(overlapLegend).toContainText('任意两条或全部三条 queue');
+    await expect(page.getByTestId('mechanism-exposure-ranking-section')).toContainText('不要求发生 overlap');
+    await expect(page.locator('[data-legend-item="feedback-engaged-user-dedup"] .editorial-mark-dedup-three')).toBeVisible();
+    await expect(page.locator('[data-legend-item="feedback-next-batch-reranking"] .editorial-mark-shared-context')).toBeVisible();
+    await expect(page.getByTestId('mechanism-network-feedback-section')).toContainText('不把用户直接注入任何 queue');
+
+    const imageDimensions = await page.locator('img[data-asset-file$="-v3.webp"]').evaluateAll((images) =>
       images.map((image) => ({
         naturalWidth: (image as HTMLImageElement).naturalWidth,
         naturalHeight: (image as HTMLImageElement).naturalHeight,
@@ -119,18 +129,18 @@ test('Editorial candidate keeps the mechanism contract visible at desktop and na
   expect(pageErrors).toEqual([]);
 });
 
-test('Editorial v2 mechanism sections keep the approved figure and legend composition', async ({ page }, testInfo) => {
+test('Editorial v3 mechanism sections keep the approved figure and legend composition', async ({ page }, testInfo) => {
   const reportPath = generateEditorialCandidate(testInfo.outputDir);
   await page.setViewportSize({ width: 1440, height: 1000 });
   await page.goto(pathToFileURL(reportPath).toString());
   await page.addStyleTag({ content: '.editorial-header { position: static !important; }' });
 
   for (const [testId, snapshot] of [
-    ['mechanism-overview-section', 'editorial-v2-overview-section.png'],
-    ['mechanism-sample-section', 'editorial-v2-sample-section.png'],
-    ['mechanism-exposure-ranking-section', 'editorial-v2-exposure-ranking-section.png'],
-    ['mechanism-llm-decision-section', 'editorial-v2-llm-decision-section.png'],
-    ['mechanism-network-feedback-section', 'editorial-v2-network-feedback-section.png'],
+    ['mechanism-overview-section', 'editorial-v3-overview-section.png'],
+    ['mechanism-sample-section', 'editorial-v3-sample-section.png'],
+    ['mechanism-exposure-ranking-section', 'editorial-v3-exposure-ranking-section.png'],
+    ['mechanism-llm-decision-section', 'editorial-v3-llm-decision-section.png'],
+    ['mechanism-network-feedback-section', 'editorial-v3-network-feedback-section.png'],
   ] as const) {
     await expect(page.getByTestId(testId)).toHaveScreenshot(snapshot, {
       animations: 'disabled',
@@ -154,12 +164,12 @@ test('Editorial candidate closes the hash, history, focus, mode, language, and d
   await expect(page.getByTestId('run-evidence-mode-panel')).toBeVisible();
   await expect(page.getByTestId('mechanism-mode-panel')).toBeHidden();
   await expect(page.locator('.editorial-figure:visible')).toHaveCount(0);
-  await expect(page.locator('.editorial-legend-v2:visible')).toHaveCount(0);
+  await expect(page.locator('.editorial-legend-v3:visible')).toHaveCount(0);
   await page.goBack();
   await expect(page).toHaveURL(/#sample$/);
   await expect(page.getByTestId('mechanism-mode-panel')).toBeVisible();
   await expect(page.locator('.editorial-figure:visible')).toHaveCount(5);
-  await expect(page.locator('.editorial-legend-v2:visible')).toHaveCount(5);
+  await expect(page.locator('.editorial-legend-v3:visible')).toHaveCount(5);
   await expect(page.getByTestId('mechanism-sample-section')).toBeFocused();
 
   const hotspot = page.getByTestId('mechanism-sample-hotspot-network');
@@ -173,6 +183,9 @@ test('Editorial candidate closes the hash, history, focus, mode, language, and d
   await page.getByRole('button', { name: 'English', exact: true }).click();
   await expect(page.locator('html')).toHaveAttribute('lang', 'en-US');
   await expect(page.locator('[data-legend-item="overview-first-message-channel"] .editorial-legend-label')).toHaveText('First message channel');
+  await expect(page.locator('[data-legend-item="ranking-cross-message-overlap"]')).toContainText('any two or all three queues');
+  await expect(page.locator('[data-legend-item="feedback-engaged-user-dedup"]')).toContainText('unique by user_id across messages');
+  await expect(page.getByTestId('mechanism-network-feedback-section')).toContainText('does not inject those users into any queue');
   await expect(page).toHaveURL(new RegExp(`${hashBeforeLanguage}$`));
   await expect(drawer).toBeVisible();
   await expect(drawer).toContainText('Direct one-hop Network Cohort');
