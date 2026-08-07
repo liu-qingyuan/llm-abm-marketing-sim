@@ -2,12 +2,13 @@ from __future__ import annotations
 
 import gzip
 import hashlib
+import re
 from pathlib import Path
 
 import pytest
 
 from llm_abm_sim import concurrent_message_editorial_candidate as candidate
-from llm_abm_sim.concurrent_message_renderer import _FIXED_RENDERERS
+from llm_abm_sim.concurrent_message_renderer import _FIXED_RENDERERS, render_report
 from llm_abm_sim.concurrent_message_report import ConcurrentMessageReportPayload
 
 FIXTURE_DIR = Path(__file__).resolve().parents[1] / "fixtures" / "concurrent_message_renderer"
@@ -30,6 +31,53 @@ _EDITORIAL_ASSET_HASHES = {
     "editorial-mechanism-network-feedback-v1.webp": "3b15835acc900c446d72636638fcd884159ba0d1103bf014c90587b5cd4e8f37",
 }
 
+_EDITORIAL_V2_ASSET_HASHES = {
+    "editorial-mechanism-overview-v2.webp": "fe112e7d898e881dd7d379333e2192e87c62278820a52ea4b0f6bd39fee550bc",
+    "editorial-mechanism-sample-v2.webp": "a01d8ea31980568b06bf8a03a42592e83387883ed0f60ea097218879bb120b37",
+    "editorial-mechanism-exposure-ranking-v2.webp": "92073c232aa770bb400375ce3495ac21a59f121a4e823e789e01a8fb0e917812",
+    "editorial-mechanism-llm-decision-v2.webp": "96a5a87a01da39ef73a8c2a1cb510bcd008697cf595b760acc891e911ff53368",
+    "editorial-mechanism-network-feedback-v2.webp": "548f0d601e84291125fac1926ea1304f723ad8fff37c013297b1f4e54719df50",
+}
+
+_V2_LEGEND_ITEMS = {
+    "overview": {
+        "overview-first-message-channel",
+        "overview-second-message-channel",
+        "overview-third-message-channel",
+        "overview-research-sample",
+        "overview-eligible-pair",
+        "overview-per-message-queue",
+        "overview-exposure-gate",
+        "overview-decision-pair",
+    },
+    "sample": {
+        "sample-influence-seed-union",
+        "sample-direct-one-hop-network-cohort",
+        "sample-ordinary-fill",
+    },
+    "exposure-ranking": {
+        "ranking-first-message-channel",
+        "ranking-second-message-channel",
+        "ranking-third-message-channel",
+        "ranking-personalized-top20",
+        "ranking-cross-message-overlap",
+        "ranking-single-exposure",
+    },
+    "llm-decision": {
+        "decision-exposure-gate",
+        "decision-primary",
+        "decision-shadow",
+    },
+    "network-feedback": {
+        "feedback-first-message-channel",
+        "feedback-second-message-channel",
+        "feedback-third-message-channel",
+        "feedback-propagating-primary",
+        "feedback-engaged-user-dedup",
+        "feedback-next-batch-reranking",
+        "feedback-no-campaign-feedback",
+    },
+}
 
 
 @pytest.fixture(scope="module")
@@ -40,6 +88,7 @@ def formal_payload() -> ConcurrentMessageReportPayload:
 
 def test_editorial_catalog_has_zh_en_key_parity() -> None:
     assert set(candidate._EDITORIAL_CATALOG["zh-CN"]) == set(candidate._EDITORIAL_CATALOG["en-US"])
+    assert set(candidate._EDITORIAL_V2_CATALOG["zh-CN"]) == set(candidate._EDITORIAL_V2_CATALOG["en-US"])
     assert candidate._EDITORIAL_DETAILS
     for detail in candidate._EDITORIAL_DETAILS.values():
         assert set(detail) == {"zh-CN", "en-US"}
@@ -69,6 +118,53 @@ def test_editorial_assets_are_versioned_packaged_and_nonblank() -> None:
 def test_existing_compatibility_assets_remain_byte_identical() -> None:
     for file_name, expected_hash in _OLD_ASSET_HASHES.items():
         assert hashlib.sha256((ASSET_DIR / file_name).read_bytes()).hexdigest() == expected_hash
+
+
+def test_editorial_v2_assets_and_legend_close_the_audited_mark_contract(
+    formal_payload: ConcurrentMessageReportPayload,
+) -> None:
+    assert set(candidate._EDITORIAL_V2_ASSET_CATALOG) == set(_V2_LEGEND_ITEMS)
+    for asset in candidate._EDITORIAL_V2_ASSET_CATALOG.values():
+        source_path = SOURCE_DIR / asset["source"]
+        source_data = source_path.read_bytes()
+        derivative_path = ASSET_DIR / asset["file"]
+        derivative_data = derivative_path.read_bytes()
+
+        assert asset["version"] == "v2"
+        assert source_path.name.endswith("-v2.png")
+        assert derivative_path.name.endswith("-v2.webp")
+        assert source_data.startswith(b"\x89PNG\r\n\x1a\n")
+        assert int.from_bytes(source_data[16:20], "big") == 1536
+        assert int.from_bytes(source_data[20:24], "big") == 1024
+        assert hashlib.sha256(source_data).hexdigest() == asset["source_sha256"]
+        assert derivative_data.startswith(b"RIFF") and derivative_data[8:12] == b"WEBP"
+        assert len(derivative_data) > 1_000
+        assert hashlib.sha256(derivative_data).hexdigest() == asset["sha256"]
+        assert asset["sha256"] == _EDITORIAL_V2_ASSET_HASHES[derivative_path.name]
+
+    html = candidate._render_editorial_v2(formal_payload)
+    assert html != candidate._render_editorial_candidate(formal_payload)
+    assert 'data-editorial-version="v2"' in html
+    assert html.count('class="editorial-legend editorial-legend-v2"') == 5
+    assert html.count('data-legend-item="') == 27
+    assert html.count('data-encoding-axis="message-identity"') == 9
+    assert html.count('data-encoding-axis="sample-role"') == 3
+
+    for section, expected_items in _V2_LEGEND_ITEMS.items():
+        start = html.index(f'data-legend-section="{section}"')
+        end = html.index("</div>", start)
+        actual_items = set(re.findall(r'data-legend-item="([^"]+)"', html[start:end]))
+        assert actual_items == expected_items
+
+    for annotation_only in (
+        "sample-synthetic-label-lineage",
+        "ranking-shared-seed-launch",
+        "decision-platform-environment",
+        "decision-message-user-fit",
+        "decision-not-selected",
+        "feedback-same-batch-frozen",
+    ):
+        assert f'data-legend-item="{annotation_only}"' not in html
 
 
 def test_editorial_candidate_is_deterministic_private_and_direct(formal_payload: ConcurrentMessageReportPayload) -> None:
@@ -214,7 +310,20 @@ def test_run_evidence_rejects_inconsistent_persisted_coverage(formal_payload: Co
 
 
 
-def test_editorial_default_uses_fixed_renderer_callables() -> None:
-    assert _FIXED_RENDERERS[0].__name__ == "_render_editorial_candidate"
-    assert len(_FIXED_RENDERERS) == 4
-    assert all(callable(renderer) for renderer in _FIXED_RENDERERS)
+def test_editorial_v2_is_default_while_v1_stays_exact(
+    formal_payload: ConcurrentMessageReportPayload,
+) -> None:
+    v1 = candidate._render_editorial_candidate(formal_payload)
+    v2 = candidate._render_editorial_v2(formal_payload)
+
+    assert hashlib.sha256(v1.encode("utf-8")).hexdigest() == (
+        "1d1e1ead3691aa275c74ff723a79960019c42fd58f179d8b74619f0a0b218ea9"
+    )
+    assert render_report(formal_payload) == v2
+    assert [renderer.__name__ for renderer in _FIXED_RENDERERS] == [
+        "_render_editorial_v2",
+        "_render_editorial_candidate",
+        "_render_two_mode_report",
+        "_legacy_render_report",
+        "_render_historical_report",
+    ]

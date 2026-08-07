@@ -28,21 +28,37 @@ PY`;
 async function expectEditorialGeometry(page: Page): Promise<void> {
   const result = await page.evaluate(() => {
     const visible = (element: HTMLElement) => element.offsetParent !== null;
-    const textOverflow = [...document.querySelectorAll<HTMLElement>('button, a, h1, h2, h3, h4, dt, dd')]
+    const textOverflow = [...document.querySelectorAll<HTMLElement>('button, a, h1, h2, h3, h4, dt, dd, .editorial-legend-label')]
       .filter(visible)
       .filter((element) => element.scrollWidth > element.clientWidth + 2)
       .map((element) => `${element.tagName}:${element.textContent?.trim().slice(0, 48)}`);
+    const componentOverlap = [...document.querySelectorAll<HTMLElement>('[data-legend-section]')]
+      .filter(visible)
+      .flatMap((legend) => {
+        const section = legend.closest<HTMLElement>('[data-section-anchor]');
+        const image = section?.querySelector<HTMLElement>('.editorial-figure > img');
+        const hotspots = section?.querySelector<HTMLElement>('.editorial-hotspot-layer');
+        if (!section || !image || !hotspots) return [`${legend.dataset.legendSection}:missing-component`];
+        const imageRect = image.getBoundingClientRect();
+        const hotspotRect = hotspots.getBoundingClientRect();
+        const legendRect = legend.getBoundingClientRect();
+        const imageHotspotOverlap = Math.min(imageRect.bottom, hotspotRect.bottom) - Math.max(imageRect.top, hotspotRect.top);
+        const imageLegendOverlap = Math.min(imageRect.bottom, legendRect.bottom) - Math.max(imageRect.top, legendRect.top);
+        return imageHotspotOverlap > 1 || imageLegendOverlap > 1 ? [legend.dataset.legendSection ?? 'unknown'] : [];
+      });
     const header = document.querySelector<HTMLElement>('.editorial-header');
     const target = document.querySelector<HTMLElement>('[data-report-mode-panel="mechanism"] [data-section-anchor="overview"]');
     return {
       horizontalOverflow: document.documentElement.scrollWidth > window.innerWidth + 1,
       textOverflow,
+      componentOverlap,
       headerHeight: header?.getBoundingClientRect().height ?? 0,
       targetTop: target?.getBoundingClientRect().top ?? 0,
     };
   });
   expect(result.horizontalOverflow).toBe(false);
   expect(result.textOverflow).toEqual([]);
+  expect(result.componentOverlap).toEqual([]);
   expect(result.targetTop).toBeGreaterThanOrEqual(result.headerHeight);
 }
 
@@ -71,15 +87,19 @@ test('Editorial candidate keeps the mechanism contract visible at desktop and na
 
     await expect(page.locator('html')).toHaveAttribute('lang', 'zh-CN');
     await expect(page.getByTestId('editorial-report')).toHaveAttribute('data-report-mode', 'mechanism');
+    await expect(page.getByTestId('editorial-report')).toHaveAttribute('data-editorial-version', 'v2');
     await expect(page.getByTestId('mechanism-mode-panel')).toBeVisible();
     await expect(page.getByTestId('run-evidence-mode-panel')).toBeHidden();
     await expect(page.locator('[data-report-anchor]')).toHaveCount(5);
     await expect(page.getByTestId('mechanism-sample-size')).toContainText('1,000');
     await expect(page.getByTestId('mechanism-eligible-pairs')).toContainText('3,000');
     await expect(page.getByTestId('mechanism-batch-contract')).toContainText('30 × Top20');
-    await expect(page.locator('img[data-asset-file$="-v1.webp"]')).toHaveCount(5);
+    await expect(page.locator('img[data-asset-file$="-v2.webp"]')).toHaveCount(5);
+    await expect(page.locator('img[data-asset-file$="-v1.webp"]')).toHaveCount(0);
+    await expect(page.locator('.editorial-legend-v2:visible')).toHaveCount(5);
+    await expect(page.locator('[data-legend-item]:visible')).toHaveCount(27);
 
-    const imageDimensions = await page.locator('img[data-asset-file$="-v1.webp"]').evaluateAll((images) =>
+    const imageDimensions = await page.locator('img[data-asset-file$="-v2.webp"]').evaluateAll((images) =>
       images.map((image) => ({
         naturalWidth: (image as HTMLImageElement).naturalWidth,
         naturalHeight: (image as HTMLImageElement).naturalHeight,
@@ -87,9 +107,8 @@ test('Editorial candidate keeps the mechanism contract visible at desktop and na
     );
     expect(imageDimensions).toHaveLength(5);
     imageDimensions.forEach(({ naturalWidth, naturalHeight }) => {
-      expect(naturalWidth).toBeGreaterThan(0);
-      expect(naturalHeight).toBeGreaterThan(0);
-      expect(naturalWidth / naturalHeight).toBeCloseTo(1.5, 2);
+      expect(naturalWidth).toBe(1536);
+      expect(naturalHeight).toBe(1024);
     });
 
     await expectEditorialGeometry(page);
@@ -98,6 +117,26 @@ test('Editorial candidate keeps the mechanism contract visible at desktop and na
   expect(externalRequests).toEqual([]);
   expect(consoleErrors).toEqual([]);
   expect(pageErrors).toEqual([]);
+});
+
+test('Editorial v2 mechanism sections keep the approved figure and legend composition', async ({ page }, testInfo) => {
+  const reportPath = generateEditorialCandidate(testInfo.outputDir);
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.goto(pathToFileURL(reportPath).toString());
+  await page.addStyleTag({ content: '.editorial-header { position: static !important; }' });
+
+  for (const [testId, snapshot] of [
+    ['mechanism-overview-section', 'editorial-v2-overview-section.png'],
+    ['mechanism-sample-section', 'editorial-v2-sample-section.png'],
+    ['mechanism-exposure-ranking-section', 'editorial-v2-exposure-ranking-section.png'],
+    ['mechanism-llm-decision-section', 'editorial-v2-llm-decision-section.png'],
+    ['mechanism-network-feedback-section', 'editorial-v2-network-feedback-section.png'],
+  ] as const) {
+    await expect(page.getByTestId(testId)).toHaveScreenshot(snapshot, {
+      animations: 'disabled',
+      caret: 'hide',
+    });
+  }
 });
 
 test('Editorial candidate closes the hash, history, focus, mode, language, and drawer contracts', async ({ page }, testInfo) => {
@@ -114,9 +153,13 @@ test('Editorial candidate closes the hash, history, focus, mode, language, and d
   await expect(page).toHaveURL(/#run\/sample$/);
   await expect(page.getByTestId('run-evidence-mode-panel')).toBeVisible();
   await expect(page.getByTestId('mechanism-mode-panel')).toBeHidden();
+  await expect(page.locator('.editorial-figure:visible')).toHaveCount(0);
+  await expect(page.locator('.editorial-legend-v2:visible')).toHaveCount(0);
   await page.goBack();
   await expect(page).toHaveURL(/#sample$/);
   await expect(page.getByTestId('mechanism-mode-panel')).toBeVisible();
+  await expect(page.locator('.editorial-figure:visible')).toHaveCount(5);
+  await expect(page.locator('.editorial-legend-v2:visible')).toHaveCount(5);
   await expect(page.getByTestId('mechanism-sample-section')).toBeFocused();
 
   const hotspot = page.getByTestId('mechanism-sample-hotspot-network');
@@ -129,6 +172,7 @@ test('Editorial candidate closes the hash, history, focus, mode, language, and d
   const hashBeforeLanguage = await page.evaluate(() => window.location.hash);
   await page.getByRole('button', { name: 'English', exact: true }).click();
   await expect(page.locator('html')).toHaveAttribute('lang', 'en-US');
+  await expect(page.locator('[data-legend-item="overview-first-message-channel"] .editorial-legend-label')).toHaveText('First message channel');
   await expect(page).toHaveURL(new RegExp(`${hashBeforeLanguage}$`));
   await expect(drawer).toBeVisible();
   await expect(drawer).toContainText('Direct one-hop Network Cohort');

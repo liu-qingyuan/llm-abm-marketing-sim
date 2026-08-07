@@ -7,7 +7,7 @@ from collections import Counter
 from collections.abc import Mapping, Sequence
 from importlib.resources import files
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 if TYPE_CHECKING:
     from .concurrent_message_report import ConcurrentMessageReportPayload
@@ -1178,6 +1178,175 @@ _EDITORIAL_ASSET_CATALOG: dict[str, dict[str, str]] = {
 }
 
 
+_EDITORIAL_V2_ASSET_VERSION = "v2"
+_EDITORIAL_V2_ASSET_CATALOG: dict[str, dict[str, str]] = {
+    "overview": {
+        "file": "editorial-mechanism-overview-v2.webp",
+        "sha256": "fe112e7d898e881dd7d379333e2192e87c62278820a52ea4b0f6bd39fee550bc",
+        "source": "editorial-mechanism-overview-v2.png",
+        "source_sha256": "769f6168d278bd9e6080631fab7b0411aa578f8cea6d7fbeba17aa04b33b6019",
+        "version": _EDITORIAL_V2_ASSET_VERSION,
+    },
+    "sample": {
+        "file": "editorial-mechanism-sample-v2.webp",
+        "sha256": "a01d8ea31980568b06bf8a03a42592e83387883ed0f60ea097218879bb120b37",
+        "source": "editorial-mechanism-sample-v2.png",
+        "source_sha256": "1981001fda541d15cf87fbc52cbedd787e831c6f066717d670e68d2d7f02fba3",
+        "version": _EDITORIAL_V2_ASSET_VERSION,
+    },
+    "exposure-ranking": {
+        "file": "editorial-mechanism-exposure-ranking-v2.webp",
+        "sha256": "92073c232aa770bb400375ce3495ac21a59f121a4e823e789e01a8fb0e917812",
+        "source": "editorial-mechanism-exposure-ranking-v2.png",
+        "source_sha256": "d2891f472388a00bc620a37a2469cfbfa9b1ddd6412d639ded6e3cea8a03a80f",
+        "version": _EDITORIAL_V2_ASSET_VERSION,
+    },
+    "llm-decision": {
+        "file": "editorial-mechanism-llm-decision-v2.webp",
+        "sha256": "96a5a87a01da39ef73a8c2a1cb510bcd008697cf595b760acc891e911ff53368",
+        "source": "editorial-mechanism-llm-decision-v2.png",
+        "source_sha256": "2653f6e55e8098cbde6550269ba062d39aba9013fcbe764dc8d9c32a40d41795",
+        "version": _EDITORIAL_V2_ASSET_VERSION,
+    },
+    "network-feedback": {
+        "file": "editorial-mechanism-network-feedback-v2.webp",
+        "sha256": "548f0d601e84291125fac1926ea1304f723ad8fff37c013297b1f4e54719df50",
+        "source": "editorial-mechanism-network-feedback-v2.png",
+        "source_sha256": "eec88039e3b1dc0b682be1a4c35db2e5e2b283b62e9dbbdb7ca86be6b5dd0fe0",
+        "version": _EDITORIAL_V2_ASSET_VERSION,
+    },
+}
+
+
+_EDITORIAL_V2_COPY: dict[str, dict[str, str]] = {
+    "zh-CN": {
+        "v2.legend.channel.first": "第一条 message 通道",
+        "v2.legend.channel.second": "第二条 message 通道",
+        "v2.legend.channel.third": "第三条 message 通道",
+        "v2.legend.research_sample": "Research Sample",
+        "v2.legend.eligible_pair": "Eligible user × message pair",
+        "v2.legend.per_message_queue": "Per-Message Queue",
+        "v2.legend.exposure_gate": "Exposure Gate",
+        "v2.legend.decision_pair": "Primary / report-only Shadow Decision pair",
+        "v2.legend.seed_union": "Influence Seed Union",
+        "v2.legend.network_cohort": "Direct one-hop Network Cohort",
+        "v2.legend.ordinary_fill": "Ordinary fill",
+        "v2.legend.personalized_top20": "Per-Message Personalized Top20",
+        "v2.legend.cross_message_overlap": "Allowed cross-message overlap",
+        "v2.legend.single_exposure": "Message-Level Single Exposure",
+        "v2.legend.primary_decision": "Primary Campaign Decision",
+        "v2.legend.shadow_decision": "Demographic Shadow Decision",
+        "v2.legend.propagating_primary": "传播 Primary action · like / comment / share",
+        "v2.legend.engaged_user_dedup": "Campaign engaged-user set · 按用户去重",
+        "v2.legend.next_batch_reranking": "下一批 per-message reranking",
+        "v2.legend.no_campaign_feedback": "No campaign feedback",
+    },
+    "en-US": {
+        "v2.legend.channel.first": "First message channel",
+        "v2.legend.channel.second": "Second message channel",
+        "v2.legend.channel.third": "Third message channel",
+        "v2.legend.research_sample": "Research Sample",
+        "v2.legend.eligible_pair": "Eligible user × message pair",
+        "v2.legend.per_message_queue": "Per-Message Queue",
+        "v2.legend.exposure_gate": "Exposure Gate",
+        "v2.legend.decision_pair": "Primary / report-only Shadow Decision pair",
+        "v2.legend.seed_union": "Influence Seed Union",
+        "v2.legend.network_cohort": "Direct one-hop Network Cohort",
+        "v2.legend.ordinary_fill": "Ordinary fill",
+        "v2.legend.personalized_top20": "Per-Message Personalized Top20",
+        "v2.legend.cross_message_overlap": "Allowed cross-message overlap",
+        "v2.legend.single_exposure": "Message-Level Single Exposure",
+        "v2.legend.primary_decision": "Primary Campaign Decision",
+        "v2.legend.shadow_decision": "Demographic Shadow Decision",
+        "v2.legend.propagating_primary": "Propagating Primary action · like / comment / share",
+        "v2.legend.engaged_user_dedup": "Campaign engaged-user set · deduplicated by user",
+        "v2.legend.next_batch_reranking": "Next-batch per-message reranking",
+        "v2.legend.no_campaign_feedback": "No campaign feedback",
+    },
+}
+_EDITORIAL_V2_CATALOG = {
+    language: {**_EDITORIAL_CATALOG[language], **_EDITORIAL_V2_COPY[language]}
+    for language in _EDITORIAL_LANGUAGES
+}
+
+
+_EDITORIAL_V1_LEGEND_ITEMS: dict[str, tuple[tuple[str, str], ...]] = {
+    "overview": (
+        ("navy", "overview.legend.sample"),
+        ("cobalt", "overview.legend.message"),
+        ("green", "overview.legend.candidates"),
+        ("amber", "overview.legend.queue"),
+        ("navy", "overview.legend.gate"),
+        ("green", "overview.legend.decision"),
+    ),
+    "sample": (
+        ("cobalt", "sample.legend.seed"),
+        ("green", "sample.legend.network"),
+        ("navy", "sample.legend.ordinary"),
+        ("amber", "sample.legend.labels"),
+    ),
+    "exposure-ranking": (
+        ("navy", "ranking.legend.launch"),
+        ("cobalt", "ranking.legend.queue"),
+        ("green", "ranking.legend.overlap"),
+        ("amber", "ranking.legend.gate"),
+    ),
+    "llm-decision": (
+        ("green", "decision.legend.platform"),
+        ("cobalt", "decision.legend.pair"),
+        ("green", "decision.legend.fit"),
+        ("amber", "decision.legend.paired"),
+    ),
+    "network-feedback": (
+        ("green", "feedback.legend.success"),
+        ("green", "feedback.legend.dedup"),
+        ("cobalt", "feedback.legend.next"),
+        ("amber", "feedback.legend.stop"),
+    ),
+}
+
+
+_EDITORIAL_V2_LEGEND_ITEMS: dict[str, tuple[tuple[str, str, str, str], ...]] = {
+    "overview": (
+        ("overview-first-message-channel", "v2.legend.channel.first", "channel cobalt", "message-identity"),
+        ("overview-second-message-channel", "v2.legend.channel.second", "channel green", "message-identity"),
+        ("overview-third-message-channel", "v2.legend.channel.third", "channel amber", "message-identity"),
+        ("overview-research-sample", "v2.legend.research_sample", "sample", "mark-grammar"),
+        ("overview-eligible-pair", "v2.legend.eligible_pair", "eligible-pair", "mark-grammar"),
+        ("overview-per-message-queue", "v2.legend.per_message_queue", "queue", "mark-grammar"),
+        ("overview-exposure-gate", "v2.legend.exposure_gate", "gate", "mark-grammar"),
+        ("overview-decision-pair", "v2.legend.decision_pair", "decision-pair cobalt", "mark-grammar"),
+    ),
+    "sample": (
+        ("sample-influence-seed-union", "v2.legend.seed_union", "seed", "sample-role"),
+        ("sample-direct-one-hop-network-cohort", "v2.legend.network_cohort", "network", "sample-role"),
+        ("sample-ordinary-fill", "v2.legend.ordinary_fill", "ordinary", "sample-role"),
+    ),
+    "exposure-ranking": (
+        ("ranking-first-message-channel", "v2.legend.channel.first", "channel cobalt", "message-identity"),
+        ("ranking-second-message-channel", "v2.legend.channel.second", "channel green", "message-identity"),
+        ("ranking-third-message-channel", "v2.legend.channel.third", "channel amber", "message-identity"),
+        ("ranking-personalized-top20", "v2.legend.personalized_top20", "top20", "mark-grammar"),
+        ("ranking-cross-message-overlap", "v2.legend.cross_message_overlap", "overlap", "mark-grammar"),
+        ("ranking-single-exposure", "v2.legend.single_exposure", "single-exposure", "mark-grammar"),
+    ),
+    "llm-decision": (
+        ("decision-exposure-gate", "v2.legend.exposure_gate", "gate", "neutral-role-state"),
+        ("decision-primary", "v2.legend.primary_decision", "primary", "neutral-role-state"),
+        ("decision-shadow", "v2.legend.shadow_decision", "shadow", "neutral-role-state"),
+    ),
+    "network-feedback": (
+        ("feedback-first-message-channel", "v2.legend.channel.first", "channel cobalt", "message-identity"),
+        ("feedback-second-message-channel", "v2.legend.channel.second", "channel green", "message-identity"),
+        ("feedback-third-message-channel", "v2.legend.channel.third", "channel amber", "message-identity"),
+        ("feedback-propagating-primary", "v2.legend.propagating_primary", "propagating", "feedback-grammar"),
+        ("feedback-engaged-user-dedup", "v2.legend.engaged_user_dedup", "dedup", "feedback-grammar"),
+        ("feedback-next-batch-reranking", "v2.legend.next_batch_reranking", "reranking", "feedback-grammar"),
+        ("feedback-no-campaign-feedback", "v2.legend.no_campaign_feedback", "no-feedback", "neutral-role-state"),
+    ),
+}
+
+
 def _value(source: object, key: str, default: object = "") -> object:
     if isinstance(source, Mapping):
         return source.get(key, default)
@@ -1186,14 +1355,14 @@ def _value(source: object, key: str, default: object = "") -> object:
 
 def _as_int(value: object, default: int = 0) -> int:
     try:
-        return int(value) if value is not None else default
+        return int(cast(Any, value)) if value is not None else default
     except (TypeError, ValueError):
         return default
 
 
 def _as_float(value: object, default: float = 0.0) -> float:
     try:
-        return float(value) if value is not None else default
+        return float(cast(Any, value)) if value is not None else default
     except (TypeError, ValueError):
         return default
 
@@ -1217,7 +1386,7 @@ def _required_int(source: object, key: str, context: str) -> int:
     if isinstance(value, bool) or value is None:
         raise ValueError(f"{context}.{key} must be a persisted integer")
     try:
-        return int(value)
+        return int(cast(Any, value))
     except (TypeError, ValueError) as exc:
         raise ValueError(f"{context}.{key} must be a persisted integer") from exc
 
@@ -1227,7 +1396,7 @@ def _required_float(source: object, key: str, context: str) -> float:
     if isinstance(value, bool) or value is None:
         raise ValueError(f"{context}.{key} must be a persisted number")
     try:
-        return float(value)
+        return float(cast(Any, value))
     except (TypeError, ValueError) as exc:
         raise ValueError(f"{context}.{key} must be a persisted number") from exc
 
@@ -1863,6 +2032,10 @@ def _copy(key: str, language: str = "zh-CN") -> str:
     return _EDITORIAL_CATALOG[language][key]
 
 
+def _v2_copy(key: str, language: str = "zh-CN") -> str:
+    return _EDITORIAL_V2_CATALOG[language][key]
+
+
 def _i18n(key: str, *, tag: str = "span", class_name: str = "", attrs: str = "") -> str:
     classes = f' class="{_escaped(class_name, quote=True)}"' if class_name else ""
     return (
@@ -1878,6 +2051,14 @@ def _attribute_i18n(key: str, attribute: str) -> str:
     )
 
 
+def _v2_i18n(key: str, *, class_name: str = "") -> str:
+    classes = f' class="{_escaped(class_name, quote=True)}"' if class_name else ""
+    return (
+        f'<span{classes} data-i18n="{_escaped(key, quote=True)}">'
+        f"{_escaped(_v2_copy(key), quote=False)}</span>"
+    )
+
+
 def _asset_bytes(asset_key: str) -> bytes:
     asset = _EDITORIAL_ASSET_CATALOG[asset_key]
     return files("llm_abm_sim").joinpath("report_assets").joinpath(asset["file"]).read_bytes()
@@ -1885,6 +2066,12 @@ def _asset_bytes(asset_key: str) -> bytes:
 
 def _embedded_asset(asset_key: str) -> str:
     return "data:image/webp;base64," + b64encode(_asset_bytes(asset_key)).decode("ascii")
+
+
+def _v2_embedded_asset(asset_key: str) -> str:
+    asset = _EDITORIAL_V2_ASSET_CATALOG[asset_key]
+    payload = files("llm_abm_sim").joinpath("report_assets").joinpath(asset["file"]).read_bytes()
+    return "data:image/webp;base64," + b64encode(payload).decode("ascii")
 
 
 def _paragraphs(value: object) -> str:
@@ -1924,6 +2111,27 @@ def _legend(items: Sequence[tuple[str, str]]) -> str:
             f'{_i18n(key)}</span>'
             for color, key in items
         )
+        + "</div>"
+    )
+
+
+def _v2_legend(section: str) -> str:
+    items = _EDITORIAL_V2_LEGEND_ITEMS[section]
+    rows: list[str] = []
+    for item_id, copy_key, mark_tokens, encoding_axis in items:
+        mark_classes = " ".join(f"editorial-mark-{token}" for token in mark_tokens.split())
+        rows.append(
+            f'<span class="editorial-legend-item" role="listitem" '
+            f'data-legend-item="{_escaped(item_id, quote=True)}" '
+            f'data-encoding-axis="{_escaped(encoding_axis, quote=True)}">'
+            f'<i class="editorial-mark {mark_classes}" aria-hidden="true"><b></b><b></b><b></b></i>'
+            f'{_v2_i18n(copy_key, class_name="editorial-legend-label")}</span>'
+        )
+    return (
+        f'<div class="editorial-legend editorial-legend-v2" data-testid="mechanism-{_escaped(section, quote=True)}-legend" '
+        f'data-legend-section="{_escaped(section, quote=True)}" role="list" '
+        f'{_attribute_i18n("shell.legend_aria", "aria-label")}>'
+        + "".join(rows)
         + "</div>"
     )
 
@@ -1993,7 +2201,8 @@ def _mechanism_html(payload: Any) -> str:
     run = _value(payload, "run", {})
     funnel = _value(payload, "campaign_funnel", {})
     sample_size = _as_int(_value(run, "sample_size", 1000), 1000)
-    message_count = len(_value(payload, "messages", [])) if isinstance(_value(payload, "messages", []), Sequence) else 3
+    messages = _value(payload, "messages", [])
+    message_count = len(messages) if isinstance(messages, Sequence) else 3
     eligible_pairs = _as_int(_value(funnel, "eligible_user_message_pairs", sample_size * message_count), sample_size * message_count)
     horizon = _as_int(_value(run, "horizon", 30), 30)
     capacity = _as_int(_value(run, "delivery_capacity", 20), 20)
@@ -2971,6 +3180,184 @@ code { overflow-wrap: anywhere; font-family: ui-monospace, SFMono-Regular, Menlo
 """
 
 
+_EDITORIAL_V2_CSS = r"""
+.editorial-report[data-editorial-version="v2"] .editorial-figure > img { background: #f8fafc; }
+.editorial-report[data-editorial-version="v2"] .editorial-hotspot-layer {
+  position: static;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  gap: 8px;
+  width: auto;
+  height: auto;
+  aspect-ratio: auto;
+  padding-top: 10px;
+}
+.editorial-report[data-editorial-version="v2"] .editorial-hotspot {
+  position: static;
+  min-width: 0;
+  max-width: none;
+  min-height: 56px;
+  box-shadow: none;
+}
+.editorial-legend-v2 {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1px;
+  border: 1px solid var(--editorial-rule);
+  background: var(--editorial-rule);
+  color: var(--editorial-ink);
+}
+.editorial-legend-v2 .editorial-legend-item {
+  display: grid;
+  grid-template-columns: 58px minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  min-height: 54px;
+  padding: 10px 14px;
+  background: var(--editorial-paper);
+}
+.editorial-legend-v2 .editorial-legend-item:last-child:nth-child(odd) { grid-column: 1 / -1; }
+.editorial-legend-v2 .editorial-legend-label {
+  display: block;
+  min-width: 0;
+  color: var(--editorial-ink);
+  font-weight: 600;
+  line-height: 1.35;
+}
+.editorial-mark {
+  --mark-color: var(--editorial-ink);
+  position: relative;
+  display: block;
+  width: 52px;
+  height: 28px;
+  color: var(--mark-color);
+  flex: none;
+}
+.editorial-mark b { position: absolute; display: block; box-sizing: border-box; }
+.editorial-mark-cobalt { --mark-color: #175cd3; }
+.editorial-mark-green { --mark-color: #00875a; }
+.editorial-mark-amber { --mark-color: #c76a00; }
+.editorial-mark-channel::before {
+  position: absolute;
+  top: 13px;
+  right: 7px;
+  left: 5px;
+  height: 3px;
+  background: var(--mark-color);
+  content: "";
+}
+.editorial-mark-channel::after {
+  position: absolute;
+  top: 8px;
+  right: 1px;
+  border-top: 6px solid transparent;
+  border-bottom: 6px solid transparent;
+  border-left: 8px solid var(--mark-color);
+  content: "";
+}
+.editorial-mark-channel b:nth-child(1), .editorial-mark-channel b:nth-child(2) {
+  top: 8px;
+  width: 11px;
+  height: 11px;
+  border: 2px solid var(--mark-color);
+  border-radius: 50%;
+  background: var(--editorial-paper);
+}
+.editorial-mark-channel b:nth-child(1) { left: 4px; background: var(--mark-color); }
+.editorial-mark-channel b:nth-child(2) { left: 25px; }
+.editorial-mark-sample::before, .editorial-mark-sample::after {
+  position: absolute;
+  top: 3px;
+  width: 7px;
+  height: 22px;
+  border-top: 2px solid var(--editorial-ink);
+  border-bottom: 2px solid var(--editorial-ink);
+  content: "";
+}
+.editorial-mark-sample::before { left: 2px; border-left: 2px solid var(--editorial-ink); }
+.editorial-mark-sample::after { right: 2px; border-right: 2px solid var(--editorial-ink); }
+.editorial-mark-sample b { width: 7px; height: 7px; border: 1.5px solid var(--editorial-ink); border-radius: 50%; }
+.editorial-mark-sample b:nth-child(1) { top: 7px; left: 14px; }
+.editorial-mark-sample b:nth-child(2) { top: 15px; left: 25px; }
+.editorial-mark-sample b:nth-child(3) { top: 7px; left: 36px; }
+.editorial-mark-eligible-pair::before { position: absolute; top: 13px; left: 10px; width: 34px; height: 3px; background: #175cd3; content: ""; }
+.editorial-mark-eligible-pair b:nth-child(1) { top: 7px; left: 1px; width: 14px; height: 14px; border: 2px solid #5b6878; border-radius: 50%; background: var(--editorial-paper); }
+.editorial-mark-eligible-pair b:nth-child(2) { top: 6px; left: 25px; width: 15px; height: 15px; border: 2px solid #175cd3; background: var(--editorial-paper); }
+.editorial-mark-eligible-pair b:nth-child(3) { top: 10px; right: 1px; width: 8px; height: 8px; border-radius: 50%; background: #175cd3; }
+.editorial-mark-queue::before { position: absolute; top: 13px; right: 2px; left: 2px; height: 3px; background: #175cd3; content: ""; }
+.editorial-mark-queue b { top: 8px; width: 12px; height: 12px; border: 2px solid #5b6878; border-radius: 50%; background: var(--editorial-paper); }
+.editorial-mark-queue b:nth-child(1) { left: 5px; }
+.editorial-mark-queue b:nth-child(2) { left: 21px; }
+.editorial-mark-queue b:nth-child(3) { left: 37px; }
+.editorial-mark-gate::before { position: absolute; top: 2px; left: 14px; width: 25px; height: 24px; border: 2px solid var(--editorial-rule); background: var(--editorial-paper); content: ""; }
+.editorial-mark-gate b:nth-child(1) { top: 7px; left: 20px; width: 12px; height: 14px; border-top: 2px solid #5b6878; border-right: 2px solid #5b6878; transform: rotate(45deg) skew(-8deg, -8deg); }
+.editorial-mark-gate b:nth-child(2) { top: 6px; left: 35px; width: 2px; height: 17px; background: #5b6878; }
+.editorial-mark-decision-pair::before, .editorial-mark-decision-pair::after { position: absolute; left: 6px; width: 38px; height: 0; content: ""; }
+.editorial-mark-decision-pair::before { top: 8px; border-top: 3px solid var(--mark-color); }
+.editorial-mark-decision-pair::after { top: 21px; border-top: 3px dashed var(--mark-color); }
+.editorial-mark-decision-pair b:nth-child(1) { top: 4px; right: 0; width: 10px; height: 10px; border-radius: 50%; background: var(--mark-color); }
+.editorial-mark-decision-pair b:nth-child(2) { top: 17px; right: 0; width: 10px; height: 10px; border: 2px solid var(--mark-color); border-radius: 50%; background: var(--editorial-paper); }
+.editorial-mark-seed b:nth-child(1) { top: 4px; left: 15px; width: 21px; height: 21px; border: 3px solid #175cd3; border-radius: 50%; background: #175cd3; }
+.editorial-mark-network::before, .editorial-mark-network::after { position: absolute; top: 13px; left: 7px; width: 38px; height: 2px; background: #00875a; content: ""; }
+.editorial-mark-network::before { transform: rotate(24deg); }
+.editorial-mark-network::after { transform: rotate(-24deg); }
+.editorial-mark-network b { border: 2px solid #00875a; border-radius: 50%; background: var(--editorial-paper); }
+.editorial-mark-network b:nth-child(1) { top: 7px; left: 20px; width: 15px; height: 15px; background: #00875a; }
+.editorial-mark-network b:nth-child(2) { top: 1px; left: 1px; width: 12px; height: 12px; }
+.editorial-mark-network b:nth-child(3) { right: 1px; bottom: 1px; width: 12px; height: 12px; }
+.editorial-mark-ordinary b:nth-child(1) { top: 4px; left: 15px; width: 21px; height: 21px; border: 3px solid var(--editorial-ink); border-radius: 50%; background: var(--editorial-paper); }
+.editorial-mark-top20::before { position: absolute; top: 13px; right: 2px; left: 2px; height: 3px; background: #175cd3; content: ""; }
+.editorial-mark-top20::after { position: absolute; top: 3px; right: 3px; width: 18px; height: 20px; border-right: 2px solid var(--editorial-ink); border-bottom: 2px solid var(--editorial-ink); border-left: 2px solid var(--editorial-ink); content: ""; }
+.editorial-mark-top20 b { top: 8px; width: 11px; height: 11px; border: 2px solid #5b6878; border-radius: 50%; background: var(--editorial-paper); }
+.editorial-mark-top20 b:nth-child(1) { left: 5px; }
+.editorial-mark-top20 b:nth-child(2) { left: 19px; }
+.editorial-mark-top20 b:nth-child(3) { left: 33px; }
+.editorial-mark-overlap::before, .editorial-mark-overlap::after { position: absolute; right: 2px; left: 2px; height: 3px; content: ""; }
+.editorial-mark-overlap::before { top: 6px; background: #175cd3; }
+.editorial-mark-overlap::after { top: 20px; background: #00875a; }
+.editorial-mark-overlap b:nth-child(1), .editorial-mark-overlap b:nth-child(2) { left: 22px; width: 11px; height: 11px; border: 2px solid #5b6878; border-radius: 50%; background: var(--editorial-paper); }
+.editorial-mark-overlap b:nth-child(1) { top: 1px; }
+.editorial-mark-overlap b:nth-child(2) { top: 15px; }
+.editorial-mark-overlap b:nth-child(3) { top: 8px; left: 26px; width: 2px; height: 12px; background: #5b6878; }
+.editorial-mark-single-exposure::before { position: absolute; top: 13px; right: 3px; left: 2px; height: 3px; background: #5b6878; content: ""; }
+.editorial-mark-single-exposure b:nth-child(1) { top: 5px; left: 15px; width: 18px; height: 18px; border: 2px solid #5b6878; background: var(--editorial-paper); }
+.editorial-mark-single-exposure b:nth-child(2) { top: 7px; right: 1px; width: 14px; height: 14px; border-radius: 50%; background: #5b6878; }
+.editorial-mark-primary::before, .editorial-mark-shadow::before { position: absolute; top: 13px; right: 6px; left: 3px; height: 0; content: ""; }
+.editorial-mark-primary::before { border-top: 3px solid #5b6878; }
+.editorial-mark-shadow::before { border-top: 3px dashed #5b6878; }
+.editorial-mark-primary b:nth-child(1), .editorial-mark-shadow b:nth-child(1) { top: 7px; right: 0; width: 15px; height: 15px; border: 3px solid #5b6878; border-radius: 50%; }
+.editorial-mark-primary b:nth-child(1) { background: #5b6878; }
+.editorial-mark-shadow b:nth-child(1) { background: var(--editorial-paper); }
+.editorial-mark-propagating { background: linear-gradient(#175cd3, #175cd3) 2px 5px / 44px 3px no-repeat, linear-gradient(#00875a, #00875a) 2px 13px / 44px 3px no-repeat, linear-gradient(#c76a00, #c76a00) 2px 21px / 44px 3px no-repeat; }
+.editorial-mark-propagating b { left: 24px; width: 8px; height: 8px; border-radius: 50%; }
+.editorial-mark-propagating b:nth-child(1) { top: 2px; background: #175cd3; }
+.editorial-mark-propagating b:nth-child(2) { top: 10px; background: #00875a; }
+.editorial-mark-propagating b:nth-child(3) { top: 18px; background: #c76a00; }
+.editorial-mark-dedup::before, .editorial-mark-dedup::after { position: absolute; left: 12px; width: 22px; height: 2px; background: #5b6878; content: ""; }
+.editorial-mark-dedup::before { top: 8px; transform: rotate(18deg); }
+.editorial-mark-dedup::after { bottom: 8px; transform: rotate(-18deg); }
+.editorial-mark-dedup b:nth-child(1), .editorial-mark-dedup b:nth-child(2) { left: 1px; width: 11px; height: 11px; border: 2px solid #5b6878; border-radius: 50%; background: var(--editorial-paper); }
+.editorial-mark-dedup b:nth-child(1) { top: 1px; }
+.editorial-mark-dedup b:nth-child(2) { bottom: 1px; }
+.editorial-mark-dedup b:nth-child(3) { top: 5px; right: 1px; width: 19px; height: 19px; border: 5px double #5b6878; border-radius: 50%; background: var(--editorial-paper); }
+.editorial-mark-reranking { background: linear-gradient(#175cd3, #175cd3) 2px 5px / 48px 3px no-repeat, linear-gradient(#00875a, #00875a) 2px 13px / 48px 3px no-repeat, linear-gradient(#c76a00, #c76a00) 2px 21px / 48px 3px no-repeat; }
+.editorial-mark-reranking::after { position: absolute; top: 1px; right: 2px; width: 17px; height: 25px; border-right: 2px solid var(--editorial-ink); border-bottom: 2px solid var(--editorial-ink); border-left: 2px solid var(--editorial-ink); content: ""; }
+.editorial-mark-reranking b { left: 10px; width: 9px; height: 9px; border: 2px solid #5b6878; border-radius: 50%; background: var(--editorial-paper); }
+.editorial-mark-reranking b:nth-child(1) { top: 2px; }
+.editorial-mark-reranking b:nth-child(2) { top: 10px; }
+.editorial-mark-reranking b:nth-child(3) { top: 18px; }
+.editorial-mark-no-feedback::before { position: absolute; top: 13px; right: 14px; left: 3px; border-top: 3px dashed #5b6878; content: ""; }
+.editorial-mark-no-feedback::after { position: absolute; top: 4px; right: 12px; width: 3px; height: 21px; background: #5b6878; content: ""; }
+.editorial-mark-no-feedback b:nth-child(1) { top: 6px; right: 0; width: 16px; height: 16px; border: 3px solid #5b6878; border-radius: 50%; background: var(--editorial-paper); }
+@media (max-width: 680px) {
+  .editorial-report[data-editorial-version="v2"] .editorial-hotspot-layer,
+  .editorial-legend-v2 { grid-template-columns: 1fr; }
+  .editorial-legend-v2 .editorial-legend-item { min-height: 50px; padding: 9px 11px; }
+}
+"""
+
+
 _EDITORIAL_SCRIPT = r"""
 (() => {
   const root = document.querySelector('[data-testid="editorial-report"]');
@@ -3894,6 +4281,78 @@ def _render_editorial_candidate(payload: ConcurrentMessageReportPayload) -> str:
 """
 
 
-# Alias stays private so tests and design validation can call the candidate seam
-# without adding a public renderer selector or a persisted renderer token.
-_render_editorial_report = _render_editorial_candidate
+def _replace_v2_fragment(value: str, old: str, new: str, *, expected: int, label: str) -> str:
+    actual = value.count(old)
+    if actual != expected:
+        raise ValueError(f"Editorial v2 could not replace frozen {label}: expected {expected}, found {actual}")
+    return value.replace(old, new)
+
+
+def _render_editorial_v2(payload: ConcurrentMessageReportPayload) -> str:
+    """Render the private Editorial v2 presentation from the frozen v1 shell."""
+    rendered = _render_editorial_candidate(payload)
+    rendered = _replace_v2_fragment(
+        rendered,
+        'class="editorial-report" data-testid="editorial-report"',
+        'class="editorial-report" data-testid="editorial-report" data-editorial-version="v2"',
+        expected=1,
+        label="root",
+    )
+    rendered = _replace_v2_fragment(
+        rendered,
+        f"<style>{_EDITORIAL_CSS}</style>",
+        f"<style>{_EDITORIAL_CSS}{_EDITORIAL_V2_CSS}</style>",
+        expected=1,
+        label="stylesheet",
+    )
+
+    v1_catalog_json = json.dumps(_EDITORIAL_CATALOG, ensure_ascii=False, separators=(",", ":")).replace(
+        "</", "<\\/"
+    )
+    v2_catalog_json = json.dumps(_EDITORIAL_V2_CATALOG, ensure_ascii=False, separators=(",", ":")).replace(
+        "</", "<\\/"
+    )
+    rendered = _replace_v2_fragment(
+        rendered,
+        v1_catalog_json,
+        v2_catalog_json,
+        expected=1,
+        label="language catalog",
+    )
+
+    for asset_key, v2_asset in _EDITORIAL_V2_ASSET_CATALOG.items():
+        v1_asset = _EDITORIAL_ASSET_CATALOG[asset_key]
+        rendered = _replace_v2_fragment(
+            rendered,
+            v1_asset["file"],
+            v2_asset["file"],
+            expected=2,
+            label=f"{asset_key} filename",
+        )
+        rendered = _replace_v2_fragment(
+            rendered,
+            v1_asset["source_sha256"],
+            v2_asset["source_sha256"],
+            expected=1,
+            label=f"{asset_key} source hash",
+        )
+        rendered = _replace_v2_fragment(
+            rendered,
+            _embedded_asset(asset_key),
+            _v2_embedded_asset(asset_key),
+            expected=1,
+            label=f"{asset_key} embedded media",
+        )
+        rendered = _replace_v2_fragment(
+            rendered,
+            _legend(_EDITORIAL_V1_LEGEND_ITEMS[asset_key]),
+            _v2_legend(asset_key),
+            expected=1,
+            label=f"{asset_key} legend",
+        )
+    return rendered
+
+
+# Alias stays private so tests and design validation can call the default Editorial
+# seam without adding a public renderer selector or a persisted renderer token.
+_render_editorial_report = _render_editorial_v2

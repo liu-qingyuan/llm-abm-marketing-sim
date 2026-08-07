@@ -37,7 +37,7 @@ import hashlib
 import json
 from pathlib import Path
 from llm_abm_sim import ConcurrentMessageExperimentConfig, ConcurrentMessageExperimentRunner
-from llm_abm_sim.concurrent_message_renderer import _CURRENT_ADAPTER
+from llm_abm_sim.concurrent_message_renderer import _render_two_mode_report
 from llm_abm_sim.concurrent_message_report import ConcurrentMessageReportPayload
 from llm_abm_sim.prompt_field_summary import (
     CONCURRENT_MESSAGE_PRIMARY_PROMPT_VERSION,
@@ -75,7 +75,7 @@ ConcurrentMessageExperimentRunner(
 payload = ConcurrentMessageReportPayload.model_validate_json(
     (root / 'concurrent_message_report_payload.json').read_bytes()
 )
-compatibility_html = _CURRENT_ADAPTER.render(payload)
+compatibility_html = _render_two_mode_report(payload)
 (root / 'report.html').write_text(compatibility_html, encoding='utf-8')
 manifest_path = root / 'artifact_manifest.json'
 manifest = json.loads(manifest_path.read_text(encoding='utf-8'))

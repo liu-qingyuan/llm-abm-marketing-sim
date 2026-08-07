@@ -39,7 +39,7 @@ Architecture 描述当前 Module、数据边界和稳定运行语义；ADR 记�
 - [current Editorial：Editorial Formal 发布与验收记录](references/jinjiang-concurrent-message-editorial-formal-release-20260729.md)
 - [current Retention：Retention final evidence](references/retention-cleanup-final-evidence-20260730.md)
 
-References README 使用决策表区分默认读取、按需 research、按需 rollback 和 forensic-only evidence。5 张 Editorial mechanism source PNG 由 `src/llm_abm_sim/report_assets/` 统一拥有；generated WebP 和 candidate contract 继续由代码与测试保护。
+References README 使用决策表区分默认读取、按需 research、按需 rollback 和 forensic-only evidence。Editorial v1/v2 mechanism source PNG 由 `src/llm_abm_sim/report_assets/` 统一拥有；generated WebP 和 renderer compatibility contract 继续由代码与测试保护。
 
 ## 周报与 Agent workflow
 

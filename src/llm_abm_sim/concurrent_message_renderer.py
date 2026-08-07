@@ -7,7 +7,7 @@ from collections.abc import Callable, Mapping, Sequence
 from typing import Any
 
 from .concurrent_message_current_renderer import render_current_report as _render_current_report
-from .concurrent_message_editorial_candidate import _render_editorial_candidate
+from .concurrent_message_editorial_candidate import _render_editorial_candidate, _render_editorial_v2
 
 
 def _legacy_render_report(payload: Any, *, include_pagination: bool = True) -> str:
@@ -960,6 +960,7 @@ def _render_historical_report(payload: Any) -> str:
 
 
 _FIXED_RENDERERS: tuple[Callable[[Any], str], ...] = (
+    _render_editorial_v2,
     _render_editorial_candidate,
     _render_two_mode_report,
     _legacy_render_report,
@@ -970,7 +971,7 @@ _FIXED_RENDERERS: tuple[Callable[[Any], str], ...] = (
 def render_report(payload: Any, *, expected_sha256: str | None = None) -> str:
     """Render the Editorial default, or dispatch to a fixed exact callable by hash."""
     if expected_sha256 is None:
-        return _render_editorial_candidate(payload)
+        return _render_editorial_v2(payload)
     for renderer in _FIXED_RENDERERS:
         rendered = renderer(payload)
         if _sha256_text(rendered) == expected_sha256:
