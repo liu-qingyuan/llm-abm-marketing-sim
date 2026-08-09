@@ -49,6 +49,55 @@ def build_concurrent_execution_run_identity(
     shadow_provider_metadata: Mapping[str, Any],
     prompt_contract: Mapping[str, Any],
 ) -> dict[str, Any]:
+    return _build_concurrent_execution_run_identity(
+        output_target=output_target,
+        operational_workspace=operational_workspace,
+        configuration_snapshot=configuration_snapshot,
+        message_snapshot=message_snapshot,
+        sample_audit=sample_audit,
+        dataset_dir=dataset_dir,
+        provider_contract={
+            "primary": dict(safe_data(primary_provider_metadata)),
+            "shadow": dict(safe_data(shadow_provider_metadata)),
+        },
+        prompt_contract=prompt_contract,
+    )
+
+
+def _build_primary_only_concurrent_execution_run_identity(
+    *,
+    output_target: str | Path,
+    operational_workspace: str | Path,
+    configuration_snapshot: Mapping[str, Any],
+    message_snapshot: Sequence[Mapping[str, Any]],
+    sample_audit: Mapping[str, Any],
+    dataset_dir: str | Path,
+    primary_provider_metadata: Mapping[str, Any],
+    prompt_contract: Mapping[str, Any],
+) -> dict[str, Any]:
+    return _build_concurrent_execution_run_identity(
+        output_target=output_target,
+        operational_workspace=operational_workspace,
+        configuration_snapshot=configuration_snapshot,
+        message_snapshot=message_snapshot,
+        sample_audit=sample_audit,
+        dataset_dir=dataset_dir,
+        provider_contract={"primary": dict(safe_data(primary_provider_metadata))},
+        prompt_contract=prompt_contract,
+    )
+
+
+def _build_concurrent_execution_run_identity(
+    *,
+    output_target: str | Path,
+    operational_workspace: str | Path,
+    configuration_snapshot: Mapping[str, Any],
+    message_snapshot: Sequence[Mapping[str, Any]],
+    sample_audit: Mapping[str, Any],
+    dataset_dir: str | Path,
+    provider_contract: Mapping[str, Any],
+    prompt_contract: Mapping[str, Any],
+) -> dict[str, Any]:
     dataset_path = Path(dataset_dir).resolve()
     dataset_files: dict[str, str] = {}
     for file_name in _CONCURRENT_MESSAGE_REQUIRED_DATASET_FILES:
@@ -72,10 +121,7 @@ def build_concurrent_execution_run_identity(
             "message_snapshot_hash": _sha256_text(_canonical_json(list(message_snapshot))),
             "sample_audit_hash": _sha256_text(_canonical_json(sample_audit)),
         },
-        "provider_contract": {
-            "primary": dict(safe_data(primary_provider_metadata)),
-            "shadow": dict(safe_data(shadow_provider_metadata)),
-        },
+        "provider_contract": dict(safe_data(provider_contract)),
         "prompt_contract": dict(safe_data(prompt_contract)),
         "deploy_eligibility": False,
     }
@@ -491,7 +537,8 @@ def _replay_workspace(workspace_dir: Path) -> dict[str, Any]:
     active_batch_hash: str | None = None
     active_batch_pair_order: list[str] = []
     active_batch_pair_index = 0
-    active_batch_pair_stage: str | None = None
+    active_batch_terminal_variants: tuple[str, ...] = ()
+    active_batch_pair_event_index = 0
 
     if journal_path.is_file():
         with journal_path.open(encoding="utf-8") as handle:
@@ -574,12 +621,24 @@ def _replay_workspace(workspace_dir: Path) -> dict[str, Any]:
                     planned_variant_count += _as_int(record.get("planned_variant_count"))
                     if len(pair_order) != _as_int(record.get("planned_pair_count")):
                         raise ValueError(f"snapshot pair count does not match selected pair plans at line {line_number}")
-                    if len(pair_order) * 2 != _as_int(record.get("planned_variant_count")):
+                    terminal_variants_raw = payload.get("terminal_variants")
+                    if terminal_variants_raw is None:
+                        terminal_variants = ("primary", "shadow")
+                    elif isinstance(terminal_variants_raw, Sequence) and not isinstance(
+                        terminal_variants_raw, (str, bytes)
+                    ):
+                        terminal_variants = tuple(_as_str(variant) for variant in terminal_variants_raw)
+                    else:
+                        raise ValueError(f"snapshot terminal_variants must be a sequence at line {line_number}")
+                    if terminal_variants not in {("primary", "shadow"), ("primary",)}:
+                        raise ValueError(f"snapshot terminal contract is unsupported at line {line_number}")
+                    if len(pair_order) * len(terminal_variants) != _as_int(record.get("planned_variant_count")):
                         raise ValueError(f"snapshot variant count does not match selected pair plans at line {line_number}")
                     active_batch_hash = snapshot_hash
                     active_batch_pair_order = pair_order
                     active_batch_pair_index = 0
-                    active_batch_pair_stage = None
+                    active_batch_terminal_variants = terminal_variants
+                    active_batch_pair_event_index = 0
                     known_snapshot_hashes.add(snapshot_hash)
                     last_durable_identity = {
                         "record_type": record_type,
@@ -655,20 +714,18 @@ def _replay_workspace(workspace_dir: Path) -> dict[str, Any]:
                         raise ValueError(f"event {event_type} payload must include pair_id at line {line_number}")
                     if current_pair_id is None or pair_id != current_pair_id:
                         raise ValueError(f"variant_started pair order breaks at line {line_number}")
-                    if decision_variant not in {"primary", "shadow"}:
+                    if decision_variant not in active_batch_terminal_variants:
                         raise ValueError(f"event {event_type} has unsupported decision_variant {decision_variant}")
                     if _as_str(payload.get("pair_id")) != pair_id:
                         raise ValueError(f"event {event_type} payload pair_id mismatch at line {line_number}")
-                    if active_batch_pair_stage is None:
-                        if decision_variant != "primary":
-                            raise ValueError(f"event {event_type} must start the primary variant first at line {line_number}")
-                        active_batch_pair_stage = "primary_started"
-                    elif active_batch_pair_stage == "primary_started":
-                        if decision_variant != "shadow":
-                            raise ValueError(f"event {event_type} must start the shadow variant after primary start at line {line_number}")
-                        active_batch_pair_stage = "shadow_started"
-                    else:
+                    if active_batch_pair_event_index >= len(active_batch_terminal_variants):
                         raise ValueError(f"variant_started occurs out of order at line {line_number}")
+                    expected_variant = active_batch_terminal_variants[active_batch_pair_event_index]
+                    if decision_variant != expected_variant:
+                        raise ValueError(
+                            f"event {event_type} must start {expected_variant} next at line {line_number}"
+                        )
+                    active_batch_pair_event_index += 1
                     started_variant_count += 1
                     last_durable_identity = {
                         "record_type": record_type,
@@ -694,18 +751,19 @@ def _replay_workspace(workspace_dir: Path) -> dict[str, Any]:
                         raise ValueError(f"event {event_type} payload must include pair_id at line {line_number}")
                     if current_pair_id is None or pair_id != current_pair_id:
                         raise ValueError(f"variant_terminal pair order breaks at line {line_number}")
-                    if decision_variant not in {"primary", "shadow"}:
+                    if decision_variant not in active_batch_terminal_variants:
                         raise ValueError(f"event {event_type} has unsupported decision_variant {decision_variant}")
                     if _as_str(payload.get("pair_id")) != pair_id:
                         raise ValueError(f"event {event_type} payload pair_id mismatch at line {line_number}")
-                    if decision_variant == "primary":
-                        if active_batch_pair_stage != "shadow_started":
-                            raise ValueError(f"primary terminal without matching start at line {line_number}")
-                        active_batch_pair_stage = "primary_terminal"
-                    else:
-                        if active_batch_pair_stage != "primary_terminal":
-                            raise ValueError(f"shadow terminal without matching start at line {line_number}")
-                        active_batch_pair_stage = "shadow_terminal"
+                    terminal_index = active_batch_pair_event_index - len(active_batch_terminal_variants)
+                    if terminal_index < 0 or terminal_index >= len(active_batch_terminal_variants):
+                        raise ValueError(f"variant_terminal occurs out of order at line {line_number}")
+                    expected_variant = active_batch_terminal_variants[terminal_index]
+                    if decision_variant != expected_variant:
+                        raise ValueError(
+                            f"event {event_type} must close {expected_variant} next at line {line_number}"
+                        )
+                    active_batch_pair_event_index += 1
                     terminal_variant_count += 1
                     last_durable_identity = {
                         "record_type": record_type,
@@ -730,11 +788,11 @@ def _replay_workspace(workspace_dir: Path) -> dict[str, Any]:
                         raise ValueError(f"event {event_type} payload must include pair_id at line {line_number}")
                     if current_pair_id is None or pair_id != current_pair_id:
                         raise ValueError(f"pair_closed pair order breaks at line {line_number}")
-                    if active_batch_pair_stage != "shadow_terminal":
-                        raise ValueError(f"pair_closed occurs before both terminals at line {line_number}")
+                    if active_batch_pair_event_index != 2 * len(active_batch_terminal_variants):
+                        raise ValueError(f"pair_closed occurs before required terminals at line {line_number}")
                     if _as_str(payload.get("pair_id")) != pair_id:
                         raise ValueError(f"event {event_type} payload pair_id mismatch at line {line_number}")
-                    active_batch_pair_stage = None
+                    active_batch_pair_event_index = 0
                     active_batch_pair_index += 1
                     closed_pair_count += 1
                     last_durable_identity = {
@@ -755,7 +813,7 @@ def _replay_workspace(workspace_dir: Path) -> dict[str, Any]:
                         }
                     )
                 elif event_type == "batch_committed":
-                    if active_batch_pair_index != len(active_batch_pair_order) or active_batch_pair_stage is not None:
+                    if active_batch_pair_index != len(active_batch_pair_order) or active_batch_pair_event_index != 0:
                         raise ValueError(f"batch_committed occurs before all pairs close at line {line_number}")
                     committed_user_ids = payload.get("committed_user_ids", [])
                     if not isinstance(committed_user_ids, Sequence):
@@ -770,7 +828,8 @@ def _replay_workspace(workspace_dir: Path) -> dict[str, Any]:
                     active_batch_hash = None
                     active_batch_pair_order = []
                     active_batch_pair_index = 0
-                    active_batch_pair_stage = None
+                    active_batch_terminal_variants = ()
+                    active_batch_pair_event_index = 0
                     last_durable_identity = {
                         "record_type": record_type,
                         "sequence": record_sequence,
@@ -842,9 +901,9 @@ def _replay_workspace(workspace_dir: Path) -> dict[str, Any]:
                 event_count += 1
 
     if active_batch_hash is not None and not finalized:
-        if active_batch_pair_stage in {"primary_started", "shadow_started"}:
+        if 0 < active_batch_pair_event_index <= len(active_batch_terminal_variants):
             inflight_unknown = True
-        if active_batch_pair_index < len(active_batch_pair_order) and active_batch_pair_stage is None:
+        if active_batch_pair_index < len(active_batch_pair_order) and active_batch_pair_event_index == 0:
             inflight_unknown = False
 
     output_exists = output_target.is_dir()

@@ -9,6 +9,7 @@ from typing import Any, Literal, cast
 
 import pytest
 
+import llm_abm_sim.concurrent_message_experiment as concurrent_message_experiment_module
 import llm_abm_sim.concurrent_message_report as concurrent_message_report_module
 from llm_abm_sim import (
     ConcurrentMessageExperimentConfig,
@@ -1451,6 +1452,159 @@ def test_concurrent_message_config_rejects_non_production_shape_on_default_profi
     )
 
     assert validation_config.configuration_profile == "validation"
+
+
+def test_private_primary_only_consumer_runs_without_shadow_and_commits_only_positive_feedback(tmp_path: Path) -> None:
+    dataset_dir = _make_concurrent_fixture(tmp_path)
+    config = ConcurrentMessageExperimentConfig(
+        dataset_dir=dataset_dir,
+        sample_size=30,
+        horizon=2,
+        delivery_capacity=10,
+        configuration_profile="validation",
+    )
+    primary_adapter = _ScriptedConcurrentAdapter(
+        name="primary-only",
+        prompt_version=CONCURRENT_MESSAGE_PRIMARY_PROMPT_VERSION,
+        positive_user_ids={"u1"},
+        fail_pairs={(0, "message_3", "u4")},
+    )
+
+    result = concurrent_message_experiment_module._PrimaryOnlyConcurrentRuntimeConsumer(
+        config,
+        primary_adapter,
+    ).run_new(tmp_path / "primary-only-run")
+
+    assert len(primary_adapter.calls) == 60
+    assert len(result.primary_rows) == 60
+    assert len(result.terminal_rows) == 60
+    assert {row["decision_variant"] for row in result.terminal_rows} == {"primary"}
+    assert len({(row["message_id"], row["user_id"]) for row in result.primary_rows}) == 60
+    assert sum(row["primary_status"] == "provider_failed" for row in result.primary_rows) == 1
+    batch_zero_selected = [message["selected_user_ids"] for message in result.step_rows[0]["messages"]]
+    assert batch_zero_selected[0] == batch_zero_selected[1] == batch_zero_selected[2]
+    assert result.step_rows[0]["deduplicated_committed_primary_positive_user_ids"] == ["u1"]
+    assert "u4" not in result.step_rows[0]["deduplicated_committed_primary_positive_user_ids"]
+    assert all("shadow" not in row for row in result.primary_rows)
+    assert all(
+        "shadow_provider_failed_user_ids" not in message for step in result.step_rows for message in step["messages"]
+    )
+    status = ConcurrentExecutionJournal.open_existing(result.workspace_root).status()
+    assert status["lifecycle"] == "ready_to_finalize"
+    assert status["planned_variant_count"] == 60
+    assert status["terminal_variant_count"] == 60
+    assert status["closed_pair_count"] == 60
+    assert status["committed_batch_count"] == 2
+
+
+def test_private_primary_only_consumer_resumes_durable_batch_without_replaying_terminals(tmp_path: Path) -> None:
+    dataset_dir = _make_concurrent_fixture(tmp_path)
+    config = ConcurrentMessageExperimentConfig(
+        dataset_dir=dataset_dir,
+        sample_size=30,
+        horizon=2,
+        delivery_capacity=10,
+        configuration_profile="validation",
+    )
+    baseline = concurrent_message_experiment_module._PrimaryOnlyConcurrentRuntimeConsumer(
+        config,
+        _ScriptedConcurrentAdapter(
+            name="primary-only-resume",
+            prompt_version=CONCURRENT_MESSAGE_PRIMARY_PROMPT_VERSION,
+            positive_user_ids={"u1"},
+            fail_pairs={(0, "message_3", "u4")},
+        ),
+    ).run_new(tmp_path / "primary-only-baseline")
+
+    output_target = tmp_path / "primary-only-crash"
+    with pytest.raises(RuntimeError, match="crash after 32 calls"):
+        concurrent_message_experiment_module._PrimaryOnlyConcurrentRuntimeConsumer(
+            config,
+            _ScriptedConcurrentAdapter(
+                name="primary-only-resume",
+                prompt_version=CONCURRENT_MESSAGE_PRIMARY_PROMPT_VERSION,
+                positive_user_ids={"u1"},
+                fail_pairs={(0, "message_3", "u4")},
+                crash_after_calls=32,
+            ),
+        ).run_new(output_target)
+
+    resumed_adapter = _ScriptedConcurrentAdapter(
+        name="primary-only-resume",
+        prompt_version=CONCURRENT_MESSAGE_PRIMARY_PROMPT_VERSION,
+        positive_user_ids={"u1"},
+        fail_pairs={(0, "message_3", "u4")},
+    )
+    resumed = concurrent_message_experiment_module._PrimaryOnlyConcurrentRuntimeConsumer(
+        config,
+        resumed_adapter,
+    ).resume(output_target)
+
+    assert resumed.candidate_rows == baseline.candidate_rows
+    assert resumed.primary_rows == baseline.primary_rows
+    assert resumed.terminal_rows == baseline.terminal_rows
+    assert resumed.step_rows == baseline.step_rows
+    assert resumed_adapter.calls
+    assert {call["time_step"] for call in resumed_adapter.calls} == {1}
+
+
+@pytest.mark.parametrize("corruption", ["snapshot", "terminal", "identity"])
+def test_private_primary_only_resume_rejects_corrupt_durable_state(
+    tmp_path: Path,
+    corruption: str,
+) -> None:
+    dataset_dir = _make_concurrent_fixture(tmp_path)
+    config = ConcurrentMessageExperimentConfig(
+        dataset_dir=dataset_dir,
+        sample_size=30,
+        horizon=2,
+        delivery_capacity=10,
+        configuration_profile="validation",
+    )
+    output_target = tmp_path / f"primary-only-corrupt-{corruption}"
+    with pytest.raises(RuntimeError, match="crash after 32 calls"):
+        concurrent_message_experiment_module._PrimaryOnlyConcurrentRuntimeConsumer(
+            config,
+            _ScriptedConcurrentAdapter(
+                name="primary-only-corrupt",
+                prompt_version=CONCURRENT_MESSAGE_PRIMARY_PROMPT_VERSION,
+                positive_user_ids={"u1"},
+                fail_pairs=set(),
+                crash_after_calls=32,
+            ),
+        ).run_new(output_target)
+
+    workspace = derive_concurrent_execution_workspace(output_target)
+    if corruption == "snapshot":
+        snapshot_path = sorted((workspace / CONCURRENT_MESSAGE_EXECUTION_SNAPSHOTS_DIR).glob("*.json"))[-1]
+        snapshot_path.write_text(snapshot_path.read_text(encoding="utf-8") + "\n", encoding="utf-8")
+    elif corruption == "terminal":
+        journal_path = workspace / CONCURRENT_MESSAGE_EXECUTION_JOURNAL_JSONL
+        records = journal_path.read_text(encoding="utf-8").splitlines()
+        terminal_index = max(
+            index for index, raw in enumerate(records) if json.loads(raw).get("event_type") == "variant_terminal"
+        )
+        terminal_record = json.loads(records[terminal_index])
+        terminal_record["payload"]["terminal_row"]["action"] = "share"
+        records[terminal_index] = json.dumps(terminal_record, ensure_ascii=False, sort_keys=True)
+        journal_path.write_text("\n".join(records) + "\n", encoding="utf-8")
+    else:
+        config = config.model_copy(update={"horizon": 3})
+
+    resume_adapter = _ScriptedConcurrentAdapter(
+        name="primary-only-corrupt",
+        prompt_version=CONCURRENT_MESSAGE_PRIMARY_PROMPT_VERSION,
+        positive_user_ids={"u1"},
+        fail_pairs=set(),
+    )
+    with pytest.raises(
+        (ValueError, FileNotFoundError), match="snapshot hash mismatch|checksum mismatch|identity mismatch"
+    ):
+        concurrent_message_experiment_module._PrimaryOnlyConcurrentRuntimeConsumer(
+            config,
+            resume_adapter,
+        ).resume(output_target)
+    assert resume_adapter.calls == []
 
 
 def test_concurrent_message_runner_resumes_crashed_batch_and_matches_baseline(tmp_path: Path) -> None:

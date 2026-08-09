@@ -38,7 +38,9 @@ personalized_delivery_score
 
 | Module / artifact | 当前职责 |
 |---|---|
-| `ConcurrentMessageExperimentRunner` | fresh/resume runtime、batch 调度、candidate/pair rows 和最终 source 组装 |
+| 私有 `_ConcurrentRuntimeKernel` | ranking plan、batch-start feedback snapshot、message-local single exposure、terminal closure、campaign 去重、next-batch commit 和 validated replay |
+| `ConcurrentMessageExperimentRunner` | 保持公开 Primary+Shadow preflight，执行 paired Decisions、组装既有 candidate/pair rows 和最终 source |
+| 私有 `_PrimaryOnlyConcurrentRuntimeConsumer` | 只执行 Primary 并组装内部结果；不建立公开 Robustness Study、Shadow 或可发布 artifact |
 | `PlatformEnvironment` / ranking | 每条 message 的 candidates、delivery capacity、Top20、exposure gate 和稳定 tie-break |
 | Decision Adapter | 对已曝光 `user × message` pair 生成 Primary/Shadow typed decisions；不选择 exposure |
 | `ConcurrentCampaignDiagnostics` | 从 persisted candidate/pair rows 重建 funnel、allocation、response、feedback 和 sensitivity diagnostics |
@@ -76,6 +78,8 @@ Robustness 请求侧是 additive Module，不改变现有 Concurrent Formal runt
 4. **canonical release**：使用明确 contract、source directory 和 release id 完成 candidate、health、atomic `current`、public acceptance 和失败回退。
 
 普通 run 与 `contract-protected` Formal/release run 都遵守同一重建语义：前者可以删除后重建，后者仍必须按显式 contract 保留和验证；`contract-protected` Formal/release roots 不能仅按目录类型推断删除。workspace 或 staging 的存在不能替代 journal replay、source closure、release validation 或 deployment authorization。
+
+私有 runtime kernel 对 paired 与 Primary-only 使用显式 terminal contract：既有 paired journal 仍要求同一 `user × message` 的 Primary、Shadow 都 terminal 后才关闭；Primary-only workspace 只记录 Primary，但必须等同批三条 message 的全部已选 pairs terminal 后才能 commit。两者都从已验证 journal 恢复；workspace identity、batch snapshot 或 terminal evidence 不一致时失败，不猜测缺失状态。
 
 ## LLM visibility 与 evidence
 
