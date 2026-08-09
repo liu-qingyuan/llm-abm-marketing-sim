@@ -3,6 +3,7 @@ from __future__ import annotations
 import csv
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 from typing import Any, Literal, cast
@@ -14,6 +15,11 @@ import llm_abm_sim.concurrent_message_report as concurrent_message_report_module
 from llm_abm_sim import (
     ConcurrentMessageExperimentConfig,
     ConcurrentMessageExperimentRunner,
+    ConcurrentRobustnessError,
+    ConcurrentRobustnessErrorCode,
+    ConcurrentRobustnessManifest,
+    ConcurrentRobustnessStudy,
+    ConcurrentRobustnessStudyStatus,
     rebuild_concurrent_message_report,
 )
 from llm_abm_sim.concurrent_campaign_diagnostics import validate_concurrent_validation_summary
@@ -37,11 +43,13 @@ from llm_abm_sim.decision import (
     ProviderDecisionError,
 )
 from llm_abm_sim.final_research import TARGET_VIDEO_ID
+from llm_abm_sim.prompt_contracts import CONCURRENT_ROBUSTNESS_PROMPT_REGISTRY
 from llm_abm_sim.prompt_field_summary import (
     CONCURRENT_MESSAGE_PRIMARY_PROMPT_VERSION,
     CONCURRENT_MESSAGE_SHADOW_PROMPT_VERSION,
 )
 from llm_abm_sim.prompting import build_engagement_prompt
+from llm_abm_sim.provider_request_contract import STRUCTURED_OUTPUT_SCHEMA_HASH
 from llm_abm_sim.providers.openai_compatible import (
     OpenAICompatibleDecisionAdapter,
     ProviderResponseEnvelope,
@@ -2007,3 +2015,437 @@ def test_concurrent_message_runner_resumes_partial_pair_without_duplicate_termin
         if record["record_type"] == "event" and record["event_type"] == "variant_terminal"
     ]
     assert len(resumed_terminal_keys) == len(set(resumed_terminal_keys))
+
+
+_ROBUSTNESS_MODELS = (
+    "gpt-5.4-mini",
+    "gpt-5.4-2026-03-05",
+    "gpt-5.5-2026-04-23",
+    "gpt-5.6-sol",
+)
+_ROBUSTNESS_COMPONENTS = (
+    "base_network_relevance",
+    "campaign_engaged_neighbor_signal",
+    "normalized_message_user_fit",
+)
+
+
+def _robustness_weight_points() -> list[dict[str, object]]:
+    baseline = {
+        "base_network_relevance": 0.50,
+        "campaign_engaged_neighbor_signal": 0.30,
+        "normalized_message_user_fit": 0.20,
+    }
+    points: list[dict[str, object]] = [
+        {
+            "scenario_id": "baseline",
+            "weights": baseline,
+            "transfer_from": None,
+            "transfer_to": None,
+            "transfer_mass": 0.0,
+        }
+    ]
+    for left, right in (
+        (_ROBUSTNESS_COMPONENTS[0], _ROBUSTNESS_COMPONENTS[1]),
+        (_ROBUSTNESS_COMPONENTS[0], _ROBUSTNESS_COMPONENTS[2]),
+        (_ROBUSTNESS_COMPONENTS[1], _ROBUSTNESS_COMPONENTS[2]),
+    ):
+        for transfer_mass in (0.05, 0.10, 0.15):
+            for source, target in ((left, right), (right, left)):
+                weights = dict(baseline)
+                weights[source] -= transfer_mass
+                weights[target] += transfer_mass
+                points.append(
+                    {
+                        "scenario_id": f"transfer-{source}-to-{target}-{transfer_mass:.2f}",
+                        "weights": weights,
+                        "transfer_from": source,
+                        "transfer_to": target,
+                        "transfer_mass": transfer_mass,
+                    }
+                )
+    return points
+
+
+def _robustness_manifest_for_source(
+    source_dir: Path,
+    *,
+    output_identity: str,
+) -> ConcurrentRobustnessManifest:
+    closure = close_concurrent_message_artifacts(source_dir)
+    config = closure.source_evidence.config_snapshot
+    sample_rows = closure.source_evidence.sample_manifest_rows
+    prompt_cells = []
+    for prompt in CONCURRENT_ROBUSTNESS_PROMPT_REGISTRY.all():
+        for requested_model in _ROBUSTNESS_MODELS:
+            prompt_cells.append(
+                {
+                    "cell_id": f"{prompt.variant_id}::{requested_model}",
+                    "prompt_variant": prompt.variant_id,
+                    "prompt_version": prompt.prompt_version,
+                    "prompt_canonical_hash": prompt.canonical_hash,
+                    "requested_model": requested_model,
+                }
+            )
+    source_kind = "formal" if config["configuration_profile"] == "production" else "fixture"
+    logical_per_cell = int(config["horizon"]) * int(config["delivery_capacity"]) * 3
+    source_hashes = closure.artifact_hashes
+    sample_identity = hashlib.sha256(
+        json.dumps(
+            [str(row["user_id"]) for row in sample_rows],
+            ensure_ascii=False,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+    return ConcurrentRobustnessManifest.model_validate(
+        {
+            "schema_version": "concurrent-robustness-manifest-v1",
+            "source": {
+                "kind": source_kind,
+                "source_id": source_dir.name,
+                "source_dir": str(source_dir.resolve()),
+                "manifest_schema": closure.manifest.schema_version,
+                "manifest_sha256": source_hashes["artifact_manifest.json"],
+                "artifacts": [
+                    {"relative_path": relative_path, "sha256": digest}
+                    for relative_path, digest in sorted(source_hashes.items())
+                ],
+                "candidate_artifact": "concurrent_runtime_candidates.csv",
+                "feedback_artifact": "concurrent_runtime_steps.json",
+            },
+            "sample": {
+                "sample_size": len(sample_rows),
+                "sample_identity": sample_identity,
+                "sample_manifest_sha256": source_hashes["sample_manifest.json"],
+                "sample_audit_sha256": source_hashes["seed_first_sample_audit.json"],
+            },
+            "message_ids": [str(row["message_id"]) for row in closure.source_evidence.message_snapshot],
+            "message_snapshot_sha256": source_hashes["message_snapshot.json"],
+            "ranking_contract": {
+                "schema_version": "concurrent-robustness-ranking-contract-v1",
+                "p95_normalization_token": "holdout-safe-log1p-p95-weighted-degree-v1",
+                "component_contract_token": "concurrent-ranking-components-v1",
+                "components": list(_ROBUSTNESS_COMPONENTS),
+                "tie_break_token": "score-desc-user-id-asc-v1",
+                "schedule_token": "shared-seed-launch-then-per-message-top-k-v1",
+                "score_precision_token": "binary64-full-precision-no-rounding-v1",
+                "ranking_formula": config["ranking_formula"],
+                "feedback_formula": config["engaged_neighbor_formula"],
+                "horizon": int(config["horizon"]),
+                "delivery_capacity": int(config["delivery_capacity"]),
+            },
+            "weight_points": _robustness_weight_points(),
+            "prompt_model_cells": prompt_cells,
+            "request_contract": {
+                "schema_version": "provider-request-contract-v1",
+                "provider": "openai_compatible",
+                "wire_api": "responses",
+                "reasoning_effort": "low",
+                "output_token_ceiling": 256,
+                "timeout_seconds": 30.0,
+                "max_retries": 2,
+                "retry_backoff_seconds": 0.5,
+                "structured_output_schema_version": "engage-decision-output-v1",
+                "structured_output_schema_hash": STRUCTURED_OUTPUT_SCHEMA_HASH,
+                "omitted_parameters": ["temperature", "top_p", "seed"],
+                "decision_store_policy": "fresh-per-cell-no-cache-v1",
+            },
+            "request_caps": {
+                "weight_logical_judgment_cap": 0,
+                "logical_judgments_per_cell": logical_per_cell,
+                "logical_judgment_cap": logical_per_cell * 16,
+                "physical_attempt_cap": logical_per_cell * 16 * 3,
+                "fee_ceiling_usd": 0.0,
+            },
+            "practical_thresholds": {
+                "engagement_rate_absolute": 0.05,
+                "decision_probability_absolute": 0.05,
+                "audience_jaccard_distance": 0.10,
+                "terminal_unique_positive_user_fraction": 0.05,
+                "terminal_unique_positive_user_count": math.ceil(len(sample_rows) * 0.05),
+            },
+            "authorization_reference": "static-only:no-live-authorization",
+            "output_identity": output_identity,
+        }
+    )
+
+
+def test_concurrent_robustness_manifest_rejects_noncanonical_weights_and_cells(tmp_path: Path) -> None:
+    source_dir = _make_validation_report_source(tmp_path, "robustness-manifest-source")
+    manifest = _robustness_manifest_for_source(source_dir, output_identity="fixture-manifest-v1")
+    payload = manifest.model_dump(mode="json")
+
+    missing_weight = json.loads(json.dumps(payload))
+    missing_weight["weight_points"].pop()
+    with pytest.raises(ValueError, match="19 canonical weight points"):
+        ConcurrentRobustnessManifest.model_validate(missing_weight)
+
+    non_finite_weight = json.loads(json.dumps(payload))
+    non_finite_weight["weight_points"][0]["weights"]["base_network_relevance"] = float("nan")
+    with pytest.raises(ValueError, match="finite"):
+        ConcurrentRobustnessManifest.model_validate(non_finite_weight)
+
+    changed_sum = json.loads(json.dumps(payload))
+    changed_sum["weight_points"][0]["weights"]["base_network_relevance"] = 0.51
+    with pytest.raises(ValueError, match="unit sum"):
+        ConcurrentRobustnessManifest.model_validate(changed_sum)
+
+    missing_cell = json.loads(json.dumps(payload))
+    missing_cell["prompt_model_cells"].pop()
+    with pytest.raises(ValueError, match="16 canonical Prompt-Model cells"):
+        ConcurrentRobustnessManifest.model_validate(missing_cell)
+
+
+def test_concurrent_robustness_static_study_is_offline_hashed_and_resumable(tmp_path: Path) -> None:
+    source_dir = _make_validation_report_source(tmp_path, "robustness-static-source")
+    manifest = _robustness_manifest_for_source(source_dir, output_identity="fixture-static-v1")
+    output_dir = tmp_path / "robustness-static-workspace"
+    source_before = {path.name: path.read_bytes() for path in source_dir.iterdir() if path.is_file()}
+
+    class NeverCalledAdapter:
+        calls = 0
+
+        def decide(self, *args: object, **kwargs: object) -> object:
+            del args, kwargs
+            self.calls += 1
+            raise AssertionError("static robustness must not call an Adapter")
+
+    adapter = NeverCalledAdapter()
+    study = ConcurrentRobustnessStudy()
+    with pytest.raises(ConcurrentRobustnessError) as nonempty_error:
+        study.run(manifest, {"unexpected": cast(LLMDecisionAdapter, adapter)}, output_dir)
+    assert nonempty_error.value.code == ConcurrentRobustnessErrorCode.UNSUPPORTED_ADAPTERS
+    with pytest.raises(ConcurrentRobustnessError) as empty_error:
+        study.run(manifest, {}, output_dir)
+    assert empty_error.value.code == ConcurrentRobustnessErrorCode.UNSUPPORTED_ADAPTERS
+    assert adapter.calls == 0
+    assert not output_dir.exists()
+
+    dataset_dir = Path(str(close_concurrent_message_artifacts(source_dir).source_evidence.config_snapshot["dataset_dir"]))
+    dataset_dir.rename(tmp_path / "processed-source-moved-away")
+
+    result = study.run(manifest, None, output_dir)
+
+    assert result.status == ConcurrentRobustnessStudyStatus.READY_FOR_HUMAN
+    assert result.workspace_root == output_dir.resolve()
+    assert result.validation_report == output_dir.resolve() / "validation_report.json"
+    assert result.logical_provider_attempts == 0
+    assert result.physical_provider_attempts == 0
+    assert result.study_root is None
+    assert result.report_candidate is None
+    assert set(path.name for path in output_dir.iterdir()) == {
+        "study_manifest.json",
+        "ranking_weight_sensitivity.json",
+        "validation_report.json",
+        "workspace_registry.json",
+    }
+    assert not (output_dir / "report.html").exists()
+    assert source_before == {path.name: path.read_bytes() for path in source_dir.iterdir() if path.is_file()}
+
+    analysis = _read_json(output_dir / "ranking_weight_sensitivity.json")
+    validation = _read_json(output_dir / "validation_report.json")
+    registry = _read_json(output_dir / "workspace_registry.json")
+    assert analysis["schema_version"] == "concurrent-ranking-weight-sensitivity-v1"
+    assert analysis["counts"] == {
+        "scenario_count": 19,
+        "message_count": 3,
+        "batch_count_per_message": 2,
+        "scenario_message_batch_count": 19 * 3 * 2,
+    }
+    assert analysis["logical_provider_attempts"] == 0
+    assert analysis["physical_provider_attempts"] == 0
+    baseline = analysis["scenarios"][0]
+    assert baseline["scenario_id"] == "baseline"
+    assert baseline["baseline_reproduced"] is True
+    for message in baseline["messages"]:
+        assert message["first_divergent_batch"] is None
+        assert message["curve_mean_jaccard_distance"] == 0.0
+        assert message["curve_auc_jaccard_distance"] == 0.0
+        for batch in message["batches"]:
+            assert batch["baseline_top_user_ids"] == batch["scenario_top_user_ids"]
+            assert batch["jaccard_distance"] == 0.0
+            assert batch["entered_user_ids"] == []
+            assert batch["exited_user_ids"] == []
+            assert batch["first_divergent_rank"] is None
+
+    inspected_batch = analysis["scenarios"][-1]["messages"][0]["batches"][0]
+    baseline_top = set(inspected_batch["baseline_top_user_ids"])
+    scenario_top = set(inspected_batch["scenario_top_user_ids"])
+    expected_distance = 1.0 - len(baseline_top & scenario_top) / len(baseline_top | scenario_top)
+    assert inspected_batch["jaccard_distance"] == pytest.approx(expected_distance)
+    for rank_delta in inspected_batch["rank_deltas"]:
+        assert rank_delta["rank_delta"] == rank_delta["scenario_rank"] - rank_delta["baseline_rank"]
+
+    assert validation["status"] == "ready_for_human"
+    assert validation["checks"]["baseline_reproduced"] is True
+    assert validation["checks"]["source_unchanged"] is True
+    assert validation["checks"]["provider_attempts_zero"] is True
+    assert validation["production_deploy_eligible"] is False
+    assert registry["workspace_type"] == "private_resumable"
+    assert registry["status"] == "ready_for_human"
+    assert registry["production_deploy_eligible"] is False
+    assert registry["study_root"] is None
+    assert registry["report_candidate"] is None
+    assert registry["logical_provider_attempts"] == 0
+    assert registry["physical_provider_attempts"] == 0
+    for artifact_name, relative_path in registry["artifacts"].items():
+        assert registry["sha256"][artifact_name] == _sha256(output_dir / relative_path)
+
+    workspace_before_resume = {path.name: path.read_bytes() for path in output_dir.iterdir()}
+    resumed = study.run(manifest, None, output_dir)
+    assert resumed == result
+    assert workspace_before_resume == {path.name: path.read_bytes() for path in output_dir.iterdir()}
+
+
+def test_concurrent_robustness_rejects_crossed_mutated_and_unsafe_evidence(tmp_path: Path) -> None:
+    source_dir = _make_validation_report_source(tmp_path, "robustness-security-source")
+    manifest = _robustness_manifest_for_source(source_dir, output_identity="fixture-security-v1")
+    output_dir = tmp_path / "robustness-security-workspace"
+    study = ConcurrentRobustnessStudy()
+    study.run(manifest, None, output_dir)
+
+    def assert_error_code(
+        expected_code: ConcurrentRobustnessErrorCode,
+        active_manifest: ConcurrentRobustnessManifest = manifest,
+        active_output: Path = output_dir,
+    ) -> None:
+        with pytest.raises(ConcurrentRobustnessError) as captured:
+            study.run(active_manifest, None, active_output)
+        assert captured.value.code == expected_code
+
+    extra_path = output_dir / "unexpected.json"
+    extra_path.write_text("{}\n", encoding="utf-8")
+    assert_error_code(ConcurrentRobustnessErrorCode.WORKSPACE_CORRUPT)
+    extra_path.unlink()
+
+    validation_path = output_dir / "validation_report.json"
+    validation_bytes = validation_path.read_bytes()
+    validation_path.unlink()
+    assert_error_code(ConcurrentRobustnessErrorCode.WORKSPACE_CORRUPT)
+    validation_path.write_bytes(validation_bytes)
+
+    analysis_path = output_dir / "ranking_weight_sensitivity.json"
+    analysis_bytes = analysis_path.read_bytes()
+    analysis_path.write_bytes(analysis_bytes + b" ")
+    assert_error_code(ConcurrentRobustnessErrorCode.WORKSPACE_CORRUPT)
+    analysis_path.write_bytes(analysis_bytes)
+
+    symlink_target = tmp_path / "crossed-analysis.json"
+    symlink_target.write_bytes(analysis_bytes)
+    analysis_path.unlink()
+    os.symlink(symlink_target, analysis_path)
+    assert_error_code(ConcurrentRobustnessErrorCode.WORKSPACE_CORRUPT)
+    analysis_path.unlink()
+    analysis_path.write_bytes(analysis_bytes)
+
+    registry_path = output_dir / "workspace_registry.json"
+    registry_bytes = registry_path.read_bytes()
+    registry = _read_json(registry_path)
+    registry["artifacts"]["weight_sensitivity"] = "../ranking_weight_sensitivity.json"
+    registry_path.write_text(json.dumps(registry, ensure_ascii=False, sort_keys=True) + "\n", encoding="utf-8")
+    assert_error_code(ConcurrentRobustnessErrorCode.WORKSPACE_CORRUPT)
+    registry_path.write_bytes(registry_bytes)
+
+    validation_bytes = validation_path.read_bytes()
+    analysis_document = _read_json(analysis_path)
+    analysis_document["scenarios"][-1]["overall_mean_jaccard_distance"] = 0.987654321
+    analysis_path.write_text(
+        json.dumps(analysis_document, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n",
+        encoding="utf-8",
+    )
+    validation_document = _read_json(validation_path)
+    validation_document["ranking_weight_sensitivity_sha256"] = _sha256(analysis_path)
+    validation_path.write_text(
+        json.dumps(validation_document, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n",
+        encoding="utf-8",
+    )
+    registry_document = _read_json(registry_path)
+    registry_document["sha256"]["weight_sensitivity"] = _sha256(analysis_path)
+    registry_document["sha256"]["validation_report"] = _sha256(validation_path)
+    registry_path.write_text(
+        json.dumps(registry_document, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n",
+        encoding="utf-8",
+    )
+    assert_error_code(ConcurrentRobustnessErrorCode.WORKSPACE_CORRUPT)
+    analysis_path.write_bytes(analysis_bytes)
+    validation_path.write_bytes(validation_bytes)
+    registry_path.write_bytes(registry_bytes)
+
+    crossed_payload = manifest.model_dump(mode="json")
+    crossed_payload["output_identity"] = "fixture-security-crossed-v1"
+    crossed_manifest = ConcurrentRobustnessManifest.model_validate(crossed_payload)
+    assert_error_code(ConcurrentRobustnessErrorCode.WORKSPACE_CORRUPT, crossed_manifest)
+
+    source_extra = source_dir / "unexpected-source.json"
+    source_extra.write_text("{}\n", encoding="utf-8")
+    assert_error_code(ConcurrentRobustnessErrorCode.INVALID_SOURCE)
+    source_extra.unlink()
+
+    candidate_path = source_dir / "concurrent_runtime_candidates.csv"
+    candidate_bytes = candidate_path.read_bytes()
+    candidate_path.write_bytes(candidate_bytes + b"\n")
+    assert_error_code(ConcurrentRobustnessErrorCode.INVALID_SOURCE)
+    candidate_path.write_bytes(candidate_bytes)
+
+    assert_error_code(
+        ConcurrentRobustnessErrorCode.PATH_VIOLATION,
+        active_output=source_dir / "nested-workspace",
+    )
+
+    source_link = tmp_path / "robustness-source-link"
+    os.symlink(source_dir, source_link, target_is_directory=True)
+    linked_payload = manifest.model_dump(mode="json")
+    linked_payload["source"]["source_dir"] = str(source_link)
+    linked_payload["source"]["source_id"] = source_link.name
+    linked_manifest = ConcurrentRobustnessManifest.model_validate(linked_payload)
+    assert_error_code(
+        ConcurrentRobustnessErrorCode.PATH_VIOLATION,
+        linked_manifest,
+        tmp_path / "linked-source-workspace",
+    )
+
+    output_link = tmp_path / "robustness-output-link"
+    os.symlink(output_dir, output_link, target_is_directory=True)
+    assert_error_code(
+        ConcurrentRobustnessErrorCode.PATH_VIOLATION,
+        active_output=output_link,
+    )
+
+    unrelated_output = tmp_path / "unrelated-existing-output"
+    unrelated_output.mkdir()
+    (unrelated_output / "unrelated.txt").write_text("not a workspace", encoding="utf-8")
+    assert_error_code(
+        ConcurrentRobustnessErrorCode.WORKSPACE_CORRUPT,
+        active_output=unrelated_output,
+    )
+
+
+def test_concurrent_robustness_validates_explicit_existing_formal_fixture_offline(tmp_path: Path) -> None:
+    repository_root = Path(__file__).resolve().parents[2]
+    source_dir = repository_root / "runs" / "jinjiang-concurrent-message-formal-v1-gpt-5.4-mini-20260727T023746Z"
+    if not source_dir.is_dir():
+        pytest.skip("explicit ignored Formal fixture is not available in this checkout")
+    manifest = _robustness_manifest_for_source(source_dir, output_identity="formal-static-verification-v1")
+
+    result = ConcurrentRobustnessStudy().run(manifest, None, tmp_path / "formal-robustness-workspace")
+
+    analysis = _read_json(result.workspace_root / "ranking_weight_sensitivity.json")
+    assert result.status == ConcurrentRobustnessStudyStatus.READY_FOR_HUMAN
+    assert analysis["counts"] == {
+        "scenario_count": 19,
+        "message_count": 3,
+        "batch_count_per_message": 30,
+        "scenario_message_batch_count": 19 * 3 * 30,
+    }
+    assert analysis["scenarios"][0]["baseline_reproduced"] is True
+    changed_batches = [
+        batch
+        for scenario in analysis["scenarios"][1:]
+        for message in scenario["messages"]
+        for batch in message["batches"]
+        if batch["jaccard_distance"] > 0.0
+    ]
+    assert changed_batches
+    assert all(batch["entered_user_ids"] and batch["exited_user_ids"] for batch in changed_batches)
+    assert result.logical_provider_attempts == 0
+    assert result.physical_provider_attempts == 0

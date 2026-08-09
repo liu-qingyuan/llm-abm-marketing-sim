@@ -44,11 +44,20 @@ personalized_delivery_score
 | `PlatformEnvironment` / ranking | 每条 message 的 candidates、delivery capacity、Top20、exposure gate 和稳定 tie-break |
 | Decision Adapter | 对已曝光 `user × message` pair 生成 Primary/Shadow typed decisions；不选择 exposure |
 | `ConcurrentCampaignDiagnostics` | 从 persisted candidate/pair rows 重建 funnel、allocation、response、feedback 和 sensitivity diagnostics |
+| `ConcurrentRobustnessStudy` | 通过唯一公开 `run(...)` Interface 验证显式 hashed source；静态路径只从 frozen candidate/feedback evidence 计算 19 个 Ranking Weight points，并持久化 non-deployable resumable workspace |
 | Report Module | typed closure、report payload、approved downloads、manifest 和 read-only rebuild |
 | Editorial candidate | bilingual presentation grouping、五个 mechanism media derivatives、run evidence surface 和 canonical report bytes |
 | Release validator/deploy | 显式 contract、source directory、release id、candidate health、atomic `current` 和公网验收 |
 
 Diagnostics 的 source of truth 是同一 run 的 persisted candidate rows 与 pair rows。in-memory rows 在写出前会安全化，但不构成第二份事实来源；report writer 和 release validator 都会重新 rebuild 并比较 diagnostics、summary、schema tokens、manifest 与 approved artifact set。
+
+## Ranking Weight robustness static workspace
+
+`ConcurrentRobustnessStudy.run(manifest, adapters_by_cell, output_dir)` 是 additive robustness Module 的唯一公开执行 Interface。Manifest 固定显式 Concurrent source 及完整 artifact hashes、Research Sample 与三条 message identity、P95/component/tie-break/schedule tokens、19 个 simplex weight points、16 个 Prompt–Model cells、request caps、practical thresholds、authorization reference 和 output identity。
+
+当前静态路径只接受 `adapters_by_cell=None`。它先通过现有 Concurrent artifact closure 验证 source，再只使用 frozen candidate 与 batch feedback evidence 重算每条 message、每批次的 Top K ranking；eligible set、feedback signal 和传播状态保持冻结。输出包含 Jaccard distance、rank delta、entered/exited users、first divergence 与 message-level mean/AUC，不调用 Provider、不打开 processed dataset，也不改写 source。
+
+结果状态为 `ready_for_human`，只形成包含 manifest、weight evidence、validation 和 hash registry 的 private resumable workspace。该 workspace 明确 `production_deploy_eligible=false`，不包含 closed study root、report candidate 或 `report.html`；同一 manifest/output identity 可安全 resume，crossed source、hash mutation、missing/extra artifact、symlink 和 path escape 均失败关闭。任何非 `None` Adapter map 在首次调用前失败；16-cell 动态运行和 complete artifact 仍属于后续实现。
 
 ## Prompt–Model request contract
 
