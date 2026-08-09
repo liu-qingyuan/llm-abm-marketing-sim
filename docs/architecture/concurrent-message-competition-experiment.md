@@ -44,20 +44,24 @@ personalized_delivery_score
 | `PlatformEnvironment` / ranking | 每条 message 的 candidates、delivery capacity、Top20、exposure gate 和稳定 tie-break |
 | Decision Adapter | 对已曝光 `user × message` pair 生成 Primary/Shadow typed decisions；不选择 exposure |
 | `ConcurrentCampaignDiagnostics` | 从 persisted candidate/pair rows 重建 funnel、allocation、response、feedback 和 sensitivity diagnostics |
-| `ConcurrentRobustnessStudy` | 通过唯一公开 `run(...)` Interface 验证显式 hashed source；静态路径只从 frozen candidate/feedback evidence 计算 19 个 Ranking Weight points，并持久化 non-deployable resumable workspace |
+| `ConcurrentRobustnessStudy` | 通过唯一公开 `run(...)` Interface 验证显式 hashed source，生成 19-point Ranking Weight workspace，并在同一 resume path 消费 registry-authenticated 16-cell evidence、完成条件分析和 immutable study closure |
 | Report Module | typed closure、report payload、approved downloads、manifest 和 read-only rebuild |
 | Editorial candidate | bilingual presentation grouping、五个 mechanism media derivatives、run evidence surface 和 canonical report bytes |
 | Release validator/deploy | 显式 contract、source directory、release id、candidate health、atomic `current` 和公网验收 |
 
 Diagnostics 的 source of truth 是同一 run 的 persisted candidate rows 与 pair rows。in-memory rows 在写出前会安全化，但不构成第二份事实来源；report writer 和 release validator 都会重新 rebuild 并比较 diagnostics、summary、schema tokens、manifest 与 approved artifact set。
 
-## Ranking Weight robustness static workspace
+## Robustness workspace 与分析闭包
 
-`ConcurrentRobustnessStudy.run(manifest, adapters_by_cell, output_dir)` 是 additive robustness Module 的唯一公开执行 Interface。Manifest 固定显式 Concurrent source 及完整 artifact hashes、Research Sample 与三条 message identity、P95/component/tie-break/schedule tokens、19 个 simplex weight points、16 个 Prompt–Model cells、request caps、practical thresholds、authorization reference 和 output identity。
+`ConcurrentRobustnessStudy.run(manifest, adapters_by_cell, output_dir)` 是 additive robustness Module 的唯一公开执行 Interface。Manifest 固定显式 Concurrent source 及完整 artifact hashes、Research Sample 与三条 message identity、P95/component/tie-break/schedule tokens、19 个 simplex weight points、16 个 Prompt–Model cells、request caps、practical thresholds、authorization reference 和 output identity；进入 cell closure 时，16 cells 还必须全部绑定 Manifest 声明的 required observed-model identity。
 
-当前静态路径只接受 `adapters_by_cell=None`。它先通过现有 Concurrent artifact closure 验证 source，再只使用 frozen candidate 与 batch feedback evidence 重算每条 message、每批次的 Top K ranking；eligible set、feedback signal 和传播状态保持冻结。输出包含 Jaccard distance、rank delta、entered/exited users、first divergence 与 message-level mean/AUC，不调用 Provider、不打开 processed dataset，也不改写 source。
+首次 `adapters_by_cell=None` 调用先通过现有 Concurrent artifact closure 验证 source，再只使用 frozen candidate 与 batch feedback evidence 重算每条 message、每批次的 Top K ranking；eligible set、feedback signal 和传播状态保持冻结。输出包含 Jaccard distance、rank delta、entered/exited users、first divergence 与 message-level mean/AUC，不调用 Provider、不打开 processed dataset，也不改写 source。结果状态为 `ready_for_human`，只形成 manifest、weight evidence、validation 和 hash registry 四个文件组成的 private resumable workspace。
 
-结果状态为 `ready_for_human`，只形成包含 manifest、weight evidence、validation 和 hash registry 的 private resumable workspace。该 workspace 明确 `production_deploy_eligible=false`，不包含 closed study root、report candidate 或 `report.html`；同一 manifest/output identity 可安全 resume，crossed source、hash mutation、missing/extra artifact、symlink 和 path escape 均失败关闭。任何非 `None` Adapter map 在首次调用前失败；16-cell 动态运行和 complete artifact 仍属于后续实现。
+同一 workspace 可以由后续 producer 以两个 additive artifacts 补充完整 cell evidence 与 registry。当前 consumer 只接受 non-deployable deterministic fixture profile：必须恰好包含 canonical order 的 `4 Prompt × 4 model`、三 message、scaled complete schedule 与每个 exposure 的 Primary terminal row；Prompt hash、requested/observed model、request contract、source/sample/message/ranking identity，以及 logical/physical/step accounting 必须全部闭合。缺失或额外 cell、duplicate pair、mixed observed model、crossed identity、missing terminal、Provider failure feedback 或 accounting 不一致都会在 finalization 前失败，源 workspace 保持不变。
+
+通过验证后，同一个 `run(...)` resume path 私下计算 Batch 0 shared-seed strict paired `engage` panel、secondary action/probability/confidence/disagreement、逐 message 双 engagement-rate 分母、Provider failures、audience overlap/first divergence 和 campaign-deduplicated positive-user growth。Prompt、model、message 都按 fixed categorical factors 汇总；planned model contrasts、Prompt × model interaction 和 user-blocked deterministic bootstrap 只条件于 fixed sample、fixed graph 和 one realized path。阈值以下只标为 `small_observed_difference`，claim audit 不允许越界研究结论。
+
+分析 artifacts、cell evidence、validation、claim audit、Manifest 和全量 artifact hashes 通过 sibling staging 原子关闭为 immutable study root；源 workspace 保持可审计。该 complete Result 仍为 `production_deploy_eligible=false`，`report_candidate=None`，不包含 `report.html`。任何非 `None` Adapter map 继续在首次调用前失败；真实 16-cell producer、Provider authorization、增量 report candidate 和 canonical release 属于后续独立 closure。
 
 ## Prompt–Model request contract
 

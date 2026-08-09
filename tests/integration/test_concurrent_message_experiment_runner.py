@@ -19,6 +19,7 @@ from llm_abm_sim import (
     ConcurrentRobustnessErrorCode,
     ConcurrentRobustnessManifest,
     ConcurrentRobustnessStudy,
+    ConcurrentRobustnessStudyResult,
     ConcurrentRobustnessStudyStatus,
     rebuild_concurrent_message_report,
 )
@@ -2076,6 +2077,12 @@ def _robustness_manifest_for_source(
     config = closure.source_evidence.config_snapshot
     sample_rows = closure.source_evidence.sample_manifest_rows
     prompt_cells = []
+    required_observed_models = {
+        "gpt-5.4-mini": "gpt-5.4-mini-2026-03-17",
+        "gpt-5.4-2026-03-05": "gpt-5.4-2026-03-05",
+        "gpt-5.5-2026-04-23": "gpt-5.5-2026-04-23",
+        "gpt-5.6-sol": "gpt-5.6-sol",
+    }
     for prompt in CONCURRENT_ROBUSTNESS_PROMPT_REGISTRY.all():
         for requested_model in _ROBUSTNESS_MODELS:
             prompt_cells.append(
@@ -2085,6 +2092,7 @@ def _robustness_manifest_for_source(
                     "prompt_version": prompt.prompt_version,
                     "prompt_canonical_hash": prompt.canonical_hash,
                     "requested_model": requested_model,
+                    "required_observed_model": required_observed_models[requested_model],
                 }
             )
     source_kind = "formal" if config["configuration_profile"] == "production" else "fixture"
@@ -2170,6 +2178,504 @@ def _robustness_manifest_for_source(
     )
 
 
+def _canonical_json_bytes(payload: object) -> bytes:
+    return (
+        json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False) + "\n"
+    ).encode("utf-8")
+
+
+def _robustness_cell_source_identity(
+    *,
+    manifest_sha256: str,
+    source_identity: dict[str, object],
+    cell_id: str,
+) -> str:
+    return hashlib.sha256(
+        _canonical_json_bytes(
+            {
+                "manifest_sha256": manifest_sha256,
+                "source_identity": source_identity,
+                "cell_id": cell_id,
+            }
+        )
+    ).hexdigest()
+
+
+def _install_deterministic_robustness_cell_fixture(
+    workspace: Path,
+    manifest: ConcurrentRobustnessManifest,
+) -> dict[str, object]:
+    manifest_sha256 = _sha256(workspace / "study_manifest.json")
+    manifest_payload = manifest.model_dump(mode="json")
+    ranking_contract = cast(dict[str, object], manifest_payload["ranking_contract"])
+    request_contract = cast(dict[str, object], manifest_payload["request_contract"])
+    ranking_contract_sha256 = hashlib.sha256(_canonical_json_bytes(ranking_contract)).hexdigest()
+    request_contract_sha256 = hashlib.sha256(_canonical_json_bytes(request_contract)).hexdigest()
+    source_identity: dict[str, object] = {
+        "source_id": manifest.source.source_id,
+        "source_manifest_sha256": manifest.source.manifest_sha256,
+        "sample_identity": manifest.sample.sample_identity,
+        "message_snapshot_sha256": manifest.message_snapshot_sha256,
+        "ranking_contract_sha256": ranking_contract_sha256,
+    }
+    positive_actions = ("like", "comment", "share")
+    cells: list[dict[str, object]] = []
+    total_physical_attempts = 0
+    logical_per_cell = manifest.request_caps.logical_judgments_per_cell
+    for cell_index, manifest_cell in enumerate(manifest.prompt_model_cells):
+        prompt_index = cell_index // len(_ROBUSTNESS_MODELS)
+        model_index = cell_index % len(_ROBUSTNESS_MODELS)
+        observed_model = manifest_cell.required_observed_model
+        assert observed_model is not None
+        cell_source_identity = _robustness_cell_source_identity(
+            manifest_sha256=manifest_sha256,
+            source_identity=source_identity,
+            cell_id=manifest_cell.cell_id,
+        )
+        terminal_rows: list[dict[str, object]] = []
+        step_rows: list[dict[str, object]] = []
+        pair_schedule_position = 0
+        campaign_positive_users: set[str] = set()
+        cell_physical_attempts = 0
+        for time_step in range(manifest.ranking_contract.horizon):
+            frozen_positive_users = sorted(campaign_positive_users, key=lambda value: int(value[1:]))
+            batch_positive_users: set[str] = set()
+            message_steps: list[dict[str, object]] = []
+            for message_index, message_id in enumerate(manifest.message_ids):
+                if time_step == 0:
+                    selected_users = [f"u{number}" for number in range(1, manifest.ranking_contract.delivery_capacity + 1)]
+                else:
+                    selected_users = [f"u{number}" for number in range(11, 20)]
+                    replacement = 20 if cell_index == 0 else 21 + ((cell_index + message_index) % 10)
+                    selected_users.append(f"u{replacement}")
+                message_positive_users: list[str] = []
+                message_failed_users: list[str] = []
+                for user_id in selected_users:
+                    user_number = int(user_id[1:])
+                    provider_failed = (
+                        cell_index == 1
+                        and time_step == manifest.ranking_contract.horizon - 1
+                        and message_index == 2
+                        and user_id == selected_users[-1]
+                    )
+                    engage = (user_number + prompt_index + model_index + message_index) % 3 != 0
+                    action = positive_actions[(user_number + cell_index + message_index) % len(positive_actions)] if engage else "ignore"
+                    request_invocations = manifest.request_contract.max_retries + 1 if provider_failed else 1
+                    provider_response_count = 0 if provider_failed else 1
+                    successful_decision_count = 0 if provider_failed else 1
+                    probability = None if provider_failed else round((0.72 if engage else 0.22) + prompt_index * 0.03 + model_index * 0.02, 6)
+                    confidence = None if provider_failed else round(0.82 - prompt_index * 0.02 + model_index * 0.01, 6)
+                    pair_id = f"{user_id}:{message_id}:{time_step}"
+                    terminal_rows.append(
+                        {
+                            "terminal_row_id": f"{pair_id}:primary",
+                            "pair_id": pair_id,
+                            "pair_schedule_position": pair_schedule_position,
+                            "time_step": time_step,
+                            "message_id": message_id,
+                            "user_id": user_id,
+                            "is_seed": time_step == 0,
+                            "selection_reason": "shared_seed" if time_step == 0 else "personalized_top_k",
+                            "decision_variant": "primary",
+                            "prompt_version": manifest_cell.prompt_version,
+                            "prompt_canonical_hash": manifest_cell.prompt_canonical_hash,
+                            "requested_model": manifest_cell.requested_model,
+                            "request_contract_sha256": request_contract_sha256,
+                            "terminal_status": "provider_failed" if provider_failed else "succeeded",
+                            "engage": None if provider_failed else engage,
+                            "probability": probability,
+                            "confidence": confidence,
+                            "action": None if provider_failed else action,
+                            "reason": None if provider_failed else "deterministic fixture decision",
+                            "failure_type": "fixture_provider_failure" if provider_failed else None,
+                            "request_invocations": request_invocations,
+                            "provider_response_count": provider_response_count,
+                            "successful_decision_count": successful_decision_count,
+                            "observed_model_counts": {} if provider_failed else {observed_model: 1},
+                            "observed_model_missing_response_count": 0,
+                            "observed_model_malformed_response_count": 0,
+                        }
+                    )
+                    pair_schedule_position += 1
+                    cell_physical_attempts += request_invocations
+                    if provider_failed:
+                        message_failed_users.append(user_id)
+                    elif action in positive_actions:
+                        message_positive_users.append(user_id)
+                        batch_positive_users.add(user_id)
+                message_steps.append(
+                    {
+                        "message_id": message_id,
+                        "selected_user_ids": selected_users,
+                        "seed_user_ids": selected_users if time_step == 0 else [],
+                        "primary_positive_user_ids": message_positive_users,
+                        "primary_provider_failed_user_ids": message_failed_users,
+                    }
+                )
+            campaign_positive_users.update(batch_positive_users)
+            step_rows.append(
+                {
+                    "time_step": time_step,
+                    "frozen_campaign_engaged_user_ids": frozen_positive_users,
+                    "deduplicated_committed_primary_positive_user_ids": sorted(
+                        batch_positive_users,
+                        key=lambda value: int(value[1:]),
+                    ),
+                    "messages": message_steps,
+                }
+            )
+        assert len(terminal_rows) == logical_per_cell
+        total_physical_attempts += cell_physical_attempts
+        cells.append(
+            {
+                "cell_index": cell_index,
+                "cell_id": manifest_cell.cell_id,
+                "prompt_variant": manifest_cell.prompt_variant,
+                "prompt_version": manifest_cell.prompt_version,
+                "prompt_canonical_hash": manifest_cell.prompt_canonical_hash,
+                "requested_model": manifest_cell.requested_model,
+                "observed_model": observed_model,
+                "source_identity_sha256": cell_source_identity,
+                "request_contract_sha256": request_contract_sha256,
+                "logical_judgment_count": len(terminal_rows),
+                "physical_attempt_count": cell_physical_attempts,
+                "terminal_rows": terminal_rows,
+                "step_rows": step_rows,
+            }
+        )
+
+    evidence: dict[str, object] = {
+        "schema_version": "concurrent-robustness-cell-evidence-v1",
+        "evidence_profile": "deterministic_fixture",
+        "manifest_sha256": manifest_sha256,
+        "source_identity": source_identity,
+        "request_contract": request_contract,
+        "request_contract_sha256": request_contract_sha256,
+        "message_ids": list(manifest.message_ids),
+        "cell_count": len(cells),
+        "logical_judgment_count": logical_per_cell * len(cells),
+        "physical_attempt_count": total_physical_attempts,
+        "external_request_invocations": 0,
+        "live_api_triggered": False,
+        "production_deploy_eligible": False,
+        "conditional_scope": "fixed-sample-fixed-graph-one-realized-path-per-cell",
+        "claim_statements": [
+            "Results are descriptive and conditional on the fixed sample, fixed graph, and one realized path per cell.",
+            "Below-threshold values are labelled small observed differences only.",
+            "One path per cell leaves model stochasticity unestimated.",
+        ],
+        "cells": cells,
+    }
+    evidence_path = workspace / "prompt_model_cell_evidence.json"
+    evidence_path.write_bytes(_canonical_json_bytes(evidence))
+    base_files = (
+        "study_manifest.json",
+        "ranking_weight_sensitivity.json",
+        "validation_report.json",
+        "workspace_registry.json",
+    )
+    registry = {
+        "schema_version": "concurrent-robustness-cell-registry-v1",
+        "workspace_type": "private_resumable",
+        "status": "cells_complete",
+        "output_identity": manifest.output_identity,
+        "output_root_sha256": hashlib.sha256(str(workspace.resolve()).encode("utf-8")).hexdigest(),
+        "manifest_sha256": manifest_sha256,
+        "source_manifest_sha256": manifest.source.manifest_sha256,
+        "base_workspace_sha256": {name: _sha256(workspace / name) for name in base_files},
+        "cell_evidence": evidence_path.name,
+        "cell_evidence_sha256": _sha256(evidence_path),
+        "cell_inventory": [
+            {
+                "cell_id": cell["cell_id"],
+                "observed_model": cell["observed_model"],
+                "source_identity_sha256": cell["source_identity_sha256"],
+                "logical_judgment_count": cell["logical_judgment_count"],
+                "physical_attempt_count": cell["physical_attempt_count"],
+                "terminal_row_count": len(cast(list[object], cell["terminal_rows"])),
+            }
+            for cell in cells
+        ],
+        "logical_judgment_count": logical_per_cell * len(cells),
+        "physical_attempt_count": total_physical_attempts,
+        "external_request_invocations": 0,
+        "production_deploy_eligible": False,
+    }
+    (workspace / "prompt_model_cell_registry.json").write_bytes(_canonical_json_bytes(registry))
+    return evidence
+
+
+def _rewrite_robustness_cell_fixture(workspace: Path, evidence: dict[str, object]) -> None:
+    cells = cast(list[dict[str, object]], evidence["cells"])
+    evidence["cell_count"] = len(cells)
+    evidence["logical_judgment_count"] = sum(int(cell["logical_judgment_count"]) for cell in cells)
+    evidence["physical_attempt_count"] = sum(int(cell["physical_attempt_count"]) for cell in cells)
+    evidence_path = workspace / "prompt_model_cell_evidence.json"
+    evidence_path.write_bytes(_canonical_json_bytes(evidence))
+    registry_path = workspace / "prompt_model_cell_registry.json"
+    registry = _read_json(registry_path)
+    registry["cell_evidence_sha256"] = _sha256(evidence_path)
+    registry["cell_inventory"] = [
+        {
+            "cell_id": cell["cell_id"],
+            "observed_model": cell["observed_model"],
+            "source_identity_sha256": cell["source_identity_sha256"],
+            "logical_judgment_count": cell["logical_judgment_count"],
+            "physical_attempt_count": cell["physical_attempt_count"],
+            "terminal_row_count": len(cast(list[object], cell["terminal_rows"])),
+        }
+        for cell in cells
+    ]
+    registry["logical_judgment_count"] = evidence["logical_judgment_count"]
+    registry["physical_attempt_count"] = evidence["physical_attempt_count"]
+    registry_path.write_bytes(_canonical_json_bytes(registry))
+
+
+def test_concurrent_robustness_complete_result_can_precede_report_candidate(tmp_path: Path) -> None:
+    result = ConcurrentRobustnessStudyResult(
+        status=ConcurrentRobustnessStudyStatus.COMPLETE,
+        workspace_root=tmp_path / "workspace",
+        validation_report=tmp_path / "study-root" / "validation_report.json",
+        manifest_sha256="a" * 64,
+        logical_provider_attempts=96,
+        physical_provider_attempts=112,
+        study_root=tmp_path / "study-root",
+        report_candidate=None,
+    )
+
+    assert result.status == ConcurrentRobustnessStudyStatus.COMPLETE
+    assert result.study_root == tmp_path / "study-root"
+    assert result.report_candidate is None
+
+
+def test_concurrent_robustness_closes_deterministic_cell_evidence_through_resume_path(tmp_path: Path) -> None:
+    source_dir = _make_validation_report_source(tmp_path, "robustness-analysis-source")
+    manifest = _robustness_manifest_for_source(source_dir, output_identity="fixture-analysis-v1")
+    workspace = tmp_path / "robustness-analysis-workspace"
+    study = ConcurrentRobustnessStudy()
+
+    ready = study.run(manifest, None, workspace)
+    assert ready.status == ConcurrentRobustnessStudyStatus.READY_FOR_HUMAN
+    _install_deterministic_robustness_cell_fixture(workspace, manifest)
+    workspace_before = {
+        path.name: path.read_bytes()
+        for path in workspace.iterdir()
+        if path.is_file()
+    }
+
+    result = study.run(manifest, None, workspace)
+
+    assert result.status == ConcurrentRobustnessStudyStatus.COMPLETE
+    assert result.workspace_root == workspace.resolve()
+    assert result.study_root == workspace.with_name(f"{workspace.name}.study-root").resolve()
+    assert result.report_candidate is None
+    assert result.logical_provider_attempts == manifest.request_caps.logical_judgment_cap == 960
+    assert result.physical_provider_attempts == 962
+    assert workspace_before == {path.name: path.read_bytes() for path in workspace.iterdir() if path.is_file()}
+    assert result.study_root is not None
+    assert {path.name for path in result.study_root.iterdir()} == {
+        "artifact_manifest.json",
+        "claim_audit.json",
+        "prompt_model_analysis.json",
+        "prompt_model_cell_evidence.json",
+        "ranking_weight_sensitivity.json",
+        "study_manifest.json",
+        "validation_report.json",
+    }
+
+    analysis = _read_json(result.study_root / "prompt_model_analysis.json")
+    validation = _read_json(result.study_root / "validation_report.json")
+    claim_audit = _read_json(result.study_root / "claim_audit.json")
+    root_manifest = _read_json(result.study_root / "artifact_manifest.json")
+    assert analysis["schema_version"] == "concurrent-prompt-model-robustness-analysis-v1"
+    assert analysis["shared_seed_direct_decisions"]["primary_outcome"] == "binary_engage"
+    assert analysis["shared_seed_direct_decisions"]["fixed_pair_count"] == 30
+    assert analysis["shared_seed_direct_decisions"]["complete_decision_pair_count"] == 30
+    assert analysis["fixed_factor_summaries"]["factor_types"] == {
+        "message": "fixed_categorical",
+        "model": "fixed_categorical",
+        "prompt": "fixed_categorical",
+    }
+    assert analysis["fixed_factor_summaries"]["linear_model_version_trend_computed"] is False
+    assert [row["contrast_id"] for row in analysis["fixed_factor_summaries"]["planned_model_contrasts"]] == [
+        "gpt-5.4-mini_vs_gpt-5.4",
+        "gpt-5.4_vs_gpt-5.5",
+        "gpt-5.5_vs_gpt-5.6-sol",
+    ]
+    assert analysis["bootstrap"]["block"] == "user_with_all_three_messages"
+    assert analysis["bootstrap"]["conditional_scope"] == (
+        "fixed_sample_fixed_graph_one_realized_path_per_cell"
+    )
+    failed_message = next(
+        row
+        for row in analysis["realized_paths"]["message_summaries"]
+        if row["cell_id"] == manifest.prompt_model_cells[1].cell_id and row["message_id"] == "message_3"
+    )
+    assert failed_message["actual_exposures"] == 20
+    assert failed_message["successful_primary_decisions"] == 19
+    assert failed_message["provider_failures"] == 1
+    assert failed_message["exposure_engagement_rate"] == pytest.approx(
+        failed_message["positive_actions"] / 20
+    )
+    assert failed_message["decision_engagement_rate"] == pytest.approx(
+        failed_message["positive_actions"] / 19
+    )
+    fixture_evidence = _read_json(workspace / "prompt_model_cell_evidence.json")
+    failed_cell = cast(list[dict[str, object]], fixture_evidence["cells"])[1]
+    successful_probabilities = [
+        float(row["probability"])
+        for row in cast(list[dict[str, object]], failed_cell["terminal_rows"])
+        if row["message_id"] == "message_3" and row["terminal_status"] == "succeeded"
+    ]
+    assert failed_message["mean_probability_successful_decisions"] == pytest.approx(
+        sum(successful_probabilities) / len(successful_probabilities)
+    )
+    assert failed_message["first_divergent_batch_from_baseline_cell"] == 1
+    assert failed_message["terminal_audience_overlap_count_with_baseline_cell"] < 20
+    accounting_cell = analysis["provider_accounting"]["cells"][1]
+    assert accounting_cell["logical_judgments"] == 60
+    assert accounting_cell["physical_attempts"] == 62
+    assert accounting_cell["provider_failures"] == 1
+    assert analysis["practical_thresholds"]["terminal_positive_users_production_count"] == 50
+    assert analysis["practical_thresholds"]["terminal_positive_users_manifest_count"] == 2
+    assert all(
+        row["classification"] in {"practically_meaningful", "small_observed_difference"}
+        for row in analysis["practical_threshold_classifications"]
+    )
+    assert claim_audit["status"] == "passed"
+    assert claim_audit["conditional_intervals"] is True
+    assert validation["status"] == "complete"
+    assert validation["counts"]["production_contract_logical_judgments"] == 28_800
+    assert validation["counts"]["manifest_logical_judgments"] == 960
+    assert validation["checks"]["provider_failures_excluded_from_decision_denominator"] is True
+    assert root_manifest["root_type"] == "immutable_closed_study"
+    for relative_path, expected_hash in root_manifest["sha256"].items():
+        assert _sha256(result.study_root / relative_path) == expected_hash
+
+    root_before_resume = {path.name: path.read_bytes() for path in result.study_root.iterdir()}
+    resumed = study.run(manifest, None, workspace)
+    assert resumed == result
+    assert root_before_resume == {path.name: path.read_bytes() for path in result.study_root.iterdir()}
+
+
+@pytest.mark.parametrize(
+    "corruption",
+    [
+        "missing_cell",
+        "extra_cell",
+        "duplicate_pair",
+        "mixed_observed_model",
+        "crossed_prompt_hash",
+        "crossed_request_contract",
+        "crossed_source_identity",
+        "forbidden_claim",
+        "missing_terminal",
+        "physical_accounting",
+    ],
+)
+def test_concurrent_robustness_cell_contract_fails_closed_before_study_root(
+    tmp_path: Path,
+    corruption: str,
+) -> None:
+    source_dir = _make_validation_report_source(tmp_path, f"robustness-cell-{corruption}-source")
+    manifest = _robustness_manifest_for_source(source_dir, output_identity=f"fixture-{corruption}-v1")
+    workspace = tmp_path / f"robustness-cell-{corruption}-workspace"
+    study = ConcurrentRobustnessStudy()
+    study.run(manifest, None, workspace)
+    evidence = _install_deterministic_robustness_cell_fixture(workspace, manifest)
+    cells = cast(list[dict[str, object]], evidence["cells"])
+
+    if corruption == "missing_cell":
+        cells.pop()
+    elif corruption == "extra_cell":
+        extra_cell = json.loads(json.dumps(cells[-1]))
+        extra_cell["cell_index"] = 16
+        extra_cell["cell_id"] = "extra-cell"
+        cells.append(extra_cell)
+    elif corruption == "duplicate_pair":
+        terminal_rows = cast(list[dict[str, object]], cells[0]["terminal_rows"])
+        terminal_rows[1]["pair_id"] = terminal_rows[0]["pair_id"]
+        terminal_rows[1]["terminal_row_id"] = terminal_rows[0]["terminal_row_id"]
+        terminal_rows[1]["user_id"] = terminal_rows[0]["user_id"]
+    elif corruption == "mixed_observed_model":
+        terminal_rows = cast(list[dict[str, object]], cells[0]["terminal_rows"])
+        terminal_rows[0]["observed_model_counts"] = {"gpt-crossed-observed-model": 1}
+    elif corruption == "crossed_prompt_hash":
+        cells[0]["prompt_canonical_hash"] = "sha256:" + "0" * 64
+    elif corruption == "crossed_request_contract":
+        evidence["request_contract_sha256"] = "0" * 64
+    elif corruption == "crossed_source_identity":
+        cast(dict[str, object], evidence["source_identity"])["sample_identity"] = "0" * 64
+    elif corruption == "forbidden_claim":
+        cast(list[str], evidence["claim_statements"])[0] = "This establishes a causal effect."
+    elif corruption == "missing_terminal":
+        terminal_rows = cast(list[dict[str, object]], cells[0]["terminal_rows"])
+        removed = terminal_rows.pop()
+        cells[0]["logical_judgment_count"] = len(terminal_rows)
+        cells[0]["physical_attempt_count"] = int(cells[0]["physical_attempt_count"]) - int(
+            cast(dict[str, object], removed)["request_invocations"]
+        )
+    else:
+        cells[0]["physical_attempt_count"] = int(cells[0]["physical_attempt_count"]) + 1
+
+    _rewrite_robustness_cell_fixture(workspace, evidence)
+
+    with pytest.raises(ConcurrentRobustnessError) as captured:
+        study.run(manifest, None, workspace)
+    assert captured.value.code == ConcurrentRobustnessErrorCode.WORKSPACE_CORRUPT
+    assert not workspace.with_name(f"{workspace.name}.study-root").exists()
+
+
+@pytest.mark.parametrize("corruption", ["mutated", "extra", "symlink"])
+def test_concurrent_robustness_closed_root_is_immutable_and_hash_closed(
+    tmp_path: Path,
+    corruption: str,
+) -> None:
+    source_dir = _make_validation_report_source(tmp_path, f"robustness-root-{corruption}-source")
+    manifest = _robustness_manifest_for_source(source_dir, output_identity=f"fixture-root-{corruption}-v1")
+    workspace = tmp_path / f"robustness-root-{corruption}-workspace"
+    study = ConcurrentRobustnessStudy()
+    study.run(manifest, None, workspace)
+    _install_deterministic_robustness_cell_fixture(workspace, manifest)
+    result = study.run(manifest, None, workspace)
+    assert result.study_root is not None
+    workspace_before = {path.name: path.read_bytes() for path in workspace.iterdir()}
+
+    if corruption == "mutated":
+        analysis_path = result.study_root / "prompt_model_analysis.json"
+        analysis_path.write_bytes(analysis_path.read_bytes() + b" ")
+    elif corruption == "extra":
+        (result.study_root / "unexpected.json").write_text("{}\n", encoding="utf-8")
+    else:
+        claims_path = result.study_root / "claim_audit.json"
+        claims_copy = tmp_path / "claims-copy.json"
+        claims_copy.write_bytes(claims_path.read_bytes())
+        claims_path.unlink()
+        os.symlink(claims_copy, claims_path)
+
+    with pytest.raises(ConcurrentRobustnessError) as captured:
+        study.run(manifest, None, workspace)
+    assert captured.value.code == ConcurrentRobustnessErrorCode.WORKSPACE_CORRUPT
+    assert workspace_before == {path.name: path.read_bytes() for path in workspace.iterdir()}
+    assert not any(path.name.endswith(".staging") for path in tmp_path.iterdir())
+
+
+def test_concurrent_robustness_closed_root_cannot_overlap_formal_source(tmp_path: Path) -> None:
+    workspace = tmp_path / "robustness-overlap-workspace"
+    source_dir = _make_validation_report_source(tmp_path, f"{workspace.name}.study-root")
+    manifest = _robustness_manifest_for_source(source_dir, output_identity="fixture-root-overlap-v1")
+    study = ConcurrentRobustnessStudy()
+    study.run(manifest, None, workspace)
+    _install_deterministic_robustness_cell_fixture(workspace, manifest)
+    source_before = {path.name: path.read_bytes() for path in source_dir.iterdir() if path.is_file()}
+
+    with pytest.raises(ConcurrentRobustnessError) as captured:
+        study.run(manifest, None, workspace)
+
+    assert captured.value.code == ConcurrentRobustnessErrorCode.PATH_VIOLATION
+    assert source_before == {path.name: path.read_bytes() for path in source_dir.iterdir() if path.is_file()}
+
+
 def test_concurrent_robustness_manifest_rejects_noncanonical_weights_and_cells(tmp_path: Path) -> None:
     source_dir = _make_validation_report_source(tmp_path, "robustness-manifest-source")
     manifest = _robustness_manifest_for_source(source_dir, output_identity="fixture-manifest-v1")
@@ -2194,6 +2700,22 @@ def test_concurrent_robustness_manifest_rejects_noncanonical_weights_and_cells(t
     missing_cell["prompt_model_cells"].pop()
     with pytest.raises(ValueError, match="16 canonical Prompt-Model cells"):
         ConcurrentRobustnessManifest.model_validate(missing_cell)
+
+    partial_observed_contract = json.loads(json.dumps(payload))
+    partial_observed_contract["prompt_model_cells"][0]["required_observed_model"] = None
+    with pytest.raises(ValueError, match="observed-model contract must cover all 16"):
+        ConcurrentRobustnessManifest.model_validate(partial_observed_contract)
+
+    mixed_observed_contract = json.loads(json.dumps(payload))
+    mixed_observed_contract["prompt_model_cells"][4]["required_observed_model"] = "gpt-crossed-model"
+    with pytest.raises(ValueError, match="mixed required observed identities"):
+        ConcurrentRobustnessManifest.model_validate(mixed_observed_contract)
+
+    static_v1_payload = json.loads(json.dumps(payload))
+    for cell in static_v1_payload["prompt_model_cells"]:
+        cell.pop("required_observed_model")
+    static_v1_manifest = ConcurrentRobustnessManifest.model_validate(static_v1_payload)
+    assert all(cell.required_observed_model is None for cell in static_v1_manifest.prompt_model_cells)
 
 
 def test_concurrent_robustness_static_study_is_offline_hashed_and_resumable(tmp_path: Path) -> None:
