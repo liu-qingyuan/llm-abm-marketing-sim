@@ -2,9 +2,9 @@ from __future__ import annotations
 
 from enum import Enum
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
-from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator, model_serializer, model_validator
 
 from .provider_config import sanitize_url
 
@@ -259,6 +259,14 @@ class FailClosedAction(str, Enum):
     SKIP_RUN = "skip_run"
 
 
+class ReasoningEffort(str, Enum):
+    """Typed reasoning levels accepted by the optional Responses request setting."""
+
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
+
+
 class ProviderLLMConfig(BaseModel):
     """Optional provider-backed decision adapter configuration.
 
@@ -280,11 +288,28 @@ class ProviderLLMConfig(BaseModel):
     retry_backoff_seconds: float = Field(default=1.0, ge=0.0)
     fail_closed_action: FailClosedAction = FailClosedAction.RAISE
     prompt_version: str = "jinjiang-green-marketing-prompt-v3"
+    reasoning_effort: ReasoningEffort | None = None
+    max_output_tokens: int | None = Field(default=None, ge=1)
+
+    @model_validator(mode="after")
+    def _validate_responses_only_options(self) -> ProviderLLMConfig:
+        if self.reasoning_effort is not None and self.wire_api != "responses":
+            raise ValueError("reasoning_effort requires the Responses wire")
+        return self
+
+    @model_serializer(mode="wrap")
+    def _serialize_optional_request_fields(self, handler: Any) -> Any:
+        serialized = handler(self)
+        if self.reasoning_effort is None:
+            serialized.pop("reasoning_effort", None)
+        if self.max_output_tokens is None:
+            serialized.pop("max_output_tokens", None)
+        return serialized
 
     def safe_metadata(self) -> dict[str, object]:
         """Return serialization-safe provider settings with no credentials."""
 
-        return {
+        metadata: dict[str, object] = {
             "enabled": self.enabled,
             "provider": self.provider,
             "model": self.model,
@@ -299,6 +324,11 @@ class ProviderLLMConfig(BaseModel):
             "fail_closed_action": self.fail_closed_action.value,
             "prompt_version": self.prompt_version,
         }
+        if self.reasoning_effort is not None:
+            metadata["reasoning_effort"] = self.reasoning_effort.value
+        if self.max_output_tokens is not None:
+            metadata["max_output_tokens"] = self.max_output_tokens
+        return metadata
 
 
 class SimulationInput(BaseModel):

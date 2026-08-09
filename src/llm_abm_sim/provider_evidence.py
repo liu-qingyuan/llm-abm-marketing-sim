@@ -31,12 +31,25 @@ PROVIDER_METADATA_ALLOWLIST = {
     "time_step",
     "timeout_seconds",
     "max_retries",
+    "max_output_tokens",
+    "omitted_parameters",
+    "output_token_ceiling",
+    "prompt_canonical_hash",
+    "reasoning_effort",
+    "request_contract",
+    "requested_model",
+    "retry_backoff_seconds",
+    "schema_version",
+    "structured_output_schema_hash",
+    "structured_output_schema_version",
     "user_id",
     "action",
     "probability",
     "confidence",
     "reason",
 }
+
+_SAFE_TOKEN_COUNTER_KEYS = frozenset({"max_output_tokens", "output_token_ceiling"})
 
 _FORBIDDEN_KEY_FRAGMENTS = (
     "authorization",
@@ -96,7 +109,11 @@ def allowlisted_provider_evidence(value: Any) -> Any:
         kept: dict[str, Any] = {}
         for key, item in value.items():
             lowered = key.lower()
-            if any(fragment in lowered for fragment in _FORBIDDEN_KEY_FRAGMENTS):
+            if any(
+                fragment in lowered
+                and not (fragment == "token" and key in _SAFE_TOKEN_COUNTER_KEYS)
+                for fragment in _FORBIDDEN_KEY_FRAGMENTS
+            ):
                 continue
             if key not in PROVIDER_METADATA_ALLOWLIST:
                 continue

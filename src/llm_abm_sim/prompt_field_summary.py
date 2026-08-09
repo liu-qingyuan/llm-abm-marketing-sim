@@ -7,6 +7,10 @@ from dataclasses import dataclass, field
 from typing import Any, Literal
 
 from .decision import DecisionInput
+from .prompt_contracts import (
+    CONCURRENT_MESSAGE_PRIMARY_PROMPT_VERSION,
+    CONCURRENT_ROBUSTNESS_PROMPT_TOKENS,
+)
 from .schemas import LATENT_VALUE_DIMENSIONS, PeerContext, PlatformContext, PostContent, UserProfile
 
 MAX_INTEREST_TAGS = 6
@@ -16,9 +20,9 @@ MAX_TEXT_LENGTH = 240
 JINJIANG_PROMPT_V3 = "jinjiang-green-marketing-prompt-v3"
 LEGACY_PROVIDER_PROMPT_V1 = "engage-provider-v1"
 LEGACY_DECISION_PROMPT_V1 = "engage-v1"
-CONCURRENT_MESSAGE_PRIMARY_PROMPT_VERSION = "jinjiang-concurrent-message-primary-prompt-v1"
 CONCURRENT_MESSAGE_SHADOW_PROMPT_VERSION = "jinjiang-concurrent-message-demographic-shadow-prompt-v1"
 JINJIANG_PROMPT_V3_TOKENS = frozenset({JINJIANG_PROMPT_V3, LEGACY_PROVIDER_PROMPT_V1, LEGACY_DECISION_PROMPT_V1})
+CONCURRENT_ROBUSTNESS_PRIMARY_PROMPT_TOKENS = frozenset(CONCURRENT_ROBUSTNESS_PROMPT_TOKENS)
 CONCURRENT_MESSAGE_PROMPT_TOKENS = frozenset(
     {CONCURRENT_MESSAGE_PRIMARY_PROMPT_VERSION, CONCURRENT_MESSAGE_SHADOW_PROMPT_VERSION}
 )
@@ -149,7 +153,7 @@ def build_prompt_field_summary(decision_input: DecisionInput) -> dict[str, str]:
             "platform_context_summary": summarize_platform_fields(decision_input.platform_context),
         }
         inclusion = profile_prompt_field_inclusion(decision_input.profile)
-    elif prompt_version == CONCURRENT_MESSAGE_PRIMARY_PROMPT_VERSION:
+    elif prompt_version in CONCURRENT_ROBUSTNESS_PRIMARY_PROMPT_TOKENS:
         summaries = {
             "post_summary": summarize_post_fields(decision_input.post),
             "marketing_content_summary": summarize_marketing_content_fields(decision_input.post),
@@ -222,11 +226,12 @@ def concurrent_profile_prompt_field_inclusion(
     profile: UserProfile,
     prompt_version: str,
 ) -> dict[str, PromptFieldInclusion]:
-    fields = (
-        CONCURRENT_PRIMARY_PROFILE_FIELDS
-        if prompt_version == CONCURRENT_MESSAGE_PRIMARY_PROMPT_VERSION
-        else CONCURRENT_SHADOW_PROFILE_FIELDS
-    )
+    if prompt_version in CONCURRENT_ROBUSTNESS_PRIMARY_PROMPT_TOKENS:
+        fields = CONCURRENT_PRIMARY_PROFILE_FIELDS
+    elif prompt_version == CONCURRENT_MESSAGE_SHADOW_PROMPT_VERSION:
+        fields = CONCURRENT_SHADOW_PROFILE_FIELDS
+    else:
+        raise ValueError(f"unsupported prompt_version: {prompt_version}")
     return {
         field_name: "included" if _concurrent_profile_value(profile, field_name) is not None else "empty_omitted"
         for field_name in fields

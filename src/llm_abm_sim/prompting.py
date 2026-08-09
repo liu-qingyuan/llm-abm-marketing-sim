@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 from .decision import DecisionInput
+from .prompt_contracts import CONCURRENT_ROBUSTNESS_PROMPT_REGISTRY, CONCURRENT_ROBUSTNESS_PROMPT_TOKENS
 from .prompt_field_summary import (
-    CONCURRENT_MESSAGE_PRIMARY_PROMPT_VERSION,
     CONCURRENT_MESSAGE_SHADOW_PROMPT_VERSION,
     JINJIANG_PROMPT_V3,
     JINJIANG_PROMPT_V3_TOKENS,
@@ -18,7 +18,7 @@ def build_engagement_prompt(decision_input: DecisionInput) -> list[dict[str, str
     prompt_version = decision_input.prompt_version
     if prompt_version in JINJIANG_PROMPT_V3_TOKENS:
         return _build_jinjiang_prompt_v3(decision_input)
-    if prompt_version == CONCURRENT_MESSAGE_PRIMARY_PROMPT_VERSION:
+    if prompt_version in CONCURRENT_ROBUSTNESS_PROMPT_TOKENS:
         return _build_concurrent_primary_prompt(decision_input)
     if prompt_version == CONCURRENT_MESSAGE_SHADOW_PROMPT_VERSION:
         return _build_concurrent_shadow_prompt(decision_input)
@@ -63,35 +63,7 @@ def _build_jinjiang_prompt_v3(decision_input: DecisionInput) -> list[dict[str, s
 
 def _build_concurrent_primary_prompt(decision_input: DecisionInput) -> list[dict[str, str]]:
     summaries = build_prompt_field_summary(decision_input)
-    return [
-        {
-            "role": "system",
-            "content": (
-                "你是 concurrent-message validation runtime 中的结构化决策函数。"
-                "你只可以使用当前 message 原文、可观测代理指标、受控 Synthetic Experiment Labels 和中性 PeerContext。"
-                "不要推断或补写未提供的人口学身份、Class、昵称、简介、签名、粉丝原始字段、历史标签、平台上下文或其他 message 历史。"
-                "只返回一个 JSON 对象，不要输出 Markdown、解释性段落、headers、secrets 或额外 commentary。"
-            ),
-        },
-        {
-            "role": "user",
-            "content": "\n\n".join(
-                [
-                    "【当前 message 原文】\n" f"{summaries['marketing_content_summary']}",
-                    "【内容主要强调的价值】\n" f"{summaries['post_value_summary']}",
-                    "【用户可观测代理指标】\n" f"{summaries['observed_profile_summary']}",
-                    "【Synthetic Experiment Labels】\n" f"{summaries['consumption_preference_summary']}",
-                    "【中性 PeerContext】\n" f"{summaries['peer_influence_summary']}",
-                    "【输出 schema】\n"
-                    "必须返回字段：engage（boolean）、probability（0.0 到 1.0）、"
-                    "reason（简短非敏感理由）、confidence（0.0 到 1.0）、"
-                    "action（ignore/like/comment/share）。"
-                    "engage=false 时 action 必须为 ignore；"
-                    "engage=true 时 action 必须为 like、comment 或 share 之一。",
-                ]
-            ),
-        },
-    ]
+    return CONCURRENT_ROBUSTNESS_PROMPT_REGISTRY.render(decision_input.prompt_version, summaries)
 
 
 def _build_concurrent_shadow_prompt(decision_input: DecisionInput) -> list[dict[str, str]]:

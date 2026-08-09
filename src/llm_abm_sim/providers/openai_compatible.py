@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, Protocol, cast
 
 from llm_abm_sim.decision import DecisionInput, EngageDecision, LLMDecisionAdapter, ProviderDecisionError
+from llm_abm_sim.prompt_contracts import CONCURRENT_ROBUSTNESS_PROMPT_TOKENS
 from llm_abm_sim.prompting import build_engagement_prompt
 from llm_abm_sim.provider_accounting import (
     ProviderAccounting,
@@ -23,6 +24,14 @@ from llm_abm_sim.provider_config import (
     resolve_runtime_http_headers,
     sanitize_url,
     should_run_live_llm,
+)
+from llm_abm_sim.provider_request_contract import (
+    ProviderRequestAccounting,
+    ProviderRequestContract,
+    ReasoningEffortValue,
+    build_provider_request_contract,
+    engage_decision_json_schema,
+    validate_robustness_request_contract,
 )
 from llm_abm_sim.schemas import (
     FailClosedAction,
@@ -79,6 +88,13 @@ class OpenAICompatibleDecisionAdapter(LLMDecisionAdapter):
         self.prompt_version = self.config.prompt_version
         model = self.config.model or (self.codex_provider_config.model if self.codex_provider_config else None)
         self.model = model or "gpt-5.5"
+        self._request_contract = build_provider_request_contract(self.config, requested_model=self.model)
+        if self.config.prompt_version in CONCURRENT_ROBUSTNESS_PROMPT_TOKENS and (
+            self.config.prompt_version != CONCURRENT_ROBUSTNESS_PROMPT_TOKENS[0]
+            or self.config.reasoning_effort is not None
+            or self.config.max_output_tokens is not None
+        ):
+            validate_robustness_request_contract(self._request_contract)
         self.client = client
         self._sleep = sleep
         self.external_request_invocations = 0
@@ -96,11 +112,27 @@ class OpenAICompatibleDecisionAdapter(LLMDecisionAdapter):
         )
 
     @property
+    def request_contract(self) -> ProviderRequestContract:
+        return self._request_contract
+
+    @property
+    def provider_request_accounting(self) -> ProviderRequestAccounting:
+        return ProviderRequestAccounting(
+            schema_version="provider-request-accounting-v1",
+            requested_model=self.model,
+            request_contract=self._request_contract,
+            response_accounting=self.provider_accounting,
+        )
+
+    @property
     def safe_metadata(self) -> dict[str, Any]:
         metadata = self.config.safe_metadata()
         metadata["adapter"] = "openai_compatible"
         metadata["adapter_version"] = "phase3-v1"
         metadata["model"] = self.model
+        if self.config.reasoning_effort is not None or self.config.max_output_tokens is not None:
+            metadata["requested_model"] = self.model
+            metadata["request_contract"] = self._request_contract.audit_record()
         if self.codex_provider_config is not None:
             metadata["codex_provider"] = self.codex_provider_config.redacted()
         return metadata
@@ -130,7 +162,18 @@ class OpenAICompatibleDecisionAdapter(LLMDecisionAdapter):
                 if uses_external_sdk:
                     self.external_request_invocations += 1
                 self.request_invocations += 1
-                raw = client.create_response(messages, cast(str, self.model))
+                if (
+                    self._request_contract.reasoning_effort is not None
+                    or self._request_contract.output_token_ceiling is not None
+                ):
+                    raw = cast(Any, client).create_response(
+                        messages,
+                        cast(str, self.model),
+                        reasoning_effort=self._request_contract.reasoning_effort,
+                        output_token_ceiling=self._request_contract.output_token_ceiling,
+                    )
+                else:
+                    raw = client.create_response(messages, cast(str, self.model))
                 response = coerce_provider_response_envelope(raw)
                 self._provider_accounting.record_response(response)
                 decision = _parse_provider_decision(response.decision_text)
@@ -251,15 +294,27 @@ class _OpenAISDKClient:
         )
         self._wire_api = wire_api
 
-    def create_response(self, messages: list[dict[str, str]], model: str) -> ProviderResponseEnvelope:
+    def create_response(
+        self,
+        messages: list[dict[str, str]],
+        model: str,
+        *,
+        reasoning_effort: ReasoningEffortValue | None = None,
+        output_token_ceiling: int | None = None,
+    ) -> ProviderResponseEnvelope:
         sdk_messages = cast(Any, messages)
         if self._wire_api == "chat":
-            chat_response = self._client.chat.completions.create(
-                model=model,
-                messages=sdk_messages,
-                response_format={"type": "json_object"},
-                extra_headers=self._extra_headers,
-            )
+            if reasoning_effort is not None:
+                raise ProviderConfigurationError("reasoning_effort requires the Responses wire")
+            chat_request: dict[str, Any] = {
+                "model": model,
+                "messages": sdk_messages,
+                "response_format": {"type": "json_object"},
+                "extra_headers": self._extra_headers,
+            }
+            if output_token_ceiling is not None:
+                chat_request["max_completion_tokens"] = output_token_ceiling
+            chat_response = self._client.chat.completions.create(**chat_request)
             return normalize_provider_response_envelope(
                 decision_text=_chat_decision_text(chat_response),
                 observed_model=response_field(chat_response, "model"),
@@ -268,12 +323,17 @@ class _OpenAISDKClient:
                 output_tokens_field="completion_tokens",
                 cached_details_field="prompt_tokens_details",
             )
-        provider_response = self._client.responses.create(
-            model=model,
-            input=sdk_messages,
-            text=cast(Any, {"format": _engage_decision_json_schema()}),
-            extra_headers=self._extra_headers,
-        )
+        responses_request: dict[str, Any] = {
+            "model": model,
+            "input": sdk_messages,
+            "text": cast(Any, {"format": engage_decision_json_schema()}),
+            "extra_headers": self._extra_headers,
+        }
+        if reasoning_effort is not None:
+            responses_request["reasoning"] = {"effort": reasoning_effort}
+        if output_token_ceiling is not None:
+            responses_request["max_output_tokens"] = output_token_ceiling
+        provider_response = self._client.responses.create(**responses_request)
         return normalize_provider_response_envelope(
             decision_text=_responses_decision_text(provider_response),
             observed_model=response_field(provider_response, "model"),
@@ -296,26 +356,6 @@ def _chat_decision_text(response: object) -> str:
     message = response_field(choices[0], "message")
     content = response_field(message, "content")
     return content if isinstance(content, str) else ""
-
-
-def _engage_decision_json_schema() -> dict[str, Any]:
-    return {
-        "type": "json_schema",
-        "name": "engage_decision",
-        "strict": True,
-        "schema": {
-            "type": "object",
-            "additionalProperties": False,
-            "required": ["engage", "probability", "reason", "confidence", "action"],
-            "properties": {
-                "engage": {"type": "boolean"},
-                "probability": {"type": "number", "minimum": 0.0, "maximum": 1.0},
-                "reason": {"type": "string"},
-                "confidence": {"type": "number", "minimum": 0.0, "maximum": 1.0},
-                "action": {"type": "string", "enum": ["ignore", "like", "comment", "share"]},
-            },
-        },
-    }
 
 
 def _parse_provider_decision(raw: str | dict[str, Any]) -> EngageDecision:

@@ -249,6 +249,13 @@ def test_redact_preserves_allowlisted_provider_metadata_keys():
     payload = {"requires_openai_auth": True, "auth_available": False, "api_key_env": "OPENAI_API_KEY"}
 
     assert redact_secrets(payload) == payload
+    assert redact_secrets({"max_output_tokens": 256, "output_token_ceiling": 256}) == {
+        "max_output_tokens": 256,
+        "output_token_ceiling": 256,
+    }
+    assert redact_secrets({"max_output_tokens": "plain-sensitive-value"}) == {
+        "max_output_tokens": "<redacted>"
+    }
 
 
 def test_resolve_runtime_credential_prefers_env_without_reading_codex(monkeypatch, tmp_path):

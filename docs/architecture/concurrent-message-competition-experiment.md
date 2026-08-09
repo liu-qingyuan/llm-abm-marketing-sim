@@ -48,6 +48,17 @@ personalized_delivery_score
 
 Diagnostics 的 source of truth 是同一 run 的 persisted candidate rows 与 pair rows。in-memory rows 在写出前会安全化，但不构成第二份事实来源；report writer 和 release validator 都会重新 rebuild 并比较 diagnostics、summary、schema tokens、manifest 与 approved artifact set。
 
+## Prompt–Model request contract
+
+Robustness 请求侧是 additive Module，不改变现有 Concurrent Formal runtime：
+
+- `PromptContractRegistry` 持有 `P0`–`P3` 的稳定 token、pinned canonical hash、LLM-visible field allowlist、排除字段、任务/动作语义、structured Decision schema 和等价性清单；模板字段增加、遗漏或同 token 漂移会在使用前失败。
+- `P0` 复用当前 Primary Prompt bytes；`P1` 只改词汇，`P2` 只重排同一信息，`P3` 只增加不输出 chain-of-thought 的结构化 rubric。四者继续只返回 `engage/probability/reason/confidence/action`。
+- `provider-request-contract-v1` 把 Prompt hash、requested model、Responses wire、显式 `reasoning_effort=low`、output-token ceiling、structured schema hash、timeout/retry 和 sampling 参数省略固定在同一请求合同；response accounting 仍独立记录 observed model 与 usage。
+- 未配置 request settings 的历史 Adapter 保持原调用形状和 safe metadata。P1–P3 或显式 Robustness request 合同不完整时在 Provider 调用前 fail closed。
+
+该 Module 只建立后续 16-cell study 可复用的请求接缝；它不执行模型 qualification、动态 cells、Provider live call、Formal Run、报告发布或 canonical deployment。
+
 ## Report 与 durable execution
 
 `rebuild_concurrent_message_report(run_dir, *, destination_dir=None)` 是报告 Module 的公开重建 Interface：

@@ -55,6 +55,8 @@ Adapter 的 `provider_accounting` 是独立 strict typed evidence，不放入 `p
 
 这些 usage 只描述 Provider 在 returned response 中报告的 allowlisted metadata。Transport failure 可能没有 returned usage，因此 persisted usage 不是完整 billed cost、价格、折扣、模型可用性或节省成本的证明。
 
+显式 request settings 另由 `provider-request-contract-v1` 和 `provider-request-accounting-v1` 记录：requested model 与 request contract 位于请求侧，observed-model counts 与 usage 位于 response accounting，二者不会因 alias 名称相似而合并。历史未配置 `reasoning_effort` / `max_output_tokens` 的 Adapter 继续保留原 request 调用形状和 safe metadata；新合同不包含 credential、raw Prompt、raw request 或 raw response。
+
 Final Research v6 只在 `require_live_env=true` 且内部 OpenAI-compatible SDK wrapper 实际 invocation 后写 `ranking-v6-formal-evidence-v1`，但 Formal status 不等于 production eligibility。`abm-report-release-contract-v3` 只接受 bare `["openai_compatible"]`、exact requested `gpt-5.4-mini`、独立 exact observed `gpt-5.4-mini-2026-03-17`、每个 returned response 的 complete usage，以及与 persisted Decisions/actions/终态一致的 run-local accounting。该唯一 exact mapping 来自 #87 qualification；dated snapshot 不表示不同 model family，也不提供价格或质量结论。未来 snapshot 的任何变化都必须新建 Ticket 并重新 qualification，不能使用 wildcard、前缀、后缀或动态“最新”解析。缺失、畸形、mixed model、partial usage、cache wrapper 或 count mismatch 都保留为可审计事实并使 `production_deploy_eligible=false`；不会估算 transport failure 的 tokens。Injected client 或任意替代 SDK builder 的 protocol client 仍是 mock evidence，不能产生 live fact。
 
 ## Web 控制台 Provider 模式
@@ -80,12 +82,18 @@ provider_llm:
   require_live_env: true
   api_key_env: OPENAI_API_KEY
   fail_closed_action: raise  # raise | no_engage | skip_run
+  # Optional Responses-only request settings. Omit both to preserve the
+  # historical request and safe-metadata contract.
+  reasoning_effort: low
+  max_output_tokens: 256
 ```
 
 安全规则：
 
 - 真实 Provider 使用必须 opt-in，并由 `LLM_ABM_RUN_LIVE_LLM=1` 门禁控制，除非测试注入 mock client。
 - Adapter 必须用 `EngageDecision` 校验每个 Provider 响应。
+- `reasoning_effort` 是 typed optional setting；未配置时不会进入 request 或 safe metadata。Prompt–Model Robustness contract 只接受显式 `low`、`wire_api: responses` 和显式 `max_output_tokens`，并在调用前 fail closed。
+- Robustness Responses request 固定 structured `EngageDecision` schema，并显式记录 Prompt hash、requested model、output-token ceiling、timeout/retry 与 `temperature` / `top_p` / `seed` 的省略；逐用户 Prompt、request payload 和 response payload 不进入该合同。
 - `fail_closed_action: raise` 是默认策略，也是手动 live smoke 策略。
 - `fail_closed_action: no_engage` 只有显式配置时才返回 `ignore` 决策。
 - `fail_closed_action: skip_run` 是 run-level fail-closed stop signal，应在正常 runner 启动部分仿真前拒绝。

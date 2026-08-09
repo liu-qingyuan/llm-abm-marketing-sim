@@ -12,6 +12,7 @@ import tomllib
 
 SECRET_KEYS = ("api_key", "token", "secret", "password", "credential", "auth", "bearer")
 SAFE_METADATA_KEYS = {"api_key_env", "requires_openai_auth", "auth_available"}
+SAFE_NUMERIC_METADATA_KEYS = {"max_output_tokens", "output_token_ceiling"}
 SECRET_VALUE_PLACEHOLDER = "<redacted>"
 HTTP_HEADER_NAME_PATTERN = re.compile(r"^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$")
 FORBIDDEN_RUNTIME_HTTP_HEADERS = frozenset({"connection", "content-length", "host", "transfer-encoding"})
@@ -248,7 +249,13 @@ def redact_secrets(value: Any) -> Any:
     if isinstance(value, dict):
         redacted: dict[str, Any] = {}
         for key, item in value.items():
-            if key.lower() not in SAFE_METADATA_KEYS and any(secret in key.lower() for secret in SECRET_KEYS):
+            lowered = key.lower()
+            safe_numeric_metadata = lowered in SAFE_NUMERIC_METADATA_KEYS and type(item) is int and item >= 0
+            if (
+                lowered not in SAFE_METADATA_KEYS
+                and not safe_numeric_metadata
+                and any(secret in lowered for secret in SECRET_KEYS)
+            ):
                 redacted[key] = SECRET_VALUE_PLACEHOLDER
             else:
                 redacted[key] = redact_secrets(item)
