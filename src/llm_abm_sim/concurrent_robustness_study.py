@@ -30,6 +30,12 @@ from .concurrent_message_report import (
     ConcurrentMessageArtifactClosure,
     close_concurrent_message_artifacts,
 )
+from .concurrent_robustness_report import (
+    _compose_concurrent_robustness_report_candidate,
+    _RobustnessReportClosureError,
+    _RobustnessReportConflictError,
+    _RobustnessReportPathError,
+)
 from .decision import LLMDecisionAdapter
 from .final_research import FORMAL_RUN_STATUS, SEED_FIRST_SAMPLING_METHOD, VALIDATION_RUN_STATUS
 from .prompt_contracts import CONCURRENT_ROBUSTNESS_PROMPT_REGISTRY
@@ -2884,7 +2890,9 @@ class ConcurrentRobustnessStudy:
     ``None`` creates the zero-call Ranking Weight workspace. When the same private
     workspace contains registry-authenticated complete deterministic cell evidence,
     resume validates and analyzes it before atomically closing an immutable study
-    root. This analysis slice never executes an Adapter or creates a report.
+    root. A caller may then supply one explicit ``report_destination`` on a
+    complete resume; the private composer independently closes the historical
+    Formal root and study root before publishing a separate non-deployable candidate.
     """
 
     def run(
@@ -2892,6 +2900,8 @@ class ConcurrentRobustnessStudy:
         manifest: ConcurrentRobustnessManifest,
         adapters_by_cell: Mapping[str, LLMDecisionAdapter] | None,
         output_dir: str | Path,
+        *,
+        report_destination: str | Path | None = None,
     ) -> ConcurrentRobustnessStudyResult:
         if not isinstance(manifest, ConcurrentRobustnessManifest):
             raise ConcurrentRobustnessError(
@@ -2951,6 +2961,11 @@ class ConcurrentRobustnessStudy:
             )
             if not cell_workspace:
                 _assert_source_unchanged(closure)
+                if report_destination is not None:
+                    raise ConcurrentRobustnessError(
+                        ConcurrentRobustnessErrorCode.ANALYSIS_INVALID,
+                        "robustness report composition requires an immutable complete study root",
+                    )
                 return ready_result
             evidence, registry = _load_cell_workspace(
                 output_path,
@@ -2992,6 +3007,39 @@ class ConcurrentRobustnessStudy:
                     "robustness study root could not be finalized atomically",
                 ) from exc
             _assert_source_unchanged(closure)
+            report_candidate: Path | None = None
+            if report_destination is not None:
+                try:
+                    report_candidate = _compose_concurrent_robustness_report_candidate(
+                        formal_root=source_path,
+                        study_root=study_root,
+                        workspace_root=output_path,
+                        manifest=manifest,
+                        manifest_payload=manifest_payload,
+                        manifest_sha256=manifest_sha256,
+                        destination_dir=report_destination,
+                    )
+                except _RobustnessReportPathError as exc:
+                    raise ConcurrentRobustnessError(
+                        ConcurrentRobustnessErrorCode.PATH_VIOLATION,
+                        "robustness report source or destination path is unsafe",
+                    ) from exc
+                except _RobustnessReportConflictError as exc:
+                    raise ConcurrentRobustnessError(
+                        ConcurrentRobustnessErrorCode.WORKSPACE_CONFLICT,
+                        "robustness report destination conflicts with existing state",
+                    ) from exc
+                except _RobustnessReportClosureError as exc:
+                    raise ConcurrentRobustnessError(
+                        ConcurrentRobustnessErrorCode.ANALYSIS_INVALID,
+                        "combined Formal and robustness report closure failed",
+                    ) from exc
+                except OSError as exc:
+                    raise ConcurrentRobustnessError(
+                        ConcurrentRobustnessErrorCode.WORKSPACE_CONFLICT,
+                        "robustness report candidate could not be published atomically",
+                    ) from exc
+                _assert_source_unchanged(closure)
             return ConcurrentRobustnessStudyResult(
                 status=ConcurrentRobustnessStudyStatus.COMPLETE,
                 workspace_root=output_path,
@@ -3000,7 +3048,12 @@ class ConcurrentRobustnessStudy:
                 logical_provider_attempts=evidence.logical_judgment_count,
                 physical_provider_attempts=evidence.physical_attempt_count,
                 study_root=study_root,
-                report_candidate=None,
+                report_candidate=report_candidate,
+            )
+        if report_destination is not None:
+            raise ConcurrentRobustnessError(
+                ConcurrentRobustnessErrorCode.ANALYSIS_INVALID,
+                "robustness report composition requires an existing complete study workspace",
             )
         try:
             result = _write_new_workspace(

@@ -12,6 +12,7 @@ import pytest
 
 import llm_abm_sim.concurrent_message_experiment as concurrent_message_experiment_module
 import llm_abm_sim.concurrent_message_report as concurrent_message_report_module
+import llm_abm_sim.concurrent_robustness_report as concurrent_robustness_report_module
 from llm_abm_sim import (
     ConcurrentMessageExperimentConfig,
     ConcurrentMessageExperimentRunner,
@@ -2448,6 +2449,230 @@ def test_concurrent_robustness_complete_result_can_precede_report_candidate(tmp_
     assert result.report_candidate is None
 
 
+def test_concurrent_robustness_composes_two_closed_sources_into_an_immutable_report_candidate(
+    tmp_path: Path,
+) -> None:
+    source_dir = _make_validation_report_source(tmp_path, "robustness-report-source")
+    manifest = _robustness_manifest_for_source(source_dir, output_identity="fixture-report-v1")
+    workspace = tmp_path / "robustness-report-workspace"
+    destination = tmp_path / "robustness-report-candidate"
+    study = ConcurrentRobustnessStudy()
+
+    study.run(manifest, None, workspace)
+    _install_deterministic_robustness_cell_fixture(workspace, manifest)
+    complete = study.run(manifest, None, workspace)
+    assert complete.study_root is not None
+    source_before = {path.name: path.read_bytes() for path in source_dir.iterdir() if path.is_file()}
+    workspace_before = {path.name: path.read_bytes() for path in workspace.iterdir() if path.is_file()}
+    study_before = {path.name: path.read_bytes() for path in complete.study_root.iterdir() if path.is_file()}
+
+    result = study.run(manifest, None, workspace, report_destination=destination)
+
+    assert result.status == ConcurrentRobustnessStudyStatus.COMPLETE
+    assert result.report_candidate == destination.resolve()
+    assert source_before == {path.name: path.read_bytes() for path in source_dir.iterdir() if path.is_file()}
+    assert workspace_before == {path.name: path.read_bytes() for path in workspace.iterdir() if path.is_file()}
+    assert study_before == {path.name: path.read_bytes() for path in complete.study_root.iterdir() if path.is_file()}
+    candidate_manifest = _read_json(destination / "artifact_manifest.json")
+    release_evidence = _read_json(destination / "release_evidence.json")
+    report_html = (destination / "report.html").read_text(encoding="utf-8")
+    assert candidate_manifest["schema_version"] == "concurrent-robustness-report-candidate-manifest-v1"
+    assert candidate_manifest["formal_source"]["manifest_sha256"] == manifest.source.manifest_sha256
+    assert candidate_manifest["study_source"]["manifest_sha256"] == result.manifest_sha256
+    assert candidate_manifest["production_deploy_eligible"] is False
+    assert candidate_manifest["row_counts"] == {
+        "prompt_model_campaign_growth": 32,
+        "prompt_model_message_summary": 48,
+        "prompt_model_practical_thresholds": 189,
+        "prompt_model_shared_seed_summary": 48,
+        "prompt_model_trajectory_summary": 96,
+        "ranking_weight_batch_diagnostics": 114,
+        "ranking_weight_message_summary": 57,
+    }
+    assert set(candidate_manifest["artifacts"]) == set(candidate_manifest["sha256"])
+    assert set(candidate_manifest["artifacts"].values()) == {
+        path.name for path in destination.iterdir() if path.name != "artifact_manifest.json"
+    }
+    for artifact_name, relative_path in candidate_manifest["artifacts"].items():
+        assert _sha256(destination / relative_path) == candidate_manifest["sha256"][artifact_name]
+    assert release_evidence["production_deploy_eligible"] is False
+    assert release_evidence["provider_calls_during_composition"] == 0
+    assert release_evidence["image_generation_triggered"] is False
+    assert release_evidence["canonical_deployment_triggered"] is False
+    assert not (destination / "prompt_model_cell_evidence.json").exists()
+    report_payload = _read_json(destination / "concurrent_robustness_report_payload.json")
+    assert report_payload["row_counts"] == candidate_manifest["row_counts"]
+    assert report_payload["claim_boundary"] == {
+        "below_threshold_label": "small_observed_difference",
+        "calibration_claim": False,
+        "causal_claim": False,
+        "ground_truth_used": False,
+        "scope": "fixed_sample_fixed_graph_one_realized_path_per_cell",
+        "statistical_equivalence_claim": False,
+    }
+    with (destination / "ranking_weight_message_summary.csv").open(
+        "r", encoding="utf-8", newline=""
+    ) as stream:
+        weight_rows = list(csv.DictReader(stream))
+    assert len(weight_rows) == report_payload["row_counts"]["ranking_weight_message_summary"]
+    assert weight_rows[0]["scenario_id"] == report_payload["ranking_weight"]["message_summary_rows"][0][
+        "scenario_id"
+    ]
+    assert weight_rows[0]["message_id"] == report_payload["ranking_weight"]["message_summary_rows"][0][
+        "message_id"
+    ]
+    assert f'<td>{weight_rows[0]["scenario_id"]}</td>' in report_html
+    assert f'<td>{weight_rows[0]["message_id"]}</td>' in report_html
+    assert all((destination / relative_path).is_file() for relative_path in candidate_manifest["approved_downloads"])
+    assert 'data-testid="mechanism-overview-section"' in report_html
+    assert 'data-testid="run-evidence-mode-panel"' in report_html
+    assert 'data-testid="robustness-source-lineage"' in report_html
+    assert 'data-testid="ranking-weight-sensitivity-section"' in report_html
+    assert 'data-testid="prompt-model-robustness-section"' in report_html
+    assert "Demographic Shadow evidence remains bound to the historical Formal source" in report_html
+    assert "production_deploy_eligible=false" in report_html
+
+
+def test_concurrent_robustness_report_rejects_unsafe_destinations_without_touching_sources(
+    tmp_path: Path,
+) -> None:
+    source_dir = _make_validation_report_source(tmp_path, "robustness-report-path-source")
+    manifest = _robustness_manifest_for_source(source_dir, output_identity="fixture-report-path-v1")
+    workspace = tmp_path / "robustness-report-path-workspace"
+    study = ConcurrentRobustnessStudy()
+    study.run(manifest, None, workspace)
+    _install_deterministic_robustness_cell_fixture(workspace, manifest)
+    complete = study.run(manifest, None, workspace)
+    assert complete.study_root is not None
+    source_before = {path.name: path.read_bytes() for path in source_dir.iterdir() if path.is_file()}
+    workspace_before = {path.name: path.read_bytes() for path in workspace.iterdir() if path.is_file()}
+    study_before = {path.name: path.read_bytes() for path in complete.study_root.iterdir() if path.is_file()}
+
+    existing = tmp_path / "nonempty-report-candidate"
+    existing.mkdir()
+    sentinel = existing / "sentinel.txt"
+    sentinel.write_text("keep", encoding="utf-8")
+    symlink_target = tmp_path / "report-candidate-link-target"
+    symlink_target.mkdir()
+    symlink_destination = tmp_path / "report-candidate-link"
+    os.symlink(symlink_target, symlink_destination, target_is_directory=True)
+    destinations = (
+        (source_dir / "nested-report", ConcurrentRobustnessErrorCode.PATH_VIOLATION),
+        (workspace / "nested-report", ConcurrentRobustnessErrorCode.PATH_VIOLATION),
+        (complete.study_root / "nested-report", ConcurrentRobustnessErrorCode.PATH_VIOLATION),
+        (tmp_path / ".." / "escaped-report", ConcurrentRobustnessErrorCode.PATH_VIOLATION),
+        (existing, ConcurrentRobustnessErrorCode.WORKSPACE_CONFLICT),
+        (symlink_destination, ConcurrentRobustnessErrorCode.WORKSPACE_CONFLICT),
+    )
+    for destination, expected_code in destinations:
+        with pytest.raises(ConcurrentRobustnessError) as captured:
+            study.run(manifest, None, workspace, report_destination=destination)
+        assert captured.value.code == expected_code
+
+    assert sentinel.read_text(encoding="utf-8") == "keep"
+    assert source_before == {path.name: path.read_bytes() for path in source_dir.iterdir() if path.is_file()}
+    assert workspace_before == {path.name: path.read_bytes() for path in workspace.iterdir() if path.is_file()}
+    assert study_before == {path.name: path.read_bytes() for path in complete.study_root.iterdir() if path.is_file()}
+    assert not list(tmp_path.glob(".*.staging"))
+
+
+def test_concurrent_robustness_report_cleans_staging_when_candidate_validation_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source_dir = _make_validation_report_source(tmp_path, "robustness-report-failure-source")
+    manifest = _robustness_manifest_for_source(source_dir, output_identity="fixture-report-failure-v1")
+    workspace = tmp_path / "robustness-report-failure-workspace"
+    destination = tmp_path / "robustness-report-failure-candidate"
+    study = ConcurrentRobustnessStudy()
+    study.run(manifest, None, workspace)
+    _install_deterministic_robustness_cell_fixture(workspace, manifest)
+    complete = study.run(manifest, None, workspace)
+    assert complete.study_root is not None
+    source_before = {path.name: path.read_bytes() for path in source_dir.iterdir() if path.is_file()}
+    workspace_before = {path.name: path.read_bytes() for path in workspace.iterdir() if path.is_file()}
+    study_before = {path.name: path.read_bytes() for path in complete.study_root.iterdir() if path.is_file()}
+
+    def fail_candidate_validation(*args: object, **kwargs: object) -> None:
+        del args, kwargs
+        raise concurrent_robustness_report_module._RobustnessReportClosureError("injected validation failure")
+
+    monkeypatch.setattr(concurrent_robustness_report_module, "_validate_candidate", fail_candidate_validation)
+    with pytest.raises(ConcurrentRobustnessError) as captured:
+        study.run(manifest, None, workspace, report_destination=destination)
+
+    assert captured.value.code == ConcurrentRobustnessErrorCode.ANALYSIS_INVALID
+    assert not destination.exists()
+    assert not list(tmp_path.glob(f".{destination.name}.*.staging"))
+    assert source_before == {path.name: path.read_bytes() for path in source_dir.iterdir() if path.is_file()}
+    assert workspace_before == {path.name: path.read_bytes() for path in workspace.iterdir() if path.is_file()}
+    assert study_before == {path.name: path.read_bytes() for path in complete.study_root.iterdir() if path.is_file()}
+
+
+@pytest.mark.parametrize("corruption", ["missing", "extra", "mutated", "crossed", "symlink"])
+def test_concurrent_robustness_report_rejects_corrupt_study_root_before_candidate(
+    tmp_path: Path,
+    corruption: str,
+) -> None:
+    source_dir = _make_validation_report_source(tmp_path, f"robustness-report-{corruption}-source")
+    manifest = _robustness_manifest_for_source(
+        source_dir,
+        output_identity=f"fixture-report-{corruption}-v1",
+    )
+    workspace = tmp_path / f"robustness-report-{corruption}-workspace"
+    destination = tmp_path / f"robustness-report-{corruption}-candidate"
+    study = ConcurrentRobustnessStudy()
+    study.run(manifest, None, workspace)
+    _install_deterministic_robustness_cell_fixture(workspace, manifest)
+    complete = study.run(manifest, None, workspace)
+    assert complete.study_root is not None
+
+    if corruption == "missing":
+        (complete.study_root / "claim_audit.json").unlink()
+    elif corruption == "extra":
+        (complete.study_root / "unexpected.json").write_text("{}\n", encoding="utf-8")
+    elif corruption == "mutated":
+        analysis_path = complete.study_root / "prompt_model_analysis.json"
+        analysis_path.write_bytes(analysis_path.read_bytes() + b" ")
+    elif corruption == "crossed":
+        (complete.study_root / "prompt_model_analysis.json").write_bytes(
+            (complete.study_root / "ranking_weight_sensitivity.json").read_bytes()
+        )
+    else:
+        claims_path = complete.study_root / "claim_audit.json"
+        claims_copy = tmp_path / "crossed-claim-audit.json"
+        claims_copy.write_bytes(claims_path.read_bytes())
+        claims_path.unlink()
+        os.symlink(claims_copy, claims_path)
+
+    with pytest.raises(ConcurrentRobustnessError) as captured:
+        study.run(manifest, None, workspace, report_destination=destination)
+
+    assert captured.value.code == ConcurrentRobustnessErrorCode.WORKSPACE_CORRUPT
+    assert not destination.exists()
+    assert not list(tmp_path.glob(f".{destination.name}.*.staging"))
+
+
+def test_concurrent_robustness_report_rejects_changed_formal_source_before_candidate(tmp_path: Path) -> None:
+    source_dir = _make_validation_report_source(tmp_path, "robustness-report-formal-mutation-source")
+    manifest = _robustness_manifest_for_source(source_dir, output_identity="fixture-report-formal-mutation-v1")
+    workspace = tmp_path / "robustness-report-formal-mutation-workspace"
+    destination = tmp_path / "robustness-report-formal-mutation-candidate"
+    study = ConcurrentRobustnessStudy()
+    study.run(manifest, None, workspace)
+    _install_deterministic_robustness_cell_fixture(workspace, manifest)
+    study.run(manifest, None, workspace)
+    unexpected = source_dir / "unexpected-source-artifact.json"
+    unexpected.write_text("{}\n", encoding="utf-8")
+
+    with pytest.raises(ConcurrentRobustnessError) as captured:
+        study.run(manifest, None, workspace, report_destination=destination)
+
+    assert captured.value.code == ConcurrentRobustnessErrorCode.INVALID_SOURCE
+    assert not destination.exists()
+    assert not list(tmp_path.glob(f".{destination.name}.*.staging"))
+
+
 def test_concurrent_robustness_closes_deterministic_cell_evidence_through_resume_path(tmp_path: Path) -> None:
     source_dir = _make_validation_report_source(tmp_path, "robustness-analysis-source")
     manifest = _robustness_manifest_for_source(source_dir, output_identity="fixture-analysis-v1")
@@ -2742,6 +2967,12 @@ def test_concurrent_robustness_static_study_is_offline_hashed_and_resumable(tmp_
     assert empty_error.value.code == ConcurrentRobustnessErrorCode.UNSUPPORTED_ADAPTERS
     assert adapter.calls == 0
     assert not output_dir.exists()
+    premature_candidate = tmp_path / "premature-report-candidate"
+    with pytest.raises(ConcurrentRobustnessError) as premature_error:
+        study.run(manifest, None, output_dir, report_destination=premature_candidate)
+    assert premature_error.value.code == ConcurrentRobustnessErrorCode.ANALYSIS_INVALID
+    assert not output_dir.exists()
+    assert not premature_candidate.exists()
 
     dataset_dir = Path(str(close_concurrent_message_artifacts(source_dir).source_evidence.config_snapshot["dataset_dir"]))
     dataset_dir.rename(tmp_path / "processed-source-moved-away")

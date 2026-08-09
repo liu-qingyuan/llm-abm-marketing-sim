@@ -44,7 +44,7 @@ personalized_delivery_score
 | `PlatformEnvironment` / ranking | 每条 message 的 candidates、delivery capacity、Top20、exposure gate 和稳定 tie-break |
 | Decision Adapter | 对已曝光 `user × message` pair 生成 Primary/Shadow typed decisions；不选择 exposure |
 | `ConcurrentCampaignDiagnostics` | 从 persisted candidate/pair rows 重建 funnel、allocation、response、feedback 和 sensitivity diagnostics |
-| `ConcurrentRobustnessStudy` | 通过唯一公开 `run(...)` Interface 验证显式 hashed source，生成 19-point Ranking Weight workspace，并在同一 resume path 消费 registry-authenticated 16-cell evidence、完成条件分析和 immutable study closure |
+| `ConcurrentRobustnessStudy` | 通过唯一公开 `run(...)` Interface 验证显式 hashed source，生成 19-point Ranking Weight workspace，在同一 resume path 消费 registry-authenticated 16-cell evidence、关闭 immutable study root，并可用显式 `report_destination` 调用私有双 lineage composer |
 | Report Module | typed closure、report payload、approved downloads、manifest 和 read-only rebuild |
 | Editorial candidate | bilingual presentation grouping、五个 mechanism media derivatives、run evidence surface 和 canonical report bytes |
 | Release validator/deploy | 显式 contract、source directory、release id、candidate health、atomic `current` 和公网验收 |
@@ -61,7 +61,7 @@ Diagnostics 的 source of truth 是同一 run 的 persisted candidate rows 与 p
 
 通过验证后，同一个 `run(...)` resume path 私下计算 Batch 0 shared-seed strict paired `engage` panel、secondary action/probability/confidence/disagreement、逐 message 双 engagement-rate 分母、Provider failures、audience overlap/first divergence 和 campaign-deduplicated positive-user growth。Prompt、model、message 都按 fixed categorical factors 汇总；planned model contrasts、Prompt × model interaction 和 user-blocked deterministic bootstrap 只条件于 fixed sample、fixed graph 和 one realized path。阈值以下只标为 `small_observed_difference`，claim audit 不允许越界研究结论。
 
-分析 artifacts、cell evidence、validation、claim audit、Manifest 和全量 artifact hashes 通过 sibling staging 原子关闭为 immutable study root；源 workspace 保持可审计。该 complete Result 仍为 `production_deploy_eligible=false`，`report_candidate=None`，不包含 `report.html`。任何非 `None` Adapter map 继续在首次调用前失败；真实 16-cell producer、Provider authorization、增量 report candidate 和 canonical release 属于后续独立 closure。
+分析 artifacts、cell evidence、validation、claim audit、Manifest 和全量 artifact hashes 通过 sibling staging 原子关闭为 immutable study root；源 workspace 保持可审计。未提供 `report_destination` 时，complete Result 继续保持 `production_deploy_eligible=false`、`report_candidate=None`，study root 不包含 `report.html`。在同一 complete resume 调用中显式提供全新 destination 时，私有 composer 先重新执行未修改的 Concurrent Formal closure，再独立验证 study root 的 schema、manifest、row counts、source links 和 hashes；随后从两条只读 lineage 生成 companion JSON/CSV、增量页面和 `production_deploy_eligible=false` release evidence，经 sibling staging 验证后原子发布独立 candidate。candidate 保留原页面的 mechanism、Run Evidence、field lineage、Demographic Shadow 与 Primary + Shadow barrier，并把旧 Shadow 明确标为历史 Formal evidence；新增 Weight small multiples 和每个 model 最多四条 Prompt series，不改变历史 renderer 或单-root rebuild。任何非 `None` Adapter map 继续在首次调用前失败；真实 16-cell producer、Provider authorization 和 canonical release 仍属于后续独立 operational closure。
 
 ## Prompt–Model request contract
 
