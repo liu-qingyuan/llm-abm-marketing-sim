@@ -94,11 +94,15 @@ Concurrent Message Competition Experiment 中，平台根据此前批次对任�
 
 ### Predeclared Ranking Weights
 
-Target Delivery Ranking 的主模型把 `0.50 * base_network_relevance + 0.30 * engaged_neighbor_signal + 0.20 * historical_tag_affinity` 作为预先声明的研究假设。权重通过历史 Top20 diagnostic、敏感性分析和 Paired Network Ranking Ablation 检查，不描述为从真实曝光日志训练得到，也不声称等同抖音平台参数。
+Target Delivery Ranking 的主模型把 `0.50 * base_network_relevance + 0.30 * engaged_neighbor_signal + 0.20 * historical_tag_affinity` 作为预先声明的研究假设。Ranking signal 是随 user、message 或 batch 状态取值的输入，Ranking weight 才是乘在 signal 上的政策参数；二者不能混称为同一类“变量”。权重通过历史 Top20 diagnostic、敏感性分析和 Paired Network Ranking Ablation 检查，不描述为从真实曝光日志训练得到，也不声称等同抖音平台参数。
 
 ### Ranking Weight Sensitivity Check
 
 对预先声明的推荐权重进行小规模离线稳健性检查，用于判断 Top20 排名是否过度依赖单一权重假设。基础研究只比较主方案、网络较弱方案和无网络对照，不穷举参数、不增加 LLM 调用，也不把结果描述为真实平台推荐准确率。
+
+### Concurrent Ranking Weight Sensitivity Study
+
+在固定 1,000-user Research Sample 上，以 19 个预声明 simplex points 只调整 Personalized Delivery Score 的三个 Ranking Weights，同时固定 P95 normalization 和 component definitions。该层只离线比较 frozen Top20 overlap 与 rank change，不调用 Provider、不推进传播；三个受约束权重不使用标准 Morris 或标准 Sobol。
 
 ### Video Source Scope
 
@@ -123,6 +127,14 @@ processed 数据中可用于构建历史信号的视频集合。对于单目标�
 ### Concurrent Message Competition Experiment
 
 三个 Experimental Message Videos 从 Batch 0 起同时运行独立的 Per-Message Personalized Top20，并在同一 1,000 用户池中形成允许重叠的个性化受众。每条 message 固定每批 Top20、30 批共 600 次曝光；“competition”表示三条并行 campaign 面向同一用户池并产生可比较的受众响应，不表示争抢同一个 20-slot message quota。实验不提供真实世界文案效果的因果排名。
+
+### Prompt–Model Robustness Study
+
+在固定 1,000-user Research Sample 和三条 Experimental Message Videos 上，对 4 个信息等价 Prompt 与 4 个同 provider 精确模型做完整 categorical factorial。每个 cell 只运行一次 1,800-Primary-Decision 动态轨迹，统一使用 low reasoning contract、fresh calls 和独立 store，不重跑 Shadow、不建立完整 Decision Bank；Batch 0 shared seeds 支持配对 `engage` 比较，其余互动、曝光和传播结果只描述单次 realized path。该研究没有 ground truth，不称为 Calibration，也不单独估计模型随机性。
+
+### Incremental Robustness Presentation
+
+保留当前 canonical report 的机制、Run Evidence、Demographic Shadow 和 barrier 内容，再增量加入 Ranking Weight 与 Prompt–Model 结果。旧 Shadow evidence 继续绑定原始 Formal source；新增曲线只借鉴批准视觉参考的宽幅、外置图例和 line/dash/marker grammar。
 
 ### Multi-Message Formal Contract
 
