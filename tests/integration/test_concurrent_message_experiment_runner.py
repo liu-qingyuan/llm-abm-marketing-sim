@@ -13,6 +13,7 @@ import pytest
 import llm_abm_sim.concurrent_message_experiment as concurrent_message_experiment_module
 import llm_abm_sim.concurrent_message_report as concurrent_message_report_module
 import llm_abm_sim.concurrent_robustness_report as concurrent_robustness_report_module
+import llm_abm_sim.concurrent_robustness_study as concurrent_robustness_study_module
 from llm_abm_sim import (
     ConcurrentMessageExperimentConfig,
     ConcurrentMessageExperimentRunner,
@@ -57,7 +58,14 @@ from llm_abm_sim.providers.openai_compatible import (
     ProviderResponseEnvelope,
     _OpenAISDKClient,
 )
-from llm_abm_sim.schemas import PeerContext, PlatformContext, PostContent, ProviderLLMConfig, UserProfile
+from llm_abm_sim.schemas import (
+    PeerContext,
+    PlatformContext,
+    PostContent,
+    ProviderLLMConfig,
+    ReasoningEffort,
+    UserProfile,
+)
 
 LATENT_COLUMNS = [
     "latent_attribute_spec_id",
@@ -2179,6 +2187,161 @@ def _robustness_manifest_for_source(
     )
 
 
+def _dynamic_validation_manifest_for_source(
+    source_dir: Path,
+    *,
+    output_identity: str,
+    fee_ceiling_usd: float = 0.0,
+    input_usd_per_million_tokens: float = 0.0,
+    output_usd_per_million_tokens: float = 0.0,
+) -> ConcurrentRobustnessManifest:
+    base = _robustness_manifest_for_source(source_dir, output_identity=output_identity)
+    payload = base.model_dump(mode="json")
+    authorization_reference = f"validation-fixture:{output_identity}"
+    payload["authorization_reference"] = authorization_reference
+    payload["request_caps"]["fee_ceiling_usd"] = fee_ceiling_usd
+    cell_ids = [str(cell["cell_id"]) for cell in payload["prompt_model_cells"]]
+    qualifications = []
+    observed_by_requested: dict[str, str] = {}
+    for cell in payload["prompt_model_cells"]:
+        observed_by_requested.setdefault(
+            str(cell["requested_model"]),
+            str(cell["required_observed_model"]),
+        )
+    for requested_model in _ROBUSTNESS_MODELS:
+        qualifications.append(
+            {
+                "schema_version": "concurrent-robustness-model-qualification-v1",
+                "qualification_kind": "deterministic_validation_fixture",
+                "artifact_reference": f"validation-fixture:{requested_model}",
+                "artifact_sha256": hashlib.sha256(
+                    f"qualification:{output_identity}:{requested_model}".encode()
+                ).hexdigest(),
+                "provider": "openai_compatible",
+                "requested_model": requested_model,
+                "required_observed_model": observed_by_requested[requested_model],
+                "status": "qualified",
+            }
+        )
+    payload["dynamic_execution"] = {
+        "schema_version": "concurrent-robustness-dynamic-execution-v1",
+        "profile": "deterministic_validation",
+        "provider": "openai_compatible",
+        "adapter_identity": "openai-compatible-injected-client-v1",
+        "observed_model_policy": "exact-required-model-per-response-v1",
+        "stopping_rule": "reject-next-attempt-before-cap-v1",
+        "authorization": {
+            "schema_version": "concurrent-robustness-execution-authorization-v1",
+            "authorization_kind": "deterministic_validation_fixture",
+            "authorization_reference": authorization_reference,
+            "artifact_sha256": hashlib.sha256(f"authorization:{output_identity}".encode()).hexdigest(),
+            "source_manifest_sha256": base.source.manifest_sha256,
+            "output_identity": output_identity,
+            "allowed_cell_ids": cell_ids,
+            "logical_judgment_cap": payload["request_caps"]["logical_judgment_cap"],
+            "physical_attempt_cap": payload["request_caps"]["physical_attempt_cap"],
+            "fee_ceiling_usd": fee_ceiling_usd,
+            "external_requests_allowed": False,
+            "production_deploy_eligible": False,
+        },
+        "qualifications": qualifications,
+        "pricing_snapshot": {
+            "schema_version": "concurrent-robustness-pricing-snapshot-v1",
+            "snapshot_reference": f"validation-fixture:{output_identity}",
+            "snapshot_sha256": hashlib.sha256(f"pricing:{output_identity}".encode()).hexdigest(),
+            "currency": "USD",
+            "input_token_ceiling": 1024,
+            "model_pricing": [
+                {
+                    "requested_model": requested_model,
+                    "input_usd_per_million_tokens": input_usd_per_million_tokens,
+                    "output_usd_per_million_tokens": output_usd_per_million_tokens,
+                }
+                for requested_model in _ROBUSTNESS_MODELS
+            ],
+        },
+    }
+    return ConcurrentRobustnessManifest.model_validate(payload)
+
+
+def _deterministic_robustness_response(
+    *,
+    observed_model: str,
+    cell_index: int,
+    logical_index: int,
+) -> ProviderResponseEnvelope:
+    engage = (logical_index + cell_index) % 4 == 0
+    return ProviderResponseEnvelope(
+        decision_text=json.dumps(
+            {
+                "engage": engage,
+                "probability": 0.82 if engage else 0.18,
+                "reason": "deterministic validation decision",
+                "confidence": 0.9,
+                "action": "like" if engage else "ignore",
+            }
+        ),
+        observed_model=observed_model,
+        observed_model_status="reported",
+        usage_status="complete",
+        input_tokens=20,
+        output_tokens=10,
+        total_tokens=30,
+        cached_input_tokens=0,
+    )
+
+
+def _dynamic_validation_adapter(
+    manifest: ConcurrentRobustnessManifest,
+    cell_index: int,
+    *,
+    responses: list[ProviderResponseEnvelope | Exception] | None = None,
+    observed_model: str | None = None,
+) -> tuple[LLMDecisionAdapter, Any]:
+    cell = manifest.prompt_model_cells[cell_index]
+    required_observed_model = observed_model or cell.required_observed_model
+    assert required_observed_model is not None
+    script = responses or [
+        _deterministic_robustness_response(
+            observed_model=required_observed_model,
+            cell_index=cell_index,
+            logical_index=logical_index,
+        )
+        for logical_index in range(manifest.request_caps.logical_judgments_per_cell)
+    ]
+    client = concurrent_robustness_study_module._DeterministicValidationProviderClient(script)
+    adapter = OpenAICompatibleDecisionAdapter(
+        ProviderLLMConfig(
+            enabled=True,
+            provider="openai_compatible",
+            model=cell.requested_model,
+            wire_api="responses",
+            require_live_env=False,
+            timeout_seconds=manifest.request_contract.timeout_seconds,
+            max_retries=manifest.request_contract.max_retries,
+            retry_backoff_seconds=manifest.request_contract.retry_backoff_seconds,
+            prompt_version=cell.prompt_version,
+            reasoning_effort=ReasoningEffort.LOW,
+            max_output_tokens=manifest.request_contract.output_token_ceiling,
+        ),
+        client=cast(Any, client),
+        sleep=lambda _: None,
+    )
+    return adapter, client
+
+
+def _dynamic_validation_adapters(
+    manifest: ConcurrentRobustnessManifest,
+) -> tuple[dict[str, LLMDecisionAdapter], list[Any]]:
+    adapters: dict[str, LLMDecisionAdapter] = {}
+    clients: list[Any] = []
+    for cell_index, cell in enumerate(manifest.prompt_model_cells):
+        adapter, client = _dynamic_validation_adapter(manifest, cell_index)
+        adapters[cell.cell_id] = adapter
+        clients.append(client)
+    return adapters, clients
+
+
 def _canonical_json_bytes(payload: object) -> bytes:
     return (
         json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False) + "\n"
@@ -2430,6 +2593,368 @@ def _rewrite_robustness_cell_fixture(workspace: Path, evidence: dict[str, object
     registry["logical_judgment_count"] = evidence["logical_judgment_count"]
     registry["physical_attempt_count"] = evidence["physical_attempt_count"]
     registry_path.write_bytes(_canonical_json_bytes(registry))
+
+
+def test_concurrent_robustness_runs_exact_dynamic_validation_matrix_and_composes_report(
+    tmp_path: Path,
+) -> None:
+    source_dir = _make_validation_report_source(tmp_path, "robustness-dynamic-source")
+    manifest = _dynamic_validation_manifest_for_source(
+        source_dir,
+        output_identity="fixture-dynamic-v1",
+    )
+    adapters, clients = _dynamic_validation_adapters(manifest)
+    workspace = tmp_path / "robustness-dynamic-workspace"
+
+    result = ConcurrentRobustnessStudy().run(manifest, adapters, workspace)
+
+    assert result.status == ConcurrentRobustnessStudyStatus.COMPLETE
+    assert result.logical_provider_attempts == manifest.request_caps.logical_judgment_cap == 960
+    assert result.physical_provider_attempts == 960
+    assert result.study_root == workspace.with_name(f"{workspace.name}.study-root")
+    assert result.report_candidate == workspace.with_name(f"{workspace.name}.report-candidate")
+    assert result.study_root is not None and result.study_root.is_dir()
+    assert result.report_candidate is not None and result.report_candidate.is_dir()
+    assert all(len(client.calls) == manifest.request_caps.logical_judgments_per_cell for client in clients)
+    assert all(
+        adapter.external_request_invocations == 0 and adapter.live_api_triggered is False
+        for adapter in adapters.values()
+        if isinstance(adapter, OpenAICompatibleDecisionAdapter)
+    )
+    assert all(
+        call["reasoning_effort"] == "low" and call["output_token_ceiling"] == 256
+        for client in clients
+        for call in client.calls
+    )
+
+    evidence = _read_json(workspace / "prompt_model_cell_evidence.json")
+    validation = _read_json(result.validation_report)
+    release_evidence = _read_json(result.report_candidate / "release_evidence.json")
+    assert evidence["evidence_profile"] == "deterministic_fixture"
+    assert evidence["cell_count"] == 16
+    assert evidence["logical_judgment_count"] == 960
+    assert evidence["external_request_invocations"] == 0
+    assert evidence["live_api_triggered"] is False
+    assert evidence["production_deploy_eligible"] is False
+    assert validation["counts"]["production_contract_logical_judgments"] == 28_800
+    assert validation["counts"]["reserved_cost_usd"] == 0.0
+    assert validation["checks"]["next_attempt_caps_enforced"] is True
+    assert validation["checks"]["reserved_cost_within_fee_ceiling"] is True
+    assert validation["checks"]["external_request_profile_matches_manifest"] is True
+    assert release_evidence["production_deploy_eligible"] is False
+    assert not any(
+        "shadow" in row
+        for cell in evidence["cells"]
+        for row in cell["terminal_rows"]
+    )
+
+    root_before = {path.name: path.read_bytes() for path in cast(Path, result.study_root).iterdir()}
+    candidate_before = {
+        path.relative_to(cast(Path, result.report_candidate)).as_posix(): path.read_bytes()
+        for path in cast(Path, result.report_candidate).rglob("*")
+        if path.is_file()
+    }
+    resume_adapters, resume_clients = _dynamic_validation_adapters(manifest)
+    resumed = ConcurrentRobustnessStudy().run(manifest, resume_adapters, workspace)
+    assert resumed == result
+    assert all(client.calls == [] for client in resume_clients)
+    assert root_before == {path.name: path.read_bytes() for path in cast(Path, resumed.study_root).iterdir()}
+    assert candidate_before == {
+        path.relative_to(cast(Path, resumed.report_candidate)).as_posix(): path.read_bytes()
+        for path in cast(Path, resumed.report_candidate).rglob("*")
+        if path.is_file()
+    }
+
+    operational = tmp_path / f".{workspace.name}.prompt-model-operational"
+    completed_snapshot = sorted(
+        (operational / "cell-00" / ".primary-only.operational" / CONCURRENT_MESSAGE_EXECUTION_SNAPSHOTS_DIR).glob(
+            "*.json"
+        )
+    )[0]
+    completed_snapshot.write_bytes(completed_snapshot.read_bytes() + b" ")
+    corrupted_adapters, corrupted_clients = _dynamic_validation_adapters(manifest)
+    with pytest.raises(ConcurrentRobustnessError) as captured:
+        ConcurrentRobustnessStudy().run(manifest, corrupted_adapters, workspace)
+    assert captured.value.code == ConcurrentRobustnessErrorCode.WORKSPACE_CORRUPT
+    assert all(client.calls == [] for client in corrupted_clients)
+    assert root_before == {path.name: path.read_bytes() for path in cast(Path, resumed.study_root).iterdir()}
+    assert candidate_before == {
+        path.relative_to(cast(Path, resumed.report_candidate)).as_posix(): path.read_bytes()
+        for path in cast(Path, resumed.report_candidate).rglob("*")
+        if path.is_file()
+    }
+
+
+@pytest.mark.parametrize("corruption", [None, "journal", "identity", "snapshot"])
+def test_concurrent_robustness_dynamic_resumes_closed_cells_and_rejects_mutated_checkpoints(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    corruption: str | None,
+) -> None:
+    source_dir = _make_validation_report_source(tmp_path, f"robustness-resume-{corruption}-source")
+    manifest = _dynamic_validation_manifest_for_source(
+        source_dir,
+        output_identity=f"fixture-resume-{corruption}-v1",
+    )
+    adapters, clients = _dynamic_validation_adapters(manifest)
+    workspace = tmp_path / f"robustness-resume-{corruption}-workspace"
+    original_builder = concurrent_robustness_study_module._build_dynamic_cell_evidence
+    interrupted = False
+
+    def interrupt_after_first_closed_cell(*args: object, **kwargs: object) -> object:
+        nonlocal interrupted
+        evidence = original_builder(*args, **kwargs)
+        if kwargs.get("cell_index") == 0 and not interrupted:
+            interrupted = True
+            raise RuntimeError("injected interruption after first closed cell")
+        return evidence
+
+    monkeypatch.setattr(
+        concurrent_robustness_study_module,
+        "_build_dynamic_cell_evidence",
+        interrupt_after_first_closed_cell,
+    )
+    with pytest.raises(RuntimeError, match="injected interruption"):
+        ConcurrentRobustnessStudy().run(manifest, adapters, workspace)
+    assert len(clients[0].calls) == manifest.request_caps.logical_judgments_per_cell
+    assert all(client.calls == [] for client in clients[1:])
+    monkeypatch.setattr(
+        concurrent_robustness_study_module,
+        "_build_dynamic_cell_evidence",
+        original_builder,
+    )
+
+    operational = tmp_path / f".{workspace.name}.prompt-model-operational"
+    cell_workspace = operational / "cell-00" / ".primary-only.operational"
+    if corruption == "journal":
+        journal_path = cell_workspace / CONCURRENT_MESSAGE_EXECUTION_JOURNAL_JSONL
+        records = journal_path.read_text(encoding="utf-8").splitlines()
+        terminal_index = max(
+            index for index, raw in enumerate(records) if json.loads(raw).get("event_type") == "variant_terminal"
+        )
+        terminal = json.loads(records[terminal_index])
+        terminal["payload"]["terminal_row"]["reason"] = "mutated completed cell"
+        records[terminal_index] = json.dumps(terminal, ensure_ascii=False, sort_keys=True)
+        journal_path.write_text("\n".join(records) + "\n", encoding="utf-8")
+    elif corruption == "identity":
+        identity_path = cell_workspace / CONCURRENT_MESSAGE_EXECUTION_RUN_IDENTITY_JSON
+        identity = _read_json(identity_path)
+        identity["execution_contract"]["cell"]["requested_model"] = "gpt-crossed-model"
+        identity_path.write_text(json.dumps(identity, ensure_ascii=False, sort_keys=True) + "\n", encoding="utf-8")
+    elif corruption == "snapshot":
+        snapshot_path = sorted((cell_workspace / CONCURRENT_MESSAGE_EXECUTION_SNAPSHOTS_DIR).glob("*.json"))[0]
+        snapshot_path.write_bytes(snapshot_path.read_bytes() + b" ")
+
+    resume_adapters, resume_clients = _dynamic_validation_adapters(manifest)
+    if corruption is None:
+        result = ConcurrentRobustnessStudy().run(manifest, resume_adapters, workspace)
+        assert result.status == ConcurrentRobustnessStudyStatus.COMPLETE
+        assert resume_clients[0].calls == []
+        assert all(
+            len(client.calls) == manifest.request_caps.logical_judgments_per_cell
+            for client in resume_clients[1:]
+        )
+    else:
+        with pytest.raises(ConcurrentRobustnessError) as captured:
+            ConcurrentRobustnessStudy().run(manifest, resume_adapters, workspace)
+        assert captured.value.code == ConcurrentRobustnessErrorCode.WORKSPACE_CORRUPT
+        assert all(client.calls == [] for client in resume_clients)
+        assert not (workspace / "prompt_model_cell_evidence.json").exists()
+        assert not workspace.with_name(f"{workspace.name}.study-root").exists()
+
+
+def test_concurrent_robustness_dynamic_budget_guard_stops_before_first_mock_attempt(
+    tmp_path: Path,
+) -> None:
+    source_dir = _make_validation_report_source(tmp_path, "robustness-cap-source")
+    manifest = _dynamic_validation_manifest_for_source(
+        source_dir,
+        output_identity="fixture-cap-v1",
+        fee_ceiling_usd=0.001,
+        input_usd_per_million_tokens=1.0,
+        output_usd_per_million_tokens=1.0,
+    )
+    adapters, clients = _dynamic_validation_adapters(manifest)
+    workspace = tmp_path / "robustness-cap-workspace"
+
+    result = ConcurrentRobustnessStudy().run(manifest, adapters, workspace)
+
+    assert result.status == ConcurrentRobustnessStudyStatus.RESUMABLE
+    assert result.logical_provider_attempts == 0
+    assert result.physical_provider_attempts == 0
+    assert result.study_root is None
+    assert result.report_candidate is None
+    assert all(client.calls == [] for client in clients)
+    assert not (workspace / "prompt_model_cell_evidence.json").exists()
+    assert not workspace.with_name(f"{workspace.name}.study-root").exists()
+    assert not workspace.with_name(f"{workspace.name}.report-candidate").exists()
+    status = _read_json(tmp_path / f".{workspace.name}.prompt-model-operational" / "execution_status.json")
+    assert status["lifecycle"] == "cap_exhausted"
+    assert status["logical_judgments"] == 0
+    assert status["physical_attempts"] == 0
+    assert status["reserved_physical_attempts"] == 3
+    assert status["production_deploy_eligible"] is False
+
+
+def test_concurrent_robustness_dynamic_retries_and_provider_failure_close_accounting(
+    tmp_path: Path,
+) -> None:
+    source_dir = _make_validation_report_source(tmp_path, "robustness-retry-source")
+    manifest = _dynamic_validation_manifest_for_source(
+        source_dir,
+        output_identity="fixture-retry-v1",
+    )
+    adapters, clients = _dynamic_validation_adapters(manifest)
+    observed_model = manifest.prompt_model_cells[1].required_observed_model
+    assert observed_model is not None
+    retry_script: list[ProviderResponseEnvelope | Exception] = [
+        TimeoutError("deterministic validation failure") for _ in range(4)
+    ]
+    retry_script.append(
+        _deterministic_robustness_response(
+            observed_model=observed_model,
+            cell_index=1,
+            logical_index=1,
+        )
+    )
+    retry_script.extend(
+        _deterministic_robustness_response(
+            observed_model=observed_model,
+            cell_index=1,
+            logical_index=logical_index,
+        )
+        for logical_index in range(2, manifest.request_caps.logical_judgments_per_cell)
+    )
+    adapters[manifest.prompt_model_cells[1].cell_id], clients[1] = _dynamic_validation_adapter(
+        manifest,
+        1,
+        responses=retry_script,
+    )
+    workspace = tmp_path / "robustness-retry-workspace"
+
+    result = ConcurrentRobustnessStudy().run(manifest, adapters, workspace)
+
+    assert result.status == ConcurrentRobustnessStudyStatus.COMPLETE
+    assert result.logical_provider_attempts == 960
+    assert result.physical_provider_attempts == 963
+    evidence = _read_json(workspace / "prompt_model_cell_evidence.json")
+    affected_cell = evidence["cells"][1]
+    first, second = affected_cell["terminal_rows"][:2]
+    assert first["terminal_status"] == "provider_failed"
+    assert first["request_invocations"] == 3
+    assert first["provider_response_count"] == 0
+    assert first["successful_decision_count"] == 0
+    assert first["action"] is None
+    assert second["terminal_status"] == "succeeded"
+    assert second["request_invocations"] == 2
+    assert second["provider_response_count"] == 1
+    assert second["successful_decision_count"] == 1
+    first_message_step = affected_cell["step_rows"][0]["messages"][0]
+    assert first["user_id"] in first_message_step["primary_provider_failed_user_ids"]
+    assert first["user_id"] not in first_message_step["primary_positive_user_ids"]
+    analysis = _read_json(cast(Path, result.study_root) / "prompt_model_analysis.json")
+    accounting = analysis["provider_accounting"]["cells"][1]
+    assert accounting["logical_judgments"] == 60
+    assert accounting["physical_attempts"] == 63
+    assert accounting["provider_failures"] == 1
+    assert evidence["external_request_invocations"] == 0
+    assert evidence["live_api_triggered"] is False
+
+
+def test_concurrent_robustness_dynamic_observed_model_drift_fails_without_final_artifact(
+    tmp_path: Path,
+) -> None:
+    source_dir = _make_validation_report_source(tmp_path, "robustness-drift-source")
+    manifest = _dynamic_validation_manifest_for_source(
+        source_dir,
+        output_identity="fixture-drift-v1",
+    )
+    adapters, clients = _dynamic_validation_adapters(manifest)
+    adapters[manifest.prompt_model_cells[0].cell_id], clients[0] = _dynamic_validation_adapter(
+        manifest,
+        0,
+        observed_model="gpt-unqualified-alias",
+    )
+    workspace = tmp_path / "robustness-drift-workspace"
+
+    with pytest.raises(ConcurrentRobustnessError) as captured:
+        ConcurrentRobustnessStudy().run(manifest, adapters, workspace)
+
+    assert captured.value.code == ConcurrentRobustnessErrorCode.WORKSPACE_CORRUPT
+    assert len(clients[0].calls) == 1
+    assert all(client.calls == [] for client in clients[1:])
+    assert all(
+        adapter.external_request_invocations == 0
+        for adapter in adapters.values()
+        if isinstance(adapter, OpenAICompatibleDecisionAdapter)
+    )
+    assert not (workspace / "prompt_model_cell_evidence.json").exists()
+    assert not workspace.with_name(f"{workspace.name}.study-root").exists()
+    assert not workspace.with_name(f"{workspace.name}.report-candidate").exists()
+
+
+def test_concurrent_robustness_dynamic_preflight_rejects_all_map_and_identity_mismatches_before_calls(
+    tmp_path: Path,
+) -> None:
+    source_dir = _make_validation_report_source(tmp_path, "robustness-preflight-source")
+    manifest = _dynamic_validation_manifest_for_source(
+        source_dir,
+        output_identity="fixture-preflight-v1",
+    )
+    canonical_ids = [cell.cell_id for cell in manifest.prompt_model_cells]
+
+    for corruption in (
+        "missing",
+        "extra",
+        "wrong_prompt_hash",
+        "wrong_prompt",
+        "wrong_model",
+        "reused_adapter",
+        "cached_adapter",
+        "unclosed_client",
+        "used_store",
+    ):
+        adapters, clients = _dynamic_validation_adapters(manifest)
+        if corruption == "missing":
+            adapters.pop(canonical_ids[-1])
+        elif corruption == "extra":
+            adapters["extra::cell"] = adapters[canonical_ids[-1]]
+        elif corruption == "wrong_prompt_hash":
+            adapter = cast(OpenAICompatibleDecisionAdapter, adapters[canonical_ids[0]])
+            request_contract = adapter.request_contract
+            object.__setattr__(request_contract, "prompt_canonical_hash", "sha256:" + "0" * 64)
+        elif corruption == "wrong_prompt":
+            adapters[canonical_ids[0]], adapters[canonical_ids[4]] = (
+                adapters[canonical_ids[4]],
+                adapters[canonical_ids[0]],
+            )
+        elif corruption == "wrong_model":
+            adapters[canonical_ids[0]], adapters[canonical_ids[1]] = (
+                adapters[canonical_ids[1]],
+                adapters[canonical_ids[0]],
+            )
+        elif corruption == "reused_adapter":
+            adapters[canonical_ids[1]] = adapters[canonical_ids[0]]
+        elif corruption == "cached_adapter":
+            adapters[canonical_ids[0]] = CachedDecisionAdapter(
+                adapters[canonical_ids[0]],
+                InMemoryDecisionCache(),
+                prompt_version=manifest.prompt_model_cells[0].prompt_version,
+            )
+        elif corruption == "unclosed_client":
+            cast(OpenAICompatibleDecisionAdapter, adapters[canonical_ids[0]]).client = cast(
+                Any,
+                _SequencedEnvelopeClient([]),
+            )
+        else:
+            cast(OpenAICompatibleDecisionAdapter, adapters[canonical_ids[0]]).request_invocations = 1
+
+        output = tmp_path / f"robustness-preflight-{corruption}"
+        with pytest.raises(ConcurrentRobustnessError) as captured:
+            ConcurrentRobustnessStudy().run(manifest, adapters, output)
+        assert captured.value.code == ConcurrentRobustnessErrorCode.UNSUPPORTED_ADAPTERS
+        assert not output.exists()
+        assert all(client.calls == [] for client in clients)
 
 
 def test_concurrent_robustness_complete_result_can_precede_report_candidate(tmp_path: Path) -> None:
@@ -2942,10 +3467,46 @@ def test_concurrent_robustness_manifest_rejects_noncanonical_weights_and_cells(t
     static_v1_manifest = ConcurrentRobustnessManifest.model_validate(static_v1_payload)
     assert all(cell.required_observed_model is None for cell in static_v1_manifest.prompt_model_cells)
 
+    dynamic_manifest = _dynamic_validation_manifest_for_source(
+        source_dir,
+        output_identity="fixture-manifest-dynamic-v1",
+    )
+    dynamic_payload = dynamic_manifest.model_dump(mode="json")
+    missing_qualification = json.loads(json.dumps(dynamic_payload))
+    missing_qualification["dynamic_execution"]["qualifications"].pop()
+    with pytest.raises(ValueError, match="qualifications must cover four models"):
+        ConcurrentRobustnessManifest.model_validate(missing_qualification)
 
-def test_concurrent_robustness_static_study_is_offline_hashed_and_resumable(tmp_path: Path) -> None:
+    crossed_qualification = json.loads(json.dumps(dynamic_payload))
+    crossed_qualification["dynamic_execution"]["qualifications"][0]["required_observed_model"] = (
+        "gpt-5.4-mini-unqualified-alias"
+    )
+    with pytest.raises(ValueError, match="qualification observed identity is crossed"):
+        ConcurrentRobustnessManifest.model_validate(crossed_qualification)
+
+    missing_authorization = json.loads(json.dumps(dynamic_payload))
+    missing_authorization["dynamic_execution"] = None
+    supplied_without_execution = ConcurrentRobustnessManifest.model_validate(missing_authorization)
+    adapters, clients = _dynamic_validation_adapters(dynamic_manifest)
+    with pytest.raises(ConcurrentRobustnessError) as captured:
+        ConcurrentRobustnessStudy().run(
+            supplied_without_execution,
+            adapters,
+            tmp_path / "manifest-missing-authorization-workspace",
+        )
+    assert captured.value.code == ConcurrentRobustnessErrorCode.UNSUPPORTED_ADAPTERS
+    assert all(client.calls == [] for client in clients)
+
+
+def test_concurrent_robustness_static_study_is_offline_hashed_and_resumable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     source_dir = _make_validation_report_source(tmp_path, "robustness-static-source")
-    manifest = _robustness_manifest_for_source(source_dir, output_identity="fixture-static-v1")
+    manifest = _dynamic_validation_manifest_for_source(source_dir, output_identity="fixture-static-v1")
+    monkeypatch.setenv("LLM_ABM_RUN_LIVE_LLM", "1")
+    monkeypatch.setenv("OPENAI_API_KEY", "present-but-static-path-must-ignore-it")
+    monkeypatch.setenv("GITHUB_LABELS", "ready-for-agent")
     output_dir = tmp_path / "robustness-static-workspace"
     source_before = {path.name: path.read_bytes() for path in source_dir.iterdir() if path.is_file()}
 

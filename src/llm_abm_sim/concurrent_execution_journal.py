@@ -74,8 +74,9 @@ def _build_primary_only_concurrent_execution_run_identity(
     dataset_dir: str | Path,
     primary_provider_metadata: Mapping[str, Any],
     prompt_contract: Mapping[str, Any],
+    execution_contract: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    return _build_concurrent_execution_run_identity(
+    identity = _build_concurrent_execution_run_identity(
         output_target=output_target,
         operational_workspace=operational_workspace,
         configuration_snapshot=configuration_snapshot,
@@ -85,6 +86,16 @@ def _build_primary_only_concurrent_execution_run_identity(
         provider_contract={"primary": dict(safe_data(primary_provider_metadata))},
         prompt_contract=prompt_contract,
     )
+    if execution_contract is None:
+        return identity
+    identity_body = {key: value for key, value in identity.items() if key not in {"run_id", "identity_hash"}}
+    identity_body["execution_contract"] = dict(safe_data(execution_contract))
+    identity_hash = _sha256_text(_canonical_json(identity_body))
+    return {
+        **identity_body,
+        "run_id": f"concurrent-execution-{identity_hash[:16]}",
+        "identity_hash": identity_hash,
+    }
 
 
 def _build_concurrent_execution_run_identity(

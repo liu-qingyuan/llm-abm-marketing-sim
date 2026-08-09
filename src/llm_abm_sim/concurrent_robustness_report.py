@@ -297,6 +297,68 @@ def _compose_concurrent_robustness_report_candidate(
     return destination
 
 
+def _validate_concurrent_robustness_report_candidate(
+    *,
+    formal_root: Path,
+    study_root: Path,
+    workspace_root: Path,
+    manifest: ConcurrentRobustnessManifest,
+    manifest_payload: bytes,
+    manifest_sha256: str,
+    candidate_dir: str | Path,
+) -> Path:
+    """Reproduce and validate an already-published candidate without rewriting it."""
+    candidate = Path(candidate_dir)
+    try:
+        absolute = Path(os.path.abspath(candidate))
+        resolved = candidate.resolve(strict=True)
+        if absolute != resolved or candidate.is_symlink() or not resolved.is_dir():
+            raise ValueError("candidate is not a real directory")
+        protected = tuple(root.resolve(strict=True) for root in (formal_root, study_root, workspace_root))
+        if any(
+            resolved == root or resolved.is_relative_to(root) or root.is_relative_to(resolved)
+            for root in protected
+        ):
+            raise ValueError("candidate overlaps a protected source root")
+        formal = close_concurrent_message_artifacts(formal_root)
+        formal_manifest_hash = formal.artifact_hashes.get(CONCURRENT_MESSAGE_ARTIFACT_MANIFEST_JSON)
+        if formal_manifest_hash is None or formal_manifest_hash != manifest.source.manifest_sha256:
+            raise ValueError("historical Formal source is crossed with the robustness manifest")
+        closed_study = _close_study_root(
+            study_root,
+            manifest=manifest,
+            manifest_payload=manifest_payload,
+            manifest_sha256=manifest_sha256,
+            formal_manifest_sha256=formal_manifest_hash,
+        )
+        formal_before = dict(formal.artifact_hashes)
+        study_before = dict(closed_study.file_hashes)
+        rows = _build_report_rows(closed_study, manifest)
+        report_payload = _build_report_payload(
+            formal=formal,
+            study=closed_study,
+            manifest=manifest,
+            manifest_sha256=manifest_sha256,
+            rows=rows,
+        )
+        expected_payloads = _candidate_payloads(
+            formal=formal,
+            study=closed_study,
+            manifest=manifest,
+            manifest_sha256=manifest_sha256,
+            rows=rows,
+            report_payload=report_payload,
+        )
+        _validate_candidate(resolved, expected_payloads=expected_payloads, expected_row_counts=rows.counts())
+        _assert_formal_unchanged(formal, formal_before)
+        _assert_study_unchanged(closed_study, study_before)
+        return resolved
+    except (_RobustnessReportPathError, _RobustnessReportConflictError, _RobustnessReportClosureError):
+        raise
+    except (FileNotFoundError, OSError, TypeError, ValueError, json.JSONDecodeError) as exc:
+        raise _RobustnessReportClosureError("existing robustness report candidate failed closure") from exc
+
+
 def _validate_destination(destination: Path, *, protected_roots: Sequence[Path]) -> Path:
     if ".." in destination.parts:
         raise _RobustnessReportPathError("robustness report destination must not contain '..'")

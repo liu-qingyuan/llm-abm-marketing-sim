@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import hashlib
 import json
 import math
 import shutil
@@ -49,6 +50,7 @@ from .final_research import (
     _RuntimeDecisionAttempt,
     _safe_runtime_rows,
 )
+from .prompt_contracts import CONCURRENT_ROBUSTNESS_PROMPT_REGISTRY
 from .prompt_field_summary import (
     CONCURRENT_MESSAGE_PRIMARY_PROMPT_VERSION,
     CONCURRENT_MESSAGE_SHADOW_PROMPT_VERSION,
@@ -672,10 +674,14 @@ def _shadow_variant_profile(user: ResearchUser) -> UserProfile:
     )
 
 
-def _primary_variant_context(plan: _PairExecutionPlan) -> _VariantDecisionContext:
+def _primary_variant_context(
+    plan: _PairExecutionPlan,
+    *,
+    prompt_token: str = CONCURRENT_MESSAGE_PRIMARY_PROMPT_VERSION,
+) -> _VariantDecisionContext:
     return _VariantDecisionContext(
         decision_variant="primary",
-        prompt_token=CONCURRENT_MESSAGE_PRIMARY_PROMPT_VERSION,
+        prompt_token=prompt_token,
         post=plan.message.as_post(),
         profile=_primary_variant_profile(plan.user),
         peer_context=PeerContext(),
@@ -1807,9 +1813,10 @@ class _ConcurrentRuntimeKernel:
             if event_type in {"run_started", "run_finalized", "run_published"}:
                 continue
             batch_snapshot_hash = _as_str(record.get("batch_snapshot_hash"))
-            active_batch = batches_by_snapshot_hash.get(batch_snapshot_hash)
-            if active_batch is None or active_batch is not self.state.active_batch:
+            replayed_active_batch = batches_by_snapshot_hash.get(batch_snapshot_hash)
+            if replayed_active_batch is None or replayed_active_batch is not self.state.active_batch:
                 raise ValueError(f"event {event_type} references a non-active batch snapshot")
+            active_batch = replayed_active_batch
             if event_type == "batch_committed":
                 payload = _require_mapping(record.get("payload"), "event payload")
                 committed_user_ids = self._string_list(
@@ -2956,14 +2963,26 @@ class _PrimaryOnlyConcurrentRuntimeConsumer:
         self,
         config: ConcurrentMessageExperimentConfig,
         primary_adapter: LLMDecisionAdapter,
+        *,
+        expected_prompt_version: str = CONCURRENT_MESSAGE_PRIMARY_PROMPT_VERSION,
+        execution_contract: Mapping[str, object] | None = None,
+        expected_sample_identity: str | None = None,
+        before_logical_judgment: Callable[[Mapping[str, object]], None] | None = None,
+        validate_terminal: Callable[[Mapping[str, object]], None] | None = None,
+        after_logical_judgment: Callable[[Mapping[str, object]], None] | None = None,
     ) -> None:
         self.config = config
         self.primary_adapter = primary_adapter
+        self.expected_prompt_version = expected_prompt_version
+        self.execution_contract = dict(safe_data(execution_contract)) if execution_contract is not None else None
+        self.expected_sample_identity = expected_sample_identity
+        self.before_logical_judgment = before_logical_judgment
+        self.validate_terminal = validate_terminal
+        self.after_logical_judgment = after_logical_judgment
         prompt_version = _adapter_prompt_version(primary_adapter)
-        if prompt_version != CONCURRENT_MESSAGE_PRIMARY_PROMPT_VERSION:
+        if prompt_version != expected_prompt_version:
             raise ValueError(
-                f"Primary-only adapter prompt_version must be {CONCURRENT_MESSAGE_PRIMARY_PROMPT_VERSION}, "
-                f"got {prompt_version}"
+                f"Primary-only adapter prompt_version must be {expected_prompt_version}, got {prompt_version}"
             )
 
     def run_new(self, output_dir: str | Path) -> _PrimaryOnlyConcurrentRuntimeResult:
@@ -3014,14 +3033,42 @@ class _PrimaryOnlyConcurrentRuntimeConsumer:
             raise ValueError("output_dir must be outside dataset_dir")
         workspace = derive_concurrent_execution_workspace(output_path)
         prepared = _prepare_concurrent_runtime_inputs(self.config)
-        provider_metadata = _adapter_safe_metadata(self.primary_adapter, ProviderLLMConfig())
+        if self.expected_sample_identity is not None:
+            sample_identity = hashlib.sha256(
+                json.dumps(
+                    prepared.cohort.sample_user_ids,
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                ).encode("utf-8")
+            ).hexdigest()
+            if sample_identity != self.expected_sample_identity:
+                raise ValueError("Primary-only prepared sample identity does not match the frozen study sample")
+        provider_metadata = json.loads(
+            json.dumps(
+                _adapter_safe_metadata(self.primary_adapter, ProviderLLMConfig()),
+                ensure_ascii=False,
+            )
+        )
         configuration_snapshot = self.config.snapshot(
             sampling_status=VALIDATION_RUN_STATUS,
             production_deploy_eligible=False,
         )
         configuration_snapshot["runtime_consumer"] = "primary_only"
+        configuration_snapshot["primary_prompt_version"] = self.expected_prompt_version
         message_snapshot = [message.model_dump(mode="json") for message in self.config.messages]
-        prompt_contract = {"primary": _variant_prompt_contract_summary()["primary"]}
+        try:
+            prompt_contract = {
+                "primary": json.loads(
+                    json.dumps(
+                        CONCURRENT_ROBUSTNESS_PROMPT_REGISTRY.resolve(
+                            self.expected_prompt_version
+                        ).audit_record(),
+                        ensure_ascii=False,
+                    )
+                )
+            }
+        except ValueError:
+            prompt_contract = {"primary": _variant_prompt_contract_summary()["primary"]}
         identity = _build_primary_only_concurrent_execution_run_identity(
             output_target=output_path,
             operational_workspace=workspace,
@@ -3031,6 +3078,7 @@ class _PrimaryOnlyConcurrentRuntimeConsumer:
             dataset_dir=self.config.dataset_dir,
             primary_provider_metadata=provider_metadata,
             prompt_contract=prompt_contract,
+            execution_contract=self.execution_contract,
         )
         return output_path, workspace, prepared, provider_metadata, identity
 
@@ -3064,10 +3112,22 @@ class _PrimaryOnlyConcurrentRuntimeConsumer:
                 if kernel.active_batch is None:
                     kernel.plan_batch()
                 for plan in kernel.pending_plans():
-                    kernel.start_pair(plan)
                     terminal_evidence = kernel.terminal_evidence(plan, "primary")
                     if terminal_evidence is None:
-                        context = _primary_variant_context(plan)
+                        judgment_identity = {
+                            "pair_id": plan.pair_id,
+                            "pair_schedule_position": plan.pair_schedule_position,
+                            "time_step": plan.time_step,
+                            "message_id": plan.message.message_id,
+                            "user_id": plan.user.user_id,
+                        }
+                        if self.before_logical_judgment is not None:
+                            self.before_logical_judgment(judgment_identity)
+                        kernel.start_pair(plan)
+                        context = _primary_variant_context(
+                            plan,
+                            prompt_token=self.expected_prompt_version,
+                        )
                         attempt, accounting = _execute_runtime_variant(
                             adapter=self.primary_adapter,
                             context=context,
@@ -3087,13 +3147,18 @@ class _PrimaryOnlyConcurrentRuntimeConsumer:
                             accounting=accounting,
                             default_provider_metadata=provider_metadata,
                         )
+                        if self.validate_terminal is not None:
+                            self.validate_terminal(variant_evidence)
                         kernel.register_terminal(
                             plan=plan,
                             decision_variant="primary",
                             terminal_row=terminal_row,
                             variant_evidence=variant_evidence,
                         )
+                        if self.after_logical_judgment is not None:
+                            self.after_logical_judgment(variant_evidence)
                     else:
+                        kernel.start_pair(plan)
                         terminal_row, _ = terminal_evidence
                     kernel.close_primary_pair(plan, self._primary_result_row(plan, terminal_row))
                 commit = kernel.commit_primary_batch()

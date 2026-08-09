@@ -44,7 +44,7 @@ personalized_delivery_score
 | `PlatformEnvironment` / ranking | 每条 message 的 candidates、delivery capacity、Top20、exposure gate 和稳定 tie-break |
 | Decision Adapter | 对已曝光 `user × message` pair 生成 Primary/Shadow typed decisions；不选择 exposure |
 | `ConcurrentCampaignDiagnostics` | 从 persisted candidate/pair rows 重建 funnel、allocation、response、feedback 和 sensitivity diagnostics |
-| `ConcurrentRobustnessStudy` | 通过唯一公开 `run(...)` Interface 验证显式 hashed source，生成 19-point Ranking Weight workspace，在同一 resume path 消费 registry-authenticated 16-cell evidence、关闭 immutable study root，并可用显式 `report_destination` 调用私有双 lineage composer |
+| `ConcurrentRobustnessStudy` | 通过唯一公开 `run(...)` Interface 验证显式 hashed source，生成 19-point Ranking Weight workspace；在 exact 16-cell Adapter map 与 execution contract 通过全量 preflight 后运行或恢复独立 Primary-only cells，关闭 immutable study root，并自动调用私有双-lineage composer 生成独立 candidate |
 | Report Module | typed closure、report payload、approved downloads、manifest 和 read-only rebuild |
 | Editorial candidate | bilingual presentation grouping、五个 mechanism media derivatives、run evidence surface 和 canonical report bytes |
 | Release validator/deploy | 显式 contract、source directory、release id、candidate health、atomic `current` 和公网验收 |
@@ -57,11 +57,13 @@ Diagnostics 的 source of truth 是同一 run 的 persisted candidate rows 与 p
 
 首次 `adapters_by_cell=None` 调用先通过现有 Concurrent artifact closure 验证 source，再只使用 frozen candidate 与 batch feedback evidence 重算每条 message、每批次的 Top K ranking；eligible set、feedback signal 和传播状态保持冻结。输出包含 Jaccard distance、rank delta、entered/exited users、first divergence 与 message-level mean/AUC，不调用 Provider、不打开 processed dataset，也不改写 source。结果状态为 `ready_for_human`，只形成 manifest、weight evidence、validation 和 hash registry 四个文件组成的 private resumable workspace。
 
-同一 workspace 可以由后续 producer 以两个 additive artifacts 补充完整 cell evidence 与 registry。当前 consumer 只接受 non-deployable deterministic fixture profile：必须恰好包含 canonical order 的 `4 Prompt × 4 model`、三 message、scaled complete schedule 与每个 exposure 的 Primary terminal row；Prompt hash、requested/observed model、request contract、source/sample/message/ranking identity，以及 logical/physical/step accounting 必须全部闭合。缺失或额外 cell、duplicate pair、mixed observed model、crossed identity、missing terminal、Provider failure feedback 或 accounting 不一致都会在 finalization 前失败，源 workspace 保持不变。
+提供 Adapter map 时，Manifest 还必须冻结 dynamic execution profile、authorization artifact、四个 requested/required-observed model qualification artifacts、observed-model policy、pricing snapshot、input/output token ceilings、stopping rule 与 logical/physical/fee caps。Map 必须恰好覆盖 canonical order 的 `4 Prompt × 4 model`；每个 cell 使用独立、无 cache 的 fresh Adapter。deterministic validation profile 只接受显式 injected mock client，要求 `external_request_invocations=0`，不能充当 live authorization；Formal profile 则要求独立 live authorization 和 provider-observed qualification。所有 cell 的 key、Prompt hash、provider/wire/model/reasoning/timeout/retry/store identity 会在首次 `decide()` 前一次性预检。
+
+每个 cell 在独立 sibling operational scope 中复用私有 Primary-only kernel，从同一 dataset/sample/graph/messages/seeds 与 baseline ranking policy 启动。Journal identity 绑定 Manifest、source、sample、message、cell、request、authorization、pricing 和 store policy；append-only journal 保存 batch-start snapshot、Primary terminal 与 commit barrier。运行会在每个 logical judgment 前保守预留最多 `max_retries + 1` 个 physical attempts 与 token-ceiling cost，若下一次可能越过 logical、physical 或 fee cap，则返回 `resumable` 且不调用 Adapter。完成 cell 可直接 replay，不重放 terminal；crossed identity、损坏 journal、变更 completed cell 或 observed-model drift 均失败关闭。
 
 通过验证后，同一个 `run(...)` resume path 私下计算 Batch 0 shared-seed strict paired `engage` panel、secondary action/probability/confidence/disagreement、逐 message 双 engagement-rate 分母、Provider failures、audience overlap/first divergence 和 campaign-deduplicated positive-user growth。Prompt、model、message 都按 fixed categorical factors 汇总；planned model contrasts、Prompt × model interaction 和 user-blocked deterministic bootstrap 只条件于 fixed sample、fixed graph 和 one realized path。阈值以下只标为 `small_observed_difference`，claim audit 不允许越界研究结论。
 
-分析 artifacts、cell evidence、validation、claim audit、Manifest 和全量 artifact hashes 通过 sibling staging 原子关闭为 immutable study root；源 workspace 保持可审计。未提供 `report_destination` 时，complete Result 继续保持 `production_deploy_eligible=false`、`report_candidate=None`，study root 不包含 `report.html`。在同一 complete resume 调用中显式提供全新 destination 时，私有 composer 先重新执行未修改的 Concurrent Formal closure，再独立验证 study root 的 schema、manifest、row counts、source links 和 hashes；随后从两条只读 lineage 生成 companion JSON/CSV、增量页面和 `production_deploy_eligible=false` release evidence，经 sibling staging 验证后原子发布独立 candidate。candidate 保留原页面的 mechanism、Run Evidence、field lineage、Demographic Shadow 与 Primary + Shadow barrier，并把旧 Shadow 明确标为历史 Formal evidence；新增 Weight small multiples 和每个 model 最多四条 Prompt series，不改变历史 renderer 或单-root rebuild。任何非 `None` Adapter map 继续在首次调用前失败；真实 16-cell producer、Provider authorization 和 canonical release 仍属于后续独立 operational closure。
+16 cells 全部闭合后，producer 才把完整 cell evidence 与 registry 加入 private workspace；缺失 terminal 永远不会伪装成 `ignore` 或 partial final artifact。分析 artifacts、cell evidence、validation、claim audit、Manifest 和全量 artifact hashes 通过 sibling staging 原子关闭为 immutable study root。动态调用随后自动使用显式 destination（未提供时使用该 output identity 的 deterministic sibling candidate）调用私有 composer：先重新执行未修改的 Concurrent source closure，再独立验证 study root 的 schema、manifest、row counts、source links 和 hashes；随后从两条只读 lineage 生成 companion JSON/CSV、增量页面和 `production_deploy_eligible=false` release evidence。candidate 保留原页面的 mechanism、Run Evidence、field lineage、Demographic Shadow 与 Primary + Shadow barrier，并把旧 Shadow 明确标为历史 Formal evidence；新增 Weight small multiples 和每个 model 最多四条 Prompt series，不改变历史 renderer 或 single-root rebuild。重复 dynamic resume 会验证而不重写既有 root/candidate。
 
 ## Prompt–Model request contract
 
@@ -72,7 +74,7 @@ Robustness 请求侧是 additive Module，不改变现有 Concurrent Formal runt
 - `provider-request-contract-v1` 把 Prompt hash、requested model、Responses wire、显式 `reasoning_effort=low`、output-token ceiling、structured schema hash、timeout/retry 和 sampling 参数省略固定在同一请求合同；response accounting 仍独立记录 observed model 与 usage。
 - 未配置 request settings 的历史 Adapter 保持原调用形状和 safe metadata。P1–P3 或显式 Robustness request 合同不完整时在 Provider 调用前 fail closed。
 
-该 Module 只建立后续 16-cell study 可复用的请求接缝；它不执行模型 qualification、动态 cells、Provider live call、Formal Run、报告发布或 canonical deployment。
+该请求 Module 现在由 16-cell producer 通过 injected Adapter 接缝复用，但不自行发现 credential、选择 Provider/model、扫描 latest source 或构造 live fallback。自动化 acceptance 只运行 deterministic validation profile；它不执行模型 qualification、真实 28,800-judgment matrix、Provider network call、Formal Run、canonical deployment 或 release gate 绕过。
 
 ## Report 与 durable execution
 
@@ -92,7 +94,7 @@ Robustness 请求侧是 additive Module，不改变现有 Concurrent Formal runt
 
 普通 run 与 `contract-protected` Formal/release run 都遵守同一重建语义：前者可以删除后重建，后者仍必须按显式 contract 保留和验证；`contract-protected` Formal/release roots 不能仅按目录类型推断删除。workspace 或 staging 的存在不能替代 journal replay、source closure、release validation 或 deployment authorization。
 
-私有 runtime kernel 对 paired 与 Primary-only 使用显式 terminal contract：既有 paired journal 仍要求同一 `user × message` 的 Primary、Shadow 都 terminal 后才关闭；Primary-only workspace 只记录 Primary，但必须等同批三条 message 的全部已选 pairs terminal 后才能 commit。两者都从已验证 journal 恢复；workspace identity、batch snapshot 或 terminal evidence 不一致时失败，不猜测缺失状态。
+私有 runtime kernel 对 paired 与 Primary-only 使用显式 terminal contract：既有 paired journal 仍要求同一 `user × message` 的 Primary、Shadow 都 terminal 后才关闭；Primary-only workspace 只记录 Primary，但必须等同批三条 message 的全部已选 pairs terminal 后才能 commit。Robustness operational root 额外持有 execution identity 与 cap status，每个 cell journal 仍由 kernel 拥有；两者都从已验证 journal 恢复，workspace identity、batch snapshot、completed cell 或 terminal evidence 不一致时失败，不猜测缺失状态。Formal live cell 若在一次 external attempt 中断且 physical count 尚需 reconciliation，只返回 private resumable evidence，不自动重放未知请求。
 
 ## LLM visibility 与 evidence
 

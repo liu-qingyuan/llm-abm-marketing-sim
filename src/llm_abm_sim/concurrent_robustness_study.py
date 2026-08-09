@@ -13,10 +13,11 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from .concurrent_execution_journal import ConcurrentExecutionJournal, derive_concurrent_execution_workspace
 from .concurrent_message_experiment import (
     CONCURRENT_MESSAGE_CANDIDATE_FIELDS,
     CONCURRENT_MESSAGE_ENGAGED_NEIGHBOR_FORMULA,
@@ -24,6 +25,9 @@ from .concurrent_message_experiment import (
     CONCURRENT_MESSAGE_PRODUCTION_HORIZON,
     CONCURRENT_MESSAGE_PRODUCTION_SAMPLE_SIZE,
     CONCURRENT_MESSAGE_RANKING_FORMULA,
+    ConcurrentMessageExperimentConfig,
+    _PrimaryOnlyConcurrentRuntimeConsumer,
+    _PrimaryOnlyConcurrentRuntimeResult,
 )
 from .concurrent_message_report import (
     CONCURRENT_MESSAGE_ARTIFACT_MANIFEST_SCHEMA,
@@ -35,11 +39,18 @@ from .concurrent_robustness_report import (
     _RobustnessReportClosureError,
     _RobustnessReportConflictError,
     _RobustnessReportPathError,
+    _validate_concurrent_robustness_report_candidate,
 )
 from .decision import LLMDecisionAdapter
 from .final_research import FORMAL_RUN_STATUS, SEED_FIRST_SAMPLING_METHOD, VALIDATION_RUN_STATUS
 from .prompt_contracts import CONCURRENT_ROBUSTNESS_PROMPT_REGISTRY
-from .provider_request_contract import OMITTED_SAMPLING_PARAMETERS, STRUCTURED_OUTPUT_SCHEMA_HASH
+from .provider_accounting import ProviderResponseEnvelope
+from .provider_request_contract import (
+    OMITTED_SAMPLING_PARAMETERS,
+    STRUCTURED_OUTPUT_SCHEMA_HASH,
+    ProviderRequestContract,
+)
+from .providers.openai_compatible import OpenAICompatibleDecisionAdapter
 
 __all__ = [
     "ConcurrentRobustnessError",
@@ -58,6 +69,10 @@ CONCURRENT_ROBUSTNESS_TIE_BREAK_TOKEN = "score-desc-user-id-asc-v1"
 CONCURRENT_ROBUSTNESS_SCHEDULE_TOKEN = "shared-seed-launch-then-per-message-top-k-v1"
 CONCURRENT_ROBUSTNESS_SCORE_PRECISION_TOKEN = "binary64-full-precision-no-rounding-v1"
 CONCURRENT_ROBUSTNESS_DECISION_STORE_POLICY = "fresh-per-cell-no-cache-v1"
+CONCURRENT_ROBUSTNESS_OBSERVED_MODEL_POLICY = "exact-required-model-per-response-v1"
+CONCURRENT_ROBUSTNESS_STOPPING_RULE = "reject-next-attempt-before-cap-v1"
+CONCURRENT_ROBUSTNESS_VALIDATION_ADAPTER_IDENTITY = "openai-compatible-injected-client-v1"
+CONCURRENT_ROBUSTNESS_LIVE_ADAPTER_IDENTITY = "openai-compatible-live-client-v1"
 
 _ROBUSTNESS_MESSAGE_IDS = ("message_1", "message_2", "message_3")
 _ROBUSTNESS_MODELS = (
@@ -352,6 +367,141 @@ class _RequestCaps(_FrozenContractModel):
         return value
 
 
+class _ExecutionAuthorization(_FrozenContractModel):
+    schema_version: Literal["concurrent-robustness-execution-authorization-v1"]
+    authorization_kind: Literal["deterministic_validation_fixture", "formal_live_provider"]
+    authorization_reference: str = Field(min_length=1, max_length=240)
+    artifact_sha256: str
+    source_manifest_sha256: str
+    output_identity: str
+    allowed_cell_ids: tuple[str, ...]
+    logical_judgment_cap: int = Field(ge=1)
+    physical_attempt_cap: int = Field(ge=1)
+    fee_ceiling_usd: float = Field(ge=0.0)
+    external_requests_allowed: bool
+    production_deploy_eligible: Literal[False]
+
+    @model_validator(mode="after")
+    def _validate_authorization(self) -> _ExecutionAuthorization:
+        if not _SHA256_PATTERN.fullmatch(self.artifact_sha256) or not _SHA256_PATTERN.fullmatch(
+            self.source_manifest_sha256
+        ):
+            raise ValueError("execution authorization hashes must be 64 lowercase hexadecimal characters")
+        if not math.isfinite(self.fee_ceiling_usd):
+            raise ValueError("execution authorization fee ceiling must be finite")
+        if len(self.allowed_cell_ids) != len(set(self.allowed_cell_ids)):
+            raise ValueError("execution authorization cell identities must be unique")
+        return self
+
+
+class _ModelQualification(_FrozenContractModel):
+    schema_version: Literal["concurrent-robustness-model-qualification-v1"]
+    qualification_kind: Literal["deterministic_validation_fixture", "provider_observed"]
+    artifact_reference: str = Field(min_length=1, max_length=240)
+    artifact_sha256: str
+    provider: str
+    requested_model: str
+    required_observed_model: str
+    status: Literal["qualified"]
+
+    @model_validator(mode="after")
+    def _validate_qualification(self) -> _ModelQualification:
+        if not _SHA256_PATTERN.fullmatch(self.artifact_sha256):
+            raise ValueError("model qualification artifact hash is invalid")
+        if not _MODEL_ID_PATTERN.fullmatch(self.requested_model) or not _MODEL_ID_PATTERN.fullmatch(
+            self.required_observed_model
+        ):
+            raise ValueError("model qualification identities are invalid")
+        return self
+
+
+class _ModelPricing(_FrozenContractModel):
+    requested_model: str
+    input_usd_per_million_tokens: float = Field(ge=0.0)
+    output_usd_per_million_tokens: float = Field(ge=0.0)
+
+    @model_validator(mode="after")
+    def _validate_pricing(self) -> _ModelPricing:
+        if not _MODEL_ID_PATTERN.fullmatch(self.requested_model):
+            raise ValueError("pricing requested model identity is invalid")
+        if not math.isfinite(self.input_usd_per_million_tokens) or not math.isfinite(
+            self.output_usd_per_million_tokens
+        ):
+            raise ValueError("pricing rates must be finite")
+        return self
+
+
+class _PricingSnapshot(_FrozenContractModel):
+    schema_version: Literal["concurrent-robustness-pricing-snapshot-v1"]
+    snapshot_reference: str = Field(min_length=1, max_length=240)
+    snapshot_sha256: str
+    currency: Literal["USD"]
+    input_token_ceiling: int = Field(ge=1)
+    model_pricing: tuple[_ModelPricing, ...]
+
+    @model_validator(mode="after")
+    def _validate_snapshot(self) -> _PricingSnapshot:
+        if not _SHA256_PATTERN.fullmatch(self.snapshot_sha256):
+            raise ValueError("pricing snapshot hash is invalid")
+        requested_models = tuple(row.requested_model for row in self.model_pricing)
+        if requested_models != _ROBUSTNESS_MODELS:
+            raise ValueError("pricing snapshot must cover the four requested models in canonical order")
+        return self
+
+    def maximum_attempt_cost(self, *, requested_model: str, output_token_ceiling: int) -> float:
+        price = next(row for row in self.model_pricing if row.requested_model == requested_model)
+        return (
+            self.input_token_ceiling * price.input_usd_per_million_tokens
+            + output_token_ceiling * price.output_usd_per_million_tokens
+        ) / 1_000_000.0
+
+
+class _DynamicExecutionContract(_FrozenContractModel):
+    schema_version: Literal["concurrent-robustness-dynamic-execution-v1"]
+    profile: Literal["deterministic_validation", "formal_live"]
+    provider: str
+    adapter_identity: str
+    observed_model_policy: str
+    stopping_rule: str
+    authorization: _ExecutionAuthorization
+    qualifications: tuple[_ModelQualification, ...]
+    pricing_snapshot: _PricingSnapshot
+
+    @model_validator(mode="after")
+    def _validate_execution_contract(self) -> _DynamicExecutionContract:
+        if self.provider != "openai_compatible":
+            raise ValueError("dynamic execution requires the frozen openai_compatible provider")
+        if self.observed_model_policy != CONCURRENT_ROBUSTNESS_OBSERVED_MODEL_POLICY:
+            raise ValueError("dynamic execution observed-model policy is not frozen")
+        if self.stopping_rule != CONCURRENT_ROBUSTNESS_STOPPING_RULE:
+            raise ValueError("dynamic execution stopping rule is not frozen")
+        if tuple(row.requested_model for row in self.qualifications) != _ROBUSTNESS_MODELS:
+            raise ValueError("dynamic execution qualifications must cover four models in canonical order")
+        if len({row.artifact_sha256 for row in self.qualifications}) != len(self.qualifications):
+            raise ValueError("dynamic execution qualification artifacts must be independent")
+        if any(row.provider != self.provider for row in self.qualifications):
+            raise ValueError("dynamic execution qualifications must use the frozen provider")
+        if self.profile == "deterministic_validation":
+            if self.adapter_identity != CONCURRENT_ROBUSTNESS_VALIDATION_ADAPTER_IDENTITY:
+                raise ValueError("validation execution requires the injected-client Adapter identity")
+            if self.authorization.authorization_kind != "deterministic_validation_fixture":
+                raise ValueError("validation execution requires a fixture-only authorization")
+            if self.authorization.external_requests_allowed:
+                raise ValueError("validation execution must forbid external requests")
+            if any(row.qualification_kind != "deterministic_validation_fixture" for row in self.qualifications):
+                raise ValueError("validation execution requires fixture qualification artifacts")
+        else:
+            if self.adapter_identity != CONCURRENT_ROBUSTNESS_LIVE_ADAPTER_IDENTITY:
+                raise ValueError("Formal execution requires the live-client Adapter identity")
+            if self.authorization.authorization_kind != "formal_live_provider":
+                raise ValueError("Formal execution requires an explicit live authorization")
+            if not self.authorization.external_requests_allowed:
+                raise ValueError("Formal execution authorization must explicitly allow external requests")
+            if any(row.qualification_kind != "provider_observed" for row in self.qualifications):
+                raise ValueError("Formal execution requires provider-observed qualification artifacts")
+        return self
+
+
 class _PracticalThresholds(_FrozenContractModel):
     engagement_rate_absolute: float
     decision_probability_absolute: float
@@ -444,6 +594,7 @@ class ConcurrentRobustnessManifest(_FrozenContractModel):
     practical_thresholds: _PracticalThresholds
     authorization_reference: str = Field(min_length=1, max_length=240)
     output_identity: str
+    dynamic_execution: _DynamicExecutionContract | None = None
 
     @field_validator("message_snapshot_sha256")
     @classmethod
@@ -532,6 +683,41 @@ class ConcurrentRobustnessManifest(_FrozenContractModel):
         expected_positive_count = math.ceil(self.sample.sample_size * 0.05)
         if self.practical_thresholds.terminal_unique_positive_user_count != expected_positive_count:
             raise ValueError("terminal positive-user threshold must be five percent of the sample")
+
+        execution = self.dynamic_execution
+        if execution is not None:
+            authorization = execution.authorization
+            canonical_cell_ids = tuple(cell.cell_id for cell in self.prompt_model_cells)
+            if authorization.authorization_reference != self.authorization_reference:
+                raise ValueError("dynamic execution authorization reference is crossed")
+            if authorization.source_manifest_sha256 != self.source.manifest_sha256:
+                raise ValueError("dynamic execution authorization source identity is crossed")
+            if authorization.output_identity != self.output_identity:
+                raise ValueError("dynamic execution authorization output identity is crossed")
+            if authorization.allowed_cell_ids != canonical_cell_ids:
+                raise ValueError("dynamic execution authorization must cover the exact 16 cells")
+            if authorization.logical_judgment_cap != self.request_caps.logical_judgment_cap:
+                raise ValueError("dynamic execution authorization logical cap is crossed")
+            if authorization.physical_attempt_cap != self.request_caps.physical_attempt_cap:
+                raise ValueError("dynamic execution authorization physical cap is crossed")
+            if not math.isclose(
+                authorization.fee_ceiling_usd,
+                self.request_caps.fee_ceiling_usd,
+                rel_tol=0.0,
+                abs_tol=1e-12,
+            ):
+                raise ValueError("dynamic execution authorization fee ceiling is crossed")
+            qualification_by_model = {row.requested_model: row for row in execution.qualifications}
+            for cell in self.prompt_model_cells:
+                qualification = qualification_by_model[cell.requested_model]
+                if cell.required_observed_model is None:
+                    raise ValueError("dynamic execution requires observed-model qualification for every cell")
+                if qualification.required_observed_model != cell.required_observed_model:
+                    raise ValueError("dynamic execution qualification observed identity is crossed")
+            if execution.profile == "deterministic_validation" and self.source.kind != "fixture":
+                raise ValueError("deterministic validation execution requires a fixture source")
+            if execution.profile == "formal_live" and self.source.kind != "formal":
+                raise ValueError("Formal live execution requires a Formal source")
 
         if self.source.kind == "formal":
             if self.sample.sample_size != CONCURRENT_MESSAGE_PRODUCTION_SAMPLE_SIZE:
@@ -759,7 +945,7 @@ class _PromptModelCellEvidence(_FrozenContractModel):
 
 class _CellEvidenceDocument(_FrozenContractModel):
     schema_version: Literal["concurrent-robustness-cell-evidence-v1"]
-    evidence_profile: Literal["deterministic_fixture"]
+    evidence_profile: Literal["deterministic_fixture", "formal_live"]
     manifest_sha256: str
     source_identity: dict[str, object]
     request_contract: _RequestContract
@@ -768,8 +954,8 @@ class _CellEvidenceDocument(_FrozenContractModel):
     cell_count: int = Field(ge=1)
     logical_judgment_count: int = Field(ge=1)
     physical_attempt_count: int = Field(ge=1)
-    external_request_invocations: Literal[0]
-    live_api_triggered: Literal[False]
+    external_request_invocations: int = Field(ge=0)
+    live_api_triggered: bool
     production_deploy_eligible: Literal[False]
     conditional_scope: Literal["fixed-sample-fixed-graph-one-realized-path-per-cell"]
     claim_statements: tuple[str, ...]
@@ -786,6 +972,12 @@ class _CellEvidenceDocument(_FrozenContractModel):
             raise ValueError("cell evidence logical accounting is inconsistent")
         if self.physical_attempt_count != sum(cell.physical_attempt_count for cell in self.cells):
             raise ValueError("cell evidence physical accounting is inconsistent")
+        if self.live_api_triggered != (self.external_request_invocations > 0):
+            raise ValueError("cell evidence live-call state is inconsistent")
+        if self.evidence_profile == "deterministic_fixture" and self.external_request_invocations != 0:
+            raise ValueError("deterministic fixture evidence cannot contain external requests")
+        if self.evidence_profile == "formal_live" and self.external_request_invocations == 0:
+            raise ValueError("Formal live evidence requires external request invocations")
         return self
 
 
@@ -812,7 +1004,7 @@ class _CellWorkspaceRegistry(_FrozenContractModel):
     cell_inventory: tuple[_CellInventoryRow, ...]
     logical_judgment_count: int = Field(ge=1)
     physical_attempt_count: int = Field(ge=1)
-    external_request_invocations: Literal[0]
+    external_request_invocations: int = Field(ge=0)
     production_deploy_eligible: Literal[False]
 
     @model_validator(mode="after")
@@ -851,6 +1043,8 @@ def _json_bytes(payload: object) -> bytes:
 
 def _manifest_bytes(manifest: ConcurrentRobustnessManifest) -> bytes:
     payload = manifest.model_dump(mode="json")
+    if payload.get("dynamic_execution") is None:
+        payload.pop("dynamic_execution", None)
     cells = payload.get("prompt_model_cells")
     if isinstance(cells, list):
         for cell in cells:
@@ -1624,8 +1818,20 @@ def _validate_cell_evidence_contract(
         raise ValueError("cell evidence logical accounting does not match the manifest cap")
     if evidence.physical_attempt_count > manifest.request_caps.physical_attempt_cap:
         raise ValueError("cell evidence physical accounting exceeds the manifest cap")
-    if manifest.source.kind != "fixture":
-        raise ValueError("deterministic cell evidence requires a non-deployable fixture source")
+    if evidence.external_request_invocations > evidence.physical_attempt_count:
+        raise ValueError("cell evidence external requests cannot exceed physical attempts")
+    if evidence.evidence_profile == "deterministic_fixture":
+        if manifest.source.kind != "fixture" or evidence.external_request_invocations != 0:
+            raise ValueError("deterministic cell evidence requires a zero-call fixture source")
+    else:
+        execution = manifest.dynamic_execution
+        if (
+            manifest.source.kind != "formal"
+            or execution is None
+            or execution.profile != "formal_live"
+            or evidence.external_request_invocations != evidence.physical_attempt_count
+        ):
+            raise ValueError("Formal live cell evidence does not match its execution contract")
     _guard_claim_statements(evidence.claim_statements)
 
     expected_group_keys = {
@@ -2520,7 +2726,21 @@ def _practical_threshold_rows(
     return rows
 
 
-def _provider_accounting_analysis(evidence: _CellEvidenceDocument) -> dict[str, Any]:
+def _provider_accounting_analysis(
+    evidence: _CellEvidenceDocument,
+    manifest: ConcurrentRobustnessManifest,
+) -> dict[str, Any]:
+    execution = manifest.dynamic_execution
+    reserved_cost_usd: float | None = None
+    if execution is not None:
+        reserved_cost_usd = sum(
+            cell.physical_attempt_count
+            * execution.pricing_snapshot.maximum_attempt_cost(
+                requested_model=cell.requested_model,
+                output_token_ceiling=manifest.request_contract.output_token_ceiling,
+            )
+            for cell in evidence.cells
+        )
     cell_rows: list[dict[str, Any]] = []
     for cell in evidence.cells:
         observed_models: Counter[str] = Counter()
@@ -2549,6 +2769,8 @@ def _provider_accounting_analysis(evidence: _CellEvidenceDocument) -> dict[str, 
         "physical_attempts": evidence.physical_attempt_count,
         "external_request_invocations": evidence.external_request_invocations,
         "live_api_triggered": evidence.live_api_triggered,
+        "reserved_cost_usd": None if reserved_cost_usd is None else _round_metric(reserved_cost_usd),
+        "fee_ceiling_usd": manifest.request_caps.fee_ceiling_usd,
         "cells": cell_rows,
     }
 
@@ -2578,7 +2800,7 @@ class _RobustnessAnalyzer:
             factor_estimands=factor_estimands,
             manifest=self.manifest,
         )
-        provider_accounting = _provider_accounting_analysis(self.evidence)
+        provider_accounting = _provider_accounting_analysis(self.evidence, self.manifest)
         analysis = {
             "schema_version": "concurrent-prompt-model-robustness-analysis-v1",
             "manifest_sha256": self.manifest_sha256,
@@ -2667,6 +2889,8 @@ def _closed_study_payloads(
             "realized_logical_judgments": evidence.logical_judgment_count,
             "realized_physical_attempts": evidence.physical_attempt_count,
             "external_request_invocations": evidence.external_request_invocations,
+            "reserved_cost_usd": analysis["provider_accounting"]["reserved_cost_usd"],
+            "fee_ceiling_usd": manifest.request_caps.fee_ceiling_usd,
             "cell_count": len(evidence.cells),
             "message_count": len(manifest.message_ids),
             "terminal_row_count": sum(len(cell.terminal_rows) for cell in evidence.cells),
@@ -2681,6 +2905,25 @@ def _closed_study_payloads(
             "request_contract_matches_manifest": True,
             "source_identity_matches_manifest": True,
             "logical_physical_accounting_closed": True,
+            "next_attempt_caps_enforced": True,
+            "reserved_cost_within_fee_ceiling": (
+                analysis["provider_accounting"]["reserved_cost_usd"] is None
+                or float(analysis["provider_accounting"]["reserved_cost_usd"])
+                <= manifest.request_caps.fee_ceiling_usd + 1e-12
+            ),
+            "external_request_profile_matches_manifest": (
+                manifest.dynamic_execution is None
+                or (
+                    manifest.dynamic_execution.profile == "deterministic_validation"
+                    and evidence.external_request_invocations == 0
+                    and evidence.live_api_triggered is False
+                )
+                or (
+                    manifest.dynamic_execution.profile == "formal_live"
+                    and evidence.external_request_invocations == evidence.physical_attempt_count
+                    and evidence.live_api_triggered is True
+                )
+            ),
             "provider_failures_in_exposure_denominator": True,
             "provider_failures_excluded_from_decision_denominator": True,
             "probability_uses_successful_decisions_only": True,
@@ -2827,6 +3070,1117 @@ def _close_study_root(
     return root_path
 
 
+_DYNAMIC_ROOT_SUFFIX = ".prompt-model-operational"
+_DYNAMIC_IDENTITY = "execution_identity.json"
+_DYNAMIC_STATUS = "execution_status.json"
+_DYNAMIC_IDENTITY_SCHEMA = "concurrent-robustness-dynamic-identity-v1"
+_DYNAMIC_STATUS_SCHEMA = "concurrent-robustness-dynamic-status-v1"
+_DYNAMIC_REPORT_SUFFIX = ".report-candidate"
+
+
+class _DeterministicValidationProviderClient:
+    """In-memory response script accepted by the no-network validation profile."""
+
+    __slots__ = ("_position", "_responses", "calls")
+
+    def __init__(self, responses: Sequence[ProviderResponseEnvelope | Exception]) -> None:
+        if not responses or any(
+            not isinstance(response, (ProviderResponseEnvelope, Exception))
+            for response in responses
+        ):
+            raise ValueError("validation Provider script requires typed responses or exceptions")
+        self._responses = tuple(responses)
+        self._position = 0
+        self.calls: list[dict[str, object]] = []
+
+    def create_response(
+        self,
+        messages: list[dict[str, str]],
+        model: str,
+        *,
+        reasoning_effort: str,
+        output_token_ceiling: int,
+    ) -> ProviderResponseEnvelope:
+        del messages
+        if self._position >= len(self._responses):
+            raise AssertionError("validation Provider response script is exhausted")
+        response = self._responses[self._position]
+        self._position += 1
+        self.calls.append(
+            {
+                "model": model,
+                "reasoning_effort": reasoning_effort,
+                "output_token_ceiling": output_token_ceiling,
+            }
+        )
+        if isinstance(response, Exception):
+            raise response
+        return response
+
+
+@dataclass(frozen=True)
+class _DynamicPreflight:
+    adapters: tuple[tuple[_PromptModelCell, OpenAICompatibleDecisionAdapter], ...]
+    external_request_baselines: dict[str, int]
+
+
+@dataclass(frozen=True)
+class _DynamicProgress:
+    logical_judgments: int
+    physical_attempts: int
+    reserved_cost_usd: float
+    inflight_unknown: bool
+
+
+@dataclass(frozen=True)
+class _DynamicRunOutcome:
+    evidence: _CellEvidenceDocument | None
+    logical_judgments: int
+    physical_attempts: int
+
+
+class _DynamicCapExhausted(RuntimeError):
+    pass
+
+
+def _dynamic_adapter_error(message: str, *, cause: Exception | None = None) -> ConcurrentRobustnessError:
+    error = ConcurrentRobustnessError(ConcurrentRobustnessErrorCode.UNSUPPORTED_ADAPTERS, message)
+    if cause is not None:
+        error.__cause__ = cause
+    return error
+
+
+def _request_contract_matches_cell(
+    actual: ProviderRequestContract,
+    *,
+    expected: _RequestContract,
+    cell: _PromptModelCell,
+) -> bool:
+    return (
+        actual.schema_version == expected.schema_version
+        and actual.requested_model == cell.requested_model
+        and actual.prompt_version == cell.prompt_version
+        and actual.prompt_canonical_hash == cell.prompt_canonical_hash
+        and actual.wire_api == expected.wire_api
+        and actual.reasoning_effort == expected.reasoning_effort
+        and actual.output_token_ceiling == expected.output_token_ceiling
+        and math.isclose(actual.timeout_seconds, expected.timeout_seconds, rel_tol=0.0, abs_tol=1e-12)
+        and actual.max_retries == expected.max_retries
+        and math.isclose(
+            actual.retry_backoff_seconds,
+            expected.retry_backoff_seconds,
+            rel_tol=0.0,
+            abs_tol=1e-12,
+        )
+        and actual.structured_output_schema_version == expected.structured_output_schema_version
+        and actual.structured_output_schema_hash == expected.structured_output_schema_hash
+        and actual.omitted_parameters == expected.omitted_parameters
+    )
+
+
+def _preflight_dynamic_adapters(
+    manifest: ConcurrentRobustnessManifest,
+    adapters_by_cell: Mapping[str, LLMDecisionAdapter],
+) -> _DynamicPreflight:
+    execution = manifest.dynamic_execution
+    if execution is None:
+        raise _dynamic_adapter_error("dynamic execution requires an explicit authorization and qualification contract")
+    expected_keys = tuple(cell.cell_id for cell in manifest.prompt_model_cells)
+    try:
+        actual_keys = tuple(adapters_by_cell.keys())
+    except Exception as exc:
+        raise _dynamic_adapter_error("dynamic Adapter map cannot be enumerated safely", cause=exc) from exc
+    if len(actual_keys) != len(set(actual_keys)) or set(actual_keys) != set(expected_keys) or len(actual_keys) != 16:
+        missing = sorted(set(expected_keys) - set(actual_keys))
+        extra = sorted(set(actual_keys) - set(expected_keys))
+        raise _dynamic_adapter_error(
+            "dynamic Adapter map must contain exactly the 16 canonical cell keys "
+            f"(missing={missing}, extra={extra})"
+        )
+
+    adapters: list[tuple[_PromptModelCell, OpenAICompatibleDecisionAdapter]] = []
+    adapter_ids: set[int] = set()
+    injected_client_ids: set[int] = set()
+    baselines: dict[str, int] = {}
+    for cell in manifest.prompt_model_cells:
+        candidate = adapters_by_cell[cell.cell_id]
+        if type(candidate) is not OpenAICompatibleDecisionAdapter:
+            raise _dynamic_adapter_error(
+                f"cell {cell.cell_id} must use the qualified OpenAICompatibleDecisionAdapter identity"
+            )
+        adapter = candidate
+        if id(adapter) in adapter_ids:
+            raise _dynamic_adapter_error("each Prompt-Model cell requires an independent fresh Adapter")
+        adapter_ids.add(id(adapter))
+        if getattr(adapter, "wrapped", None) is not None or getattr(adapter, "cache", None) is not None:
+            raise _dynamic_adapter_error("dynamic robustness cells forbid cached or wrapped Decision Adapters")
+        request_contract = adapter.request_contract
+        if not _request_contract_matches_cell(request_contract, expected=manifest.request_contract, cell=cell):
+            raise _dynamic_adapter_error(f"cell {cell.cell_id} request, Prompt, or model contract is crossed")
+        if adapter.config.provider != execution.provider or adapter.config.fail_closed_action.value != "raise":
+            raise _dynamic_adapter_error(f"cell {cell.cell_id} provider or fail-closed policy is crossed")
+        if not adapter.config.enabled:
+            raise _dynamic_adapter_error(f"cell {cell.cell_id} Adapter must be explicitly enabled")
+        if adapter.request_invocations != 0 or adapter.external_request_invocations != 0:
+            raise _dynamic_adapter_error(f"cell {cell.cell_id} Adapter is not a fresh decision store")
+        accounting = adapter.provider_accounting
+        if (
+            accounting.provider_response_count != 0
+            or accounting.successful_decision_count != 0
+            or accounting.observed_model_counts
+            or accounting.observed_model_missing_response_count != 0
+            or accounting.observed_model_malformed_response_count != 0
+        ):
+            raise _dynamic_adapter_error(f"cell {cell.cell_id} Adapter contains prior Provider evidence")
+
+        if execution.profile == "deterministic_validation":
+            client = adapter.client
+            if type(client) is not _DeterministicValidationProviderClient or adapter.config.require_live_env:
+                raise _dynamic_adapter_error(
+                    f"cell {cell.cell_id} validation profile requires the closed in-memory mock client"
+                )
+            if id(client) in injected_client_ids:
+                raise _dynamic_adapter_error("validation cells require independent injected mock clients")
+            injected_client_ids.add(id(client))
+        elif adapter.client is not None or not adapter.config.require_live_env:
+            raise _dynamic_adapter_error(
+                f"cell {cell.cell_id} Formal profile requires the live-client Adapter identity"
+            )
+        baselines[cell.cell_id] = adapter.external_request_invocations
+        adapters.append((cell, adapter))
+    return _DynamicPreflight(adapters=tuple(adapters), external_request_baselines=baselines)
+
+
+def _dynamic_runtime_config(closure: ConcurrentMessageArtifactClosure) -> ConcurrentMessageExperimentConfig:
+    config = closure.source_evidence.config_snapshot
+    try:
+        return ConcurrentMessageExperimentConfig(
+            dataset_dir=Path(str(config["dataset_dir"])),
+            sample_size=int(config["sample_size"]),
+            horizon=int(config["horizon"]),
+            delivery_capacity=int(config["delivery_capacity"]),
+            random_seed=int(config["random_seed"]),
+            configuration_profile=cast(
+                Literal["production", "validation"],
+                config["configuration_profile"],
+            ),
+            sample_holdout_video_id=str(config["sample_holdout_video_id"]),
+        )
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ConcurrentRobustnessError(
+            ConcurrentRobustnessErrorCode.INVALID_SOURCE,
+            "dynamic execution cannot reconstruct the frozen Concurrent runtime configuration",
+        ) from exc
+
+
+def _dynamic_root(output_path: Path) -> Path:
+    return output_path.parent / f".{output_path.name}{_DYNAMIC_ROOT_SUFFIX}"
+
+
+def _dynamic_report_destination(output_path: Path) -> Path:
+    return output_path.with_name(f"{output_path.name}{_DYNAMIC_REPORT_SUFFIX}")
+
+
+def _cell_output_target(root: Path, cell_index: int) -> Path:
+    return root / f"cell-{cell_index:02d}" / "primary-only"
+
+
+def _dynamic_identity_payload(
+    *,
+    manifest: ConcurrentRobustnessManifest,
+    manifest_sha256: str,
+    output_path: Path,
+) -> dict[str, object]:
+    execution = manifest.dynamic_execution
+    assert execution is not None
+    return {
+        "schema_version": _DYNAMIC_IDENTITY_SCHEMA,
+        "workspace_type": "private_resumable",
+        "manifest_sha256": manifest_sha256,
+        "source_manifest_sha256": manifest.source.manifest_sha256,
+        "output_identity": manifest.output_identity,
+        "output_root": str(output_path),
+        "operational_root": str(_dynamic_root(output_path)),
+        "report_candidate": str(_dynamic_report_destination(output_path)),
+        "dynamic_execution": execution.model_dump(mode="json"),
+        "cell_outputs": [
+            {
+                "cell_index": index,
+                "cell_id": cell.cell_id,
+                "output_target": str(_cell_output_target(_dynamic_root(output_path), index)),
+            }
+            for index, cell in enumerate(manifest.prompt_model_cells)
+        ],
+        "production_deploy_eligible": False,
+    }
+
+
+def _atomic_write_dynamic_json(path: Path, payload: Mapping[str, object]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile("wb", dir=path.parent, delete=False) as handle:
+        handle.write(_json_bytes(dict(payload)))
+        handle.flush()
+        os.fsync(handle.fileno())
+        temporary_path = Path(handle.name)
+    os.replace(temporary_path, path)
+
+
+def _dynamic_status_payload(
+    *,
+    manifest_sha256: str,
+    lifecycle: str,
+    logical_judgments: int,
+    physical_attempts: int,
+    reserved_logical_judgments: int,
+    reserved_physical_attempts: int,
+    reserved_cost_usd: float,
+    last_cell_id: str | None,
+    last_pair_id: str | None,
+) -> dict[str, object]:
+    return {
+        "schema_version": _DYNAMIC_STATUS_SCHEMA,
+        "lifecycle": lifecycle,
+        "manifest_sha256": manifest_sha256,
+        "logical_judgments": logical_judgments,
+        "physical_attempts": physical_attempts,
+        "reserved_logical_judgments": reserved_logical_judgments,
+        "reserved_physical_attempts": reserved_physical_attempts,
+        "reserved_cost_usd": round(reserved_cost_usd, 12),
+        "last_cell_id": last_cell_id,
+        "last_pair_id": last_pair_id,
+        "production_deploy_eligible": False,
+    }
+
+
+def _open_dynamic_root(
+    *,
+    manifest: ConcurrentRobustnessManifest,
+    manifest_sha256: str,
+    output_path: Path,
+    source_path: Path,
+) -> Path:
+    root = _dynamic_root(output_path)
+    _validate_study_paths(source_path, root)
+    expected_identity = _json_bytes(
+        _dynamic_identity_payload(
+            manifest=manifest,
+            manifest_sha256=manifest_sha256,
+            output_path=output_path,
+        )
+    )
+    if root.exists():
+        try:
+            if root.is_symlink() or not root.is_dir():
+                raise ValueError("dynamic root is not a real directory")
+            entries = list(root.iterdir())
+            allowed_cell_dirs = {f"cell-{index:02d}" for index in range(16)}
+            for entry in entries:
+                if entry.is_symlink():
+                    raise ValueError("dynamic root contains a symlink")
+                if entry.name in {_DYNAMIC_IDENTITY, _DYNAMIC_STATUS}:
+                    if not entry.is_file():
+                        raise ValueError("dynamic root metadata is not a regular file")
+                elif entry.name in allowed_cell_dirs:
+                    if not entry.is_dir():
+                        raise ValueError("dynamic cell scope is not a directory")
+                else:
+                    raise ValueError("dynamic root contains an unexpected entry")
+            if (root / _DYNAMIC_IDENTITY).read_bytes() != expected_identity:
+                raise ValueError("dynamic execution identity is crossed")
+            status = _read_json_object(root / _DYNAMIC_STATUS)
+            if status.get("schema_version") != _DYNAMIC_STATUS_SCHEMA:
+                raise ValueError("dynamic execution status schema is unsupported")
+            if status.get("manifest_sha256") != manifest_sha256:
+                raise ValueError("dynamic execution status manifest is crossed")
+            return root
+        except (OSError, ValueError, json.JSONDecodeError) as exc:
+            raise ConcurrentRobustnessError(
+                ConcurrentRobustnessErrorCode.WORKSPACE_CORRUPT,
+                "dynamic Prompt-Model workspace identity or state is corrupt",
+            ) from exc
+
+    root.parent.mkdir(parents=True, exist_ok=True)
+    staging = Path(
+        tempfile.mkdtemp(
+            prefix=f".{root.name}.{manifest.output_identity}.",
+            suffix=".staging",
+            dir=root.parent,
+        )
+    )
+    try:
+        (staging / _DYNAMIC_IDENTITY).write_bytes(expected_identity)
+        (staging / _DYNAMIC_STATUS).write_bytes(
+            _json_bytes(
+                _dynamic_status_payload(
+                    manifest_sha256=manifest_sha256,
+                    lifecycle="initialized",
+                    logical_judgments=0,
+                    physical_attempts=0,
+                    reserved_logical_judgments=0,
+                    reserved_physical_attempts=0,
+                    reserved_cost_usd=0.0,
+                    last_cell_id=None,
+                    last_pair_id=None,
+                )
+            )
+        )
+        if root.exists():
+            raise ConcurrentRobustnessError(
+                ConcurrentRobustnessErrorCode.WORKSPACE_CONFLICT,
+                "dynamic Prompt-Model workspace appeared during atomic creation",
+            )
+        os.replace(staging, root)
+    except Exception:
+        if staging.exists():
+            shutil.rmtree(staging, ignore_errors=True)
+        raise
+    return root
+
+
+def _dynamic_progress(
+    root: Path,
+    *,
+    manifest: ConcurrentRobustnessManifest,
+    manifest_sha256: str,
+) -> _DynamicProgress:
+    execution = manifest.dynamic_execution
+    assert execution is not None
+    logical_judgments = 0
+    physical_attempts = 0
+    reserved_cost_usd = 0.0
+    inflight_unknown = False
+    for cell_index, cell in enumerate(manifest.prompt_model_cells):
+        output_target = _cell_output_target(root, cell_index)
+        workspace = derive_concurrent_execution_workspace(output_target)
+        cell_scope = output_target.parent
+        if not cell_scope.exists():
+            continue
+        if cell_scope.is_symlink() or not cell_scope.is_dir() or not workspace.is_dir():
+            raise ValueError(f"dynamic cell {cell.cell_id} workspace is incomplete")
+        replay = ConcurrentExecutionJournal.open_existing(workspace).replay()
+        identity = _mapping(replay.get("identity"), "dynamic cell journal identity")
+        expected_execution_identity = _cell_execution_identity(
+            manifest=manifest,
+            manifest_sha256=manifest_sha256,
+            cell_index=cell_index,
+            cell=cell,
+        )
+        if identity.get("execution_contract") != expected_execution_identity:
+            raise ValueError(f"dynamic cell {cell.cell_id} journal identity is crossed")
+        status = _mapping(replay.get("status"), "dynamic cell journal status")
+        inflight_unknown = inflight_unknown or bool(status.get("inflight_unknown"))
+        records = _sequence(replay.get("records"), "dynamic cell journal records")
+        cell_physical = 0
+        for record_raw in records:
+            record = _mapping(record_raw, "dynamic cell journal record")
+            if record.get("record_type") != "event" or record.get("event_type") != "variant_terminal":
+                continue
+            payload = _mapping(record.get("payload"), "dynamic cell terminal payload")
+            evidence = _mapping(payload.get("variant_evidence"), "dynamic cell terminal evidence")
+            logical_judgments += 1
+            requests = _as_int(evidence.get("request_invocations"), "dynamic terminal request invocations")
+            physical_attempts += requests
+            cell_physical += requests
+        attempt_cost = execution.pricing_snapshot.maximum_attempt_cost(
+            requested_model=cell.requested_model,
+            output_token_ceiling=manifest.request_contract.output_token_ceiling,
+        )
+        reserved_cost_usd += cell_physical * attempt_cost
+    return _DynamicProgress(
+        logical_judgments=logical_judgments,
+        physical_attempts=physical_attempts,
+        reserved_cost_usd=reserved_cost_usd,
+        inflight_unknown=inflight_unknown,
+    )
+
+
+def _validate_completed_dynamic_root(
+    *,
+    manifest: ConcurrentRobustnessManifest,
+    manifest_sha256: str,
+    output_path: Path,
+    source_path: Path,
+    evidence: _CellEvidenceDocument,
+) -> None:
+    root = _dynamic_root(output_path)
+    if not root.is_dir():
+        raise ConcurrentRobustnessError(
+            ConcurrentRobustnessErrorCode.WORKSPACE_CORRUPT,
+            "completed dynamic evidence is missing its operational lineage",
+        )
+    root = _open_dynamic_root(
+        manifest=manifest,
+        manifest_sha256=manifest_sha256,
+        output_path=output_path,
+        source_path=source_path,
+    )
+    try:
+        progress = _dynamic_progress(root, manifest=manifest, manifest_sha256=manifest_sha256)
+        status = _read_json_object(root / _DYNAMIC_STATUS)
+        if status.get("lifecycle") != "cells_complete":
+            raise ValueError("completed dynamic operational status is not closed")
+        if (
+            progress.inflight_unknown
+            or progress.logical_judgments != evidence.logical_judgment_count
+            or progress.physical_attempts != evidence.physical_attempt_count
+            or _as_int(status.get("logical_judgments"), "dynamic status logical count")
+            != evidence.logical_judgment_count
+            or _as_int(status.get("physical_attempts"), "dynamic status physical count")
+            != evidence.physical_attempt_count
+        ):
+            raise ValueError("completed dynamic operational accounting is crossed")
+    except (FileNotFoundError, OSError, TypeError, ValueError, json.JSONDecodeError) as exc:
+        raise ConcurrentRobustnessError(
+            ConcurrentRobustnessErrorCode.WORKSPACE_CORRUPT,
+            "completed dynamic cell journals failed immutable replay",
+        ) from exc
+
+
+def _cell_execution_identity(
+    *,
+    manifest: ConcurrentRobustnessManifest,
+    manifest_sha256: str,
+    cell_index: int,
+    cell: _PromptModelCell,
+) -> dict[str, object]:
+    execution = manifest.dynamic_execution
+    assert execution is not None
+    payload = {
+        "schema_version": "concurrent-robustness-cell-execution-identity-v1",
+        "manifest_sha256": manifest_sha256,
+        "source_manifest_sha256": manifest.source.manifest_sha256,
+        "sample_identity": manifest.sample.sample_identity,
+        "message_snapshot_sha256": manifest.message_snapshot_sha256,
+        "cell_index": cell_index,
+        "cell": cell.model_dump(mode="json"),
+        "request_contract_sha256": _sha256_bytes(_json_bytes(manifest.request_contract.model_dump(mode="json"))),
+        "approval_artifact_sha256": execution.authorization.artifact_sha256,
+        "pricing_snapshot_sha256": execution.pricing_snapshot.snapshot_sha256,
+        "decision_store_policy": manifest.request_contract.decision_store_policy,
+        "production_deploy_eligible": False,
+    }
+    normalized = json.loads(_json_bytes(payload))
+    if not isinstance(normalized, dict):
+        raise TypeError("dynamic cell execution identity must normalize to an object")
+    return normalized
+
+
+class _DynamicBudgetGuard:
+    def __init__(
+        self,
+        *,
+        manifest: ConcurrentRobustnessManifest,
+        manifest_sha256: str,
+        root: Path,
+        progress: _DynamicProgress,
+    ) -> None:
+        self.manifest = manifest
+        self.manifest_sha256 = manifest_sha256
+        self.root = root
+        self.logical_judgments = progress.logical_judgments
+        self.physical_attempts = progress.physical_attempts
+        self.reserved_cost_usd = progress.reserved_cost_usd
+        self.cell: _PromptModelCell | None = None
+        self.pending_pair_id: str | None = None
+        self.pending_attempt_cost = 0.0
+
+    def select_cell(self, cell: _PromptModelCell) -> None:
+        self.cell = cell
+        execution = self.manifest.dynamic_execution
+        assert execution is not None
+        self.pending_attempt_cost = execution.pricing_snapshot.maximum_attempt_cost(
+            requested_model=cell.requested_model,
+            output_token_ceiling=self.manifest.request_contract.output_token_ceiling,
+        )
+
+    def before(self, judgment: Mapping[str, object]) -> None:
+        if self.cell is None or self.pending_pair_id is not None:
+            raise RuntimeError("dynamic budget guard lifecycle is invalid")
+        pair_id = str(judgment.get("pair_id", ""))
+        max_attempts = self.manifest.request_contract.max_retries + 1
+        next_logical = self.logical_judgments + 1
+        next_reserved_physical = self.physical_attempts + max_attempts
+        next_reserved_cost = self.reserved_cost_usd + max_attempts * self.pending_attempt_cost
+        caps = self.manifest.request_caps
+        if (
+            next_logical > caps.logical_judgment_cap
+            or next_reserved_physical > caps.physical_attempt_cap
+            or next_reserved_cost > caps.fee_ceiling_usd + 1e-12
+        ):
+            _atomic_write_dynamic_json(
+                self.root / _DYNAMIC_STATUS,
+                _dynamic_status_payload(
+                    manifest_sha256=self.manifest_sha256,
+                    lifecycle="cap_exhausted",
+                    logical_judgments=self.logical_judgments,
+                    physical_attempts=self.physical_attempts,
+                    reserved_logical_judgments=next_logical,
+                    reserved_physical_attempts=next_reserved_physical,
+                    reserved_cost_usd=next_reserved_cost,
+                    last_cell_id=self.cell.cell_id,
+                    last_pair_id=pair_id,
+                ),
+            )
+            raise _DynamicCapExhausted("next logical or physical attempt would exceed a frozen cap")
+        self.pending_pair_id = pair_id
+        _atomic_write_dynamic_json(
+            self.root / _DYNAMIC_STATUS,
+            _dynamic_status_payload(
+                manifest_sha256=self.manifest_sha256,
+                lifecycle="attempt_reserved",
+                logical_judgments=self.logical_judgments,
+                physical_attempts=self.physical_attempts,
+                reserved_logical_judgments=next_logical,
+                reserved_physical_attempts=next_reserved_physical,
+                reserved_cost_usd=next_reserved_cost,
+                last_cell_id=self.cell.cell_id,
+                last_pair_id=pair_id,
+            ),
+        )
+
+    def after(self, evidence: Mapping[str, object]) -> None:
+        if self.cell is None or self.pending_pair_id is None:
+            raise RuntimeError("dynamic budget guard has no reserved judgment")
+        if evidence.get("pair_id") != self.pending_pair_id:
+            raise ValueError("dynamic budget guard terminal identity is crossed")
+        request_invocations = _as_int(
+            evidence.get("request_invocations"),
+            "dynamic terminal request invocations",
+        )
+        if not 1 <= request_invocations <= self.manifest.request_contract.max_retries + 1:
+            raise ValueError("dynamic terminal physical attempts exceed the retry contract")
+        self.logical_judgments += 1
+        self.physical_attempts += request_invocations
+        self.reserved_cost_usd += request_invocations * self.pending_attempt_cost
+        pair_id = self.pending_pair_id
+        self.pending_pair_id = None
+        _atomic_write_dynamic_json(
+            self.root / _DYNAMIC_STATUS,
+            _dynamic_status_payload(
+                manifest_sha256=self.manifest_sha256,
+                lifecycle="running",
+                logical_judgments=self.logical_judgments,
+                physical_attempts=self.physical_attempts,
+                reserved_logical_judgments=self.logical_judgments,
+                reserved_physical_attempts=self.physical_attempts,
+                reserved_cost_usd=self.reserved_cost_usd,
+                last_cell_id=self.cell.cell_id,
+                last_pair_id=pair_id,
+            ),
+        )
+
+
+def _validate_dynamic_terminal(
+    evidence: Mapping[str, object],
+    *,
+    manifest: ConcurrentRobustnessManifest,
+    cell: _PromptModelCell,
+    adapter: OpenAICompatibleDecisionAdapter,
+    external_baseline: int,
+) -> None:
+    requests = _as_int(evidence.get("request_invocations"), "terminal request invocations")
+    responses = _as_int(evidence.get("provider_response_count"), "terminal Provider responses")
+    successes = _as_int(evidence.get("successful_decision_count"), "terminal successful Decisions")
+    if not requests >= responses >= successes or requests > manifest.request_contract.max_retries + 1:
+        raise ValueError("dynamic terminal accounting violates invocations >= responses >= successful Decisions")
+    observed_counts = _mapping(evidence.get("observed_model_counts"), "terminal observed-model counts")
+    missing = _as_int(evidence.get("observed_model_missing_response_count"), "missing observed models")
+    malformed = _as_int(evidence.get("observed_model_malformed_response_count"), "malformed observed models")
+    if missing or malformed:
+        raise ValueError("dynamic terminal responses require complete observed-model identity")
+    execution = manifest.dynamic_execution
+    assert execution is not None
+    usage_complete = evidence.get("usage_complete") is True
+    if responses > 0 and not usage_complete:
+        raise ValueError("dynamic terminal responses require complete token usage accounting")
+    input_usage = evidence.get("input_usage")
+    output_usage = evidence.get("output_usage")
+    if usage_complete and (
+        not isinstance(input_usage, int)
+        or not isinstance(output_usage, int)
+        or input_usage > execution.pricing_snapshot.input_token_ceiling
+        or output_usage > manifest.request_contract.output_token_ceiling
+    ):
+        raise ValueError("dynamic terminal token usage exceeds its frozen ceiling")
+    required_observed_model = cell.required_observed_model
+    if required_observed_model is None or set(str(model) for model in observed_counts) - {required_observed_model}:
+        raise ValueError("dynamic terminal observed model drifted from qualification")
+    external_delta = adapter.external_request_invocations - external_baseline
+    if external_delta < 0:
+        raise ValueError("dynamic Adapter external request counter moved backwards")
+    if execution.profile == "deterministic_validation" and external_delta != 0:
+        raise ValueError("validation Adapter triggered an external request")
+    if execution.profile == "formal_live" and external_delta != adapter.request_invocations:
+        raise ValueError("Formal Adapter physical and external request accounting diverged")
+
+
+def _candidate_bool(value: object) -> bool:
+    if value is True or value == "true" or value == "True" or value == 1 or value == "1":
+        return True
+    if value is False or value == "false" or value == "False" or value == 0 or value == "0" or value == "":
+        return False
+    raise ValueError("candidate boolean field is malformed")
+
+
+def _batch_zero_candidate_fingerprint(rows: Sequence[Mapping[str, Any]]) -> tuple[tuple[object, ...], ...]:
+    fingerprint: list[tuple[object, ...]] = []
+    for row in rows:
+        if _as_int(row.get("time_step"), "candidate time_step") != 0:
+            continue
+        fingerprint.append(
+            (
+                str(row.get("message_id", "")),
+                str(row.get("user_id", "")),
+                _candidate_bool(row.get("is_seed")),
+                _candidate_bool(row.get("selected")),
+                str(row.get("selection_reason", "")),
+                _as_int(row.get("ranking_position"), "candidate ranking position"),
+                str(row.get("base_network_relevance_full_precision", "")),
+                _as_int(row.get("campaign_engaged_neighbor_count"), "candidate engaged-neighbor count"),
+                str(row.get("campaign_engaged_neighbor_signal_full_precision", "")),
+                str(row.get("raw_message_user_fit_full_precision", "")),
+                str(row.get("normalized_message_user_fit_full_precision", "")),
+                str(row.get("personalized_delivery_score_full_precision", "")),
+            )
+        )
+    return tuple(fingerprint)
+
+
+def _validate_dynamic_initial_state(
+    result: _PrimaryOnlyConcurrentRuntimeResult,
+    *,
+    source_candidate_rows: Sequence[Mapping[str, Any]],
+) -> None:
+    if _batch_zero_candidate_fingerprint(result.candidate_rows) != _batch_zero_candidate_fingerprint(
+        source_candidate_rows
+    ):
+        raise ValueError("dynamic cell initial sample, graph, messages, seeds, or baseline ranking is crossed")
+
+
+def _json_mapping_cell(value: object, label: str) -> dict[str, int]:
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"{label} is not valid JSON") from exc
+    mapping = _mapping(value, label)
+    return {str(key): _as_int(count, label) for key, count in mapping.items()}
+
+
+def _optional_float_cell(value: object) -> float | None:
+    if value is None or value == "":
+        return None
+    return _as_finite_float(value, "terminal numeric Decision field")
+
+
+def _build_dynamic_cell_evidence(
+    *,
+    manifest: ConcurrentRobustnessManifest,
+    manifest_sha256: str,
+    cell_index: int,
+    cell: _PromptModelCell,
+    result: _PrimaryOnlyConcurrentRuntimeResult,
+) -> _PromptModelCellEvidence:
+    request_contract_sha256 = _sha256_bytes(_json_bytes(manifest.request_contract.model_dump(mode="json")))
+    source_identity = _expected_cell_source_identity(manifest)
+    primary_by_pair = {str(row["pair_id"]): row for row in result.primary_rows}
+    terminal_rows: list[_CellTerminalRow] = []
+    for row in sorted(result.terminal_rows, key=lambda item: _as_int(item["pair_schedule_position"], "pair position")):
+        pair_id = str(row["pair_id"])
+        primary_row = primary_by_pair.get(pair_id)
+        if primary_row is None:
+            raise ValueError("dynamic terminal row has no matching realized exposure")
+        terminal_status_raw = str(row["terminal_status"])
+        if terminal_status_raw not in {"succeeded", "provider_failed"}:
+            raise ValueError("dynamic terminal status is unsupported")
+        terminal_status = cast(Literal["succeeded", "provider_failed"], terminal_status_raw)
+        action_raw = str(row.get("action", "")) or None
+        if action_raw not in {None, "like", "comment", "share", "ignore"}:
+            raise ValueError("dynamic terminal action is unsupported")
+        action_value = cast(Literal["like", "comment", "share", "ignore"] | None, action_raw)
+        reason_value = str(row.get("reason", "")) or None
+        failure_value = str(row.get("failure_type", "")) or None
+        terminal_rows.append(
+            _CellTerminalRow(
+                terminal_row_id=str(row["terminal_row_id"]),
+                pair_id=pair_id,
+                pair_schedule_position=_as_int(row["pair_schedule_position"], "pair position"),
+                time_step=_as_int(row["time_step"], "terminal time_step"),
+                message_id=str(row["message_id"]),
+                user_id=str(row["user_id"]),
+                is_seed=_candidate_bool(primary_row["is_seed"]),
+                selection_reason=str(primary_row["selection_reason"]),
+                decision_variant="primary",
+                prompt_version=str(row["prompt_version"]),
+                prompt_canonical_hash=cell.prompt_canonical_hash,
+                requested_model=cell.requested_model,
+                request_contract_sha256=request_contract_sha256,
+                terminal_status=terminal_status,
+                engage=None if terminal_status == "provider_failed" else action_value in _POSITIVE_ACTIONS,
+                probability=_optional_float_cell(row.get("probability")),
+                confidence=_optional_float_cell(row.get("confidence")),
+                action=action_value,
+                reason=reason_value,
+                failure_type=failure_value,
+                request_invocations=_as_int(row["request_invocations"], "terminal request invocations"),
+                provider_response_count=_as_int(row["provider_response_count"], "terminal responses"),
+                successful_decision_count=_as_int(row["successful_decision_count"], "terminal successes"),
+                observed_model_counts=_json_mapping_cell(row["observed_model_counts"], "observed model counts"),
+                observed_model_missing_response_count=_as_int(
+                    row["observed_model_missing_response_count"],
+                    "missing observed models",
+                ),
+                observed_model_malformed_response_count=_as_int(
+                    row["observed_model_malformed_response_count"],
+                    "malformed observed models",
+                ),
+            )
+        )
+    if cell.required_observed_model is None:
+        raise ValueError("dynamic cell lacks a required observed-model identity")
+    physical_attempts = sum(row.request_invocations for row in terminal_rows)
+    return _PromptModelCellEvidence(
+        cell_index=cell_index,
+        cell_id=cell.cell_id,
+        prompt_variant=cell.prompt_variant,
+        prompt_version=cell.prompt_version,
+        prompt_canonical_hash=cell.prompt_canonical_hash,
+        requested_model=cell.requested_model,
+        observed_model=cell.required_observed_model,
+        source_identity_sha256=_cell_source_identity_sha256(
+            manifest_sha256=manifest_sha256,
+            source_identity=source_identity,
+            cell_id=cell.cell_id,
+        ),
+        request_contract_sha256=request_contract_sha256,
+        logical_judgment_count=len(terminal_rows),
+        physical_attempt_count=physical_attempts,
+        terminal_rows=tuple(terminal_rows),
+        step_rows=tuple(
+            _CellStepRow(
+                time_step=_as_int(step["time_step"], "step time_step"),
+                frozen_campaign_engaged_user_ids=tuple(
+                    str(user_id) for user_id in _sequence(
+                        step["frozen_campaign_engaged_user_ids"],
+                        "frozen campaign users",
+                    )
+                ),
+                deduplicated_committed_primary_positive_user_ids=tuple(
+                    str(user_id) for user_id in _sequence(
+                        step["deduplicated_committed_primary_positive_user_ids"],
+                        "committed positive users",
+                    )
+                ),
+                messages=tuple(
+                    _CellStepMessage(
+                        message_id=str(message["message_id"]),
+                        selected_user_ids=tuple(
+                            str(user_id) for user_id in _sequence(message["selected_user_ids"], "selected users")
+                        ),
+                        seed_user_ids=tuple(
+                            str(user_id) for user_id in _sequence(message["seed_user_ids"], "seed users")
+                        ),
+                        primary_positive_user_ids=tuple(
+                            str(user_id)
+                            for user_id in _sequence(message["primary_positive_user_ids"], "positive users")
+                        ),
+                        primary_provider_failed_user_ids=tuple(
+                            str(user_id)
+                            for user_id in _sequence(
+                                message["primary_provider_failed_user_ids"],
+                                "Provider failed users",
+                            )
+                        ),
+                    )
+                    for message in _sequence(step["messages"], "step messages")
+                    if isinstance(message, Mapping)
+                ),
+            )
+            for step in result.step_rows
+        ),
+    )
+
+
+def _publish_dynamic_evidence(
+    output_path: Path,
+    *,
+    manifest: ConcurrentRobustnessManifest,
+    manifest_sha256: str,
+    evidence: _CellEvidenceDocument,
+) -> tuple[_CellEvidenceDocument, _CellWorkspaceRegistry]:
+    _validate_cell_evidence_contract(evidence, manifest=manifest, manifest_sha256=manifest_sha256)
+    evidence_payload = _json_bytes(evidence.model_dump(mode="json"))
+    evidence_sha256 = _sha256_bytes(evidence_payload)
+    registry = _CellWorkspaceRegistry(
+        schema_version="concurrent-robustness-cell-registry-v1",
+        workspace_type="private_resumable",
+        status="cells_complete",
+        output_identity=manifest.output_identity,
+        output_root_sha256=_output_root_sha256(output_path),
+        manifest_sha256=manifest_sha256,
+        source_manifest_sha256=manifest.source.manifest_sha256,
+        base_workspace_sha256={name: _sha256_file(output_path / name) for name in sorted(_WORKSPACE_FILES)},
+        cell_evidence="prompt_model_cell_evidence.json",
+        cell_evidence_sha256=evidence_sha256,
+        cell_inventory=tuple(
+            _CellInventoryRow(
+                cell_id=cell.cell_id,
+                observed_model=cell.observed_model,
+                source_identity_sha256=cell.source_identity_sha256,
+                logical_judgment_count=cell.logical_judgment_count,
+                physical_attempt_count=cell.physical_attempt_count,
+                terminal_row_count=len(cell.terminal_rows),
+            )
+            for cell in evidence.cells
+        ),
+        logical_judgment_count=evidence.logical_judgment_count,
+        physical_attempt_count=evidence.physical_attempt_count,
+        external_request_invocations=evidence.external_request_invocations,
+        production_deploy_eligible=False,
+    )
+    registry_payload = _json_bytes(registry.model_dump(mode="json"))
+    staging = Path(
+        tempfile.mkdtemp(
+            prefix=f".{output_path.name}.cells.",
+            suffix=".staging",
+            dir=output_path.parent,
+        )
+    )
+    try:
+        staged_payloads = {
+            _CELL_EVIDENCE: evidence_payload,
+            _CELL_REGISTRY: registry_payload,
+        }
+        for name, payload in staged_payloads.items():
+            (staging / name).write_bytes(payload)
+        for name, payload in staged_payloads.items():
+            destination = output_path / name
+            if destination.exists():
+                if destination.is_symlink() or destination.read_bytes() != payload:
+                    raise ConcurrentRobustnessError(
+                        ConcurrentRobustnessErrorCode.WORKSPACE_CORRUPT,
+                        "existing dynamic cell artifact conflicts with completed evidence",
+                    )
+                continue
+            os.replace(staging / name, destination)
+    finally:
+        if staging.exists():
+            shutil.rmtree(staging, ignore_errors=True)
+    return _load_cell_workspace(
+        output_path,
+        output_path=output_path,
+        manifest=manifest,
+        manifest_sha256=manifest_sha256,
+    )
+
+
+class _DynamicPromptModelProducer:
+    def __init__(
+        self,
+        *,
+        manifest: ConcurrentRobustnessManifest,
+        manifest_sha256: str,
+        output_path: Path,
+        source_path: Path,
+        closure: ConcurrentMessageArtifactClosure,
+        preflight: _DynamicPreflight,
+    ) -> None:
+        self.manifest = manifest
+        self.manifest_sha256 = manifest_sha256
+        self.output_path = output_path
+        self.source_path = source_path
+        self.closure = closure
+        self.preflight = preflight
+
+    def run(self) -> _DynamicRunOutcome:
+        execution = self.manifest.dynamic_execution
+        assert execution is not None
+        root = _open_dynamic_root(
+            manifest=self.manifest,
+            manifest_sha256=self.manifest_sha256,
+            output_path=self.output_path,
+            source_path=self.source_path,
+        )
+        try:
+            progress = _dynamic_progress(
+                root,
+                manifest=self.manifest,
+                manifest_sha256=self.manifest_sha256,
+            )
+        except (FileNotFoundError, OSError, TypeError, ValueError, json.JSONDecodeError) as exc:
+            raise ConcurrentRobustnessError(
+                ConcurrentRobustnessErrorCode.WORKSPACE_CORRUPT,
+                "dynamic Prompt-Model journals failed durable replay",
+            ) from exc
+        persisted_status = _read_json_object(root / _DYNAMIC_STATUS)
+        persisted_lifecycle = str(persisted_status.get("lifecycle", ""))
+        persisted_counts = (
+            _as_int(persisted_status.get("logical_judgments"), "dynamic status logical count"),
+            _as_int(persisted_status.get("physical_attempts"), "dynamic status physical count"),
+        )
+        if persisted_lifecycle != "attempt_reserved" and persisted_counts != (
+            progress.logical_judgments,
+            progress.physical_attempts,
+        ):
+            raise ConcurrentRobustnessError(
+                ConcurrentRobustnessErrorCode.WORKSPACE_CORRUPT,
+                "dynamic execution status is crossed with durable cell journals",
+            )
+        if execution.profile == "formal_live" and progress.inflight_unknown:
+            _atomic_write_dynamic_json(
+                root / _DYNAMIC_STATUS,
+                _dynamic_status_payload(
+                    manifest_sha256=self.manifest_sha256,
+                    lifecycle="inflight_reconciliation_required",
+                    logical_judgments=progress.logical_judgments,
+                    physical_attempts=progress.physical_attempts,
+                    reserved_logical_judgments=progress.logical_judgments,
+                    reserved_physical_attempts=progress.physical_attempts,
+                    reserved_cost_usd=progress.reserved_cost_usd,
+                    last_cell_id=None,
+                    last_pair_id=None,
+                ),
+            )
+            return _DynamicRunOutcome(
+                evidence=None,
+                logical_judgments=progress.logical_judgments,
+                physical_attempts=progress.physical_attempts,
+            )
+
+        _atomic_write_dynamic_json(
+            root / _DYNAMIC_STATUS,
+            _dynamic_status_payload(
+                manifest_sha256=self.manifest_sha256,
+                lifecycle="running",
+                logical_judgments=progress.logical_judgments,
+                physical_attempts=progress.physical_attempts,
+                reserved_logical_judgments=progress.logical_judgments,
+                reserved_physical_attempts=progress.physical_attempts,
+                reserved_cost_usd=progress.reserved_cost_usd,
+                last_cell_id=None,
+                last_pair_id=None,
+            ),
+        )
+        config = _dynamic_runtime_config(self.closure)
+        guard = _DynamicBudgetGuard(
+            manifest=self.manifest,
+            manifest_sha256=self.manifest_sha256,
+            root=root,
+            progress=progress,
+        )
+        cells: list[_PromptModelCellEvidence] = []
+        try:
+            for cell_index, (cell, adapter) in enumerate(self.preflight.adapters):
+                guard.select_cell(cell)
+                external_baseline = self.preflight.external_request_baselines[cell.cell_id]
+
+                def validate_terminal(
+                    evidence: Mapping[str, object],
+                    active_cell: _PromptModelCell = cell,
+                    active_adapter: OpenAICompatibleDecisionAdapter = adapter,
+                    baseline: int = external_baseline,
+                ) -> None:
+                    _validate_dynamic_terminal(
+                        evidence,
+                        manifest=self.manifest,
+                        cell=active_cell,
+                        adapter=active_adapter,
+                        external_baseline=baseline,
+                    )
+
+                consumer = _PrimaryOnlyConcurrentRuntimeConsumer(
+                    config,
+                    adapter,
+                    expected_prompt_version=cell.prompt_version,
+                    execution_contract=_cell_execution_identity(
+                        manifest=self.manifest,
+                        manifest_sha256=self.manifest_sha256,
+                        cell_index=cell_index,
+                        cell=cell,
+                    ),
+                    expected_sample_identity=self.manifest.sample.sample_identity,
+                    before_logical_judgment=guard.before,
+                    validate_terminal=validate_terminal,
+                    after_logical_judgment=guard.after,
+                )
+                output_target = _cell_output_target(root, cell_index)
+                workspace = derive_concurrent_execution_workspace(output_target)
+                try:
+                    result = consumer.resume(output_target) if workspace.exists() else consumer.run_new(output_target)
+                except _DynamicCapExhausted:
+                    return _DynamicRunOutcome(
+                        evidence=None,
+                        logical_judgments=guard.logical_judgments,
+                        physical_attempts=guard.physical_attempts,
+                    )
+                _validate_dynamic_initial_state(
+                    result,
+                    source_candidate_rows=self.closure.source_evidence.candidate_rows,
+                )
+                cell_evidence = _build_dynamic_cell_evidence(
+                    manifest=self.manifest,
+                    manifest_sha256=self.manifest_sha256,
+                    cell_index=cell_index,
+                    cell=cell,
+                    result=result,
+                )
+                if cell_evidence.logical_judgment_count != self.manifest.request_caps.logical_judgments_per_cell:
+                    raise ValueError("dynamic cell did not close its complete logical schedule")
+                cells.append(cell_evidence)
+        except ConcurrentRobustnessError:
+            raise
+        except (FileNotFoundError, OSError, TypeError, ValueError, json.JSONDecodeError) as exc:
+            raise ConcurrentRobustnessError(
+                ConcurrentRobustnessErrorCode.WORKSPACE_CORRUPT,
+                "dynamic Prompt-Model runtime or durable checkpoint failed closed",
+            ) from exc
+
+        logical_judgments = sum(cell.logical_judgment_count for cell in cells)
+        physical_attempts = sum(cell.physical_attempt_count for cell in cells)
+        external_request_invocations = 0 if execution.profile == "deterministic_validation" else physical_attempts
+        evidence = _CellEvidenceDocument(
+            schema_version="concurrent-robustness-cell-evidence-v1",
+            evidence_profile=(
+                "deterministic_fixture" if execution.profile == "deterministic_validation" else "formal_live"
+            ),
+            manifest_sha256=self.manifest_sha256,
+            source_identity=_expected_cell_source_identity(self.manifest),
+            request_contract=self.manifest.request_contract,
+            request_contract_sha256=_sha256_bytes(
+                _json_bytes(self.manifest.request_contract.model_dump(mode="json"))
+            ),
+            message_ids=self.manifest.message_ids,
+            cell_count=len(cells),
+            logical_judgment_count=logical_judgments,
+            physical_attempt_count=physical_attempts,
+            external_request_invocations=external_request_invocations,
+            live_api_triggered=external_request_invocations > 0,
+            production_deploy_eligible=False,
+            conditional_scope="fixed-sample-fixed-graph-one-realized-path-per-cell",
+            claim_statements=_SAFE_CLAIM_STATEMENTS,
+            cells=tuple(cells),
+        )
+        _atomic_write_dynamic_json(
+            root / _DYNAMIC_STATUS,
+            _dynamic_status_payload(
+                manifest_sha256=self.manifest_sha256,
+                lifecycle="cells_complete",
+                logical_judgments=logical_judgments,
+                physical_attempts=physical_attempts,
+                reserved_logical_judgments=logical_judgments,
+                reserved_physical_attempts=physical_attempts,
+                reserved_cost_usd=guard.reserved_cost_usd,
+                last_cell_id=cells[-1].cell_id,
+                last_pair_id=cells[-1].terminal_rows[-1].pair_id,
+            ),
+        )
+        return _DynamicRunOutcome(
+            evidence=evidence,
+            logical_judgments=logical_judgments,
+            physical_attempts=physical_attempts,
+        )
+
+
 def _write_new_workspace(
     output_path: Path,
     *,
@@ -2887,12 +4241,11 @@ def _write_new_workspace(
 class ConcurrentRobustnessStudy:
     """Run or resume one robustness study behind a single high-level Interface.
 
-    ``None`` creates the zero-call Ranking Weight workspace. When the same private
-    workspace contains registry-authenticated complete deterministic cell evidence,
-    resume validates and analyzes it before atomically closing an immutable study
-    root. A caller may then supply one explicit ``report_destination`` on a
-    complete resume; the private composer independently closes the historical
-    Formal root and study root before publishing a separate non-deployable candidate.
+    ``None`` creates the zero-call Ranking Weight workspace. An exact, explicitly
+    authorized 16-cell Adapter map runs or resumes independent Primary-only cells;
+    deterministic validation accepts injected clients only and cannot trigger an
+    external request. Complete cell evidence is closed into an immutable study root
+    and a separate non-deployable report candidate behind this same Interface.
     """
 
     def run(
@@ -2908,12 +4261,6 @@ class ConcurrentRobustnessStudy:
                 ConcurrentRobustnessErrorCode.INVALID_MANIFEST,
                 "ConcurrentRobustnessStudy requires a typed immutable manifest",
             )
-        if adapters_by_cell is not None:
-            raise ConcurrentRobustnessError(
-                ConcurrentRobustnessErrorCode.UNSUPPORTED_ADAPTERS,
-                "dynamic Prompt-Model adapters are unavailable in the static robustness slice",
-            )
-
         source_path = _resolve_source_path(manifest.source.source_dir)
         output_path = _resolve_output_path(output_dir)
         _validate_study_paths(source_path, output_path)
@@ -2942,6 +4289,12 @@ class ConcurrentRobustnessStudy:
                 "frozen candidate or feedback evidence failed the dedicated weight analysis contract",
             ) from exc
         _assert_source_unchanged(closure)
+        dynamic_preflight: _DynamicPreflight | None = None
+        if adapters_by_cell is not None:
+            if not isinstance(adapters_by_cell, Mapping):
+                raise _dynamic_adapter_error("dynamic adapters_by_cell must be a Mapping")
+            dynamic_preflight = _preflight_dynamic_adapters(manifest, adapters_by_cell)
+
         if output_path.exists():
             try:
                 actual_files = {path.name for path in output_path.iterdir()}
@@ -2950,17 +4303,40 @@ class ConcurrentRobustnessStudy:
                     ConcurrentRobustnessErrorCode.WORKSPACE_CORRUPT,
                     "existing robustness workspace cannot be inspected safely",
                 ) from exc
-            cell_workspace = actual_files - _WORKSPACE_FILES == _CELL_WORKSPACE_ADDITIONS
+            workspace_extras = actual_files - _WORKSPACE_FILES
+            cell_workspace = workspace_extras == _CELL_WORKSPACE_ADDITIONS
+            dynamic_partial = (
+                dynamic_preflight is not None
+                and bool(workspace_extras)
+                and workspace_extras < _CELL_WORKSPACE_ADDITIONS
+                and _dynamic_root(output_path).is_dir()
+            )
             ready_result = _validate_workspace(
                 output_path,
                 output_path=output_path,
                 manifest=manifest,
                 manifest_sha256=manifest_sha256,
                 analysis=analysis,
-                allowed_extra_files=_CELL_WORKSPACE_ADDITIONS if cell_workspace else None,
+                allowed_extra_files=(
+                    _CELL_WORKSPACE_ADDITIONS
+                    if cell_workspace
+                    else workspace_extras
+                    if dynamic_partial
+                    else None
+                ),
             )
             if not cell_workspace:
                 _assert_source_unchanged(closure)
+                if dynamic_preflight is not None:
+                    return self._run_dynamic(
+                        manifest=manifest,
+                        manifest_sha256=manifest_sha256,
+                        output_path=output_path,
+                        source_path=source_path,
+                        closure=closure,
+                        preflight=dynamic_preflight,
+                        report_destination=report_destination,
+                    )
                 if report_destination is not None:
                     raise ConcurrentRobustnessError(
                         ConcurrentRobustnessErrorCode.ANALYSIS_INVALID,
@@ -2973,6 +4349,14 @@ class ConcurrentRobustnessStudy:
                 manifest=manifest,
                 manifest_sha256=manifest_sha256,
             )
+            if dynamic_preflight is not None:
+                _validate_completed_dynamic_root(
+                    manifest=manifest,
+                    manifest_sha256=manifest_sha256,
+                    output_path=output_path,
+                    source_path=source_path,
+                    evidence=evidence,
+                )
             try:
                 prompt_model_analysis, claim_audit = _RobustnessAnalyzer(
                     manifest=manifest,
@@ -3008,17 +4392,31 @@ class ConcurrentRobustnessStudy:
                 ) from exc
             _assert_source_unchanged(closure)
             report_candidate: Path | None = None
-            if report_destination is not None:
+            effective_report_destination = report_destination
+            if dynamic_preflight is not None and effective_report_destination is None:
+                effective_report_destination = _dynamic_report_destination(output_path)
+            if effective_report_destination is not None:
                 try:
-                    report_candidate = _compose_concurrent_robustness_report_candidate(
-                        formal_root=source_path,
-                        study_root=study_root,
-                        workspace_root=output_path,
-                        manifest=manifest,
-                        manifest_payload=manifest_payload,
-                        manifest_sha256=manifest_sha256,
-                        destination_dir=report_destination,
-                    )
+                    if dynamic_preflight is not None and os.path.lexists(effective_report_destination):
+                        report_candidate = _validate_concurrent_robustness_report_candidate(
+                            formal_root=source_path,
+                            study_root=study_root,
+                            workspace_root=output_path,
+                            manifest=manifest,
+                            manifest_payload=manifest_payload,
+                            manifest_sha256=manifest_sha256,
+                            candidate_dir=effective_report_destination,
+                        )
+                    else:
+                        report_candidate = _compose_concurrent_robustness_report_candidate(
+                            formal_root=source_path,
+                            study_root=study_root,
+                            workspace_root=output_path,
+                            manifest=manifest,
+                            manifest_payload=manifest_payload,
+                            manifest_sha256=manifest_sha256,
+                            destination_dir=effective_report_destination,
+                        )
                 except _RobustnessReportPathError as exc:
                     raise ConcurrentRobustnessError(
                         ConcurrentRobustnessErrorCode.PATH_VIOLATION,
@@ -3050,7 +4448,7 @@ class ConcurrentRobustnessStudy:
                 study_root=study_root,
                 report_candidate=report_candidate,
             )
-        if report_destination is not None:
+        if report_destination is not None and dynamic_preflight is None:
             raise ConcurrentRobustnessError(
                 ConcurrentRobustnessErrorCode.ANALYSIS_INVALID,
                 "robustness report composition requires an existing complete study workspace",
@@ -3070,4 +4468,60 @@ class ConcurrentRobustnessStudy:
                 "robustness workspace could not be written atomically",
             ) from exc
         _assert_source_unchanged(closure)
+        if dynamic_preflight is not None:
+            return self._run_dynamic(
+                manifest=manifest,
+                manifest_sha256=manifest_sha256,
+                output_path=output_path,
+                source_path=source_path,
+                closure=closure,
+                preflight=dynamic_preflight,
+                report_destination=report_destination,
+            )
         return result
+
+    def _run_dynamic(
+        self,
+        *,
+        manifest: ConcurrentRobustnessManifest,
+        manifest_sha256: str,
+        output_path: Path,
+        source_path: Path,
+        closure: ConcurrentMessageArtifactClosure,
+        preflight: _DynamicPreflight,
+        report_destination: str | Path | None,
+    ) -> ConcurrentRobustnessStudyResult:
+        outcome = _DynamicPromptModelProducer(
+            manifest=manifest,
+            manifest_sha256=manifest_sha256,
+            output_path=output_path,
+            source_path=source_path,
+            closure=closure,
+            preflight=preflight,
+        ).run()
+        _assert_source_unchanged(closure)
+        if outcome.evidence is None:
+            return ConcurrentRobustnessStudyResult(
+                status=ConcurrentRobustnessStudyStatus.RESUMABLE,
+                workspace_root=output_path,
+                validation_report=output_path / _WORKSPACE_VALIDATION,
+                manifest_sha256=manifest_sha256,
+                logical_provider_attempts=outcome.logical_judgments,
+                physical_provider_attempts=outcome.physical_attempts,
+                study_root=None,
+                report_candidate=None,
+            )
+        _publish_dynamic_evidence(
+            output_path,
+            manifest=manifest,
+            manifest_sha256=manifest_sha256,
+            evidence=outcome.evidence,
+        )
+        _assert_source_unchanged(closure)
+        destination = report_destination or _dynamic_report_destination(output_path)
+        return self.run(
+            manifest,
+            None,
+            output_path,
+            report_destination=destination,
+        )
