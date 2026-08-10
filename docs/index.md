@@ -4,10 +4,10 @@
 
 ## Current Research
 
-- **Canonical endpoint：** [Multi-Message Editorial Formal Presentation](https://abm.q1ngyuan.top/)。
+- **Canonical endpoint：** [Concurrent Robustness Formal Research Report](https://abm.q1ngyuan.top/)。
 - **Current architecture：** [Concurrent Message Competition Experiment](architecture/concurrent-message-competition-experiment.md)。
 
-当前 Editorial release 覆盖 1,000 位 Research Sample users、3 条 message、30 个 batch 和每条 message 600 次曝光。默认 toy/realistic fixture、offline/mock validation 和 rule-based run 都不能替代 persisted Formal evidence 或 canonical release。
+当前 release 在既有 1,000 位 Research Sample users、3 条 message、30 个 batch 和历史 Primary + Shadow evidence 上，增量发布 19-point Ranking Weight Sensitivity 与 Primary-only `4 Prompt × 4 model` Formal Robustness Study。默认 toy/realistic fixture、offline/mock validation 和 rule-based run 都不能替代 persisted Formal evidence 或 canonical release。
 
 ## 运行与演示
 
@@ -36,7 +36,7 @@ Architecture 描述当前 Module、数据边界和稳定运行语义；ADR 记�
 
 - [References 总览](references/README.md)
 - [current dataset：锦江 final dataset 审计](references/jinjiang-final-dataset-audit-20260624.md)
-- [current Editorial：Editorial v3 Formal 发布记录](references/jinjiang-concurrent-message-editorial-v3-formal-release-20260807.md)
+- [current Formal release：Concurrent Robustness 发布记录](references/jinjiang-concurrent-robustness-formal-release-20260810.md)
 - [current Retention：Retention final evidence](references/retention-cleanup-final-evidence-20260730.md)
 
 References README 使用决策表区分默认读取、按需 research、按需 rollback 和 forensic-only evidence。Editorial v1/v2/v3 mechanism source PNG 由 `src/llm_abm_sim/report_assets/` 统一拥有；generated WebP 和 renderer compatibility contract 继续由代码与测试保护。
