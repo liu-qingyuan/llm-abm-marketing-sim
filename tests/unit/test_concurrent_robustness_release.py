@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib.util
 import json
 from pathlib import Path
 from types import SimpleNamespace
@@ -192,6 +193,46 @@ def test_formal_candidate_promotes_without_mutating_validation_evidence(
     )
     assert validated["production_deploy_eligible"] is True
     assert validated["logical_judgments"] == 28_800
+
+
+def test_release_validator_routes_v5_contract_through_strong_gate(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    validator_path = Path(__file__).resolve().parents[2] / "scripts" / "validate_abm_report_release.py"
+    spec = importlib.util.spec_from_file_location("validate_abm_report_release_v5_test", validator_path)
+    assert spec is not None and spec.loader is not None
+    validator = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(validator)
+    source = tmp_path / "release"
+    source.mkdir()
+    contract = tmp_path / "release-contract.json"
+    _write_json(contract, {"schema_version": "abm-report-release-contract-v5"})
+    expected = {
+        "schema_version": "abm-report-release-contract-v5",
+        "release_purpose": "concurrent_robustness_formal_research",
+        "source_directory": "release",
+        "sampling_method": "seed_first_research_sample_v1",
+        "sampling_status": "persisted_seed_first_formal_run",
+        "decision_execution_mode": "live_provider",
+        "report_sha256": "a" * 64,
+        "production_deploy_eligible": True,
+    }
+    calls: list[dict[str, object]] = []
+
+    def validate_v5(**kwargs: object) -> dict[str, object]:
+        calls.append(kwargs)
+        return expected
+
+    monkeypatch.setattr(validator, "validate_concurrent_robustness_production_release", validate_v5)
+
+    assert validator.validate_release(
+        repo_root=tmp_path,
+        contract_path=contract,
+        source_dir=source,
+    ) == expected
+    assert len(calls) == 1
+    assert calls[0]["source_dir"] == source
 
 
 def test_production_release_rejects_post_close_report_mutation(
