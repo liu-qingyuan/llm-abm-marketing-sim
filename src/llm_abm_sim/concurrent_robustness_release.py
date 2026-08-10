@@ -215,6 +215,9 @@ def promote_concurrent_robustness_release(
             "validation_candidate_evidence_sha256": candidate_evidence_sha256,
             "formal_execution_contract": execution_contract_file.relative_to(root).as_posix(),
             "formal_execution_contract_sha256": execution_contract_sha256,
+            "formal_judgment_implementation_commit": execution_contract["implementation_commit"],
+            "formal_closure_implementation_commit": execution_contract["closure_implementation_commit"],
+            "formal_closure_replay_sha256": execution_contract["closure_replay_sha256"],
             "adapter_identity": CONCURRENT_ROBUSTNESS_SUBSCRIPTION_ADAPTER_IDENTITY,
             "provider_transport": "openai-codex",
             "requested_observed_model_aliases": PI_SUBSCRIPTION_MODEL_ALIASES,
@@ -283,6 +286,9 @@ def validate_concurrent_robustness_production_release(
         "validation_candidate_evidence_sha256",
         "formal_execution_contract",
         "formal_execution_contract_sha256",
+        "formal_judgment_implementation_commit",
+        "formal_closure_implementation_commit",
+        "formal_closure_replay_sha256",
         "adapter_identity",
         "provider_transport",
         "requested_observed_model_aliases",
@@ -314,6 +320,21 @@ def validate_concurrent_robustness_production_release(
         or contract_document.get("artifact_manifest_schema_version") != ROBUSTNESS_PRODUCTION_MANIFEST_SCHEMA
         or contract_document.get("report_payload_schema_version") != "concurrent-robustness-report-payload-v1"
         or contract_document.get("production_evidence_schema_version") != ROBUSTNESS_PRODUCTION_EVIDENCE_SCHEMA
+        or not _COMMIT.fullmatch(
+            _string(
+                contract_document.get("formal_judgment_implementation_commit"),
+                "Formal judgment implementation commit",
+            )
+        )
+        or not _COMMIT.fullmatch(
+            _string(
+                contract_document.get("formal_closure_implementation_commit"),
+                "Formal closure implementation commit",
+            )
+        )
+        or not _SHA256.fullmatch(
+            _string(contract_document.get("formal_closure_replay_sha256"), "Formal closure replay SHA-256")
+        )
         or contract_document.get("adapter_identity") != CONCURRENT_ROBUSTNESS_SUBSCRIPTION_ADAPTER_IDENTITY
         or contract_document.get("provider_transport") != "openai-codex"
         or contract_document.get("requested_observed_model_aliases") != PI_SUBSCRIPTION_MODEL_ALIASES
@@ -399,6 +420,12 @@ def validate_concurrent_robustness_production_release(
     if (
         cell_evidence.logical_judgment_count != ROBUSTNESS_FORMAL_LOGICAL_JUDGMENTS
         or cell_evidence.physical_attempt_count != physical_attempts
+        or contract_document.get("formal_judgment_implementation_commit")
+        != execution_contract.get("implementation_commit")
+        or contract_document.get("formal_closure_implementation_commit")
+        != execution_contract.get("closure_implementation_commit")
+        or contract_document.get("formal_closure_replay_sha256")
+        != execution_contract.get("closure_replay_sha256")
         or execution_contract.get("physical_provider_attempts") != physical_attempts
         or execution_contract.get("subscription_billed_cost_usd") != 0.0
     ):
@@ -466,6 +493,10 @@ def _validate_parallel_cell_execution(
         "parallel_cell_indices",
         "parallel_cell_strategy",
         "main_process_subscription_nominal_reference_cost_usd",
+        "parallel_worker_subscription_nominal_reference_cost_usd",
+        "main_process_physical_attempts",
+        "parallel_worker_physical_attempts",
+        "parallel_worker_completion_sha256",
     }
     if not required.issubset(document):
         raise ConcurrentRobustnessReleaseError("parallel Formal execution evidence is incomplete")
@@ -500,11 +531,21 @@ def _validate_parallel_cell_execution(
         raise ConcurrentRobustnessReleaseError("parallel subscription nominal reference cost is invalid")
     worker_nominal = 0.0
     worker_physical = 0
+    completion_hashes = _string_mapping(
+        document.get("parallel_worker_completion_sha256"),
+        "parallel worker completion hashes",
+    )
+    if set(completion_hashes) != {f"cell-{index:02d}" for index in range(1, 16)}:
+        raise ConcurrentRobustnessReleaseError("parallel worker completion hash inventory is incomplete")
     dynamic_root = _dynamic_root(workspace)
     for cell_index in range(1, 16):
         cell = manifest.prompt_model_cells[cell_index]
         completion_path = dynamic_root / f"cell-{cell_index:02d}" / "cell_worker_completion.json"
         completion = _json_object(completion_path)
+        if completion_hashes[f"cell-{cell_index:02d}"] != _sha256_file(completion_path):
+            raise ConcurrentRobustnessReleaseError(
+                f"parallel cell {cell_index} completion hash is crossed"
+            )
         completion_physical = _strict_int(
             completion.get("physical_attempts"),
             f"parallel cell {cell_index} physical attempts",
@@ -543,13 +584,25 @@ def _validate_parallel_cell_execution(
         worker_nominal += float(nominal)
     main_physical = physical_attempts - worker_physical
     per_cell_logical = manifest.request_caps.logical_judgments_per_cell
-    if not per_cell_logical <= main_physical <= per_cell_logical * (manifest.request_contract.max_retries + 1):
-        raise ConcurrentRobustnessReleaseError("main-process cell physical accounting is crossed")
-    if not math.isclose(
-        float(aggregate_nominal),
-        float(main_nominal) + worker_nominal,
-        rel_tol=0.0,
-        abs_tol=1e-12,
+    if (
+        not per_cell_logical
+        <= main_physical
+        <= per_cell_logical * (manifest.request_contract.max_retries + 1)
+        or document.get("main_process_physical_attempts") != main_physical
+        or document.get("parallel_worker_physical_attempts") != worker_physical
+    ):
+        raise ConcurrentRobustnessReleaseError("main/worker physical accounting is crossed")
+    recorded_worker_nominal = document.get("parallel_worker_subscription_nominal_reference_cost_usd")
+    if (
+        isinstance(recorded_worker_nominal, bool)
+        or not isinstance(recorded_worker_nominal, (int, float))
+        or not math.isclose(float(recorded_worker_nominal), worker_nominal, rel_tol=0.0, abs_tol=1e-12)
+        or not math.isclose(
+            float(aggregate_nominal),
+            float(main_nominal) + worker_nominal,
+            rel_tol=0.0,
+            abs_tol=1e-12,
+        )
     ):
         raise ConcurrentRobustnessReleaseError("parallel nominal reference cost does not close")
 
@@ -589,6 +642,17 @@ def _validate_execution_contract(
         "completion_status",
         "logical_provider_attempts",
         "physical_provider_attempts",
+        "closure_implementation_commit",
+        "closure_replay_artifact",
+        "closure_replay_sha256",
+        "closure_study_module_artifact",
+        "closure_study_module_sha256",
+        "closure_report_module_artifact",
+        "closure_report_module_sha256",
+        "closure_provider_requests",
+        "closure_subscription_billed_cost_usd",
+        "study_artifact_manifest_sha256",
+        "report_candidate_manifest_sha256",
         "subscription_nominal_reference_cost_usd",
         "subscription_billed_cost_usd",
         "subscription_billing_evidence",
@@ -607,6 +671,8 @@ def _validate_execution_contract(
         or document.get("canonical_deployment_authorized_after_validation") is not True
         or document.get("completion_status") != "complete"
         or document.get("logical_provider_attempts") != ROBUSTNESS_FORMAL_LOGICAL_JUDGMENTS
+        or document.get("closure_provider_requests") != 0
+        or document.get("closure_subscription_billed_cost_usd") != 0.0
         or document.get("subscription_billed_cost_usd") != 0.0
         or document.get("subscription_billing_evidence") != "openai-codex OAuth subscription transport"
         or isinstance(document.get("subscription_nominal_reference_cost_usd"), bool)
@@ -622,6 +688,8 @@ def _validate_execution_contract(
         "formal_runner_sha256": "formal_runner_artifact",
         "subscription_worker_sha256": "subscription_worker_artifact",
         "subscription_client_sha256": "subscription_client_artifact",
+        "closure_study_module_sha256": "closure_study_module_artifact",
+        "closure_report_module_sha256": "closure_report_module_artifact",
     }
     for hash_key, path_key in implementation_artifacts.items():
         expected_hash = _string(document.get(hash_key), hash_key)
@@ -634,6 +702,41 @@ def _validate_execution_contract(
         )
         if _sha256_file(artifact) != expected_hash:
             raise ConcurrentRobustnessReleaseError(f"Formal implementation artifact is crossed: {path_key}")
+
+    closure_commit = _string(document.get("closure_implementation_commit"), "closure implementation commit")
+    if not _COMMIT.fullmatch(closure_commit):
+        raise ConcurrentRobustnessReleaseError("closure implementation commit is invalid")
+    closure_replay = _repo_file(
+        root,
+        Path(_string(document.get("closure_replay_artifact"), "closure replay artifact")),
+        "closure replay artifact",
+    )
+    closure_replay_sha256 = _string(document.get("closure_replay_sha256"), "closure replay SHA-256")
+    closure_document = _json_object(closure_replay)
+    if (
+        not _SHA256.fullmatch(closure_replay_sha256)
+        or _sha256_file(closure_replay) != closure_replay_sha256
+        or closure_document.get("schema_version") != "concurrent-robustness-formal-closure-replay-v1"
+        or closure_document.get("closure_implementation_commit") != closure_commit
+        or closure_document.get("status") != "complete"
+        or closure_document.get("manifest_sha256") != manifest_sha256
+        or closure_document.get("logical_provider_attempts") != ROBUSTNESS_FORMAL_LOGICAL_JUDGMENTS
+        or closure_document.get("physical_provider_attempts") != physical_attempts
+        or closure_document.get("provider_requests_during_closure_replay") != 0
+        or closure_document.get("subscription_billed_cost_usd_during_closure") != 0.0
+        or Path(_string(closure_document.get("workspace"), "closure workspace")).resolve(strict=True)
+        != workspace
+        or Path(_string(closure_document.get("study_root"), "closure study root")).resolve(strict=True)
+        != study
+        or Path(_string(closure_document.get("report_candidate"), "closure report candidate")).resolve(
+            strict=True
+        )
+        != candidate
+        or document.get("study_artifact_manifest_sha256") != _sha256_file(study / "artifact_manifest.json")
+        or document.get("report_candidate_manifest_sha256")
+        != _sha256_file(candidate / CONCURRENT_MESSAGE_ARTIFACT_MANIFEST_JSON)
+    ):
+        raise ConcurrentRobustnessReleaseError("zero-call Formal closure replay evidence is crossed")
 
     if document.get("parallel_cell_execution_used") is True:
         _validate_parallel_cell_execution(
@@ -822,7 +925,9 @@ def _production_payloads(
         "validation_candidate_evidence_sha256": candidate_hashes[ROBUSTNESS_CANDIDATE_RELEASE_EVIDENCE],
         "validation_candidate_content_identity_sha256": candidate_evidence["candidate_content_identity_sha256"],
         "formal_execution_contract_sha256": execution_contract_sha256,
-        "formal_implementation_commit": execution_contract["implementation_commit"],
+        "formal_judgment_implementation_commit": execution_contract["implementation_commit"],
+        "formal_closure_implementation_commit": execution_contract["closure_implementation_commit"],
+        "formal_closure_replay_sha256": execution_contract["closure_replay_sha256"],
         "adapter_identity": CONCURRENT_ROBUSTNESS_SUBSCRIPTION_ADAPTER_IDENTITY,
         "provider_transport": "openai-codex",
         "requested_observed_model_aliases": PI_SUBSCRIPTION_MODEL_ALIASES,
@@ -863,6 +968,9 @@ def _production_payloads(
         },
         "formal_execution": {
             "contract_sha256": execution_contract_sha256,
+            "judgment_implementation_commit": execution_contract["implementation_commit"],
+            "closure_implementation_commit": execution_contract["closure_implementation_commit"],
+            "closure_replay_sha256": execution_contract["closure_replay_sha256"],
             "logical_judgments": ROBUSTNESS_FORMAL_LOGICAL_JUDGMENTS,
             "physical_attempts": physical_attempts,
             "subscription_billed_cost_usd": 0.0,

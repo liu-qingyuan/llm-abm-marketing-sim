@@ -148,6 +148,8 @@ def test_formal_candidate_promotes_without_mutating_validation_evidence(
 
     execution_document = {
         "implementation_commit": "1234567",
+        "closure_implementation_commit": "7654321",
+        "closure_replay_sha256": "e" * 64,
         "physical_provider_attempts": 28_800,
         "subscription_nominal_reference_cost_usd": 1.25,
         "subscription_billed_cost_usd": 0.0,
@@ -282,6 +284,8 @@ def test_production_release_rejects_post_close_report_mutation(
         "_validate_execution_contract",
         lambda **_kwargs: {
             "implementation_commit": "1234567",
+            "closure_implementation_commit": "7654321",
+            "closure_replay_sha256": "e" * 64,
             "physical_provider_attempts": 28_800,
             "subscription_nominal_reference_cost_usd": 1.25,
         },
