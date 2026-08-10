@@ -3003,6 +3003,16 @@ def test_concurrent_robustness_composes_two_closed_sources_into_an_immutable_rep
     tmp_path: Path,
 ) -> None:
     source_dir = _make_validation_report_source(tmp_path, "robustness-report-source")
+    source_closure = close_concurrent_message_artifacts(source_dir)
+    legacy_html = _legacy_render_report(source_closure.report_payload)
+    (source_dir / "report.html").write_text(legacy_html, encoding="utf-8")
+    source_manifest = _read_json(source_dir / "artifact_manifest.json")
+    source_manifest["sha256"]["report_html"] = _sha256(source_dir / "report.html")
+    (source_dir / "artifact_manifest.json").write_text(
+        json.dumps(source_manifest, ensure_ascii=False, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    assert 'data-testid="mechanism-overview-section"' not in legacy_html
     manifest = _robustness_manifest_for_source(source_dir, output_identity="fixture-report-v1")
     workspace = tmp_path / "robustness-report-workspace"
     destination = tmp_path / "robustness-report-candidate"

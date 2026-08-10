@@ -16,6 +16,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from .concurrent_message_renderer import render_report
 from .concurrent_message_report import (
     CONCURRENT_MESSAGE_ARTIFACT_MANIFEST_JSON,
     CONCURRENT_MESSAGE_REPORT_HTML,
@@ -786,7 +787,7 @@ def _candidate_payloads(
     payloads[_PROMPT_GROWTH_CSV] = _csv_bytes(_PROMPT_GROWTH_FIELDS, rows.prompt_growth)
     payloads[_THRESHOLD_CSV] = _csv_bytes(_THRESHOLD_FIELDS, rows.thresholds)
 
-    formal_html = formal.report_html
+    formal_html = render_report(formal.report_payload)
     payloads[CONCURRENT_MESSAGE_REPORT_HTML] = _render_additive_report(
         formal_html,
         payload=report_payload,
