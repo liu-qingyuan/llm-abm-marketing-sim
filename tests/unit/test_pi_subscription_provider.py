@@ -8,7 +8,7 @@ import pytest
 from llm_abm_sim.prompt_contracts import CONCURRENT_ROBUSTNESS_PROMPT_TOKENS
 from llm_abm_sim.providers.openai_compatible import OpenAICompatibleDecisionAdapter
 from llm_abm_sim.providers.pi_subscription import PiSubscriptionProviderClient, PiSubscriptionProviderError
-from llm_abm_sim.schemas import PeerContext, PostContent, ProviderLLMConfig, UserProfile
+from llm_abm_sim.schemas import PeerContext, PostContent, ProviderLLMConfig, ReasoningEffort, UserProfile
 
 
 def _fake_worker(path: Path) -> Path:
@@ -111,7 +111,7 @@ def test_subscription_client_is_external_accounted_and_secret_free(
             model="gpt-5.4-mini",
             require_live_env=True,
             prompt_version=CONCURRENT_ROBUSTNESS_PROMPT_TOKENS[0],
-            reasoning_effort="low",
+            reasoning_effort=ReasoningEffort.LOW,
             max_output_tokens=256,
         ),
         client=client,

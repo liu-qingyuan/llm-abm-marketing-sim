@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 import re
 import shutil
@@ -20,6 +21,7 @@ from .concurrent_robustness_study import (
     CONCURRENT_ROBUSTNESS_SUBSCRIPTION_ADAPTER_IDENTITY,
     ConcurrentRobustnessManifest,
     _CellEvidenceDocument,
+    _dynamic_root,
     _validate_cell_evidence_contract,
     _validate_completed_dynamic_root,
 )
@@ -448,6 +450,110 @@ def _close_formal_cell_evidence(
         ) from exc
 
 
+def _validate_parallel_cell_execution(
+    *,
+    root: Path,
+    document: Mapping[str, Any],
+    manifest: ConcurrentRobustnessManifest,
+    manifest_sha256: str,
+    workspace: Path,
+    physical_attempts: int,
+) -> None:
+    required = {
+        "parallel_cell_worker_commit",
+        "parallel_cell_worker_artifact",
+        "parallel_cell_worker_sha256",
+        "parallel_cell_indices",
+        "parallel_cell_strategy",
+        "main_process_subscription_nominal_reference_cost_usd",
+    }
+    if not required.issubset(document):
+        raise ConcurrentRobustnessReleaseError("parallel Formal execution evidence is incomplete")
+    if (
+        not _COMMIT.fullmatch(
+            _string(document.get("parallel_cell_worker_commit"), "parallel cell worker commit")
+        )
+        or document.get("parallel_cell_indices") != list(range(1, 16))
+        or document.get("parallel_cell_strategy") != "disjoint-final-journals-main-study-replay-v1"
+    ):
+        raise ConcurrentRobustnessReleaseError("parallel Formal execution identity is crossed")
+    worker_sha256 = _string(document.get("parallel_cell_worker_sha256"), "parallel cell worker SHA-256")
+    if not _SHA256.fullmatch(worker_sha256):
+        raise ConcurrentRobustnessReleaseError("parallel cell worker SHA-256 is invalid")
+    worker_artifact = _repo_file(
+        root,
+        Path(_string(document.get("parallel_cell_worker_artifact"), "parallel cell worker artifact")),
+        "parallel cell worker artifact",
+    )
+    if _sha256_file(worker_artifact) != worker_sha256:
+        raise ConcurrentRobustnessReleaseError("parallel cell worker artifact hash is crossed")
+    main_nominal = document.get("main_process_subscription_nominal_reference_cost_usd")
+    aggregate_nominal = document.get("subscription_nominal_reference_cost_usd")
+    if (
+        isinstance(main_nominal, bool)
+        or not isinstance(main_nominal, (int, float))
+        or float(main_nominal) < 0.0
+        or isinstance(aggregate_nominal, bool)
+        or not isinstance(aggregate_nominal, (int, float))
+        or float(aggregate_nominal) < 0.0
+    ):
+        raise ConcurrentRobustnessReleaseError("parallel subscription nominal reference cost is invalid")
+    worker_nominal = 0.0
+    worker_physical = 0
+    dynamic_root = _dynamic_root(workspace)
+    for cell_index in range(1, 16):
+        cell = manifest.prompt_model_cells[cell_index]
+        completion_path = dynamic_root / f"cell-{cell_index:02d}" / "cell_worker_completion.json"
+        completion = _json_object(completion_path)
+        completion_physical = _strict_int(
+            completion.get("physical_attempts"),
+            f"parallel cell {cell_index} physical attempts",
+        )
+        nominal = completion.get("subscription_nominal_reference_cost_usd")
+        expected_workspace = (
+            dynamic_root
+            / f"cell-{cell_index:02d}"
+            / ".primary-only.operational"
+        ).resolve(strict=True)
+        if (
+            completion.get("schema_version")
+            != "concurrent-robustness-formal-cell-worker-completion-v1"
+            or completion.get("manifest_sha256") != manifest_sha256
+            or completion.get("cell_index") != cell_index
+            or completion.get("cell_id") != cell.cell_id
+            or completion.get("requested_model") != cell.requested_model
+            or completion.get("observed_model") != cell.required_observed_model
+            or completion.get("logical_judgments") != manifest.request_caps.logical_judgments_per_cell
+            or not manifest.request_caps.logical_judgments_per_cell
+            <= completion_physical
+            <= manifest.request_caps.logical_judgments_per_cell
+            * (manifest.request_contract.max_retries + 1)
+            or isinstance(nominal, bool)
+            or not isinstance(nominal, (int, float))
+            or float(nominal) < 0.0
+            or completion.get("subscription_billed_cost_usd") != 0.0
+            or Path(_string(completion.get("journal_workspace"), "parallel journal workspace")).resolve(
+                strict=True
+            )
+            != expected_workspace
+            or completion.get("production_deploy_eligible") is not False
+        ):
+            raise ConcurrentRobustnessReleaseError(f"parallel cell {cell_index} completion evidence is crossed")
+        worker_physical += completion_physical
+        worker_nominal += float(nominal)
+    main_physical = physical_attempts - worker_physical
+    per_cell_logical = manifest.request_caps.logical_judgments_per_cell
+    if not per_cell_logical <= main_physical <= per_cell_logical * (manifest.request_contract.max_retries + 1):
+        raise ConcurrentRobustnessReleaseError("main-process cell physical accounting is crossed")
+    if not math.isclose(
+        float(aggregate_nominal),
+        float(main_nominal) + worker_nominal,
+        rel_tol=0.0,
+        abs_tol=1e-12,
+    ):
+        raise ConcurrentRobustnessReleaseError("parallel nominal reference cost does not close")
+
+
 def _validate_execution_contract(
     *,
     root: Path,
@@ -474,8 +580,11 @@ def _validate_execution_contract(
         "provider_calls_authorized",
         "canonical_deployment_authorized_after_validation",
         "implementation_commit",
+        "formal_runner_artifact",
         "formal_runner_sha256",
+        "subscription_worker_artifact",
         "subscription_worker_sha256",
+        "subscription_client_artifact",
         "subscription_client_sha256",
         "completion_status",
         "logical_provider_attempts",
@@ -500,6 +609,7 @@ def _validate_execution_contract(
         or document.get("logical_provider_attempts") != ROBUSTNESS_FORMAL_LOGICAL_JUDGMENTS
         or document.get("subscription_billed_cost_usd") != 0.0
         or document.get("subscription_billing_evidence") != "openai-codex OAuth subscription transport"
+        or isinstance(document.get("subscription_nominal_reference_cost_usd"), bool)
         or not isinstance(document.get("subscription_nominal_reference_cost_usd"), (int, float))
         or float(document["subscription_nominal_reference_cost_usd"]) < 0.0
         or not _COMMIT.fullmatch(_string(document.get("implementation_commit"), "implementation commit"))
@@ -508,9 +618,34 @@ def _validate_execution_contract(
     physical_attempts = _strict_int(document.get("physical_provider_attempts"), "physical provider attempts")
     if not ROBUSTNESS_FORMAL_LOGICAL_JUDGMENTS <= physical_attempts <= ROBUSTNESS_FORMAL_PHYSICAL_ATTEMPT_CAP:
         raise ConcurrentRobustnessReleaseError("Formal execution physical attempts exceed the approved contract")
-    for key in ("formal_runner_sha256", "subscription_worker_sha256", "subscription_client_sha256"):
-        if not _SHA256.fullmatch(_string(document.get(key), key)):
-            raise ConcurrentRobustnessReleaseError(f"Formal execution {key} is invalid")
+    implementation_artifacts = {
+        "formal_runner_sha256": "formal_runner_artifact",
+        "subscription_worker_sha256": "subscription_worker_artifact",
+        "subscription_client_sha256": "subscription_client_artifact",
+    }
+    for hash_key, path_key in implementation_artifacts.items():
+        expected_hash = _string(document.get(hash_key), hash_key)
+        if not _SHA256.fullmatch(expected_hash):
+            raise ConcurrentRobustnessReleaseError(f"Formal execution {hash_key} is invalid")
+        artifact = _repo_file(
+            root,
+            Path(_string(document.get(path_key), path_key)),
+            f"Formal implementation artifact {path_key}",
+        )
+        if _sha256_file(artifact) != expected_hash:
+            raise ConcurrentRobustnessReleaseError(f"Formal implementation artifact is crossed: {path_key}")
+
+    if document.get("parallel_cell_execution_used") is True:
+        _validate_parallel_cell_execution(
+            root=root,
+            document=document,
+            manifest=manifest,
+            manifest_sha256=manifest_sha256,
+            workspace=workspace,
+            physical_attempts=physical_attempts,
+        )
+    elif any(str(key).startswith("parallel_cell_") for key in document):
+        raise ConcurrentRobustnessReleaseError("parallel cell evidence is present without an explicit execution flag")
 
     qualification = _repo_file(
         root,
@@ -589,16 +724,21 @@ def _validate_execution_contract(
     pricing_document = _json_object(pricing)
     pricing_evidence = dict(pricing_document)
     pricing_sha256 = pricing_evidence.pop("evidence_sha256", None)
+    model_pricing = pricing_document.get("model_pricing")
     if (
         pricing_sha256 != _sha256_bytes(_json_bytes(pricing_evidence))
         or pricing_sha256 != execution.pricing_snapshot.snapshot_sha256
         or pricing_document.get("provider_transport") != "openai-codex"
         or pricing_document.get("billing_mode") != "subscription"
+        or not isinstance(model_pricing, list)
+        or len(model_pricing) != 4
+        or {row.get("requested_model") for row in model_pricing if isinstance(row, dict)}
+        != set(PI_SUBSCRIPTION_MODEL_ALIASES)
         or any(
             not isinstance(row, dict)
             or row.get("input_usd_per_million_tokens") != 0.0
             or row.get("output_usd_per_million_tokens") != 0.0
-            for row in pricing_document.get("model_pricing", [])
+            for row in model_pricing
         )
     ):
         raise ConcurrentRobustnessReleaseError("subscription pricing artifact is crossed")
