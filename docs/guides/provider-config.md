@@ -26,6 +26,12 @@
 
 Codex auth 只允许复用到当前 selected Provider 和它声明的 `base_url`。`requires_openai_auth = true` 时可直接复用 Codex auth snapshot；`requires_openai_auth = false` 通常不复用，但 selected provider 声明 `x-openai-actor-authorization` 时遵循 Codex 0.145 的组合语义：已有 Codex auth snapshot 作为 Bearer，actor header 作为附加 header，两者缺一时 live gate 都 fail closed。其他 selected-provider 静态 `http_headers` 仍可走 header-only 路径，不会自动生成 `Authorization: Bearer ...`；若 provider 自己显式声明 `Authorization` header，则保留该值。所有 header value 只在 live gate 后以 runtime-only container 传给 SDK，不能进入脱敏 metadata 或 persisted artifacts。`OPENAI_API_KEY` 仍是 OpenAI-compatible/sub2api API key 的显式环境 fallback。
 
+## Pi OAuth subscription transport
+
+显式授权的 Formal operational run 可以使用 `PiSubscriptionProviderClient`。它通过本机 Pi `ModelRuntime` 与 OAuth subscription 调用 `openai-codex`，只在 `LLM_ABM_RUN_LIVE_LLM=1` 时启动，并通过 JSONL worker 返回 typed Decision、observed model 与 usage；Python artifact 侧只看到 `openai-codex-subscription-client-v1` 脱敏 identity。worker 必须应用 Pi 的 HTTP proxy settings，模型必须位于固定 allowlist，且 dated requested IDs 与实际 Pi alias 的映射进入 qualification artifact。该 transport 不读取或打印 credential，不持久化 raw Prompt/response，也不能用于默认测试或自动降级。
+
+Codex subscription endpoint 若拒绝 wire-level `max_output_tokens`，worker 省略该参数，但仍要求完整 usage，并在返回后对 Manifest 的 output-token ceiling 做 application-level fail-closed 检查。subscription billing 的显式 fee ceiling 为 `USD 0`；logical/physical attempt caps 仍独立执行，不能因为无 per-token 费用而失效。
+
 ## 必需行为
 
 - `pytest -q` 默认排除 `live_llm`。

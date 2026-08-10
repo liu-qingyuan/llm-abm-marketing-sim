@@ -135,6 +135,9 @@ class OpenAICompatibleDecisionAdapter(LLMDecisionAdapter):
             metadata["request_contract"] = self._request_contract.audit_record()
         if self.codex_provider_config is not None:
             metadata["codex_provider"] = self.codex_provider_config.redacted()
+        client_metadata = getattr(self.client, "safe_metadata", None)
+        if isinstance(client_metadata, dict):
+            metadata["external_transport"] = client_metadata
         return metadata
 
     def decide(
@@ -155,7 +158,9 @@ class OpenAICompatibleDecisionAdapter(LLMDecisionAdapter):
         )
         messages = build_engagement_prompt(decision_input)
         client = self._build_live_client() if self.client is None else self.client
-        uses_external_sdk = self.client is None and type(client) is _OpenAISDKClient
+        uses_external_sdk = (self.client is None and type(client) is _OpenAISDKClient) or bool(
+            getattr(client, "external_provider_client", False)
+        )
         last_error: Exception | None = None
         for attempt in range(self.config.max_retries + 1):
             try:

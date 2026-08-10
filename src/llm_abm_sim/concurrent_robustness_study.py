@@ -51,6 +51,11 @@ from .provider_request_contract import (
     ProviderRequestContract,
 )
 from .providers.openai_compatible import OpenAICompatibleDecisionAdapter
+from .providers.pi_subscription import (
+    PI_SUBSCRIPTION_ADAPTER_IDENTITY,
+    PI_SUBSCRIPTION_MODEL_ALIASES,
+    PiSubscriptionProviderClient,
+)
 
 __all__ = [
     "ConcurrentRobustnessError",
@@ -73,6 +78,7 @@ CONCURRENT_ROBUSTNESS_OBSERVED_MODEL_POLICY = "exact-required-model-per-response
 CONCURRENT_ROBUSTNESS_STOPPING_RULE = "reject-next-attempt-before-cap-v1"
 CONCURRENT_ROBUSTNESS_VALIDATION_ADAPTER_IDENTITY = "openai-compatible-injected-client-v1"
 CONCURRENT_ROBUSTNESS_LIVE_ADAPTER_IDENTITY = "openai-compatible-live-client-v1"
+CONCURRENT_ROBUSTNESS_SUBSCRIPTION_ADAPTER_IDENTITY = PI_SUBSCRIPTION_ADAPTER_IDENTITY
 
 _ROBUSTNESS_MESSAGE_IDS = ("message_1", "message_2", "message_3")
 _ROBUSTNESS_MODELS = (
@@ -491,8 +497,11 @@ class _DynamicExecutionContract(_FrozenContractModel):
             if any(row.qualification_kind != "deterministic_validation_fixture" for row in self.qualifications):
                 raise ValueError("validation execution requires fixture qualification artifacts")
         else:
-            if self.adapter_identity != CONCURRENT_ROBUSTNESS_LIVE_ADAPTER_IDENTITY:
-                raise ValueError("Formal execution requires the live-client Adapter identity")
+            if self.adapter_identity not in {
+                CONCURRENT_ROBUSTNESS_LIVE_ADAPTER_IDENTITY,
+                CONCURRENT_ROBUSTNESS_SUBSCRIPTION_ADAPTER_IDENTITY,
+            }:
+                raise ValueError("Formal execution requires an approved external Adapter identity")
             if self.authorization.authorization_kind != "formal_live_provider":
                 raise ValueError("Formal execution requires an explicit live authorization")
             if not self.authorization.external_requests_allowed:
@@ -669,7 +678,14 @@ class ConcurrentRobustnessManifest(_FrozenContractModel):
                 )
                 if previous != cell.required_observed_model:
                     raise ValueError("manifest requested model has mixed required observed identities")
-            if observed_by_requested["gpt-5.4-mini"] != "gpt-5.4-mini-2026-03-17":
+            if (
+                self.dynamic_execution is not None
+                and self.dynamic_execution.adapter_identity
+                == CONCURRENT_ROBUSTNESS_SUBSCRIPTION_ADAPTER_IDENTITY
+            ):
+                if observed_by_requested != PI_SUBSCRIPTION_MODEL_ALIASES:
+                    raise ValueError("subscription manifest must bind the exact qualified Pi model aliases")
+            elif observed_by_requested["gpt-5.4-mini"] != "gpt-5.4-mini-2026-03-17":
                 raise ValueError("manifest mini model must bind its qualified observed identity")
 
         logical_per_cell = self.ranking_contract.horizon * self.ranking_contract.delivery_capacity * 3
@@ -3242,6 +3258,15 @@ def _preflight_dynamic_adapters(
             if id(client) in injected_client_ids:
                 raise _dynamic_adapter_error("validation cells require independent injected mock clients")
             injected_client_ids.add(id(client))
+        elif execution.adapter_identity == CONCURRENT_ROBUSTNESS_SUBSCRIPTION_ADAPTER_IDENTITY:
+            if (
+                type(adapter.client) is not PiSubscriptionProviderClient
+                or not adapter.config.require_live_env
+                or not adapter.client.ready
+            ):
+                raise _dynamic_adapter_error(
+                    f"cell {cell.cell_id} Formal subscription profile requires the ready Pi OAuth client"
+                )
         elif adapter.client is not None or not adapter.config.require_live_env:
             raise _dynamic_adapter_error(
                 f"cell {cell.cell_id} Formal profile requires the live-client Adapter identity"
