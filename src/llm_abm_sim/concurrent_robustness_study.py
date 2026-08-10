@@ -1990,8 +1990,8 @@ def _validate_cell_evidence_contract(
                 if expected_time_step == 0:
                     if batch_seed_users is None:
                         batch_seed_users = message_step.seed_user_ids
-                    elif batch_seed_users != message_step.seed_user_ids:
-                        raise ValueError("Batch 0 shared seeds differ across messages")
+                    elif set(batch_seed_users) != set(message_step.seed_user_ids):
+                        raise ValueError("Batch 0 shared seed set differs across messages")
             committed_users = step.deduplicated_committed_primary_positive_user_ids
             _validate_unique_ids(committed_users, "committed campaign users")
             if set(committed_users) != batch_positive_users:
@@ -2003,8 +2003,8 @@ def _validate_cell_evidence_contract(
             raise ValueError("cell evidence requires a non-empty Batch 0 shared-seed panel")
         if shared_seed_users is None:
             shared_seed_users = cell_batch_zero_seed_users
-        elif shared_seed_users != cell_batch_zero_seed_users:
-            raise ValueError("Batch 0 shared seeds differ across Prompt-Model cells")
+        elif set(shared_seed_users) != set(cell_batch_zero_seed_users):
+            raise ValueError("Batch 0 shared seed set differs across Prompt-Model cells")
 
 
 def _load_cell_workspace(

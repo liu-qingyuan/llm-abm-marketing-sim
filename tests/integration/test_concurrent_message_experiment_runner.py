@@ -2368,6 +2368,8 @@ def _robustness_cell_source_identity(
 def _install_deterministic_robustness_cell_fixture(
     workspace: Path,
     manifest: ConcurrentRobustnessManifest,
+    *,
+    permute_batch_zero_seed_order: bool = False,
 ) -> dict[str, object]:
     manifest_sha256 = _sha256(workspace / "study_manifest.json")
     manifest_payload = manifest.model_dump(mode="json")
@@ -2408,6 +2410,8 @@ def _install_deterministic_robustness_cell_fixture(
             for message_index, message_id in enumerate(manifest.message_ids):
                 if time_step == 0:
                     selected_users = [f"u{number}" for number in range(1, manifest.ranking_contract.delivery_capacity + 1)]
+                    if permute_batch_zero_seed_order and message_index:
+                        selected_users = selected_users[message_index:] + selected_users[:message_index]
                 else:
                     selected_users = [f"u{number}" for number in range(11, 20)]
                     replacement = 20 if cell_index == 0 else 21 + ((cell_index + message_index) % 10)
@@ -2972,6 +2976,27 @@ def test_concurrent_robustness_complete_result_can_precede_report_candidate(tmp_
     assert result.status == ConcurrentRobustnessStudyStatus.COMPLETE
     assert result.study_root == tmp_path / "study-root"
     assert result.report_candidate is None
+
+
+def test_concurrent_robustness_accepts_shared_seed_set_in_message_local_rank_order(
+    tmp_path: Path,
+) -> None:
+    source_dir = _make_validation_report_source(tmp_path, "robustness-shared-seed-set-source")
+    manifest = _robustness_manifest_for_source(source_dir, output_identity="fixture-shared-seed-set-v1")
+    workspace = tmp_path / "robustness-shared-seed-set-workspace"
+    study = ConcurrentRobustnessStudy()
+
+    study.run(manifest, None, workspace)
+    _install_deterministic_robustness_cell_fixture(
+        workspace,
+        manifest,
+        permute_batch_zero_seed_order=True,
+    )
+
+    complete = study.run(manifest, None, workspace)
+
+    assert complete.status == ConcurrentRobustnessStudyStatus.COMPLETE
+    assert complete.study_root is not None
 
 
 def test_concurrent_robustness_composes_two_closed_sources_into_an_immutable_report_candidate(
