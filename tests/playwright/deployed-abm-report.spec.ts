@@ -30,6 +30,15 @@ const fallbackArtifactsByKind: Record<string, string[]> = {
     'concurrent_campaign_diagnostics.json',
     'seed_first_sample_audit.json',
   ],
+  'concurrent-robustness': [
+    'artifact_manifest.json',
+    'concurrent_robustness_report_payload.json',
+    'robustness_production_release_evidence.json',
+    'ranking_weight_sensitivity.json',
+    'prompt_model_analysis.json',
+    'ranking_weight_message_summary.csv',
+    'prompt_model_message_summary.csv',
+  ],
 };
 
 async function expectNoHorizontalOverflow(page: Page): Promise<void> {
@@ -164,6 +173,37 @@ async function expectConcurrentMessageReport(page: Page): Promise<void> {
   await expect(drawer).toBeHidden();
 }
 
+async function expectConcurrentRobustnessReport(page: Page): Promise<void> {
+  await expectConcurrentMessageReport(page);
+  const root = page.getByTestId('robustness-report-release');
+  await expect(root).toBeVisible();
+  await expect(page.getByTestId('robustness-production-eligibility')).toHaveText(
+    'production_deploy_eligible=true',
+  );
+  await expect(page.getByTestId('robustness-source-lineage')).toBeVisible();
+  await expect(page.getByTestId('robustness-shadow-source-label')).toContainText(
+    'Demographic Shadow evidence remains bound to the historical Formal source',
+  );
+  await expect(page.getByTestId('ranking-weight-sensitivity-section')).toBeVisible();
+  await expect(page.getByTestId('ranking-weight-family-select')).toBeVisible();
+  await expect(page.getByTestId('prompt-model-robustness-section')).toBeVisible();
+  await expect(page.getByTestId('prompt-model-message-select')).toBeVisible();
+  await expect(page.getByTestId('prompt-model-metric-select')).toBeVisible();
+  await expect(page.getByTestId('prompt-model-growth-panels')).toBeVisible();
+  await expect(page.getByTestId('practical-threshold-summary')).toBeVisible();
+  await expect(page.getByTestId('robustness-downloads-section')).toBeVisible();
+}
+
+async function expectReportByKind(page: Page): Promise<void> {
+  if (reportKind === 'concurrent-robustness') {
+    await expectConcurrentRobustnessReport(page);
+  } else if (reportKind === 'concurrent-message') {
+    await expectConcurrentMessageReport(page);
+  } else {
+    await expectFinalResearchReport(page);
+  }
+}
+
 test.describe('deployed Seed-First report', () => {
   test.skip(!publicUrl, 'ABM_DEPLOY_PUBLIC_URL is required for explicit public deployment acceptance');
 
@@ -177,21 +217,13 @@ test.describe('deployed Seed-First report', () => {
 
     await page.setViewportSize({ width: 1440, height: 1000 });
     await page.goto(`${publicUrl}/`, { waitUntil: 'domcontentloaded', timeout: 150_000 });
-    if (reportKind === 'concurrent-message') {
-      await expectConcurrentMessageReport(page);
-    } else {
-      await expectFinalResearchReport(page);
-    }
+    await expectReportByKind(page);
     await expectNoHorizontalOverflow(page);
     await expectArtifactHeads(request);
 
     await page.setViewportSize({ width: 390, height: 844 });
     await page.goto(`${publicUrl}/`, { waitUntil: 'domcontentloaded', timeout: 150_000 });
-    if (reportKind === 'concurrent-message') {
-      await expectConcurrentMessageReport(page);
-    } else {
-      await expectFinalResearchReport(page);
-    }
+    await expectReportByKind(page);
     await expectNoHorizontalOverflow(page);
 
     expect(consoleErrors).toEqual([]);

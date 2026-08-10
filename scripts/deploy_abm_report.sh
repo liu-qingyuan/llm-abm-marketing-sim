@@ -89,6 +89,32 @@ COPYFILE_DISABLE=1 cp -R "${CANONICAL_SOURCE_DIR}/." "${LOCAL_SNAPSHOT_DIR}/"
   --source-dir "${SOURCE_DIR}" \
   --snapshot-dir "${LOCAL_SNAPSHOT_DIR}" \
   --require-formal-production
+"${PYTHON}" - "${RELEASE_CONTRACT}" "${RELEASE_ID}" "${DOMAIN}" <<'PY' || fail "release id or canonical domain is crossed with the contract"
+import json
+import sys
+from pathlib import Path
+from urllib.parse import urlparse
+
+contract = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+release_id = sys.argv[2]
+domain = sys.argv[3]
+if contract.get("schema_version") == "abm-report-release-contract-v5":
+    if contract.get("release_id") != release_id:
+        raise SystemExit("v5 CLI release id differs from the frozen contract")
+    endpoint = contract.get("canonical_endpoint")
+    parsed = urlparse(endpoint) if isinstance(endpoint, str) else None
+    if (
+        parsed is None
+        or parsed.scheme != "https"
+        or parsed.hostname != domain
+        or parsed.port is not None
+        or parsed.path != "/"
+        or parsed.params
+        or parsed.query
+        or parsed.fragment
+    ):
+        raise SystemExit("v5 deployment domain differs from the frozen canonical endpoint")
+PY
 PUBLIC_ACCEPTANCE_REPORT_KIND="$("${PYTHON}" - "${RELEASE_CONTRACT}" <<'PY'
 import json
 import sys
@@ -100,6 +126,8 @@ if schema_version in {'abm-report-release-contract-v2', 'abm-report-release-cont
     print('final-research')
 elif schema_version == 'abm-report-release-contract-v4':
     print('concurrent-message')
+elif schema_version == 'abm-report-release-contract-v5':
+    print('concurrent-robustness')
 else:
     raise SystemExit(f'unsupported public acceptance contract schema_version: {schema_version!r}')
 PY
@@ -518,8 +546,10 @@ REMOTE_REPORT_HEADER_SHA="$(printf '%s\n' "${PUBLIC_REPORT_HEADERS}" \
 
 PUBLIC_MANIFEST="$(mktemp)"
 PUBLIC_REPORT="$(mktemp)"
+PUBLIC_ARTIFACT_DIR="$(mktemp -d)"
 cleanup_public_artifacts() {
   rm -f "${PUBLIC_MANIFEST}" "${PUBLIC_REPORT}"
+  rm -r -- "${PUBLIC_ARTIFACT_DIR}"
 }
 cleanup_and_rollback_on_failure() {
   status=$?
@@ -545,6 +575,28 @@ for artifact in "${PUBLIC_ACCEPTANCE_ARTIFACTS[@]}"; do
   curl "${PUBLIC_CURL_RETRY[@]}" -fsSIL --max-time 30 "https://${DOMAIN}/${artifact}" >/dev/null || \
     fail "public artifact check failed: ${artifact}"
 done
+
+artifact_index=0
+while IFS=$'\t' read -r artifact expected_sha; do
+  [[ -n "${artifact}" && "${expected_sha}" =~ ^[a-f0-9]{64}$ ]] || fail "invalid public artifact hash contract row"
+  artifact_index=$((artifact_index + 1))
+  public_artifact="${PUBLIC_ARTIFACT_DIR}/artifact-${artifact_index}"
+  curl "${PUBLIC_CURL_RETRY[@]}" -fsSL --compressed --max-time 180 \
+    -H 'Cache-Control: no-cache' \
+    "https://${DOMAIN}/${artifact}?release=${RELEASE_ID}" \
+    -o "${public_artifact}"
+  public_artifact_sha="$(shasum -a 256 "${public_artifact}" | awk '{print $1}')"
+  [[ "${public_artifact_sha}" == "${expected_sha}" ]] || fail "public artifact checksum mismatch: ${artifact}"
+done < <("${PYTHON}" - "${RELEASE_CONTRACT}" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+contract = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+for artifact, digest in sorted(contract.get("artifact_sha256", {}).items()):
+    print(f"{artifact}\t{digest}")
+PY
+)
 
 ABM_DEPLOY_PUBLIC_URL="https://${DOMAIN}" \
 ABM_DEPLOY_REPORT_KIND="${PUBLIC_ACCEPTANCE_REPORT_KIND}" \

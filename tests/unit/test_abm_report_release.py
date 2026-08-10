@@ -1032,7 +1032,7 @@ def test_deploy_retries_transient_public_transport_errors_without_weakening_chec
     script = deploy_script.read_text(encoding="utf-8")
 
     assert "PUBLIC_CURL_RETRY=(--retry 4 --retry-all-errors --retry-delay 2 --retry-max-time 120)" in script
-    assert script.count('curl "${PUBLIC_CURL_RETRY[@]}"') == 6
+    assert script.count('curl "${PUBLIC_CURL_RETRY[@]}"') == 7
 
 
 def test_deploy_preserves_candidate_checks_atomic_switch_and_transaction_rollback_order():

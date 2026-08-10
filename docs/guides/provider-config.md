@@ -30,7 +30,7 @@ Codex auth 只允许复用到当前 selected Provider 和它声明的 `base_url`
 
 显式授权的 Formal operational run 可以使用 `PiSubscriptionProviderClient`。它通过本机 Pi `ModelRuntime` 与 OAuth subscription 调用 `openai-codex`，只在 `LLM_ABM_RUN_LIVE_LLM=1` 时启动，并通过 JSONL worker 返回 typed Decision、observed model 与 usage；Python artifact 侧只看到 `openai-codex-subscription-client-v1` 脱敏 identity。worker 必须应用 Pi 的 HTTP proxy settings，模型必须位于固定 allowlist，且 dated requested IDs 与实际 Pi alias 的映射进入 qualification artifact。该 transport 不读取或打印 credential，不持久化 raw Prompt/response，也不能用于默认测试或自动降级。
 
-Codex subscription endpoint 若拒绝 wire-level `max_output_tokens`，worker 省略该参数，但仍要求完整 usage，并在返回后对 Manifest 的 output-token ceiling 做 application-level fail-closed 检查。subscription billing 的显式 fee ceiling 为 `USD 0`；logical/physical attempt caps 仍独立执行，不能因为无 per-token 费用而失效。
+Codex subscription endpoint 若拒绝 wire-level `max_output_tokens`，worker 省略该参数，但仍要求完整 usage，并在返回后对 Manifest 的 output-token ceiling 做 application-level fail-closed 检查。subscription billing 的显式 billed fee ceiling 为 `USD 0`；Pi catalog 返回的 API-equivalent `usage.cost` 只作为 nominal reference cost 单独累计，不表示 OAuth subscription 的实际扣费，也不替代 auth/transport gate。logical/physical attempt caps 仍独立执行，不能因为无 per-token 费用而失效。
 
 ## 必需行为
 
