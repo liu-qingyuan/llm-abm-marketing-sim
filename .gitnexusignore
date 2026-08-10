@@ -50,25 +50,6 @@ __pycache__/
 *.log
 *.trace
 
-# Generated agent/tool scratch. Tracked durable Markdown under .omx remains indexed.
+# Generated agent/tool scratch.
 /.agents/
 /.claude/
-/.omx/cache/
-/.omx/context/
-/.omx/drafts/
-/.omx/interviews/
-/.omx/logs/
-/.omx/plans/
-/.omx/prompts/
-/.omx/qa/
-/.omx/ralph-orch/
-/.omx/ralphy/
-/.omx/run-logs/
-/.omx/scripts/
-/.omx/specs/
-/.omx/state/
-/.omx/ultragoal/
-/.omx/workspaces/
-/.omx/metrics.json
-/.omx/phase-handoffs/logs/
-/.omx/phase-handoffs/templates/
