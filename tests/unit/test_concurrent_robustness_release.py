@@ -88,6 +88,8 @@ def _candidate(candidate: Path) -> None:
         },
     )
     (candidate / "ranking_weight_sensitivity.json").write_text("{}\n", encoding="utf-8")
+    (candidate / "sample_manifest.json").write_text("{}\n", encoding="utf-8")
+    (candidate / "sample_manifest.csv").write_text("user_id\nu1\n", encoding="utf-8")
     (candidate / "report.html").write_text(
         """<!doctype html><html><head><title>test</title></head><body>
 <div data-testid="mechanism-overview-section"></div>
@@ -186,6 +188,11 @@ def test_formal_candidate_promotes_without_mutating_validation_evidence(
     )
     assert preserved_manifest["production_deploy_eligible"] is False
     assert preserved_evidence["production_deploy_eligible"] is False
+    production_manifest = json.loads(
+        (promoted.source_dir / "artifact_manifest.json").read_text(encoding="utf-8")
+    )
+    assert production_manifest["artifacts"]["sample_manifest_json"] == "sample_manifest.json"
+    assert production_manifest["artifacts"]["sample_manifest_csv"] == "sample_manifest.csv"
 
     contract = json.loads(promoted.contract_path.read_text(encoding="utf-8"))
     validated = release.validate_concurrent_robustness_production_release(

@@ -1055,7 +1055,10 @@ def _validate_production_release_dir(source: Path, *, release_id: str) -> None:
 
 
 def _logical_name(relative_path: str) -> str:
-    return Path(relative_path).stem.replace("-", "_")
+    path = Path(relative_path)
+    stem = path.stem.replace("-", "_")
+    suffix = path.suffix.removeprefix(".").replace("-", "_")
+    return f"{stem}_{suffix}" if suffix else stem
 
 
 def _json_bytes(payload: object) -> bytes:
