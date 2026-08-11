@@ -6,7 +6,7 @@ The design goal is not a generic autonomous agent framework. The core is a repro
 
 ## Current Research Release
 
-当前公开研究入口是 [Multi-Message Editorial Formal Presentation](https://abm.q1ngyuan.top/)，不是默认 toy/realistic fixture 的替代名称。三 message runtime、v4 contract、release hash、rollback 和公网验收见 [`docs/references/jinjiang-concurrent-message-editorial-formal-release-20260729.md`](docs/references/jinjiang-concurrent-message-editorial-formal-release-20260729.md)；研究架构见 [`docs/architecture/concurrent-message-competition-experiment.md`](docs/architecture/concurrent-message-competition-experiment.md)。当前 release 只覆盖 1,000 位 Research Sample users，36,400 用户完整 provider-backed experiment 尚未执行。
+当前公开研究入口是 [Concurrent Robustness Formal Research Report](https://abm.q1ngyuan.top/)，不是默认 toy/realistic fixture 的替代名称。当前 v5 contract、immutable Formal lineage、release hashes、rollback 与公网验收见 [`docs/references/jinjiang-concurrent-robustness-formal-release-20260810.md`](docs/references/jinjiang-concurrent-robustness-formal-release-20260810.md)；研究架构见 [`docs/architecture/concurrent-message-competition-experiment.md`](docs/architecture/concurrent-message-competition-experiment.md)。当前 release 使用固定 1,000 位 Research Sample users、3 条 messages、19-point Ranking Weight Sensitivity 与 `4 Prompt × 4 model` Formal Robustness Study；不表示总体因果效应或模型质量排名。
 
 ## Core Modeling Contract
 

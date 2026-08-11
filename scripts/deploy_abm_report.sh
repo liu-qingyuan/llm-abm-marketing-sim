@@ -81,6 +81,7 @@ cleanup_local_snapshot() {
 }
 LOCAL_SNAPSHOT_DIR="$(mktemp -d "${TMPDIR:-/tmp}/abm-report-deploy.XXXXXX")"
 trap cleanup_local_snapshot EXIT
+LOCAL_SNAPSHOT_DIR="$(cd -- "${LOCAL_SNAPSHOT_DIR}" && pwd -P)" || fail "cannot resolve local release snapshot"
 COPYFILE_DISABLE=1 cp -R "${CANONICAL_SOURCE_DIR}/." "${LOCAL_SNAPSHOT_DIR}/"
 
 "${PYTHON}" "${SCRIPT_DIR}/validate_abm_report_release.py" \

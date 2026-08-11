@@ -924,6 +924,8 @@ def test_deploy_stops_on_validator_failure_before_any_remote_action(tmp_path: Pa
     ssh_marker = tmp_path / "ssh-invoked"
     snapshot_root = tmp_path / "snapshots"
     snapshot_root.mkdir()
+    logical_snapshot_root = tmp_path / "logical-snapshots"
+    os.symlink(snapshot_root, logical_snapshot_root, target_is_directory=True)
     python = bin_dir / "python"
     python.write_text(
         '#!/usr/bin/env bash\nprintf \'%s\\n\' "$*" > "${FAKE_VALIDATOR_LOG}"\nexit 19\n',
@@ -943,7 +945,7 @@ def test_deploy_stops_on_validator_failure_before_any_remote_action(tmp_path: Pa
             "ABM_DEPLOY_PYTHON": str(python),
             "FAKE_VALIDATOR_LOG": str(validator_log),
             "FAKE_SSH_MARKER": str(ssh_marker),
-            "TMPDIR": str(snapshot_root),
+            "TMPDIR": str(logical_snapshot_root),
         }
     )
 
@@ -967,6 +969,8 @@ def test_deploy_stops_on_validator_failure_before_any_remote_action(tmp_path: Pa
     validator_args = validator_log.read_text(encoding="utf-8")
     assert f"--contract {contract}" in validator_args
     assert "--require-formal-production" in validator_args
+    assert str(snapshot_root.resolve()) in validator_args
+    assert str(logical_snapshot_root) not in validator_args
     assert not ssh_marker.exists()
     assert list(snapshot_root.iterdir()) == []
 
