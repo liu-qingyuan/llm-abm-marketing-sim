@@ -9,7 +9,7 @@ import shutil
 import tempfile
 from collections.abc import Mapping
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 from .concurrent_message_report import (
@@ -880,6 +880,11 @@ def _production_payloads(
     report_payload = _json_object(candidate / ROBUSTNESS_REPORT_PAYLOAD)
     if report_payload.get("production_deploy_eligible") is not False:
         raise ConcurrentRobustnessReleaseError("candidate report payload is not a validation-only artifact")
+    downloads = _string_mapping(report_payload.get("downloads"), "candidate report downloads")
+    if downloads.get("release_evidence") != ROBUSTNESS_CANDIDATE_RELEASE_EVIDENCE:
+        raise ConcurrentRobustnessReleaseError("candidate release-evidence download mapping is crossed")
+    downloads["release_evidence"] = ROBUSTNESS_PRODUCTION_EVIDENCE
+    report_payload["downloads"] = downloads
     report_payload["production_deploy_eligible"] = True
     report_payload["production_release"] = {
         "schema_version": ROBUSTNESS_PRODUCTION_EVIDENCE_SCHEMA,
@@ -893,14 +898,38 @@ def _production_payloads(
     payloads[ROBUSTNESS_REPORT_PAYLOAD] = _json_bytes(report_payload)
 
     report_html = (candidate / CONCURRENT_MESSAGE_REPORT_HTML).read_text(encoding="utf-8")
-    if report_html.count("production_deploy_eligible=false") != 1:
-        raise ConcurrentRobustnessReleaseError("candidate report has an ambiguous production marker")
-    report_html = report_html.replace("production_deploy_eligible=false", "production_deploy_eligible=true")
-    report_html = report_html.replace(
+    if 'data-release-id=' in report_html or 'name="abm-release-id"' in report_html:
+        raise ConcurrentRobustnessReleaseError("candidate release id is ambiguous or already transformed")
+    report_html = _replace_once(
+        report_html,
+        "production_deploy_eligible=false",
+        "production_deploy_eligible=true",
+        label="candidate production marker",
+    )
+    report_html = _replace_once(
+        report_html,
+        "document.querySelector('[data-testid=\"robustness-report-candidate\"]')",
+        "document.querySelector('[data-testid=\"robustness-report-release\"]')",
+        label="candidate bootstrap selector",
+    )
+    report_html = _replace_once(
+        report_html,
         'data-testid="robustness-report-candidate"',
-        'data-testid="robustness-report-release" data-release-id="' + release_id + '"',
-        1,
-    ).replace("values in this candidate", "values in this production release")
+        f'data-testid="robustness-report-release" data-release-id="{release_id}"',
+        label="candidate report root",
+    )
+    report_html = _replace_once(
+        report_html,
+        f'href="{ROBUSTNESS_CANDIDATE_RELEASE_EVIDENCE}"',
+        f'href="{ROBUSTNESS_PRODUCTION_EVIDENCE}"',
+        label="candidate release-evidence href",
+    )
+    report_html = _replace_once(
+        report_html,
+        "values in this candidate",
+        "values in this production release",
+        label="candidate download description",
+    )
     meta = (
         f'<meta name="abm-release-contract" content="{ROBUSTNESS_RELEASE_CONTRACT_SCHEMA}">'
         f'<meta name="abm-release-id" content="{release_id}">'
@@ -1036,6 +1065,14 @@ def _validate_production_release_dir(source: Path, *, release_id: str) -> None:
     ):
         raise ConcurrentRobustnessReleaseError("validation candidate eligibility was mutated during promotion")
     html = (source / CONCURRENT_MESSAGE_REPORT_HTML).read_text(encoding="utf-8")
+    _validate_production_stage_html(html, release_id=release_id)
+    _validate_production_downloads(
+        source,
+        payload=payload,
+        manifest=manifest,
+        artifacts=artifacts,
+        html=html,
+    )
     required = (
         'data-testid="mechanism-overview-section"',
         'data-testid="run-evidence-mode-panel"',
@@ -1052,6 +1089,114 @@ def _validate_production_release_dir(source: Path, *, release_id: str) -> None:
         raise ConcurrentRobustnessReleaseError("production report is missing a required release or lineage marker")
     if re.search(r"<(?:script|link|img)\b[^>]*(?:src|href)=[\"']https?://", html, re.IGNORECASE):
         raise ConcurrentRobustnessReleaseError("production report requests an external resource")
+
+
+def _validate_production_stage_html(html: str, *, release_id: str) -> None:
+    root = f'data-testid="robustness-report-release" data-release-id="{release_id}"'
+    bootstrap = "document.querySelector('[data-testid=\"robustness-report-release\"]')"
+    release_meta = f'<meta name="abm-release-id" content="{release_id}">'
+    if (
+        html.count(root) != 1
+        or html.count(bootstrap) != 1
+        or html.count('data-testid="robustness-report-release"') != 2
+        or html.count(release_meta) != 1
+        or len(re.findall(r'\bdata-release-id="[^"]*"', html)) != 1
+        or len(re.findall(r'<meta\s+name="abm-release-id"\s+content="[^"]*">', html)) != 1
+        or 'data-testid="robustness-report-candidate"' in html
+    ):
+        raise ConcurrentRobustnessReleaseError(
+            "production report stage root, release id, or bootstrap selector is crossed"
+        )
+
+
+def _validate_production_downloads(
+    source: Path,
+    *,
+    payload: Mapping[str, Any],
+    manifest: Mapping[str, Any],
+    artifacts: Mapping[str, str],
+    html: str,
+) -> None:
+    payload_downloads = _string_mapping(payload.get("downloads"), "production payload downloads")
+    approved_downloads = _string_mapping(
+        manifest.get("approved_downloads"),
+        "production approved downloads",
+    )
+    if payload_downloads != approved_downloads:
+        raise ConcurrentRobustnessReleaseError(
+            "production payload and manifest approved downloads are crossed"
+        )
+    if len(set(approved_downloads.values())) != len(approved_downloads):
+        raise ConcurrentRobustnessReleaseError("production approved downloads are not one-to-one")
+    if (
+        approved_downloads.get("release_evidence") != ROBUSTNESS_PRODUCTION_EVIDENCE
+        or ROBUSTNESS_VALIDATION_CANDIDATE_EVIDENCE in approved_downloads.values()
+        or ROBUSTNESS_CANDIDATE_RELEASE_EVIDENCE in approved_downloads.values()
+    ):
+        raise ConcurrentRobustnessReleaseError(
+            "production release-evidence download is crossed with validation candidate evidence"
+        )
+
+    inventory = set(artifacts.values()) | {CONCURRENT_MESSAGE_ARTIFACT_MANIFEST_JSON}
+    for relative_path in approved_downloads.values():
+        path = PurePosixPath(relative_path)
+        if (
+            "\\" in relative_path
+            or path.is_absolute()
+            or path.as_posix() != relative_path
+            or ".." in path.parts
+            or relative_path not in inventory
+        ):
+            raise ConcurrentRobustnessReleaseError(
+                "production approved download escapes or is absent from the artifact inventory"
+            )
+        target = source / relative_path
+        if target.is_symlink() or not target.is_file():
+            raise ConcurrentRobustnessReleaseError(
+                "production approved download is missing or is not a regular file"
+            )
+
+    section_starts = list(
+        re.finditer(
+            r'<section\b(?=[^>]*\bdata-testid="robustness-downloads-section")[^>]*>',
+            html,
+            re.IGNORECASE,
+        )
+    )
+    if len(section_starts) != 1:
+        raise ConcurrentRobustnessReleaseError("production download section is missing or ambiguous")
+    section_end = html.find("</section>", section_starts[0].end())
+    if section_end < 0:
+        raise ConcurrentRobustnessReleaseError("production download section is not closed")
+    section = html[section_starts[0].end():section_end]
+    html_downloads: dict[str, str] = {}
+    for anchor in re.findall(r"<a\b[^>]*>", section, re.IGNORECASE):
+        pairs = re.findall(r'([A-Za-z_:][A-Za-z0-9_.:-]*)="([^"]*)"', anchor)
+        attributes = dict(pairs)
+        if len(attributes) != len(pairs):
+            raise ConcurrentRobustnessReleaseError("production download link attributes are ambiguous")
+        test_id = attributes.get("data-testid", "")
+        prefix = "robustness-download-"
+        key = test_id.removeprefix(prefix)
+        href = attributes.get("href")
+        if (
+            not test_id.startswith(prefix)
+            or not re.fullmatch(r"[A-Za-z0-9_-]+", key)
+            or href is None
+            or key in html_downloads
+        ):
+            raise ConcurrentRobustnessReleaseError("production download link mapping is invalid")
+        html_downloads[key] = href
+    if html_downloads != approved_downloads:
+        raise ConcurrentRobustnessReleaseError(
+            "production HTML and approved download mappings are crossed"
+        )
+
+
+def _replace_once(document: str, before: str, after: str, *, label: str) -> str:
+    if document.count(before) != 1 or after in document:
+        raise ConcurrentRobustnessReleaseError(f"{label} is missing, ambiguous, or already transformed")
+    return document.replace(before, after, 1)
 
 
 def _logical_name(relative_path: str) -> str:

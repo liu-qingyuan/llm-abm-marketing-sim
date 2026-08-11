@@ -33,6 +33,7 @@ EXPECTED_REFERENCE_FILES = {
     "docs/references/jinjiang-concurrent-message-editorial-formal-release-20260729.md",
     "docs/references/jinjiang-concurrent-message-editorial-v2-formal-release-20260807.md",
     "docs/references/jinjiang-concurrent-message-editorial-v3-formal-release-20260807.md",
+    "docs/references/jinjiang-concurrent-robustness-formal-release-20260810.md",
     "docs/references/concurrent-message-legend-visual-semantics-audit-20260803.md",
     "docs/references/concurrent-message-sensitivity-curve-visual-reference-20260803.md",
     "docs/references/concurrent-message-sensitivity-curve-visual-reference-20260803.jpg",
@@ -130,7 +131,7 @@ def test_current_entrypoints_are_discoverable_from_the_single_index() -> None:
         DOCS_ROOT / "architecture" / "retention-audit.md",
         DOCS_ROOT / "references" / "jinjiang-final-dataset-audit-20260624.md",
         DOCS_ROOT / "references" / "retention-cleanup-final-evidence-20260730.md",
-        DOCS_ROOT / "references" / "jinjiang-concurrent-message-editorial-v3-formal-release-20260807.md",
+        DOCS_ROOT / "references" / "jinjiang-concurrent-robustness-formal-release-20260810.md",
         DOCS_ROOT / "weekly" / "README.md",
         DOCS_ROOT / "agents" / "README.md",
     ]
@@ -219,7 +220,7 @@ def test_required_evidence_and_weekly_navigation_remain() -> None:
 
     weekly_text = _read(DOCS_ROOT / "weekly" / "README.md")
     assert "不覆盖 current Architecture" in weekly_text
-    assert len(list((DOCS_ROOT / "weekly").glob("*.md"))) == 7
+    assert len(list((DOCS_ROOT / "weekly").glob("*.md"))) == 8
 
 
 def test_references_reading_order_and_root_navigation_contract() -> None:
@@ -228,7 +229,7 @@ def test_references_reading_order_and_root_navigation_contract() -> None:
         assert marker in references
     assert "默认 AI 阅读顺序不超过" in references
 
-    default_markers = ("current dataset", "current Editorial", "current Retention")
+    default_markers = ("current dataset", "current Formal release", "current Retention")
     default_positions = [references.index(marker) for marker in default_markers]
     assert default_positions == sorted(default_positions)
 
@@ -241,7 +242,7 @@ def test_references_reading_order_and_root_navigation_contract() -> None:
     assert root_reference_targets == {
         (DOCS_ROOT / "references" / "README.md").resolve(),
         (DOCS_ROOT / "references" / "jinjiang-final-dataset-audit-20260624.md").resolve(),
-        (DOCS_ROOT / "references" / "jinjiang-concurrent-message-editorial-v3-formal-release-20260807.md").resolve(),
+        (DOCS_ROOT / "references" / "jinjiang-concurrent-robustness-formal-release-20260810.md").resolve(),
         (DOCS_ROOT / "references" / "retention-cleanup-final-evidence-20260730.md").resolve(),
     }
 

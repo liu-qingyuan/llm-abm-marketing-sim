@@ -173,6 +173,72 @@ async function expectConcurrentMessageReport(page: Page): Promise<void> {
   await expect(drawer).toBeHidden();
 }
 
+async function expectRobustnessWeightFamily(page: Page, familyId: string): Promise<void> {
+  await expect(page.getByTestId('ranking-weight-family-select')).toHaveValue(familyId);
+  await expect(page.locator(`[data-weight-family="${familyId}"]:visible`)).toHaveCount(3);
+  for (const otherFamily of ['network-feedback', 'network-fit', 'feedback-fit'].filter(
+    (value) => value !== familyId,
+  )) {
+    await expect(page.locator(`[data-weight-family="${otherFamily}"]:visible`)).toHaveCount(0);
+  }
+  const panels = page.locator('.robustness-weight-family:visible');
+  await expect(panels).toHaveCount(3);
+  for (let index = 0; index < 3; index += 1) {
+    await expect(panels.nth(index).locator('svg .robustness-series > g:visible')).toHaveCount(6);
+    await expect(panels.nth(index).locator('.robustness-legend-item:visible')).toHaveCount(6);
+  }
+}
+
+async function expectRobustnessPromptView(
+  page: Page,
+  messageId: string,
+  metricId: string,
+): Promise<void> {
+  await expect(page.locator('[data-prompt-view]:visible')).toHaveCount(1);
+  const view = page.locator(`[data-prompt-view="${messageId}|${metricId}"]`);
+  await expect(view).toBeVisible();
+  await expect(view.locator('.robustness-model-panel')).toHaveCount(4);
+  for (let index = 0; index < 4; index += 1) {
+    const panel = view.locator('.robustness-model-panel').nth(index);
+    await expect(panel.locator('svg .robustness-series > g:visible')).toHaveCount(4);
+    await expect(panel.locator('.robustness-legend-item:visible')).toHaveCount(4);
+  }
+  const sharedRows = page.getByTestId('shared-seed-exact-table').locator('tbody tr:visible');
+  await expect(sharedRows).toHaveCount(16);
+  expect(
+    await sharedRows.evaluateAll((rows) => rows.map((row) => row.getAttribute('data-row-message-id'))),
+  ).toEqual(Array(16).fill(messageId));
+}
+
+async function expectConcurrentRobustnessInteractions(page: Page): Promise<void> {
+  const familySelect = page.getByTestId('ranking-weight-family-select');
+  for (const familyId of ['network-feedback', 'network-fit', 'feedback-fit', 'network-feedback']) {
+    await familySelect.selectOption(familyId);
+    await expectRobustnessWeightFamily(page, familyId);
+  }
+  await familySelect.focus();
+  await familySelect.pressSequentially('Campaign');
+  await expectRobustnessWeightFamily(page, 'feedback-fit');
+
+  const messageSelect = page.getByTestId('prompt-model-message-select');
+  const metricSelect = page.getByTestId('prompt-model-metric-select');
+  for (const messageId of ['message_1', 'message_2', 'message_3']) {
+    await messageSelect.selectOption(messageId);
+    for (const metricId of ['engagement', 'audience']) {
+      await metricSelect.selectOption(metricId);
+      await expectRobustnessPromptView(page, messageId, metricId);
+    }
+  }
+  await messageSelect.selectOption('message_1');
+  await metricSelect.selectOption('engagement');
+  await messageSelect.focus();
+  await messageSelect.pressSequentially('message_2');
+  await expectRobustnessPromptView(page, 'message_2', 'engagement');
+  await metricSelect.focus();
+  await metricSelect.pressSequentially('Audience');
+  await expectRobustnessPromptView(page, 'message_2', 'audience');
+}
+
 async function expectConcurrentRobustnessReport(page: Page): Promise<void> {
   await expectConcurrentMessageReport(page);
   const root = page.getByTestId('robustness-report-release');
@@ -192,6 +258,30 @@ async function expectConcurrentRobustnessReport(page: Page): Promise<void> {
   await expect(page.getByTestId('prompt-model-growth-panels')).toBeVisible();
   await expect(page.getByTestId('practical-threshold-summary')).toBeVisible();
   await expect(page.getByTestId('robustness-downloads-section')).toBeVisible();
+  await expectConcurrentRobustnessInteractions(page);
+}
+
+async function expectRobustnessDownloadHeads(
+  page: Page,
+  request: APIRequestContext,
+): Promise<void> {
+  if (!publicUrl) throw new Error('ABM_DEPLOY_PUBLIC_URL is required');
+  const publicOrigin = new URL(publicUrl).origin;
+  const hrefs = await page.getByTestId('robustness-downloads-section').getByRole('link').evaluateAll(
+    (links) => links.map((link) => link.getAttribute('href') ?? ''),
+  );
+  expect(hrefs.length).toBeGreaterThan(10);
+  for (const href of hrefs) {
+    expect(href.length > 0 && !href.startsWith('/') && !href.includes('..'), href).toBeTruthy();
+    const target = new URL(href, `${publicUrl}/`);
+    expect(target.origin, href).toBe(publicOrigin);
+    const response = await request.head(target.toString(), { timeout: 30_000 });
+    try {
+      expect(response.ok(), href).toBeTruthy();
+    } finally {
+      await response.dispose();
+    }
+  }
 }
 
 async function expectReportByKind(page: Page): Promise<void> {
@@ -210,6 +300,14 @@ test.describe('deployed Seed-First report', () => {
   test('serves the approved report and artifacts without responsive errors', async ({ page, request }) => {
     test.setTimeout(300_000);
     const consoleErrors: string[] = [];
+    const thirdPartyRequests: string[] = [];
+    const publicOrigin = new URL(publicUrl ?? 'https://invalid.local').origin;
+    page.on('request', (observedRequest) => {
+      const target = new URL(observedRequest.url());
+      if (target.protocol !== 'data:' && target.origin !== publicOrigin) {
+        thirdPartyRequests.push(observedRequest.url());
+      }
+    });
     page.on('console', (message) => {
       if (message.type() === 'error') consoleErrors.push(message.text());
     });
@@ -220,6 +318,9 @@ test.describe('deployed Seed-First report', () => {
     await expectReportByKind(page);
     await expectNoHorizontalOverflow(page);
     await expectArtifactHeads(request);
+    if (reportKind === 'concurrent-robustness') {
+      await expectRobustnessDownloadHeads(page, request);
+    }
 
     await page.setViewportSize({ width: 390, height: 844 });
     await page.goto(`${publicUrl}/`, { waitUntil: 'domcontentloaded', timeout: 150_000 });
@@ -227,5 +328,6 @@ test.describe('deployed Seed-First report', () => {
     await expectNoHorizontalOverflow(page);
 
     expect(consoleErrors).toEqual([]);
+    expect(thirdPartyRequests).toEqual([]);
   });
 });
