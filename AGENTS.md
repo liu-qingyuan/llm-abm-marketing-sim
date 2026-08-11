@@ -136,9 +136,8 @@ python -m llm_abm_sim.run --config configs/default.yaml --output runs/sample
 ### Canonical Final Research 发布
 
 - `https://abm.q1ngyuan.top/` 是 Final Research 的 canonical endpoint。
-- Canonical 网页不是独立手工维护的前端副本；runtime、Report Module、persisted contract 和 release artifact 是同一条交付链。影响用户可见语义、交互、机制图或 evidence binding 的任务，必须先修改拥有该知识的 Module 及 contract/tests，禁止直接改远端 `report.html`、手工复制散落文件或让网页长期落后于仓库实现。
-- AI 在任务开始时必须判断是否影响 canonical presentation，并把同步网页写入计划和完成标准。影响该网页 persisted contract、runtime evidence 或用户可见报告的更新，只有在适用的 Formal release 完成 contract validation、candidate deployment 和公网 hash/interaction/download 验收后才算完整交付；用户明确限定为 analysis/spec/read-only/no-deploy，或没有合法 Formal artifact 时，停止在独立 artifact 与 `ready-for-human` operational Ticket，不得静默部署 Validation/mock/rule-based fixture 或绕过门禁。
-- 只改变 presentation、copy、interaction 或 evidence binding 且既有 Formal evidence 足够时，优先零 Provider 重建独立 candidate/release，并记录 `provider_calls=0`；只有 runtime evidence 本身不足或研究合同改变时，才提出新的 Formal Run 授权。
+- Canonical 网页是 runtime、Report Module、persisted contract 和 release artifact 的发布结果，不是手工维护的副本。任务开始时先判断是否影响该网页；若影响，必须更新拥有该知识的 Module 及 contract/tests，并完成 immutable release、部署和公网 hash/interaction/download 验收，禁止直接修改远端 `report.html`。
+- 仅修改 presentation 且既有 Formal evidence 足够时，零 Provider 重建并记录 `provider_calls=0`；用户明确要求 analysis/spec/read-only/no-deploy 或没有合法 Formal artifact 时，停止在独立 artifact 与 `ready-for-human` operational Ticket，不得部署 Validation/mock/rule-based fixture。
 - 每次真实 Formal Run 仍需明确记录 Provider、模型、调用/费用预算和独立输出目录；该授权不由代码提交、Spec、Ralph label 或测试 fixture 推定。
 - Formal Run 一旦获得明确授权并通过当前 production release contract，默认继续部署到上述 canonical endpoint，无需对同一域名重复询问部署授权；更换域名、主机、远程根目录或部署结构时必须重新授权。
 - 部署必须使用显式 contract、source directory 和 release id，禁止扫描“最新”目录；继续执行本地 preflight、candidate health check、原子 `current` 切换、失败回退和公网 evidence 验收，并在 operational Ticket 记录 source run、release id、hash、部署时间和结果。
