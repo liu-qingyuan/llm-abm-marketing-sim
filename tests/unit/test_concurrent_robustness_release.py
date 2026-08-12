@@ -108,6 +108,17 @@ def _candidate(
         "sample_manifest_json": "sample_manifest.json",
         "weight_json": "ranking_weight_sensitivity.json",
     }
+    content_hashes = {
+        relative_path: _sha256(candidate / relative_path)
+        for relative_path in artifact_paths.values()
+        if relative_path != "release_evidence.json"
+    }
+    release_path = candidate / "release_evidence.json"
+    release_document = json.loads(release_path.read_text(encoding="utf-8"))
+    release_document["candidate_content_identity_sha256"] = hashlib.sha256(
+        (json.dumps(content_hashes, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n").encode()
+    ).hexdigest()
+    _write_json(release_path, release_document)
     artifact_hashes = {
         name: _sha256(candidate / relative_path)
         for name, relative_path in artifact_paths.items()

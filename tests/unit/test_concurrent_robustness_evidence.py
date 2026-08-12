@@ -65,6 +65,17 @@ def _candidate(
         "release_evidence_json": "release_evidence.json",
         "sample_json": "sample.json",
     }
+    content_hashes = {
+        relative: _sha256(path / relative)
+        for relative in artifacts.values()
+        if relative != "release_evidence.json"
+    }
+    release_path = path / "release_evidence.json"
+    release_document = json.loads(release_path.read_text(encoding="utf-8"))
+    release_document["candidate_content_identity_sha256"] = hashlib.sha256(
+        (json.dumps(content_hashes, sort_keys=True, separators=(",", ":")) + "\n").encode()
+    ).hexdigest()
+    _write_json(release_path, release_document)
     hashes = {name: _sha256(path / relative) for name, relative in artifacts.items()}
     identity_rows = {relative: hashes[name] for name, relative in sorted(artifacts.items())}
     identity = hashlib.sha256(
@@ -196,6 +207,7 @@ def test_close_writes_exact_contract_and_typed_facts(closure_fixture: dict[str, 
         "new_candidate_report_sha256",
         "new_candidate_payload_sha256",
         "new_candidate_evidence_sha256",
+        "new_candidate_content_identity_sha256",
         "provider_calls_during_closure",
         "image_generation_triggered",
     }

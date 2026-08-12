@@ -684,6 +684,8 @@ def validate_concurrent_robustness_production_release(
 
 def _production_approved_downloads(candidate_report_payload: Mapping[str, Any]) -> dict[str, str]:
     downloads = _string_mapping(candidate_report_payload.get("downloads"), "candidate report downloads")
+    if ROBUSTNESS_PRESENTATION_CLOSURE_CONTRACT in downloads.values():
+        raise ConcurrentRobustnessReleaseError("presentation closure cannot be a Report approved download")
     if downloads.get("release_evidence") != ROBUSTNESS_CANDIDATE_RELEASE_EVIDENCE:
         raise ConcurrentRobustnessReleaseError("candidate release-evidence download mapping is crossed")
     approved_downloads = dict(downloads)
@@ -875,6 +877,7 @@ def _validate_production_release_dir(
         or evidence.get("schema_version") != ROBUSTNESS_PRODUCTION_EVIDENCE_SCHEMA
         or evidence.get("release_id") != release_id
         or evidence.get("production_deploy_eligible") is not True
+        or type(evidence.get("provider_calls_during_promotion")) is not int
         or evidence.get("provider_calls_during_promotion") != 0
         or evidence.get("subscription_billed_cost_usd") != 0.0
         or payload.get("schema_version") != "concurrent-robustness-report-payload-v1"
@@ -937,6 +940,7 @@ def _validate_production_downloads(
         raise ConcurrentRobustnessReleaseError("production approved downloads are not one-to-one")
     if (
         approved_downloads.get("release_evidence") != ROBUSTNESS_PRODUCTION_EVIDENCE
+        or ROBUSTNESS_PRESENTATION_CLOSURE_CONTRACT in approved_downloads.values()
         or ROBUSTNESS_VALIDATION_CANDIDATE_EVIDENCE in approved_downloads.values()
         or ROBUSTNESS_CANDIDATE_RELEASE_EVIDENCE in approved_downloads.values()
     ):

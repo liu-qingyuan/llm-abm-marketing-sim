@@ -503,6 +503,15 @@ def _validate_candidate_release_contract(
     for name, relative_path in artifacts.items():
         if declared_hashes[name] != candidate_hashes[relative_path]:
             raise ConcurrentRobustnessEvidenceError("validation candidate artifact hash mismatch")
+    content_hashes = {
+        relative_path: declared_hashes[name]
+        for name, relative_path in artifacts.items()
+        if relative_path != _CANDIDATE_EVIDENCE
+    }
+    if candidate_evidence.get("candidate_content_identity_sha256") != _sha256_bytes(
+        _json_bytes(dict(sorted(content_hashes.items())))
+    ):
+        raise ConcurrentRobustnessEvidenceError("validation candidate content identity is crossed")
     identity_rows = dict(sorted((path, declared_hashes[name]) for name, path in artifacts.items()))
     if candidate_manifest.get("candidate_identity_sha256") != _sha256_bytes(_json_bytes(identity_rows)):
         raise ConcurrentRobustnessEvidenceError("validation candidate identity hash is crossed")
@@ -542,6 +551,7 @@ def _validate_candidate_release_contract(
     if (
         len(set(manifest_downloads)) != len(manifest_downloads)
         or set(manifest_downloads) != set(payload_downloads.values())
+        or type(candidate_evidence.get("provider_calls_during_composition")) is not int
         or candidate_evidence.get("provider_calls_during_composition") != 0
         or candidate_evidence.get("image_generation_triggered") is not False
     ):
@@ -621,6 +631,7 @@ def close_presentation(
         "new_candidate_report_sha256": new_facts.report_sha256,
         "new_candidate_payload_sha256": new_facts.payload_sha256,
         "new_candidate_evidence_sha256": new_facts.evidence_sha256,
+        "new_candidate_content_identity_sha256": new_facts.content_identity_sha256,
         "provider_calls_during_closure": 0,
         "image_generation_triggered": False,
     }
@@ -804,6 +815,7 @@ def validate_presentation_closure(
         "new_candidate_report_sha256",
         "new_candidate_payload_sha256",
         "new_candidate_evidence_sha256",
+        "new_candidate_content_identity_sha256",
         "provider_calls_during_closure",
         "image_generation_triggered",
     }
@@ -897,6 +909,7 @@ def validate_presentation_closure(
         "new_candidate_report_sha256": new_facts.report_sha256,
         "new_candidate_payload_sha256": new_facts.payload_sha256,
         "new_candidate_evidence_sha256": new_facts.evidence_sha256,
+        "new_candidate_content_identity_sha256": new_facts.content_identity_sha256,
     }
     if any(document.get(key) != value for key, value in expected_hashes.items()):
         raise ConcurrentRobustnessEvidenceError("presentation closure hash or identity is crossed")
