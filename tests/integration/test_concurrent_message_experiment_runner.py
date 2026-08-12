@@ -573,13 +573,17 @@ def test_concurrent_message_report_rebuild_destination_uses_editorial_default_fo
     assert (destination_dir / "report.html").read_text(encoding="utf-8") != legacy_html
 
 
-def _make_validation_report_source(tmp_path: Path, name: str) -> Path:
-    dataset_dir = _make_concurrent_fixture(tmp_path)
+def _make_validation_report_source(tmp_path: Path, name: str, *, report_sized: bool = False) -> Path:
+    dataset_dir = _make_concurrent_fixture(
+        tmp_path,
+        user_count=1000 if report_sized else 30,
+        seed_user_count=20 if report_sized else 10,
+    )
     config = ConcurrentMessageExperimentConfig(
         dataset_dir=dataset_dir,
-        sample_size=30,
-        horizon=2,
-        delivery_capacity=10,
+        sample_size=1000 if report_sized else 30,
+        horizon=30 if report_sized else 2,
+        delivery_capacity=20 if report_sized else 10,
         configuration_profile="validation",
     )
     return ConcurrentMessageExperimentRunner(
@@ -2414,8 +2418,15 @@ def _install_deterministic_robustness_cell_fixture(
                     if permute_batch_zero_seed_order and message_index:
                         selected_users = selected_users[message_index:] + selected_users[:message_index]
                 else:
-                    selected_users = [f"u{number}" for number in range(11, 20)]
-                    replacement = 20 if cell_index == 0 else 21 + ((cell_index + message_index) % 10)
+                    capacity = manifest.ranking_contract.delivery_capacity
+                    batch_start = 1 + time_step * capacity
+                    selected_users = [
+                        f"u{number}" for number in range(batch_start, batch_start + capacity - 1)
+                    ]
+                    if capacity == 10:
+                        replacement = 20 if cell_index == 0 else 21 + ((cell_index + message_index) % 10)
+                    else:
+                        replacement = batch_start + capacity - 1
                     selected_users.append(f"u{replacement}")
                 message_positive_users: list[str] = []
                 message_failed_users: list[str] = []

@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { expect, test, type Locator, type Page } from '@playwright/test';
@@ -14,6 +14,7 @@ function generateRobustnessFixture(outputDir: string): RobustnessFixture {
   const command = `
 set -euo pipefail
 . .venv/bin/activate
+    export PYTHONPATH="$PWD/src:$PWD"
 python - <<'PY'
 from pathlib import Path
 from unittest.mock import patch
@@ -33,7 +34,7 @@ from tests.unit.test_concurrent_robustness_release import (
 
 root = Path(${JSON.stringify(root)}).resolve()
 root.mkdir(parents=True, exist_ok=True)
-formal = _make_validation_report_source(root, 'formal-source')
+formal = _make_validation_report_source(root, 'formal-source', report_sized=True)
 manifest = _robustness_manifest_for_source(formal, output_identity='browser-report-fixture-v1')
 workspace = root / 'workspace'
 candidate = root / 'candidate'
@@ -93,6 +94,26 @@ PY`;
     candidateDir: path.join(root, 'candidate'),
     productionDir: path.join(root, 'production-release'),
   };
+}
+
+async function expectTraceReady(page: Page): Promise<void> {
+  const traceState = page.getByTestId('run-trace-state');
+  await expect(traceState).toHaveAttribute('data-trace-state', 'ready');
+  await expect(page.getByTestId('run-llm-decision-section')).toHaveAttribute('data-trace-state', 'ready');
+  await expect(page.getByTestId('run-trace-filtered-count')).toContainText('1,800');
+  await expect(page.getByTestId('run-trace-table-body').locator('tr')).toHaveCount(25);
+  for (const testId of [
+    'run-trace-search',
+    'run-trace-message-select',
+    'run-trace-class-select',
+    'run-trace-batch-select',
+    'run-trace-action-select',
+    'run-trace-provider-select',
+    'run-trace-disagreement-select',
+    'run-trace-page-size',
+  ]) {
+    await expect(page.getByTestId(testId)).toBeEnabled();
+  }
 }
 
 async function expectWeightFamily(page: Page, familyId: string): Promise<void> {
@@ -391,7 +412,7 @@ async function expectPromptContractAndDiagram(page: Page): Promise<void> {
   await expect(diagram).toHaveAccessibleName('Prompt-Model factorial 设计');
   await expect(diagram.locator('[data-diagram-node-id]')).toHaveCount(12);
   await expect(diagram.locator('[data-diagram-edge-id]')).toHaveCount(15);
-  await expect(diagram).toContainText('每 cell 一条 2-batch realized path');
+  await expect(diagram).toContainText('每 cell 一条 30-batch realized path');
   await expect(page.getByTestId('prompt-model-factorial-fallback')).toContainText('message 不是额外运行');
   const diagramScroller = page.locator('.robustness-factorial-scroll');
   await diagramScroller.focus();
@@ -480,8 +501,52 @@ async function exerciseRobustnessInteractions(page: Page): Promise<void> {
   await expect(page.getByTestId('practical-threshold-summary')).toContainText('small_observed_difference');
 }
 
-test('candidate and promoted production keep closed downloads, full controls, and responsive keyboard behavior', async ({ page }, testInfo) => {
+test('candidate fails closed when platform gzip decoding is unsupported', async ({ page }, testInfo) => {
   test.setTimeout(180_000);
+  const fixture = generateRobustnessFixture(testInfo.outputDir);
+  const externalRequests: string[] = [];
+  const consoleErrors: string[] = [];
+  const pageErrors: string[] = [];
+  page.on('request', (request) => {
+    const protocol = new URL(request.url()).protocol;
+    if (protocol !== 'file:' && protocol !== 'data:') externalRequests.push(request.url());
+  });
+  page.on('console', (message) => {
+    if (message.type() === 'error') consoleErrors.push(message.text());
+  });
+  page.on('pageerror', (error) => pageErrors.push(error.message));
+  await page.addInitScript(() => {
+    Object.defineProperty(globalThis, 'DecompressionStream', {
+      configurable: true,
+      value: undefined,
+    });
+  });
+  await page.goto(pathToFileURL(path.join(fixture.candidateDir, 'report.html')).toString());
+
+  await expect(page.getByTestId('run-trace-state')).toHaveAttribute('data-trace-state', 'error');
+  await expect(page.getByTestId('run-llm-decision-section')).toHaveAttribute('data-trace-state', 'error');
+  await expect(page.getByTestId('run-trace-state')).toContainText('Trace data unavailable');
+  for (const testId of [
+    'run-trace-search',
+    'run-trace-message-select',
+    'run-trace-class-select',
+    'run-trace-batch-select',
+    'run-trace-action-select',
+    'run-trace-provider-select',
+    'run-trace-disagreement-select',
+    'run-trace-page-size',
+  ]) {
+    await expect(page.getByTestId(testId)).toBeDisabled();
+  }
+  await expect(page.getByTestId('run-exposure-message-select')).toBeEnabled();
+  await expect(page.getByTestId('run-feedback-message-select')).toBeEnabled();
+  expect(externalRequests).toEqual([]);
+  expect(consoleErrors).toEqual([]);
+  expect(pageErrors).toEqual([]);
+});
+
+test('candidate and promoted production keep closed downloads, full controls, and responsive keyboard behavior', async ({ page }, testInfo) => {
+  test.setTimeout(420_000);
   const fixture = generateRobustnessFixture(testInfo.outputDir);
   const externalRequests: string[] = [];
   const consoleErrors: string[] = [];
@@ -505,8 +570,13 @@ test('candidate and promoted production keep closed downloads, full controls, an
       { width: 390, height: 844 },
     ]) {
       await page.setViewportSize(viewport);
-      await page.goto(pathToFileURL(path.join(stage.directory, 'report.html')).toString());
+      const reportPath = path.join(stage.directory, 'report.html');
+      const reportBytes = readFileSync(reportPath);
+      expect(reportBytes.byteLength).toBeLessThan(3 * 1024 * 1024);
+      expect(reportBytes.toString('utf-8')).toContain('data-trace-state="loading"');
+      await page.goto(pathToFileURL(reportPath).toString());
 
+      await expectTraceReady(page);
       await expect(page.getByTestId('mechanism-overview-section')).toBeVisible();
       await expect(page.getByTestId('run-evidence-mode-panel')).toBeHidden();
       await expect(page.getByTestId('run-trace-lineage-data')).toHaveCount(1);
@@ -547,7 +617,7 @@ test('candidate and promoted production keep closed downloads, full controls, an
       const rankDisclosure = page.getByTestId('ranking-weight-rank-exact-table');
       await rankDisclosure.locator('summary').press('Enter');
       await expect(page.getByTestId('ranking-weight-batch-table')).toBeVisible();
-      await expect(page.getByTestId('ranking-weight-batch-table').locator('tbody tr')).toHaveCount(114);
+      await expect(page.getByTestId('ranking-weight-batch-table').locator('tbody tr')).toHaveCount(1710);
 
       const downloadLinks = page.getByTestId('robustness-downloads-section').getByRole('link');
       expect(await downloadLinks.count()).toBeGreaterThan(10);

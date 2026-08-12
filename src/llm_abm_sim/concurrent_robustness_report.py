@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import base64
+import binascii
 import csv
+import gzip
 import hashlib
 import html
 import io
@@ -10,6 +13,7 @@ import os
 import re
 import shutil
 import tempfile
+import zlib
 from collections import defaultdict
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
@@ -37,6 +41,25 @@ _CLOSED_STUDY_ROOT_SUFFIX = ".study-root"
 _WEIGHT_SCHEMA = "concurrent-ranking-weight-sensitivity-v1"
 _PROMPT_MODEL_SCHEMA = "concurrent-prompt-model-robustness-analysis-v1"
 _CLAIM_AUDIT_SCHEMA = "concurrent-robustness-claim-audit-v1"
+_TRACE_ENVELOPE_SCHEMA = "concurrent-robustness-trace-envelope-v1"
+_TRACE_ENCODING = "gzip+base64"
+_TRACE_ROW_COUNT = 1800
+_MAX_TRACE_UNCOMPRESSED_BYTES = 20 * 1024 * 1024
+_MAX_TRACE_COMPRESSED_BYTES = 4 * 1024 * 1024
+_MAX_REPORT_HTML_BYTES = 3 * 1024 * 1024
+_TRACE_ENVELOPE_FIELDS = {
+    "schema",
+    "encoding",
+    "uncompressed_byte_length",
+    "sha256",
+    "row_count",
+    "payload",
+}
+_TRACE_SCRIPT_OPEN = '<script type="application/json" data-testid="run-trace-rows-data">'
+_TRACE_SCRIPT_PATTERN = re.compile(
+    r'<script\b(?=[^>]*\bdata-testid="run-trace-rows-data")[^>]*>(.*?)</script>',
+    re.DOTALL,
+)
 
 _STUDY_FILES = {
     "artifact_manifest.json",
@@ -2190,6 +2213,350 @@ def _production_release_payload(facts: _ProductionPresentationFacts) -> dict[str
     }
 
 
+def _reject_json_constant(value: str) -> Any:
+    raise ValueError(f"non-standard JSON constant is not allowed: {value}")
+
+
+def _trace_envelope_for_json(trace_json: str) -> str:
+    raw = trace_json.encode("utf-8")
+    if len(raw) > _MAX_TRACE_UNCOMPRESSED_BYTES:
+        raise _RobustnessReportClosureError("trace rows exceed the uncompressed size bound")
+    try:
+        rows = json.loads(trace_json, parse_constant=_reject_json_constant)
+    except (json.JSONDecodeError, ValueError) as exc:
+        raise _RobustnessReportClosureError("trace rows are not valid JSON") from exc
+    if type(rows) is not list or len(rows) != _TRACE_ROW_COUNT or any(type(row) is not dict for row in rows):
+        raise _RobustnessReportClosureError("trace rows must be a list of exactly 1,800 objects")
+
+    compressed_buffer = io.BytesIO()
+    with gzip.GzipFile(fileobj=compressed_buffer, mode="wb", filename="", mtime=0) as stream:
+        stream.write(raw)
+    compressed = compressed_buffer.getvalue()
+    if len(compressed) > _MAX_TRACE_COMPRESSED_BYTES:
+        raise _RobustnessReportClosureError("trace rows exceed the compressed size bound")
+    envelope = {
+        "schema": _TRACE_ENVELOPE_SCHEMA,
+        "encoding": _TRACE_ENCODING,
+        "uncompressed_byte_length": len(raw),
+        "sha256": _sha256_bytes(raw),
+        "row_count": _TRACE_ROW_COUNT,
+        "payload": base64.b64encode(compressed).decode("ascii"),
+    }
+    return json.dumps(envelope, ensure_ascii=False, separators=(",", ":"), sort_keys=True).replace("</", "<\\/")
+
+
+def _replace_trace_script(formal_html: str) -> str:
+    matches = list(_TRACE_SCRIPT_PATTERN.finditer(formal_html))
+    if len(matches) != 1 or formal_html.count(_TRACE_SCRIPT_OPEN) != 1:
+        raise _RobustnessReportClosureError("historical report must contain exactly one trace rows script")
+    match = matches[0]
+    envelope = _trace_envelope_for_json(match.group(1))
+    replacement = f"{_TRACE_SCRIPT_OPEN}{envelope}</script>"
+    return formal_html[: match.start()] + replacement + formal_html[match.end() :]
+
+
+def _stream_trace_gzip(compressed: bytes) -> bytes:
+    if len(compressed) > _MAX_TRACE_COMPRESSED_BYTES:
+        raise ValueError("trace envelope compressed payload is oversized")
+    if len(compressed) < 18:
+        raise ValueError("trace envelope gzip payload is too short")
+    if compressed[:3] != b"\x1f\x8b\x08" or compressed[3] != 0 or compressed[4:8] != b"\x00\x00\x00\x00":
+        raise ValueError("trace envelope gzip header is invalid")
+    if compressed[8] not in {0, 2} or compressed[9] not in {3, 255}:
+        raise ValueError("trace envelope gzip header is invalid")
+
+    decompressor = zlib.decompressobj(wbits=16 + zlib.MAX_WBITS)
+    chunks: list[bytes] = []
+    total = 0
+    for offset in range(0, len(compressed), 64 * 1024):
+        pending = compressed[offset : offset + 64 * 1024]
+        while pending:
+            allowance = _MAX_TRACE_UNCOMPRESSED_BYTES - total + 1
+            try:
+                output = decompressor.decompress(pending, allowance)
+            except zlib.error as exc:
+                raise ValueError("trace envelope gzip payload is corrupt") from exc
+            total += len(output)
+            if total > _MAX_TRACE_UNCOMPRESSED_BYTES:
+                raise ValueError("trace envelope decompressed payload is oversized")
+            if output:
+                chunks.append(output)
+            pending = decompressor.unconsumed_tail
+            if not pending:
+                break
+    if not decompressor.eof:
+        raise ValueError("trace envelope gzip payload is truncated")
+    if decompressor.unused_data or decompressor.unconsumed_tail:
+        raise ValueError("trace envelope gzip payload has trailing data")
+    return b"".join(chunks)
+
+
+def _decode_trace_envelope(envelope: Mapping[str, Any]) -> list[dict[str, Any]]:
+    if type(envelope) is not dict or set(envelope) != _TRACE_ENVELOPE_FIELDS:
+        raise ValueError("trace envelope fields are not exact")
+    if envelope.get("schema") != _TRACE_ENVELOPE_SCHEMA or envelope.get("encoding") != _TRACE_ENCODING:
+        raise ValueError("trace envelope schema or encoding is unsupported")
+    length = envelope.get("uncompressed_byte_length")
+    if type(length) is not int or length < 0 or length > _MAX_TRACE_UNCOMPRESSED_BYTES:
+        raise ValueError("trace envelope uncompressed length is out of bounds")
+    row_count = envelope.get("row_count")
+    if type(row_count) is not int or row_count != _TRACE_ROW_COUNT:
+        raise ValueError("trace envelope row count is invalid")
+    digest = envelope.get("sha256")
+    if not isinstance(digest, str) or not re.fullmatch(r"[0-9a-f]{64}", digest):
+        raise ValueError("trace envelope digest is invalid")
+    encoded = envelope.get("payload")
+    if (
+        not isinstance(encoded, str)
+        or not encoded
+        or len(encoded) > ((_MAX_TRACE_COMPRESSED_BYTES + 2) // 3) * 4
+        or len(encoded) % 4
+        or not re.fullmatch(r"(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?", encoded)
+    ):
+        raise ValueError("trace envelope payload is not valid base64")
+    try:
+        compressed = base64.b64decode(encoded, validate=True)
+    except (ValueError, binascii.Error) as exc:
+        raise ValueError("trace envelope payload is not valid base64") from exc
+    if base64.b64encode(compressed).decode("ascii") != encoded:
+        raise ValueError("trace envelope payload is not canonical base64")
+    raw = _stream_trace_gzip(compressed)
+    if len(raw) != length:
+        raise ValueError("trace envelope decompressed length is invalid")
+    if _sha256_bytes(raw) != digest:
+        raise ValueError("trace envelope digest does not match")
+    try:
+        rows_value = json.loads(raw.decode("utf-8"), parse_constant=_reject_json_constant)
+    except (UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
+        raise ValueError("trace envelope payload is not valid UTF-8 JSON") from exc
+    if type(rows_value) is not list or len(rows_value) != _TRACE_ROW_COUNT or any(type(row) is not dict for row in rows_value):
+        raise ValueError("trace envelope rows are not exactly 1,800 objects")
+    return rows_value
+
+
+def _validate_trace_envelope_html(html_document: str) -> None:
+    matches = list(_TRACE_SCRIPT_PATTERN.finditer(html_document))
+    if len(matches) != 1 or html_document.count(_TRACE_SCRIPT_OPEN) != 1:
+        raise ValueError("report must contain exactly one trace rows script")
+    try:
+        value = json.loads(matches[0].group(1), parse_constant=_reject_json_constant)
+        if type(value) is not dict:
+            raise ValueError("trace envelope must be an object")
+        _decode_trace_envelope(value)
+    except (UnicodeDecodeError, json.JSONDecodeError, TypeError, ValueError) as exc:
+        raise ValueError("report trace envelope failed validation") from exc
+
+
+_TRACE_RUNTIME_BRIDGE = r"""
+(() => {
+  const root = document.querySelector('[data-testid="editorial-report"]');
+  const traceSection = root?.querySelector('[data-testid="run-llm-decision-section"]');
+  const traceTool = root?.querySelector('[data-testid="run-trace-tool"]');
+  const traceRowsData = root?.querySelector('[data-testid="run-trace-rows-data"]');
+  const deferredRuntime = document.querySelector('[data-concurrent-editorial-runtime="deferred"]');
+  const traceTable = root?.querySelector('[data-testid="run-trace-table"]');
+  const status = traceTool?.querySelector('[data-testid="run-trace-state"]') || document.createElement('p');
+  const maxCompressedBytes = 4 * 1024 * 1024;
+  const maxUncompressedBytes = 20 * 1024 * 1024;
+  const expectedRowCount = 1800;
+  const exactFields = [
+    'encoding',
+    'payload',
+    'row_count',
+    'schema',
+    'sha256',
+    'uncompressed_byte_length',
+  ];
+  let runtimeStarted = false;
+
+  function setStatus(state, message) {
+    if (root) root.dataset.traceState = state;
+    if (traceSection) traceSection.dataset.traceState = state;
+    if (traceTool) traceTool.dataset.traceState = state;
+    status.dataset.traceState = state;
+    status.textContent = message;
+  }
+
+  function gateControls(disabled) {
+    const controls = new Set([
+      ...(traceTool?.querySelectorAll('input, select, button') || []),
+      ...(root?.querySelectorAll('[data-mechanism-key]') || []),
+      ...(document.querySelector('[data-testid="evidence-drawer"]')?.querySelectorAll('button') || []),
+    ]);
+    controls.forEach((control) => {
+      control.disabled = disabled;
+      control.setAttribute('aria-disabled', String(disabled));
+    });
+    if (traceTable) {
+      traceTable.setAttribute('aria-disabled', String(disabled));
+      traceTable.style.pointerEvents = disabled ? 'none' : '';
+    }
+  }
+
+  function startEditorialRuntime(rows) {
+    if (runtimeStarted || !deferredRuntime || !traceRowsData) return;
+    runtimeStarted = true;
+    traceRowsData.textContent = JSON.stringify(rows);
+    const executable = document.createElement('script');
+    executable.textContent = deferredRuntime.textContent || '';
+    deferredRuntime.remove();
+    document.body.append(executable);
+  }
+
+  function failure() {
+    try {
+      startEditorialRuntime([]);
+    } finally {
+      gateControls(true);
+      setStatus('error', 'Trace data unavailable. Filters and drawer remain disabled.');
+      status.setAttribute('role', 'alert');
+    }
+  }
+
+  async function decodeBase64Envelope() {
+    if (!root || !traceSection || !traceTool || !traceRowsData || !deferredRuntime) {
+      throw new Error('trace bridge markers are missing');
+    }
+    if (typeof DecompressionStream !== 'function') {
+      throw new Error('gzip decompression is unsupported');
+    }
+    if (!globalThis.crypto?.subtle || typeof TextDecoder !== 'function') {
+      throw new Error('required platform decoding APIs are unsupported');
+    }
+    const envelope = JSON.parse(traceRowsData.textContent || '');
+    if (!envelope || typeof envelope !== 'object' || Array.isArray(envelope)) {
+      throw new Error('trace envelope is not an object');
+    }
+    const observedFields = Object.keys(envelope).sort();
+    if (observedFields.join('|') !== exactFields.join('|')) {
+      throw new Error('trace envelope fields are not exact');
+    }
+    if (envelope.schema !== 'concurrent-robustness-trace-envelope-v1'
+      || envelope.encoding !== 'gzip+base64') {
+      throw new Error('trace envelope schema is unsupported');
+    }
+    if (!Number.isInteger(envelope.uncompressed_byte_length)
+      || envelope.uncompressed_byte_length < 0
+      || envelope.uncompressed_byte_length > maxUncompressedBytes) {
+      throw new Error('trace envelope is oversized');
+    }
+    if (!Number.isInteger(envelope.row_count) || envelope.row_count !== expectedRowCount) {
+      throw new Error('trace envelope row count is invalid');
+    }
+    if (typeof envelope.sha256 !== 'string' || !/^[0-9a-f]{64}$/.test(envelope.sha256)) {
+      throw new Error('trace envelope digest is invalid');
+    }
+    if (typeof envelope.payload !== 'string'
+      || !envelope.payload
+      || envelope.payload.length % 4 !== 0
+      || envelope.payload.length > Math.ceil(maxCompressedBytes / 3) * 4
+      || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(envelope.payload)) {
+      throw new Error('trace envelope payload is invalid');
+    }
+    const binary = atob(envelope.payload);
+    if (binary.length > maxCompressedBytes) throw new Error('trace envelope is oversized');
+    if (btoa(binary) !== envelope.payload) throw new Error('trace envelope payload is not canonical base64');
+    const compressed = new Uint8Array(binary.length);
+    for (let index = 0; index < binary.length; index += 1) compressed[index] = binary.charCodeAt(index);
+    if (compressed.length < 18
+      || compressed[0] !== 0x1f
+      || compressed[1] !== 0x8b
+      || compressed[2] !== 0x08
+      || compressed[3] !== 0
+      || compressed[4] !== 0
+      || compressed[5] !== 0
+      || compressed[6] !== 0
+      || compressed[7] !== 0
+      || ![0, 2].includes(compressed[8])
+      || ![3, 255].includes(compressed[9])) {
+      throw new Error('trace envelope gzip header is invalid');
+    }
+
+    const response = new Response(compressed);
+    if (!response.body) throw new Error('gzip stream body is unavailable');
+    const reader = response.body.pipeThrough(new DecompressionStream('gzip')).getReader();
+    const chunks = [];
+    let total = 0;
+    for (;;) {
+      const result = await reader.read();
+      if (result.done) break;
+      const chunk = result.value;
+      total += chunk.byteLength;
+      if (total > maxUncompressedBytes) throw new Error('trace envelope is oversized');
+      chunks.push(chunk);
+    }
+    if (total !== envelope.uncompressed_byte_length) throw new Error('trace envelope length does not match');
+    const raw = new Uint8Array(total);
+    let offset = 0;
+    chunks.forEach((chunk) => {
+      raw.set(chunk, offset);
+      offset += chunk.byteLength;
+    });
+    const digestBuffer = await globalThis.crypto.subtle.digest('SHA-256', raw);
+    const digest = [...new Uint8Array(digestBuffer)]
+      .map((value) => value.toString(16).padStart(2, '0'))
+      .join('');
+    if (digest !== envelope.sha256) throw new Error('trace envelope digest does not match');
+    const text = new TextDecoder('utf-8', { fatal: true }).decode(raw);
+    const rows = JSON.parse(text);
+    if (!Array.isArray(rows) || rows.length !== expectedRowCount
+      || rows.some((row) => !row || typeof row !== 'object' || Array.isArray(row))) {
+      throw new Error('trace envelope rows are invalid');
+    }
+    return rows;
+  }
+
+  if (!traceTool) return;
+  traceTool.setAttribute('aria-busy', 'true');
+  status.dataset.testid = 'run-trace-state';
+  status.setAttribute('role', 'status');
+  status.setAttribute('aria-live', 'polite');
+  status.setAttribute('aria-atomic', 'true');
+  setStatus('loading', 'Loading persisted trace data.');
+  if (!status.parentElement) traceTool.prepend(status);
+  gateControls(true);
+  const traceReady = decodeBase64Envelope()
+    .then((rows) => {
+      startEditorialRuntime(rows);
+      traceTool.setAttribute('aria-busy', 'false');
+      gateControls(false);
+      setStatus('ready', 'Trace ready: 1,800 persisted rows.');
+      return { state: 'ready', rowCount: rows.length };
+    })
+    .catch(() => {
+      failure();
+      traceTool.setAttribute('aria-busy', 'false');
+      return { state: 'error', rowCount: 0 };
+    });
+  globalThis.__concurrentRobustnessTraceReady = traceReady;
+})();
+"""
+
+
+def _defer_editorial_runtime(formal_html: str) -> str:
+    scripts = list(re.finditer(r"<script(?:\s[^>]*)?>(.*?)</script>", formal_html, re.DOTALL))
+    runtime_scripts = [
+        match
+        for match in scripts
+        if "const traceRowsData = root.querySelector" in match.group(1)
+        and "const root = document.querySelector('[data-testid=\"editorial-report\"]')" in match.group(1)
+    ]
+    if len(runtime_scripts) != 1:
+        raise _RobustnessReportClosureError("historical Editorial runtime marker is missing or duplicated")
+    match = runtime_scripts[0]
+    opening_end = formal_html.find(">", match.start(), match.end())
+    if opening_end < 0:
+        raise _RobustnessReportClosureError("historical Editorial runtime script is malformed")
+    opening = formal_html[match.start() : opening_end + 1]
+    if opening != "<script>":
+        raise _RobustnessReportClosureError("historical Editorial runtime script marker is malformed")
+    inert_opening = '<script type="application/x-concurrent-editorial-runtime" data-concurrent-editorial-runtime="deferred">'
+    deferred = formal_html[: match.start()] + inert_opening + match.group(1) + "</script>" + formal_html[match.end() :]
+    bridge = '<script type="text/javascript">' + _TRACE_RUNTIME_BRIDGE + "</script>"
+    runtime_end = match.start() + len(inert_opening) + len(match.group(1)) + len("</script>")
+    return deferred[:runtime_end] + bridge + deferred[runtime_end:]
+
+
 def _validate_presentation_bundle(
     bundle: _PresentationBundle,
     *,
@@ -2198,6 +2565,9 @@ def _validate_presentation_bundle(
     payload_value = json.loads(bundle.report_payload)
     payload = _mapping(payload_value, "report presentation payload")
     html_document = bundle.report_html.decode("utf-8")
+    if len(bundle.report_html) >= _MAX_REPORT_HTML_BYTES:
+        raise ValueError("report.html exceeds the 3 MiB presentation limit")
+    _validate_trace_envelope_html(html_document)
     if payload.get("schema_version") != _REPORT_PAYLOAD_SCHEMA:
         raise ValueError("report presentation payload schema is unsupported")
     downloads = _string_mapping(payload.get("downloads"), "report presentation downloads")
@@ -2270,6 +2640,9 @@ def _validate_presentation_bundle(
         'data-testid="mechanism-overview-section"',
         'data-testid="run-evidence-mode-panel"',
         'data-testid="run-trace-lineage-data"',
+        'data-testid="run-trace-state"',
+        'data-trace-state="loading"',
+        'data-concurrent-editorial-runtime="deferred"',
         'data-testid="robustness-source-lineage"',
         'data-testid="ranking-weight-sensitivity-section"',
         'data-testid="prompt-model-robustness-section"',
@@ -2641,7 +3014,28 @@ def _render_additive_report(
         _ROBUSTNESS_SCRIPT.replace("__REPORT_STAGE_TEST_ID__", stage_test_id)
         .replace("__PROMPT_PRESENTATION_CATALOG__", prompt_catalog_json)
     )
-    rendered = formal_html.replace(
+    rendered = _replace_trace_script(formal_html)
+    rendered = _defer_editorial_runtime(rendered)
+    trace_section_marker = 'data-section-anchor="llm-decision" data-testid="run-llm-decision-section" tabindex="-1"'
+    if rendered.count(trace_section_marker) != 1:
+        raise _RobustnessReportClosureError("composed report must contain one trace section")
+    rendered = rendered.replace(
+        trace_section_marker,
+        f'{trace_section_marker} data-trace-state="loading"',
+        1,
+    )
+    trace_tool_marker = '<div class="editorial-trace-tool" data-testid="run-trace-tool">'
+    if rendered.count(trace_tool_marker) != 1:
+        raise _RobustnessReportClosureError("composed report must contain one trace tool")
+    rendered = rendered.replace(
+        trace_tool_marker,
+        trace_tool_marker
+        + '<p data-testid="run-trace-state" data-trace-state="loading" role="status" aria-live="polite" aria-atomic="true">Loading persisted trace data.</p>',
+        1,
+    )
+    if rendered.count(_TRACE_SCRIPT_OPEN) != 1:
+        raise _RobustnessReportClosureError("composed report must contain exactly one trace envelope")
+    rendered = rendered.replace(
         overview_figure_marker,
         f"{project_diagram_html}{overview_figure_marker}",
         1,
