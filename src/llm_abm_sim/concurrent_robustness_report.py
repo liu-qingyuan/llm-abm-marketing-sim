@@ -2048,6 +2048,7 @@ def _build_report_payload(
             "practical_threshold_rows": rows.thresholds,
         },
         "row_counts": rows.counts(),
+        "trace_row_count": len(formal.decision_trace_document.rows),
         "downloads": downloads,
         "claim_boundary": {
             "scope": "fixed_sample_fixed_graph_one_realized_path_per_cell",
@@ -2217,7 +2218,9 @@ def _reject_json_constant(value: str) -> Any:
     raise ValueError(f"non-standard JSON constant is not allowed: {value}")
 
 
-def _trace_envelope_for_json(trace_json: str) -> str:
+def _trace_envelope_for_json(trace_json: str, *, expected_row_count: int = _TRACE_ROW_COUNT) -> str:
+    if type(expected_row_count) is not int or expected_row_count <= 0:
+        raise _RobustnessReportClosureError("trace row count must be a positive strict integer")
     raw = trace_json.encode("utf-8")
     if len(raw) > _MAX_TRACE_UNCOMPRESSED_BYTES:
         raise _RobustnessReportClosureError("trace rows exceed the uncompressed size bound")
@@ -2225,8 +2228,10 @@ def _trace_envelope_for_json(trace_json: str) -> str:
         rows = json.loads(trace_json, parse_constant=_reject_json_constant)
     except (json.JSONDecodeError, ValueError) as exc:
         raise _RobustnessReportClosureError("trace rows are not valid JSON") from exc
-    if type(rows) is not list or len(rows) != _TRACE_ROW_COUNT or any(type(row) is not dict for row in rows):
-        raise _RobustnessReportClosureError("trace rows must be a list of exactly 1,800 objects")
+    if type(rows) is not list or len(rows) != expected_row_count or any(type(row) is not dict for row in rows):
+        raise _RobustnessReportClosureError(
+            f"trace rows must be a list of exactly {expected_row_count:,} objects"
+        )
 
     compressed_buffer = io.BytesIO()
     with gzip.GzipFile(fileobj=compressed_buffer, mode="wb", filename="", mtime=0) as stream:
@@ -2239,18 +2244,18 @@ def _trace_envelope_for_json(trace_json: str) -> str:
         "encoding": _TRACE_ENCODING,
         "uncompressed_byte_length": len(raw),
         "sha256": _sha256_bytes(raw),
-        "row_count": _TRACE_ROW_COUNT,
+        "row_count": expected_row_count,
         "payload": base64.b64encode(compressed).decode("ascii"),
     }
     return json.dumps(envelope, ensure_ascii=False, separators=(",", ":"), sort_keys=True).replace("</", "<\\/")
 
 
-def _replace_trace_script(formal_html: str) -> str:
+def _replace_trace_script(formal_html: str, *, expected_row_count: int = _TRACE_ROW_COUNT) -> str:
     matches = list(_TRACE_SCRIPT_PATTERN.finditer(formal_html))
     if len(matches) != 1 or formal_html.count(_TRACE_SCRIPT_OPEN) != 1:
         raise _RobustnessReportClosureError("historical report must contain exactly one trace rows script")
     match = matches[0]
-    envelope = _trace_envelope_for_json(match.group(1))
+    envelope = _trace_envelope_for_json(match.group(1), expected_row_count=expected_row_count)
     replacement = f"{_TRACE_SCRIPT_OPEN}{envelope}</script>"
     return formal_html[: match.start()] + replacement + formal_html[match.end() :]
 
@@ -2291,7 +2296,11 @@ def _stream_trace_gzip(compressed: bytes) -> bytes:
     return b"".join(chunks)
 
 
-def _decode_trace_envelope(envelope: Mapping[str, Any]) -> list[dict[str, Any]]:
+def _decode_trace_envelope(
+    envelope: Mapping[str, Any],
+    *,
+    expected_row_count: int = _TRACE_ROW_COUNT,
+) -> list[dict[str, Any]]:
     if type(envelope) is not dict or set(envelope) != _TRACE_ENVELOPE_FIELDS:
         raise ValueError("trace envelope fields are not exact")
     if envelope.get("schema") != _TRACE_ENVELOPE_SCHEMA or envelope.get("encoding") != _TRACE_ENCODING:
@@ -2299,8 +2308,10 @@ def _decode_trace_envelope(envelope: Mapping[str, Any]) -> list[dict[str, Any]]:
     length = envelope.get("uncompressed_byte_length")
     if type(length) is not int or length < 0 or length > _MAX_TRACE_UNCOMPRESSED_BYTES:
         raise ValueError("trace envelope uncompressed length is out of bounds")
+    if type(expected_row_count) is not int or expected_row_count <= 0:
+        raise ValueError("expected trace row count must be a positive strict integer")
     row_count = envelope.get("row_count")
-    if type(row_count) is not int or row_count != _TRACE_ROW_COUNT:
+    if type(row_count) is not int or row_count != expected_row_count:
         raise ValueError("trace envelope row count is invalid")
     digest = envelope.get("sha256")
     if not isinstance(digest, str) or not re.fullmatch(r"[0-9a-f]{64}", digest):
@@ -2329,12 +2340,16 @@ def _decode_trace_envelope(envelope: Mapping[str, Any]) -> list[dict[str, Any]]:
         rows_value = json.loads(raw.decode("utf-8"), parse_constant=_reject_json_constant)
     except (UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
         raise ValueError("trace envelope payload is not valid UTF-8 JSON") from exc
-    if type(rows_value) is not list or len(rows_value) != _TRACE_ROW_COUNT or any(type(row) is not dict for row in rows_value):
-        raise ValueError("trace envelope rows are not exactly 1,800 objects")
+    if type(rows_value) is not list or len(rows_value) != expected_row_count or any(type(row) is not dict for row in rows_value):
+        raise ValueError(f"trace envelope rows are not exactly {expected_row_count:,} objects")
     return rows_value
 
 
-def _validate_trace_envelope_html(html_document: str) -> None:
+def _validate_trace_envelope_html(
+    html_document: str,
+    *,
+    expected_row_count: int = _TRACE_ROW_COUNT,
+) -> None:
     matches = list(_TRACE_SCRIPT_PATTERN.finditer(html_document))
     if len(matches) != 1 or html_document.count(_TRACE_SCRIPT_OPEN) != 1:
         raise ValueError("report must contain exactly one trace rows script")
@@ -2342,7 +2357,7 @@ def _validate_trace_envelope_html(html_document: str) -> None:
         value = json.loads(matches[0].group(1), parse_constant=_reject_json_constant)
         if type(value) is not dict:
             raise ValueError("trace envelope must be an object")
-        _decode_trace_envelope(value)
+        _decode_trace_envelope(value, expected_row_count=expected_row_count)
     except (UnicodeDecodeError, json.JSONDecodeError, TypeError, ValueError) as exc:
         raise ValueError("report trace envelope failed validation") from exc
 
@@ -2358,7 +2373,7 @@ _TRACE_RUNTIME_BRIDGE = r"""
   const status = traceTool?.querySelector('[data-testid="run-trace-state"]') || document.createElement('p');
   const maxCompressedBytes = 4 * 1024 * 1024;
   const maxUncompressedBytes = 20 * 1024 * 1024;
-  const expectedRowCount = 1800;
+  const expectedRowCount = __TRACE_ROW_COUNT__;
   const exactFields = [
     'encoding',
     'payload',
@@ -2520,7 +2535,7 @@ _TRACE_RUNTIME_BRIDGE = r"""
       startEditorialRuntime(rows);
       traceTool.setAttribute('aria-busy', 'false');
       gateControls(false);
-      setStatus('ready', 'Trace ready: 1,800 persisted rows.');
+      setStatus('ready', `Trace ready: ${rows.length.toLocaleString()} persisted rows.`);
       return { state: 'ready', rowCount: rows.length };
     })
     .catch(() => {
@@ -2567,7 +2582,14 @@ def _validate_presentation_bundle(
     html_document = bundle.report_html.decode("utf-8")
     if len(bundle.report_html) >= _MAX_REPORT_HTML_BYTES:
         raise ValueError("report.html exceeds the 3 MiB presentation limit")
-    _validate_trace_envelope_html(html_document)
+    expected_trace_rows = _strict_positive_int(
+        payload.get("trace_row_count"),
+        "report trace row count",
+    )
+    _validate_trace_envelope_html(
+        html_document,
+        expected_row_count=expected_trace_rows,
+    )
     if payload.get("schema_version") != _REPORT_PAYLOAD_SCHEMA:
         raise ValueError("report presentation payload schema is unsupported")
     downloads = _string_mapping(payload.get("downloads"), "report presentation downloads")
@@ -3014,8 +3036,18 @@ def _render_additive_report(
         _ROBUSTNESS_SCRIPT.replace("__REPORT_STAGE_TEST_ID__", stage_test_id)
         .replace("__PROMPT_PRESENTATION_CATALOG__", prompt_catalog_json)
     )
-    rendered = _replace_trace_script(formal_html)
-    rendered = _defer_editorial_runtime(rendered)
+    expected_trace_rows = _strict_positive_int(
+        payload.get("trace_row_count"),
+        "report trace row count",
+    )
+    rendered = _replace_trace_script(
+        formal_html,
+        expected_row_count=expected_trace_rows,
+    )
+    rendered = _defer_editorial_runtime(rendered).replace(
+        "__TRACE_ROW_COUNT__",
+        str(expected_trace_rows),
+    )
     trace_section_marker = 'data-section-anchor="llm-decision" data-testid="run-llm-decision-section" tabindex="-1"'
     if rendered.count(trace_section_marker) != 1:
         raise _RobustnessReportClosureError("composed report must contain one trace section")
@@ -3513,6 +3545,12 @@ def _mapping(value: object, label: str) -> dict[str, Any]:
     if not isinstance(value, Mapping):
         raise ValueError(f"{label} must be an object")
     return {str(key): item for key, item in value.items()}
+
+
+def _strict_positive_int(value: object, label: str) -> int:
+    if type(value) is not int or value <= 0:
+        raise ValueError(f"{label} must be a positive strict integer")
+    return value
 
 
 def _sequence(value: object, label: str) -> list[Any]:
