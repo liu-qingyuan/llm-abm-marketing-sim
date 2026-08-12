@@ -19,6 +19,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--destination-dir", type=Path, required=True)
     parser.add_argument("--release-contract", type=Path, required=True)
     parser.add_argument("--release-id", required=True)
+    parser.add_argument("--presentation-closure", "--presentation-closure-path", dest="presentation_closure", type=Path)
     return parser.parse_args()
 
 
@@ -34,6 +35,7 @@ def main() -> int:
         destination_dir=args.destination_dir,
         release_contract_path=args.release_contract,
         release_id=args.release_id,
+        presentation_closure_path=args.presentation_closure,
     )
     print(
         json.dumps(

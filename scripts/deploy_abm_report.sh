@@ -99,9 +99,10 @@ from urllib.parse import urlparse
 contract = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
 release_id = sys.argv[2]
 domain = sys.argv[3]
-if contract.get("schema_version") == "abm-report-release-contract-v5":
+if contract.get("schema_version") in {"abm-report-release-contract-v5", "abm-report-release-contract-v6"}:
+    schema = contract.get("schema_version")
     if contract.get("release_id") != release_id:
-        raise SystemExit("v5 CLI release id differs from the frozen contract")
+        raise SystemExit(f"{schema} CLI release id differs from the frozen contract")
     endpoint = contract.get("canonical_endpoint")
     parsed = urlparse(endpoint) if isinstance(endpoint, str) else None
     if (
@@ -114,7 +115,7 @@ if contract.get("schema_version") == "abm-report-release-contract-v5":
         or parsed.query
         or parsed.fragment
     ):
-        raise SystemExit("v5 deployment domain differs from the frozen canonical endpoint")
+        raise SystemExit(f"{schema} deployment domain differs from the frozen canonical endpoint")
 PY
 PUBLIC_ACCEPTANCE_REPORT_KIND="$("${PYTHON}" - "${RELEASE_CONTRACT}" <<'PY'
 import json
@@ -127,7 +128,7 @@ if schema_version in {'abm-report-release-contract-v2', 'abm-report-release-cont
     print('final-research')
 elif schema_version == 'abm-report-release-contract-v4':
     print('concurrent-message')
-elif schema_version == 'abm-report-release-contract-v5':
+elif schema_version in {'abm-report-release-contract-v5', 'abm-report-release-contract-v6'}:
     print('concurrent-robustness')
 else:
     raise SystemExit(f'unsupported public acceptance contract schema_version: {schema_version!r}')

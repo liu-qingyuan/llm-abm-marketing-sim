@@ -1474,6 +1474,24 @@ def _validate_v5(
         raise ReleaseValidationError(f"invalid v5 Concurrent Robustness release: {exc}") from exc
 
 
+def _validate_v6(
+    *,
+    repo_root: Path,
+    contract_document: dict[str, object],
+    source_dir: Path,
+    snapshot_dir: Path | None = None,
+) -> dict[str, object]:
+    try:
+        return validate_concurrent_robustness_production_release(
+            repo_root=repo_root,
+            contract_document=contract_document,
+            source_dir=source_dir,
+            snapshot_dir=snapshot_dir,
+        )
+    except (ConcurrentRobustnessReleaseError, OSError, ValidationError) as exc:
+        raise ReleaseValidationError(f"invalid v6 Concurrent Robustness release: {exc}") from exc
+
+
 def validate_release(
     *,
     repo_root: Path,
@@ -1521,6 +1539,14 @@ def validate_release(
             source_dir=source_dir,
             snapshot_dir=snapshot_dir,
         )
+    if schema_version == "abm-report-release-contract-v6":
+        _safe_contract_file(repo_root, contract_path)
+        return _validate_v6(
+            repo_root=repo_root,
+            contract_document=contract,
+            source_dir=source_dir,
+            snapshot_dir=snapshot_dir,
+        )
     raise ReleaseValidationError(f"unsupported release contract schema_version: {schema_version!r}")
 
 
@@ -1537,7 +1563,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--require-formal-production",
         action="store_true",
-        help="Reject validated evidence unless it is a deploy-eligible v2-v5 Formal research release",
+        help="Reject validated evidence unless it is a deploy-eligible v2-v6 Formal research release",
     )
     return parser.parse_args()
 
@@ -1558,13 +1584,14 @@ def main() -> int:
                 "abm-report-release-contract-v3",
                 "abm-report-release-contract-v4",
                 "abm-report-release-contract-v5",
+                "abm-report-release-contract-v6",
             }
             or result.get("release_purpose")
             not in {"formal_research", "concurrent_robustness_formal_research"}
             or result.get("production_deploy_eligible") is not True
         ):
             raise ReleaseValidationError(
-                "formal production deployment requires abm-report-release-contract-v2, v3, v4, or v5 "
+                "formal production deployment requires abm-report-release-contract-v2, v3, v4, v5, or v6 "
                 "deploy-eligible Formal research evidence"
             )
     except ReleaseValidationError as exc:

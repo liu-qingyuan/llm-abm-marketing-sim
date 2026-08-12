@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import math
 import os
 import re
 import shutil
@@ -12,9 +11,14 @@ from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any
 
+from . import concurrent_robustness_evidence as _evidence
 from .concurrent_message_report import (
     CONCURRENT_MESSAGE_ARTIFACT_MANIFEST_JSON,
     CONCURRENT_MESSAGE_REPORT_HTML,
+)
+from .concurrent_robustness_evidence import (
+    ConcurrentRobustnessEvidenceError,
+    PresentationClosureFacts,
 )
 from .concurrent_robustness_report import (
     _REPORT_PRESENTATION,
@@ -24,24 +28,23 @@ from .concurrent_robustness_report import (
 from .concurrent_robustness_study import (
     CONCURRENT_ROBUSTNESS_SUBSCRIPTION_ADAPTER_IDENTITY,
     ConcurrentRobustnessManifest,
-    _CellEvidenceDocument,
-    _dynamic_root,
-    _validate_cell_evidence_contract,
-    _validate_completed_dynamic_root,
 )
 from .providers.pi_subscription import PI_SUBSCRIPTION_MODEL_ALIASES
 
 ROBUSTNESS_PRODUCTION_MANIFEST_SCHEMA = "concurrent-robustness-production-release-manifest-v1"
 ROBUSTNESS_PRODUCTION_EVIDENCE_SCHEMA = "concurrent-robustness-production-release-evidence-v1"
-ROBUSTNESS_RELEASE_CONTRACT_SCHEMA = "abm-report-release-contract-v5"
+ROBUSTNESS_RELEASE_CONTRACT_SCHEMA_V5 = "abm-report-release-contract-v5"
+ROBUSTNESS_RELEASE_CONTRACT_SCHEMA_V6 = "abm-report-release-contract-v6"
+ROBUSTNESS_RELEASE_CONTRACT_SCHEMA = ROBUSTNESS_RELEASE_CONTRACT_SCHEMA_V5
+ROBUSTNESS_PRESENTATION_CLOSURE_CONTRACT = "presentation_closure_contract.json"
 ROBUSTNESS_CANONICAL_ENDPOINT = "https://abm.q1ngyuan.top/"
 ROBUSTNESS_REPORT_PAYLOAD = "concurrent_robustness_report_payload.json"
 ROBUSTNESS_CANDIDATE_RELEASE_EVIDENCE = "release_evidence.json"
 ROBUSTNESS_VALIDATION_CANDIDATE_MANIFEST = "validation_candidate_artifact_manifest.json"
 ROBUSTNESS_VALIDATION_CANDIDATE_EVIDENCE = "validation_candidate_release_evidence.json"
 ROBUSTNESS_PRODUCTION_EVIDENCE = "robustness_production_release_evidence.json"
-ROBUSTNESS_FORMAL_LOGICAL_JUDGMENTS = 28_800
-ROBUSTNESS_FORMAL_PHYSICAL_ATTEMPT_CAP = 86_400
+ROBUSTNESS_FORMAL_LOGICAL_JUDGMENTS = _evidence.FORMAL_LOGICAL_JUDGMENTS
+ROBUSTNESS_FORMAL_PHYSICAL_ATTEMPT_CAP = _evidence.FORMAL_PHYSICAL_ATTEMPT_CAP
 
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _RELEASE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,159}$")
@@ -50,6 +53,39 @@ _COMMIT = re.compile(r"^[0-9a-f]{7,40}$")
 
 class ConcurrentRobustnessReleaseError(ValueError):
     """Raised when Formal evidence cannot be promoted to a production release."""
+
+
+# These package-internal compatibility seams preserve v5's test and caller
+# injection points while the evidence implementation lives in Evidence Module.
+_CellEvidenceDocument = _evidence._CellEvidenceDocument
+_validate_cell_evidence_contract = _evidence._validate_cell_evidence_contract
+_validate_completed_dynamic_root = _evidence._validate_completed_dynamic_root
+
+
+def _validate_execution_contract(**kwargs: object) -> dict[str, Any]:
+    try:
+        return _evidence._validate_execution_contract(**kwargs)
+    except ConcurrentRobustnessEvidenceError as exc:
+        raise ConcurrentRobustnessReleaseError(str(exc)) from exc
+
+
+def _close_formal_cell_evidence(**kwargs: object) -> Any:
+    try:
+        return _evidence.close_formal_cell_evidence(
+            evidence_model=_CellEvidenceDocument,
+            cell_validator=_validate_cell_evidence_contract,
+            dynamic_validator=_validate_completed_dynamic_root,
+            **kwargs,
+        )
+    except ConcurrentRobustnessEvidenceError as exc:
+        raise ConcurrentRobustnessReleaseError(str(exc)) from exc
+
+
+def _validate_candidate_release_contract(**kwargs: object) -> None:
+    try:
+        _evidence._validate_candidate_release_contract(**kwargs)
+    except ConcurrentRobustnessEvidenceError as exc:
+        raise ConcurrentRobustnessReleaseError(str(exc)) from exc
 
 
 @dataclass(frozen=True)
@@ -73,6 +109,7 @@ def promote_concurrent_robustness_release(
     destination_dir: str | Path,
     release_contract_path: str | Path,
     release_id: str,
+    presentation_closure_path: str | Path | None = None,
 ) -> ConcurrentRobustnessProductionRelease:
     """Validate both immutable lineages, then atomically create a production-only release root."""
     root = _real_directory(Path(repo_root), "repository root")
@@ -81,11 +118,18 @@ def promote_concurrent_robustness_release(
     workspace = _repo_directory(root, Path(workspace_root), "robustness workspace")
     candidate = _repo_directory(root, Path(candidate_dir), "robustness validation candidate")
     execution_contract_file = _repo_file(root, Path(execution_contract_path), "Formal execution contract")
+    presentation_closure_file = (
+        _repo_file(root, Path(presentation_closure_path), "presentation closure contract")
+        if presentation_closure_path is not None
+        else None
+    )
     destination = _new_repo_path(root, Path(destination_dir), "production release destination")
     contract_path = _new_repo_path(root, Path(release_contract_path), "production release contract")
     if not _RELEASE_ID.fullmatch(release_id):
         raise ConcurrentRobustnessReleaseError("release id is not a bounded stable token")
     protected = (formal, study, workspace, candidate, execution_contract_file.parent)
+    if presentation_closure_file is not None:
+        protected = (*protected, presentation_closure_file)
     if any(_paths_overlap(destination, path) for path in protected):
         raise ConcurrentRobustnessReleaseError("production release destination overlaps immutable input evidence")
     if contract_path == destination or contract_path.is_relative_to(destination):
@@ -112,14 +156,26 @@ def promote_concurrent_robustness_release(
         or manifest.request_caps.fee_ceiling_usd != 0.0
     ):
         raise ConcurrentRobustnessReleaseError("study manifest is not the approved subscription-backed Formal profile")
-    observed = {
-        cell.requested_model: cell.required_observed_model
-        for cell in manifest.prompt_model_cells
-    }
+    observed = {cell.requested_model: cell.required_observed_model for cell in manifest.prompt_model_cells}
     if observed != PI_SUBSCRIPTION_MODEL_ALIASES:
         raise ConcurrentRobustnessReleaseError("Formal study model aliases are crossed with qualification")
     if Path(manifest.source.source_dir).resolve(strict=True) != formal:
         raise ConcurrentRobustnessReleaseError("Formal study source path is crossed")
+
+    closure_facts: PresentationClosureFacts | None = None
+    if presentation_closure_file is not None:
+        try:
+            closure_facts = _evidence.validate_presentation_closure(
+                repo_root=root,
+                closure_path=presentation_closure_file,
+                formal_root=formal,
+                study_root=study,
+                workspace_root=workspace,
+                candidate_dir=candidate,
+                execution_contract_path=execution_contract_file,
+            )
+        except ConcurrentRobustnessEvidenceError as exc:
+            raise ConcurrentRobustnessReleaseError(str(exc)) from exc
 
     candidate_manifest = _json_object(candidate / CONCURRENT_MESSAGE_ARTIFACT_MANIFEST_JSON)
     candidate_evidence = _json_object(candidate / ROBUSTNESS_CANDIDATE_RELEASE_EVIDENCE)
@@ -135,13 +191,14 @@ def promote_concurrent_robustness_release(
         study=study,
     )
 
+    formal_candidate = closure_facts.old_candidate_path if closure_facts is not None else candidate
     execution_contract = _validate_execution_contract(
         root=root,
         path=execution_contract_file,
         formal=formal,
         study=study,
         workspace=workspace,
-        candidate=candidate,
+        candidate=formal_candidate,
         manifest=manifest,
         manifest_sha256=manifest_sha256,
     )
@@ -171,10 +228,19 @@ def promote_concurrent_robustness_release(
     candidate_evidence_sha256 = candidate_hashes[ROBUSTNESS_CANDIDATE_RELEASE_EVIDENCE]
     execution_contract_sha256 = _sha256_file(execution_contract_file)
     approved_downloads = _production_approved_downloads(candidate_report_payload)
+    selected_release_schema = (
+        ROBUSTNESS_RELEASE_CONTRACT_SCHEMA_V6 if closure_facts is not None else ROBUSTNESS_RELEASE_CONTRACT_SCHEMA_V5
+    )
+    presentation_closure_bytes = None
+    if presentation_closure_file is not None and closure_facts is not None:
+        presentation_closure_bytes = presentation_closure_file.read_bytes()
+        if _sha256_bytes(presentation_closure_bytes) != closure_facts.closure_sha256:
+            raise ConcurrentRobustnessReleaseError("presentation closure changed during promotion")
     stage_facts = _production_presentation_facts(
         release_id=release_id,
         physical_attempts=physical_attempts,
         approved_downloads=approved_downloads,
+        release_contract_schema=selected_release_schema,
     )
     presentation = _materialize_production_presentation(
         formal=formal,
@@ -198,6 +264,7 @@ def promote_concurrent_robustness_release(
         physical_attempts=physical_attempts,
         presentation=presentation,
         approved_downloads=approved_downloads,
+        presentation_closure=presentation_closure_bytes,
     )
     destination.parent.mkdir(parents=True, exist_ok=True)
     contract_path.parent.mkdir(parents=True, exist_ok=True)
@@ -211,7 +278,7 @@ def promote_concurrent_robustness_release(
         _validate_production_release_dir(staging, stage_facts=stage_facts)
         release_hashes = _flat_file_hashes(staging)
         contract_document = {
-            "schema_version": ROBUSTNESS_RELEASE_CONTRACT_SCHEMA,
+            "schema_version": selected_release_schema,
             "release_purpose": "concurrent_robustness_formal_research",
             "release_id": release_id,
             "canonical_endpoint": ROBUSTNESS_CANONICAL_ENDPOINT,
@@ -243,6 +310,9 @@ def promote_concurrent_robustness_release(
             "production_deploy_eligible": True,
             "artifact_sha256": dict(sorted(release_hashes.items())),
         }
+        if closure_facts is not None and presentation_closure_file is not None:
+            contract_document["presentation_closure_contract"] = presentation_closure_file.relative_to(root).as_posix()
+            contract_document["presentation_closure_contract_sha256"] = closure_facts.closure_sha256
         contract_staging.write_bytes(_json_bytes(contract_document))
         if destination.exists() or contract_path.exists():
             raise ConcurrentRobustnessReleaseError("production release destination or contract appeared during staging")
@@ -279,9 +349,13 @@ def validate_concurrent_robustness_production_release(
 ) -> dict[str, object]:
     """Fail-closed validator used by the production deployment gate."""
     root = _real_directory(Path(repo_root), "repository root")
-    if contract_document.get("schema_version") != ROBUSTNESS_RELEASE_CONTRACT_SCHEMA:
+    schema_version = contract_document.get("schema_version")
+    if schema_version not in {
+        ROBUSTNESS_RELEASE_CONTRACT_SCHEMA_V5,
+        ROBUSTNESS_RELEASE_CONTRACT_SCHEMA_V6,
+    }:
         raise ConcurrentRobustnessReleaseError("unsupported Concurrent Robustness release contract")
-    if set(contract_document) != {
+    if schema_version == ROBUSTNESS_RELEASE_CONTRACT_SCHEMA_V5 and set(contract_document) != {
         "schema_version",
         "release_purpose",
         "release_id",
@@ -315,6 +389,44 @@ def validate_concurrent_robustness_production_release(
         "artifact_sha256",
     }:
         raise ConcurrentRobustnessReleaseError("v5 release contract fields are missing or unexpected")
+    if schema_version == ROBUSTNESS_RELEASE_CONTRACT_SCHEMA_V6:
+        v6_fields = {
+            "schema_version",
+            "release_purpose",
+            "release_id",
+            "canonical_endpoint",
+            "source_directory",
+            "artifact_manifest_schema_version",
+            "report_payload_schema_version",
+            "production_evidence_schema_version",
+            "historical_formal_directory",
+            "historical_formal_manifest_sha256",
+            "study_root_directory",
+            "study_manifest_sha256",
+            "study_artifact_manifest_sha256",
+            "workspace_directory",
+            "validation_candidate_directory",
+            "validation_candidate_manifest_sha256",
+            "validation_candidate_evidence_sha256",
+            "formal_execution_contract",
+            "formal_execution_contract_sha256",
+            "formal_judgment_implementation_commit",
+            "formal_closure_implementation_commit",
+            "formal_closure_replay_sha256",
+            "adapter_identity",
+            "provider_transport",
+            "requested_observed_model_aliases",
+            "logical_judgments",
+            "physical_attempts",
+            "physical_attempt_cap",
+            "subscription_billed_cost_usd",
+            "production_deploy_eligible",
+            "artifact_sha256",
+            "presentation_closure_contract",
+            "presentation_closure_contract_sha256",
+        }
+        if set(contract_document) != v6_fields:
+            raise ConcurrentRobustnessReleaseError("v6 release contract fields are missing or unexpected")
     release_id = _string(contract_document.get("release_id"), "release id")
     if not _RELEASE_ID.fullmatch(release_id):
         raise ConcurrentRobustnessReleaseError("v5 release id is invalid")
@@ -366,6 +478,11 @@ def validate_concurrent_robustness_production_release(
     actual_hashes = _flat_file_hashes(evidence_dir)
     if actual_hashes != expected_hashes:
         raise ConcurrentRobustnessReleaseError("v5 source inventory or artifact hashes differ from the contract")
+    if schema_version == ROBUSTNESS_RELEASE_CONTRACT_SCHEMA_V6:
+        if actual_hashes.get(ROBUSTNESS_PRESENTATION_CLOSURE_CONTRACT) != contract_document.get(
+            "presentation_closure_contract_sha256"
+        ):
+            raise ConcurrentRobustnessReleaseError("v6 release closure artifact hash is crossed")
     production_manifest = _json_object(evidence_dir / CONCURRENT_MESSAGE_ARTIFACT_MANIFEST_JSON)
     stage_facts = _production_presentation_facts(
         release_id=release_id,
@@ -374,6 +491,7 @@ def validate_concurrent_robustness_production_release(
             production_manifest.get("approved_downloads"),
             "production approved downloads",
         ),
+        release_contract_schema=str(schema_version),
     )
     _validate_production_release_dir(evidence_dir, stage_facts=stage_facts)
 
@@ -402,6 +520,20 @@ def validate_concurrent_robustness_production_release(
         Path(_string(contract_document.get("formal_execution_contract"), "Formal execution contract")),
         "Formal execution contract",
     )
+    closure_file: Path | None = None
+    if schema_version == ROBUSTNESS_RELEASE_CONTRACT_SCHEMA_V6:
+        closure_file = _repo_file(
+            root,
+            Path(
+                _canonical_relative_path(
+                    contract_document.get("presentation_closure_contract"),
+                    "presentation closure contract",
+                )
+            ),
+            "presentation closure contract",
+        )
+        if _sha256_file(closure_file) != contract_document.get("presentation_closure_contract_sha256"):
+            raise ConcurrentRobustnessReleaseError("v6 presentation closure contract hash is crossed")
     for path, key in (
         (study / "study_manifest.json", "study_manifest_sha256"),
         (study / "artifact_manifest.json", "study_artifact_manifest_sha256"),
@@ -428,6 +560,21 @@ def validate_concurrent_robustness_production_release(
         formal=formal,
         study=study,
     )
+    formal_candidate = candidate
+    if closure_file is not None:
+        try:
+            closure_facts = _evidence.validate_presentation_closure(
+                repo_root=root,
+                closure_path=closure_file,
+                formal_root=formal,
+                study_root=study,
+                workspace_root=workspace,
+                candidate_dir=candidate,
+                execution_contract_path=execution_contract_file,
+            )
+            formal_candidate = closure_facts.old_candidate_path
+        except ConcurrentRobustnessEvidenceError as exc:
+            raise ConcurrentRobustnessReleaseError(str(exc)) from exc
     expected_presentation = _materialize_production_presentation(
         formal=formal,
         study=study,
@@ -447,7 +594,7 @@ def validate_concurrent_robustness_production_release(
         formal=formal,
         study=study,
         workspace=workspace,
-        candidate=candidate,
+        candidate=formal_candidate,
         manifest=manifest,
         manifest_sha256=_sha256_bytes(manifest_payload),
     )
@@ -465,14 +612,13 @@ def validate_concurrent_robustness_production_release(
         != execution_contract.get("implementation_commit")
         or contract_document.get("formal_closure_implementation_commit")
         != execution_contract.get("closure_implementation_commit")
-        or contract_document.get("formal_closure_replay_sha256")
-        != execution_contract.get("closure_replay_sha256")
+        or contract_document.get("formal_closure_replay_sha256") != execution_contract.get("closure_replay_sha256")
         or execution_contract.get("physical_provider_attempts") != physical_attempts
         or execution_contract.get("subscription_billed_cost_usd") != 0.0
     ):
         raise ConcurrentRobustnessReleaseError("v5 execution evidence is crossed with the release contract")
     return {
-        "schema_version": ROBUSTNESS_RELEASE_CONTRACT_SCHEMA,
+        "schema_version": schema_version,
         "release_purpose": "concurrent_robustness_formal_research",
         "release_id": release_id,
         "source_directory": contract_document["source_directory"],
@@ -485,508 +631,6 @@ def validate_concurrent_robustness_production_release(
         "artifact_count": len(actual_hashes),
         "production_deploy_eligible": True,
     }
-
-
-def _close_formal_cell_evidence(
-    *,
-    study: Path,
-    workspace: Path,
-    formal: Path,
-    manifest: ConcurrentRobustnessManifest,
-    manifest_sha256: str,
-) -> _CellEvidenceDocument:
-    try:
-        evidence = _CellEvidenceDocument.model_validate(
-            _json_object(study / "prompt_model_cell_evidence.json")
-        )
-        _validate_cell_evidence_contract(
-            evidence,
-            manifest=manifest,
-            manifest_sha256=manifest_sha256,
-        )
-        _validate_completed_dynamic_root(
-            manifest=manifest,
-            manifest_sha256=manifest_sha256,
-            output_path=workspace,
-            source_path=formal,
-            evidence=evidence,
-        )
-        return evidence
-    except (OSError, TypeError, ValueError) as exc:
-        raise ConcurrentRobustnessReleaseError(
-            "Formal cell rows or durable journals failed independent closure"
-        ) from exc
-
-
-def _validate_parallel_cell_execution(
-    *,
-    root: Path,
-    document: Mapping[str, Any],
-    manifest: ConcurrentRobustnessManifest,
-    manifest_sha256: str,
-    workspace: Path,
-    physical_attempts: int,
-) -> None:
-    required = {
-        "parallel_cell_worker_commit",
-        "parallel_cell_worker_artifact",
-        "parallel_cell_worker_sha256",
-        "parallel_cell_indices",
-        "parallel_cell_strategy",
-        "main_process_subscription_nominal_reference_cost_usd",
-        "parallel_worker_subscription_nominal_reference_cost_usd",
-        "main_process_physical_attempts",
-        "parallel_worker_physical_attempts",
-        "parallel_worker_completion_sha256",
-    }
-    if not required.issubset(document):
-        raise ConcurrentRobustnessReleaseError("parallel Formal execution evidence is incomplete")
-    if (
-        not _COMMIT.fullmatch(
-            _string(document.get("parallel_cell_worker_commit"), "parallel cell worker commit")
-        )
-        or document.get("parallel_cell_indices") != list(range(1, 16))
-        or document.get("parallel_cell_strategy") != "disjoint-final-journals-main-study-replay-v1"
-    ):
-        raise ConcurrentRobustnessReleaseError("parallel Formal execution identity is crossed")
-    worker_sha256 = _string(document.get("parallel_cell_worker_sha256"), "parallel cell worker SHA-256")
-    if not _SHA256.fullmatch(worker_sha256):
-        raise ConcurrentRobustnessReleaseError("parallel cell worker SHA-256 is invalid")
-    worker_artifact = _repo_file(
-        root,
-        Path(_string(document.get("parallel_cell_worker_artifact"), "parallel cell worker artifact")),
-        "parallel cell worker artifact",
-    )
-    if _sha256_file(worker_artifact) != worker_sha256:
-        raise ConcurrentRobustnessReleaseError("parallel cell worker artifact hash is crossed")
-    main_nominal = document.get("main_process_subscription_nominal_reference_cost_usd")
-    aggregate_nominal = document.get("subscription_nominal_reference_cost_usd")
-    if (
-        isinstance(main_nominal, bool)
-        or not isinstance(main_nominal, (int, float))
-        or float(main_nominal) < 0.0
-        or isinstance(aggregate_nominal, bool)
-        or not isinstance(aggregate_nominal, (int, float))
-        or float(aggregate_nominal) < 0.0
-    ):
-        raise ConcurrentRobustnessReleaseError("parallel subscription nominal reference cost is invalid")
-    worker_nominal = 0.0
-    worker_physical = 0
-    completion_hashes = _string_mapping(
-        document.get("parallel_worker_completion_sha256"),
-        "parallel worker completion hashes",
-    )
-    if set(completion_hashes) != {f"cell-{index:02d}" for index in range(1, 16)}:
-        raise ConcurrentRobustnessReleaseError("parallel worker completion hash inventory is incomplete")
-    dynamic_root = _dynamic_root(workspace)
-    for cell_index in range(1, 16):
-        cell = manifest.prompt_model_cells[cell_index]
-        completion_path = dynamic_root / f"cell-{cell_index:02d}" / "cell_worker_completion.json"
-        completion = _json_object(completion_path)
-        if completion_hashes[f"cell-{cell_index:02d}"] != _sha256_file(completion_path):
-            raise ConcurrentRobustnessReleaseError(
-                f"parallel cell {cell_index} completion hash is crossed"
-            )
-        completion_physical = _strict_int(
-            completion.get("physical_attempts"),
-            f"parallel cell {cell_index} physical attempts",
-        )
-        nominal = completion.get("subscription_nominal_reference_cost_usd")
-        expected_workspace = (
-            dynamic_root
-            / f"cell-{cell_index:02d}"
-            / ".primary-only.operational"
-        ).resolve(strict=True)
-        if (
-            completion.get("schema_version")
-            != "concurrent-robustness-formal-cell-worker-completion-v1"
-            or completion.get("manifest_sha256") != manifest_sha256
-            or completion.get("cell_index") != cell_index
-            or completion.get("cell_id") != cell.cell_id
-            or completion.get("requested_model") != cell.requested_model
-            or completion.get("observed_model") != cell.required_observed_model
-            or completion.get("logical_judgments") != manifest.request_caps.logical_judgments_per_cell
-            or not manifest.request_caps.logical_judgments_per_cell
-            <= completion_physical
-            <= manifest.request_caps.logical_judgments_per_cell
-            * (manifest.request_contract.max_retries + 1)
-            or isinstance(nominal, bool)
-            or not isinstance(nominal, (int, float))
-            or float(nominal) < 0.0
-            or completion.get("subscription_billed_cost_usd") != 0.0
-            or Path(_string(completion.get("journal_workspace"), "parallel journal workspace")).resolve(
-                strict=True
-            )
-            != expected_workspace
-            or completion.get("production_deploy_eligible") is not False
-        ):
-            raise ConcurrentRobustnessReleaseError(f"parallel cell {cell_index} completion evidence is crossed")
-        worker_physical += completion_physical
-        worker_nominal += float(nominal)
-    main_physical = physical_attempts - worker_physical
-    per_cell_logical = manifest.request_caps.logical_judgments_per_cell
-    if (
-        not per_cell_logical
-        <= main_physical
-        <= per_cell_logical * (manifest.request_contract.max_retries + 1)
-        or document.get("main_process_physical_attempts") != main_physical
-        or document.get("parallel_worker_physical_attempts") != worker_physical
-    ):
-        raise ConcurrentRobustnessReleaseError("main/worker physical accounting is crossed")
-    recorded_worker_nominal = document.get("parallel_worker_subscription_nominal_reference_cost_usd")
-    if (
-        isinstance(recorded_worker_nominal, bool)
-        or not isinstance(recorded_worker_nominal, (int, float))
-        or not math.isclose(float(recorded_worker_nominal), worker_nominal, rel_tol=0.0, abs_tol=1e-12)
-        or not math.isclose(
-            float(aggregate_nominal),
-            float(main_nominal) + worker_nominal,
-            rel_tol=0.0,
-            abs_tol=1e-12,
-        )
-    ):
-        raise ConcurrentRobustnessReleaseError("parallel nominal reference cost does not close")
-
-
-def _validate_execution_contract(
-    *,
-    root: Path,
-    path: Path,
-    formal: Path,
-    study: Path,
-    workspace: Path,
-    candidate: Path,
-    manifest: ConcurrentRobustnessManifest,
-    manifest_sha256: str,
-) -> dict[str, Any]:
-    document = _json_object(path)
-    required = {
-        "schema_version",
-        "output_identity",
-        "source_dir",
-        "workspace",
-        "study_root",
-        "report_candidate",
-        "study_manifest_sha256",
-        "qualification_artifact",
-        "authorization_artifact",
-        "pricing_artifact",
-        "provider_calls_authorized",
-        "canonical_deployment_authorized_after_validation",
-        "implementation_commit",
-        "formal_runner_artifact",
-        "formal_runner_sha256",
-        "subscription_worker_artifact",
-        "subscription_worker_sha256",
-        "subscription_client_artifact",
-        "subscription_client_sha256",
-        "completion_status",
-        "logical_provider_attempts",
-        "physical_provider_attempts",
-        "closure_implementation_commit",
-        "closure_replay_artifact",
-        "closure_replay_sha256",
-        "closure_study_module_artifact",
-        "closure_study_module_sha256",
-        "closure_report_module_artifact",
-        "closure_report_module_sha256",
-        "closure_provider_requests",
-        "closure_subscription_billed_cost_usd",
-        "study_artifact_manifest_sha256",
-        "report_candidate_manifest_sha256",
-        "subscription_nominal_reference_cost_usd",
-        "subscription_billed_cost_usd",
-        "subscription_billing_evidence",
-    }
-    if not required.issubset(document):
-        raise ConcurrentRobustnessReleaseError("Formal execution contract is incomplete")
-    if (
-        document.get("schema_version") != "concurrent-robustness-formal-run-contract-v1"
-        or document.get("output_identity") != manifest.output_identity
-        or Path(_string(document.get("source_dir"), "Formal source path")).resolve(strict=True) != formal
-        or Path(_string(document.get("workspace"), "workspace path")).resolve(strict=True) != workspace
-        or Path(_string(document.get("study_root"), "study root path")).resolve(strict=True) != study
-        or Path(_string(document.get("report_candidate"), "candidate path")).resolve(strict=True) != candidate
-        or document.get("study_manifest_sha256") != manifest_sha256
-        or document.get("provider_calls_authorized") is not True
-        or document.get("canonical_deployment_authorized_after_validation") is not True
-        or document.get("completion_status") != "complete"
-        or document.get("logical_provider_attempts") != ROBUSTNESS_FORMAL_LOGICAL_JUDGMENTS
-        or document.get("closure_provider_requests") != 0
-        or document.get("closure_subscription_billed_cost_usd") != 0.0
-        or document.get("subscription_billed_cost_usd") != 0.0
-        or document.get("subscription_billing_evidence") != "openai-codex OAuth subscription transport"
-        or isinstance(document.get("subscription_nominal_reference_cost_usd"), bool)
-        or not isinstance(document.get("subscription_nominal_reference_cost_usd"), (int, float))
-        or float(document["subscription_nominal_reference_cost_usd"]) < 0.0
-        or not _COMMIT.fullmatch(_string(document.get("implementation_commit"), "implementation commit"))
-    ):
-        raise ConcurrentRobustnessReleaseError("Formal execution contract is crossed or incomplete")
-    physical_attempts = _strict_int(document.get("physical_provider_attempts"), "physical provider attempts")
-    if not ROBUSTNESS_FORMAL_LOGICAL_JUDGMENTS <= physical_attempts <= ROBUSTNESS_FORMAL_PHYSICAL_ATTEMPT_CAP:
-        raise ConcurrentRobustnessReleaseError("Formal execution physical attempts exceed the approved contract")
-    implementation_artifacts = {
-        "formal_runner_sha256": "formal_runner_artifact",
-        "subscription_worker_sha256": "subscription_worker_artifact",
-        "subscription_client_sha256": "subscription_client_artifact",
-        "closure_study_module_sha256": "closure_study_module_artifact",
-        "closure_report_module_sha256": "closure_report_module_artifact",
-    }
-    for hash_key, path_key in implementation_artifacts.items():
-        expected_hash = _string(document.get(hash_key), hash_key)
-        if not _SHA256.fullmatch(expected_hash):
-            raise ConcurrentRobustnessReleaseError(f"Formal execution {hash_key} is invalid")
-        artifact = _repo_file(
-            root,
-            Path(_string(document.get(path_key), path_key)),
-            f"Formal implementation artifact {path_key}",
-        )
-        if _sha256_file(artifact) != expected_hash:
-            raise ConcurrentRobustnessReleaseError(f"Formal implementation artifact is crossed: {path_key}")
-
-    closure_commit = _string(document.get("closure_implementation_commit"), "closure implementation commit")
-    if not _COMMIT.fullmatch(closure_commit):
-        raise ConcurrentRobustnessReleaseError("closure implementation commit is invalid")
-    closure_replay = _repo_file(
-        root,
-        Path(_string(document.get("closure_replay_artifact"), "closure replay artifact")),
-        "closure replay artifact",
-    )
-    closure_replay_sha256 = _string(document.get("closure_replay_sha256"), "closure replay SHA-256")
-    closure_document = _json_object(closure_replay)
-    if (
-        not _SHA256.fullmatch(closure_replay_sha256)
-        or _sha256_file(closure_replay) != closure_replay_sha256
-        or closure_document.get("schema_version") != "concurrent-robustness-formal-closure-replay-v1"
-        or closure_document.get("closure_implementation_commit") != closure_commit
-        or closure_document.get("status") != "complete"
-        or closure_document.get("manifest_sha256") != manifest_sha256
-        or closure_document.get("logical_provider_attempts") != ROBUSTNESS_FORMAL_LOGICAL_JUDGMENTS
-        or closure_document.get("physical_provider_attempts") != physical_attempts
-        or closure_document.get("provider_requests_during_closure_replay") != 0
-        or closure_document.get("subscription_billed_cost_usd_during_closure") != 0.0
-        or Path(_string(closure_document.get("workspace"), "closure workspace")).resolve(strict=True)
-        != workspace
-        or Path(_string(closure_document.get("study_root"), "closure study root")).resolve(strict=True)
-        != study
-        or Path(_string(closure_document.get("report_candidate"), "closure report candidate")).resolve(
-            strict=True
-        )
-        != candidate
-        or document.get("study_artifact_manifest_sha256") != _sha256_file(study / "artifact_manifest.json")
-        or document.get("report_candidate_manifest_sha256")
-        != _sha256_file(candidate / CONCURRENT_MESSAGE_ARTIFACT_MANIFEST_JSON)
-    ):
-        raise ConcurrentRobustnessReleaseError("zero-call Formal closure replay evidence is crossed")
-
-    if document.get("parallel_cell_execution_used") is True:
-        _validate_parallel_cell_execution(
-            root=root,
-            document=document,
-            manifest=manifest,
-            manifest_sha256=manifest_sha256,
-            workspace=workspace,
-            physical_attempts=physical_attempts,
-        )
-    elif any(str(key).startswith("parallel_cell_") for key in document):
-        raise ConcurrentRobustnessReleaseError("parallel cell evidence is present without an explicit execution flag")
-
-    qualification = _repo_file(
-        root,
-        Path(_string(document.get("qualification_artifact"), "qualification artifact")),
-        "qualification artifact",
-    )
-    authorization = _repo_file(
-        root,
-        Path(_string(document.get("authorization_artifact"), "authorization artifact")),
-        "authorization artifact",
-    )
-    pricing = _repo_file(
-        root,
-        Path(_string(document.get("pricing_artifact"), "pricing artifact")),
-        "pricing artifact",
-    )
-    qualification_document = _json_object(qualification)
-    rows = qualification_document.get("rows")
-    if (
-        qualification_document.get("schema_version") != "concurrent-robustness-subscription-qualification-v1"
-        or qualification_document.get("provider_transport") != "openai-codex"
-        or qualification_document.get("subscription_billing") is not True
-        or qualification_document.get("model_count") != 4
-        or not isinstance(rows, list)
-        or len(rows) != 4
-    ):
-        raise ConcurrentRobustnessReleaseError("model qualification artifact header is invalid")
-    row_by_model: dict[str, dict[str, Any]] = {}
-    for raw in rows:
-        if not isinstance(raw, dict):
-            raise ConcurrentRobustnessReleaseError("model qualification row is invalid")
-        row = dict(raw)
-        recorded = row.pop("evidence_sha256", None)
-        if recorded != _sha256_bytes(_json_bytes(row)):
-            raise ConcurrentRobustnessReleaseError("model qualification row hash is crossed")
-        requested = _string(raw.get("requested_model"), "qualified requested model")
-        if (
-            requested in row_by_model
-            or raw.get("provider_transport") != "openai-codex"
-            or raw.get("authentication") != "local_oauth_subscription"
-            or raw.get("observed_model") != PI_SUBSCRIPTION_MODEL_ALIASES.get(requested)
-            or raw.get("status") != "qualified"
-            or raw.get("structured_decision_valid") is not True
-            or raw.get("usage_status") != "complete"
-        ):
-            raise ConcurrentRobustnessReleaseError("model qualification row contract is crossed")
-        row_by_model[requested] = raw
-    if row_by_model.keys() != PI_SUBSCRIPTION_MODEL_ALIASES.keys():
-        raise ConcurrentRobustnessReleaseError("qualification does not cover the exact four requested models")
-    execution = manifest.dynamic_execution
-    assert execution is not None
-    for record in execution.qualifications:
-        row = row_by_model.get(record.requested_model)
-        if (
-            row is None
-            or record.artifact_sha256 != row.get("evidence_sha256")
-            or record.required_observed_model != row.get("observed_model")
-            or record.artifact_reference != f"{qualification.resolve()}#{record.requested_model}"
-        ):
-            raise ConcurrentRobustnessReleaseError("manifest qualification reference is crossed")
-
-    authorization_document = _json_object(authorization)
-    authorization_evidence = dict(authorization_document)
-    authorization_sha256 = authorization_evidence.pop("evidence_sha256", None)
-    if (
-        authorization_sha256 != _sha256_bytes(_json_bytes(authorization_evidence))
-        or authorization_sha256 != execution.authorization.artifact_sha256
-        or authorization_document.get("provider_transport") != "openai-codex"
-        or authorization_document.get("subscription_billing") is not True
-        or authorization_document.get("logical_judgment_cap") != ROBUSTNESS_FORMAL_LOGICAL_JUDGMENTS
-        or authorization_document.get("physical_attempt_cap") != ROBUSTNESS_FORMAL_PHYSICAL_ATTEMPT_CAP
-        or authorization_document.get("fee_ceiling_usd") != 0.0
-        or authorization_document.get("external_requests_allowed") is not True
-    ):
-        raise ConcurrentRobustnessReleaseError("execution authorization artifact is crossed")
-    pricing_document = _json_object(pricing)
-    pricing_evidence = dict(pricing_document)
-    pricing_sha256 = pricing_evidence.pop("evidence_sha256", None)
-    model_pricing = pricing_document.get("model_pricing")
-    if (
-        pricing_sha256 != _sha256_bytes(_json_bytes(pricing_evidence))
-        or pricing_sha256 != execution.pricing_snapshot.snapshot_sha256
-        or pricing_document.get("provider_transport") != "openai-codex"
-        or pricing_document.get("billing_mode") != "subscription"
-        or not isinstance(model_pricing, list)
-        or len(model_pricing) != 4
-        or {row.get("requested_model") for row in model_pricing if isinstance(row, dict)}
-        != set(PI_SUBSCRIPTION_MODEL_ALIASES)
-        or any(
-            not isinstance(row, dict)
-            or row.get("input_usd_per_million_tokens") != 0.0
-            or row.get("output_usd_per_million_tokens") != 0.0
-            for row in model_pricing
-        )
-    ):
-        raise ConcurrentRobustnessReleaseError("subscription pricing artifact is crossed")
-    return document
-
-
-def _validate_candidate_release_contract(
-    *,
-    candidate: Path,
-    candidate_manifest: Mapping[str, Any],
-    candidate_evidence: Mapping[str, Any],
-    candidate_report_payload: Mapping[str, Any],
-    manifest: ConcurrentRobustnessManifest,
-    manifest_sha256: str,
-    formal: Path,
-    study: Path,
-) -> None:
-    candidate_hashes = _flat_file_hashes(candidate)
-    artifacts = _string_mapping(candidate_manifest.get("artifacts"), "candidate artifacts")
-    declared_hashes = _string_mapping(candidate_manifest.get("sha256"), "candidate artifact hashes")
-    if (
-        candidate_manifest.get("schema_version")
-        != "concurrent-robustness-report-candidate-manifest-v1"
-        or candidate_manifest.get("candidate_type") != "immutable_combined_robustness_report"
-        or candidate_manifest.get("production_deploy_eligible") is not False
-        or candidate_evidence.get("schema_version")
-        != "concurrent-robustness-report-release-evidence-v1"
-        or candidate_evidence.get("production_deploy_eligible") is not False
-        or candidate_report_payload.get("schema_version")
-        != "concurrent-robustness-report-payload-v1"
-        or candidate_report_payload.get("production_deploy_eligible") is not False
-    ):
-        raise ConcurrentRobustnessReleaseError(
-            "validation candidate did not preserve its non-production contract"
-        )
-    if set(artifacts) != set(declared_hashes) or len(set(artifacts.values())) != len(artifacts):
-        raise ConcurrentRobustnessReleaseError("validation candidate artifact inventory is crossed")
-    if set(artifacts.values()) != set(candidate_hashes) - {CONCURRENT_MESSAGE_ARTIFACT_MANIFEST_JSON}:
-        raise ConcurrentRobustnessReleaseError("validation candidate artifact inventory is incomplete")
-    for name, relative_path in artifacts.items():
-        if declared_hashes[name] != candidate_hashes[relative_path]:
-            raise ConcurrentRobustnessReleaseError("validation candidate artifact hash mismatch")
-    identity_rows = dict(sorted((path, declared_hashes[name]) for name, path in artifacts.items()))
-    if candidate_manifest.get("candidate_identity_sha256") != _sha256_bytes(_json_bytes(identity_rows)):
-        raise ConcurrentRobustnessReleaseError("validation candidate identity hash is crossed")
-
-    formal_source = candidate_manifest.get("formal_source")
-    study_source = candidate_manifest.get("study_source")
-    if not isinstance(formal_source, Mapping) or not isinstance(study_source, Mapping):
-        raise ConcurrentRobustnessReleaseError("validation candidate lineage is missing")
-    formal_manifest_sha256 = _sha256_file(formal / CONCURRENT_MESSAGE_ARTIFACT_MANIFEST_JSON)
-    study_artifact_sha256 = _sha256_file(study / "artifact_manifest.json")
-    study_root_identity = _string(
-        _json_object(study / "artifact_manifest.json").get("root_identity_sha256"),
-        "study root identity",
-    )
-    if (
-        formal_source.get("manifest_sha256") != manifest.source.manifest_sha256
-        or manifest.source.manifest_sha256 != formal_manifest_sha256
-        or study_source.get("manifest_sha256") != manifest_sha256
-        or study_source.get("artifact_manifest_sha256") != study_artifact_sha256
-        or study_source.get("root_identity_sha256") != study_root_identity
-        or candidate_evidence.get("formal_source_manifest_sha256")
-        != manifest.source.manifest_sha256
-        or candidate_evidence.get("study_manifest_sha256") != manifest_sha256
-        or candidate_evidence.get("study_root_identity_sha256") != study_root_identity
-    ):
-        raise ConcurrentRobustnessReleaseError("validation candidate lineage is crossed")
-
-    payload_downloads = _string_mapping(
-        candidate_report_payload.get("downloads"),
-        "candidate report downloads",
-    )
-    raw_manifest_downloads = candidate_manifest.get("approved_downloads")
-    if not isinstance(raw_manifest_downloads, list) or any(
-        not isinstance(value, str) or not value for value in raw_manifest_downloads
-    ):
-        raise ConcurrentRobustnessReleaseError("validation candidate approved downloads are invalid")
-    manifest_downloads = list(raw_manifest_downloads)
-    if (
-        len(set(manifest_downloads)) != len(manifest_downloads)
-        or set(manifest_downloads) != set(payload_downloads.values())
-        or candidate_evidence.get("provider_calls_during_composition") != 0
-        or candidate_evidence.get("image_generation_triggered") is not False
-    ):
-        raise ConcurrentRobustnessReleaseError(
-            "validation candidate approved downloads or eligibility evidence is crossed"
-        )
-    inventory = set(artifacts.values()) | {CONCURRENT_MESSAGE_ARTIFACT_MANIFEST_JSON}
-    for relative_path in manifest_downloads:
-        path = PurePosixPath(relative_path)
-        target = candidate / relative_path
-        if (
-            "\\" in relative_path
-            or path.is_absolute()
-            or path.as_posix() != relative_path
-            or ".." in path.parts
-            or relative_path not in inventory
-            or target.is_symlink()
-            or not target.is_file()
-        ):
-            raise ConcurrentRobustnessReleaseError(
-                "validation candidate approved download escapes or is absent from inventory"
-            )
 
 
 def _production_approved_downloads(candidate_report_payload: Mapping[str, Any]) -> dict[str, str]:
@@ -1005,10 +649,11 @@ def _production_presentation_facts(
     release_id: str,
     physical_attempts: int,
     approved_downloads: Mapping[str, str],
+    release_contract_schema: str = ROBUSTNESS_RELEASE_CONTRACT_SCHEMA_V5,
 ) -> _ProductionPresentationFacts:
     return _ProductionPresentationFacts(
         release_id=release_id,
-        release_contract_schema=ROBUSTNESS_RELEASE_CONTRACT_SCHEMA,
+        release_contract_schema=release_contract_schema,
         canonical_endpoint=ROBUSTNESS_CANONICAL_ENDPOINT,
         production_evidence_schema=ROBUSTNESS_PRODUCTION_EVIDENCE_SCHEMA,
         formal_logical_judgments=ROBUSTNESS_FORMAL_LOGICAL_JUDGMENTS,
@@ -1037,9 +682,7 @@ def _materialize_production_presentation(
             raise TypeError("Report materialization returned an invalid bundle")
         return bundle
     except (OSError, TypeError, ValueError) as exc:
-        raise ConcurrentRobustnessReleaseError(
-            "Report production presentation failed closure"
-        ) from exc
+        raise ConcurrentRobustnessReleaseError("Report production presentation failed closure") from exc
 
 
 def _validate_production_presentation(
@@ -1050,9 +693,7 @@ def _validate_production_presentation(
     try:
         _REPORT_PRESENTATION.validate_bundle(bundle, stage_facts=stage_facts)
     except (OSError, TypeError, ValueError) as exc:
-        raise ConcurrentRobustnessReleaseError(
-            "Report production presentation failed validation"
-        ) from exc
+        raise ConcurrentRobustnessReleaseError("Report production presentation failed validation") from exc
 
 
 def _build_production_release_payloads(
@@ -1070,6 +711,7 @@ def _build_production_release_payloads(
     physical_attempts: int,
     presentation: _PresentationBundle,
     approved_downloads: Mapping[str, str],
+    presentation_closure: bytes | None = None,
 ) -> dict[str, bytes]:
     payloads: dict[str, bytes] = {}
     for relative_path in sorted(candidate_hashes):
@@ -1081,13 +723,17 @@ def _build_production_release_payloads(
         }:
             continue
         payloads[relative_path] = (candidate / relative_path).read_bytes()
-    payloads[ROBUSTNESS_VALIDATION_CANDIDATE_MANIFEST] = (candidate / CONCURRENT_MESSAGE_ARTIFACT_MANIFEST_JSON).read_bytes()
+    payloads[ROBUSTNESS_VALIDATION_CANDIDATE_MANIFEST] = (
+        candidate / CONCURRENT_MESSAGE_ARTIFACT_MANIFEST_JSON
+    ).read_bytes()
     payloads[ROBUSTNESS_VALIDATION_CANDIDATE_EVIDENCE] = (
         candidate / ROBUSTNESS_CANDIDATE_RELEASE_EVIDENCE
     ).read_bytes()
 
     payloads[ROBUSTNESS_REPORT_PAYLOAD] = presentation.report_payload
     payloads[CONCURRENT_MESSAGE_REPORT_HTML] = presentation.report_html
+    if presentation_closure is not None:
+        payloads[ROBUSTNESS_PRESENTATION_CLOSURE_CONTRACT] = presentation_closure
 
     production_evidence = {
         "schema_version": ROBUSTNESS_PRODUCTION_EVIDENCE_SCHEMA,
@@ -1113,9 +759,7 @@ def _build_production_release_payloads(
         "logical_judgments": ROBUSTNESS_FORMAL_LOGICAL_JUDGMENTS,
         "physical_attempts": physical_attempts,
         "physical_attempt_cap": ROBUSTNESS_FORMAL_PHYSICAL_ATTEMPT_CAP,
-        "subscription_nominal_reference_cost_usd": execution_contract[
-            "subscription_nominal_reference_cost_usd"
-        ],
+        "subscription_nominal_reference_cost_usd": execution_contract["subscription_nominal_reference_cost_usd"],
         "subscription_billed_cost_usd": 0.0,
         "provider_calls_during_promotion": 0,
         "validation_candidate_preserved": True,
@@ -1123,10 +767,7 @@ def _build_production_release_payloads(
     }
     payloads[ROBUSTNESS_PRODUCTION_EVIDENCE] = _json_bytes(production_evidence)
     content_hashes = {path: _sha256_bytes(payload) for path, payload in payloads.items()}
-    artifact_mapping = {
-        _logical_name(path): path
-        for path in sorted(content_hashes)
-    }
+    artifact_mapping = {_logical_name(path): path for path in sorted(content_hashes)}
     if len(artifact_mapping) != len(content_hashes):
         raise ConcurrentRobustnessReleaseError("production release artifact logical names collide")
     release_identity = _sha256_bytes(_json_bytes(dict(sorted(content_hashes.items()))))
@@ -1155,10 +796,7 @@ def _build_production_release_payloads(
             "subscription_billed_cost_usd": 0.0,
         },
         "artifacts": dict(sorted(artifact_mapping.items())),
-        "sha256": {
-            name: content_hashes[path]
-            for name, path in sorted(artifact_mapping.items())
-        },
+        "sha256": {name: content_hashes[path] for name, path in sorted(artifact_mapping.items())},
         "release_identity_sha256": release_identity,
         "approved_downloads": dict(approved_downloads),
         "production_deploy_eligible": True,
@@ -1208,9 +846,7 @@ def _validate_production_release_dir(
         raise ConcurrentRobustnessReleaseError("production release identity is crossed")
     if hashes[ROBUSTNESS_VALIDATION_CANDIDATE_MANIFEST] != evidence.get(
         "validation_candidate_manifest_sha256"
-    ) or hashes[ROBUSTNESS_VALIDATION_CANDIDATE_EVIDENCE] != evidence.get(
-        "validation_candidate_evidence_sha256"
-    ):
+    ) or hashes[ROBUSTNESS_VALIDATION_CANDIDATE_EVIDENCE] != evidence.get("validation_candidate_evidence_sha256"):
         raise ConcurrentRobustnessReleaseError("preserved validation candidate evidence is crossed")
     candidate_manifest = _json_object(source / ROBUSTNESS_VALIDATION_CANDIDATE_MANIFEST)
     candidate_evidence = _json_object(source / ROBUSTNESS_VALIDATION_CANDIDATE_EVIDENCE)
@@ -1247,9 +883,7 @@ def _validate_production_downloads(
         "production approved downloads",
     )
     if payload_downloads != approved_downloads:
-        raise ConcurrentRobustnessReleaseError(
-            "production payload and manifest approved downloads are crossed"
-        )
+        raise ConcurrentRobustnessReleaseError("production payload and manifest approved downloads are crossed")
     if len(set(approved_downloads.values())) != len(approved_downloads):
         raise ConcurrentRobustnessReleaseError("production approved downloads are not one-to-one")
     if (
@@ -1276,9 +910,7 @@ def _validate_production_downloads(
             )
         target = source / relative_path
         if target.is_symlink() or not target.is_file():
-            raise ConcurrentRobustnessReleaseError(
-                "production approved download is missing or is not a regular file"
-            )
+            raise ConcurrentRobustnessReleaseError("production approved download is missing or is not a regular file")
 
 
 def _logical_name(relative_path: str) -> str:
@@ -1340,10 +972,17 @@ def _strict_int(value: object, label: str) -> int:
     return value
 
 
+def _canonical_relative_path(value: object, label: str) -> str:
+    relative = _string(value, label)
+    path = PurePosixPath(relative)
+    if "\\" in relative or path.is_absolute() or path.as_posix() != relative or "." in path.parts or ".." in path.parts:
+        raise ConcurrentRobustnessReleaseError(f"{label} must be a canonical repository-relative path")
+    return relative
+
+
 def _string_mapping(value: object, label: str) -> dict[str, str]:
     if not isinstance(value, dict) or any(
-        not isinstance(key, str) or not key or not isinstance(item, str) or not item
-        for key, item in value.items()
+        not isinstance(key, str) or not key or not isinstance(item, str) or not item for key, item in value.items()
     ):
         raise ConcurrentRobustnessReleaseError(f"{label} must be a non-empty string mapping")
     return dict(value)
