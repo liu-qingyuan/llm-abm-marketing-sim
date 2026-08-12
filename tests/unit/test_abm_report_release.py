@@ -1039,6 +1039,18 @@ def test_deploy_retries_transient_public_transport_errors_without_weakening_chec
     assert script.count('curl "${PUBLIC_CURL_RETRY[@]}"') == 7
 
 
+def test_deploy_prevents_cdn_transformations_of_hash_bound_report():
+    deploy_script = REPO_ROOT / "scripts" / "deploy_abm_report.sh"
+    script = deploy_script.read_text(encoding="utf-8")
+    container_nginx = script.split("<<'CONTAINER_NGINX'", maxsplit=1)[1].split(
+        "CONTAINER_NGINX", maxsplit=1
+    )[0]
+    report_location = container_nginx.split("location = /report.html {", maxsplit=1)[1].split("}", maxsplit=1)[0]
+
+    assert 'add_header X-Artifact-SHA256 "__REPORT_SHA__" always;' in report_location
+    assert 'add_header Cache-Control "no-cache, no-transform" always;' in report_location
+
+
 def test_deploy_preserves_candidate_checks_atomic_switch_and_transaction_rollback_order():
     deploy_script = REPO_ROOT / "scripts" / "deploy_abm_report.sh"
     script = deploy_script.read_text(encoding="utf-8")

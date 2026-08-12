@@ -36,7 +36,7 @@ Architecture 描述当前 Module、数据边界和稳定运行语义；ADR 记�
 
 - [References 总览](references/README.md)
 - [current dataset：锦江 final dataset 审计](references/jinjiang-final-dataset-audit-20260624.md)
-- [current Formal release：Concurrent Robustness 发布记录](references/jinjiang-concurrent-robustness-formal-release-20260810.md)
+- [current Formal release：Concurrent Robustness v6 发布记录](references/jinjiang-concurrent-robustness-v6-local-release-20260813.md)
 - [current Retention：Retention final evidence](references/retention-cleanup-final-evidence-20260730.md)
 
 References README 使用决策表区分默认读取、按需 research、按需 rollback 和 forensic-only evidence。Editorial v1/v2/v3 mechanism source PNG 由 `src/llm_abm_sim/report_assets/` 统一拥有；generated WebP 和 renderer compatibility contract 继续由代码与测试保护。

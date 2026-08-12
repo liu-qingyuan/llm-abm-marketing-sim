@@ -1,6 +1,8 @@
 # 锦江 Concurrent Robustness Formal Run 与 Production Release 记录
 
-统计周期：2026-08-10—2026-08-11；口径更新时间：2026-08-11T19:49:48Z；canonical release：`jinjiang-concurrent-robustness-production-v1-repair-20260811T193031Z`
+统计周期：2026-08-10—2026-08-11；口径更新时间：2026-08-11T19:49:48Z；历史 canonical release：`jinjiang-concurrent-robustness-production-v1-repair-20260811T193031Z`
+
+> 状态更新（2026-08-13）：本 release 已由 [Concurrent Robustness v6](jinjiang-concurrent-robustness-v6-local-release-20260813.md) 取代，继续作为 managed rollback evidence；以下记录保留其当时的发布事实。
 
 ## 发布结论
 

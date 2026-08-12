@@ -371,6 +371,7 @@ server {
     location = / { try_files /report.html =404; }
     location = /report.html {
         add_header X-Artifact-SHA256 "__REPORT_SHA__" always;
+        add_header Cache-Control "no-cache, no-transform" always;
         try_files $uri =404;
     }
     location ~* \.csv$ {
