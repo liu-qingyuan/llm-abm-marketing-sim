@@ -171,6 +171,8 @@ async function expectReaderDiagrams(page: Page): Promise<void> {
   await expect(project).toHaveAccessibleName('项目证据链');
   await expect(project.locator('[data-diagram-node-id]')).toHaveCount(12);
   await expect(project.locator('[data-diagram-edge-id]')).toHaveCount(14);
+  await expect(project.locator('[data-diagram-node-id="Runner"]')).toContainText('Concurrent 实验生命周期');
+  await expect(project.locator('[data-diagram-node-id="Runner"]')).not.toContainText('ConcurrentMessageExperimentRunner');
   await expectSemanticEdge(project, 'project-edge-kernel-adapter', {
     from: 'Kernel',
     to: 'Adapter',
@@ -191,8 +193,9 @@ async function expectReaderDiagrams(page: Page): Promise<void> {
   const batch = page.getByTestId('batch-mechanism-diagram');
   await expect(batch).toBeVisible();
   await expect(batch).toHaveAccessibleName('Concurrent Message 真实批次机制');
-  await expect(batch.locator('[data-diagram-node-id]')).toHaveCount(24);
-  await expect(batch.locator('[data-diagram-edge-id]')).toHaveCount(31);
+  await expect(batch).toHaveAttribute('viewBox', '0 0 1500 1150');
+  await expect(batch.locator('[data-diagram-node-id]')).toHaveCount(21);
+  await expect(batch.locator('[data-diagram-edge-id]')).toHaveCount(27);
   await expect(batch.locator('[data-diagram-node-id="Rank1"]')).toContainText(/Message 1 独立 Per-Message Top\d+/);
   await expect(batch.locator('[data-diagram-node-id="Rank2"]')).toContainText(/Message 2 独立 Per-Message Top\d+/);
   await expect(batch.locator('[data-diagram-node-id="Rank3"]')).toContainText(/Message 3 独立 Per-Message Top\d+/);
@@ -246,21 +249,29 @@ async function expectReaderDiagrams(page: Page): Promise<void> {
     effect: 'request_report_only_shadow',
     provenance: 'DemographicShadowDecision',
   });
-  await expectSemanticEdge(batch, 'batch-edge-positive-collect', {
+  await expectSemanticEdge(batch, 'batch-edge-positive-pending', {
     from: 'Positive',
-    to: 'Collect',
+    to: 'Pending',
     condition: 'action_in_like_comment_share',
-    timing: 'pending_set_build',
-    effect: 'add_user_id',
+    timing: 'pending_set_finalize',
+    effect: 'add_user_id_then_deduplicate_pending_set',
     provenance: 'campaign-positive-user-contract',
   });
-  await expectSemanticEdge(batch, 'batch-edge-join-commit', {
-    from: 'Join',
+  await expectSemanticEdge(batch, 'batch-edge-pending-commit', {
+    from: 'Pending',
     to: 'Commit',
-    condition: 'barrier_closed_and_pending_set_finalized',
-    timing: 'after_full_batch',
-    effect: 'commit_campaign_user_set_unique_by_user_id',
-    provenance: 'campaign-user-id-deduplication-contract',
+    condition: 'pending_set_finalized',
+    timing: 'batch_commit_gate',
+    effect: 'satisfy_pending_operand',
+    provenance: 'batch-commit-join-contract',
+  });
+  await expectSemanticEdge(batch, 'batch-edge-barrier-commit', {
+    from: 'Barrier',
+    to: 'Commit',
+    condition: 'full_batch_barrier_closed',
+    timing: 'batch_commit_gate',
+    effect: 'satisfy_terminal_operand_and_commit_unique_user_ids',
+    provenance: 'batch-commit-join-contract',
   });
   for (const [edgeId, target] of [
     ['batch-edge-commit-next1', 'Next1'],
@@ -294,6 +305,9 @@ async function expectReaderDiagrams(page: Page): Promise<void> {
     }
   }
 
+  await expect(page.getByTestId('project-evidence-chain-mermaid-source')).toContainText(
+    'ConcurrentMessageExperimentRunner',
+  );
   for (const testId of ['project-evidence-chain-mermaid-source', 'batch-mechanism-mermaid-source']) {
     const source = page.getByTestId(testId);
     await source.locator('summary').focus();
@@ -358,27 +372,25 @@ async function expectPromptContractAndDiagram(page: Page): Promise<void> {
     await expect(row).toHaveAttribute('data-controlled-change', contract.change);
     await expect(row).toHaveAttribute('data-prompt-version', contract.token);
     await expect(row).toHaveAttribute('data-prompt-canonical-hash', contract.hash);
-    const hashDisclosure = row.locator('details');
-    await hashDisclosure.locator('summary').focus();
-    await hashDisclosure.locator('summary').press('Enter');
-    await expect(hashDisclosure).toHaveAttribute('open', '');
-    await expect(hashDisclosure.locator('code')).toHaveText(contract.hash);
+    const identityDisclosure = row.locator('.robustness-prompt-details');
+    await identityDisclosure.locator('summary').focus();
+    await identityDisclosure.locator('summary').press('Enter');
+    await expect(identityDisclosure).toHaveAttribute('open', '');
+    await expect(identityDisclosure.locator('.robustness-prompt-hash code')).toHaveText(contract.hash);
   }
 
   const sharedContract = page.getByTestId('prompt-model-shared-contract');
-  await sharedContract.locator('summary').focus();
-  await sharedContract.locator('summary').press('Enter');
   await expect(sharedContract).toHaveAttribute('open', '');
+  await sharedContract.locator('summary').focus();
+  await expect(sharedContract.locator('summary')).toBeFocused();
   await expect(sharedContract).toContainText('engage / probability / reason / confidence / action');
   await expect(sharedContract).toContainText('engage=false => action=ignore');
 
   const diagram = page.getByTestId('prompt-model-factorial-diagram');
   await expect(diagram).toBeVisible();
   await expect(diagram).toHaveAccessibleName('Prompt-Model factorial 设计');
-  await expect(diagram.locator('[data-diagram-node-id]')).toHaveCount(14);
-  await expect(diagram.locator('[data-diagram-edge-id]')).toHaveCount(17);
-  await expect(diagram).toContainText('每 cell 60 个 Primary judgments');
-  await expect(diagram).toContainText('960 个 logical judgments');
+  await expect(diagram.locator('[data-diagram-node-id]')).toHaveCount(12);
+  await expect(diagram.locator('[data-diagram-edge-id]')).toHaveCount(15);
   await expect(diagram).toContainText('每 cell 一条 2-batch realized path');
   await expect(page.getByTestId('prompt-model-factorial-fallback')).toContainText('message 不是额外运行');
   const diagramScroller = page.locator('.robustness-factorial-scroll');
@@ -542,6 +554,13 @@ test('candidate and promoted production keep closed downloads, full controls, an
       const hrefs = await downloadLinks.evaluateAll((links) => links.map((link) => link.getAttribute('href') ?? ''));
       expect(hrefs.every((href) => href.length > 0 && !href.startsWith('/') && !href.includes('..'))).toBe(true);
       expect(hrefs.every((href) => existsSync(path.join(stage.directory, href)))).toBe(true);
+      for (const [testId, href] of [
+        ['robustness-download-project_evidence_chain_mermaid', 'project-evidence-chain.mmd'],
+        ['robustness-download-batch_mechanism_mermaid', 'real-batch-mechanism.mmd'],
+        ['robustness-download-prompt_model_factorial_mermaid', 'prompt-model-factorial.mmd'],
+      ]) {
+        await expect(page.getByTestId(testId)).toHaveAttribute('href', href);
+      }
       if (stage.rootTestId === 'robustness-report-release') {
         await expect(page.getByTestId('robustness-download-release_evidence')).toHaveAttribute(
           'href',

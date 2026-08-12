@@ -3306,6 +3306,21 @@ def test_concurrent_robustness_composes_two_closed_sources_into_an_immutable_rep
     assert not (destination / "prompt_model_cell_evidence.json").exists()
     report_payload = _read_json(destination / "concurrent_robustness_report_payload.json")
     assert report_payload["row_counts"] == candidate_manifest["row_counts"]
+    mermaid_downloads = {
+        "project_evidence_chain_mermaid": "project-evidence-chain.mmd",
+        "batch_mechanism_mermaid": "real-batch-mechanism.mmd",
+        "prompt_model_factorial_mermaid": "prompt-model-factorial.mmd",
+    }
+    assert {
+        key: report_payload["downloads"][key]
+        for key in mermaid_downloads
+    } == mermaid_downloads
+    for relative_path in mermaid_downloads.values():
+        source = (destination / relative_path).read_text(encoding="utf-8")
+        assert source.startswith("flowchart TB\n")
+        assert "%% node " in source
+        assert "%% edge " in source
+        assert "<script" not in source
     assert report_payload["claim_boundary"] == {
         "below_threshold_label": "small_observed_difference",
         "calibration_claim": False,
@@ -3375,8 +3390,8 @@ def test_concurrent_robustness_composes_two_closed_sources_into_an_immutable_rep
         ))
         for tag in semantic_edge_tags
     )
-    assert len(semantic_node_tags) == 50
-    assert len(semantic_edge_tags) == 62
+    assert len(semantic_node_tags) == 45
+    assert len(semantic_edge_tags) == 56
     assert all(
         f'data-diagram-mark-id="{mark_id}"' in report_html
         for mark_id in (
@@ -3407,7 +3422,12 @@ def test_concurrent_robustness_composes_two_closed_sources_into_an_immutable_rep
         if 'data-to="Commit"' in tag or 'data-to="Pending"' in tag
     ]
     assert all('data-from="Shadow"' not in tag for tag in batch_feedback_edges)
-    assert all('data-from="NoFeedback"' not in tag or 'data-to="Pending"' in tag for tag in batch_feedback_edges)
+    assert all('data-from="NoFeedback"' not in tag for tag in batch_feedback_edges)
+    assert (
+        'data-from="Primary" data-to="Pending" data-direction="forward" '
+        'data-condition="terminal_action_ignore_or_provider_failed"' in report_html
+    )
+    assert 'data-effect="no_campaign_feedback_allow_empty_pending_set"' in report_html
     assert 'data-from="Commit" data-to="Next1"' in report_html
     assert 'data-from="Commit" data-to="Next2"' in report_html
     assert 'data-from="Commit" data-to="Next3"' in report_html
@@ -3426,8 +3446,6 @@ def test_concurrent_robustness_composes_two_closed_sources_into_an_immutable_rep
         "Cross",
         "Cells",
         "Runtime",
-        "Count",
-        "Total",
         "Direct",
         "Paths",
         "Views",
@@ -3445,8 +3463,6 @@ def test_concurrent_robustness_composes_two_closed_sources_into_an_immutable_rep
         "edge_models_cross",
         "edge_cross_cells",
         "edge_cells_runtime",
-        "edge_runtime_count",
-        "edge_count_total",
         "edge_runtime_direct",
         "edge_runtime_paths",
         "edge_direct_views",
