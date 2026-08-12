@@ -4,11 +4,13 @@
 
 - operational Ticket：[#181](https://github.com/liu-qingyuan/llm-abm-marketing-sim/issues/181)
 - 实现 commit：`ca638f44ef7424e3991c60ab1c1affc2144eec46`
-- 状态：**local production release ready；未部署 canonical**
+- 状态：**superseded；post-close review 后已删除本页旧 local artifacts，未部署 canonical**
 - Provider/API/image-generation calls：`0`
 - secrets 读取、打印或写入：否
 - SSH / remote switch：未执行
 - 本次 preflight 时 canonical `report.html` SHA-256：`541bcf04820c8643c73ca9e7d927fe6a1d44c23d02f849532bcb18ab6c5eeb43`
+
+> 重要：独立 review 后，`528dfb7` 加强了 candidate content identity 与 closure-download exclusion。下列旧 candidate/closure/release/snapshot 路径和 hashes 仅作为审计记录，均已删除且禁止部署；#181 已重新打开，等待基于 `528dfb7` 的全链重建。
 
 ## 显式 lineage
 
@@ -63,4 +65,4 @@
 
 ## Deployment handoff
 
-[#182](https://github.com/liu-qingyuan/llm-abm-marketing-sim/issues/182) 必须只使用上述显式 release contract、source directory 和 release id。部署前重新读取 remote `current` 作为 rollback identity；使用 Deployment Module 的 physical snapshot、candidate health、atomic switch、rollback 和逐 artifact public acceptance，不得扫描“最新”目录。
+本页记录的 release 已 supersede，**不得交给 #182**。只有 #181 基于 `528dfb7` 重建、重新验收并发布新的显式 contract/source/release id 后，才能进入部署。部署前仍须重新读取 remote `current` 作为 rollback identity，并使用 Deployment Module 的 physical snapshot、candidate health、atomic switch、rollback 和逐 artifact public acceptance，不得扫描“最新”目录。
