@@ -2518,6 +2518,9 @@ _TRACE_RUNTIME_BRIDGE = r"""
 
     const response = new Response(compressed);
     if (!response.body) throw new Error('gzip stream body is unavailable');
+    // WHATWG Compression Streams defines gzip as exactly one member and rejects
+    // additional input. Reading through done is therefore the browser-side member
+    // boundary check; length, digest, and row-shape checks below remain independent.
     const reader = response.body.pipeThrough(new DecompressionStream('gzip')).getReader();
     const chunks = [];
     let total = 0;

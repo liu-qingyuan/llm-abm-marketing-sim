@@ -501,6 +501,43 @@ async function exerciseRobustnessInteractions(page: Page): Promise<void> {
   await expect(page.getByTestId('practical-threshold-summary')).toContainText('small_observed_difference');
 }
 
+test('candidate fails closed on concatenated gzip members', async ({ page }, testInfo) => {
+  test.setTimeout(180_000);
+  const fixture = generateRobustnessFixture(testInfo.outputDir);
+  await page.addInitScript(() => {
+    const originalAtob = globalThis.atob.bind(globalThis);
+    const originalBtoa = globalThis.btoa.bind(globalThis);
+    globalThis.atob = (value: string): string => {
+      const decoded = originalAtob(value);
+      if (decoded.length < 10 || decoded.charCodeAt(0) !== 0x1f || decoded.charCodeAt(1) !== 0x8b) {
+        return decoded;
+      }
+      const emptyMember = new Uint8Array([
+        0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x13,
+        0x03, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+      ]);
+      return decoded + String.fromCharCode(...emptyMember);
+    };
+    globalThis.btoa = (value: string): string => {
+      const emptyMemberLength = 20;
+      if (value.length > emptyMemberLength
+        && value.charCodeAt(0) === 0x1f
+        && value.charCodeAt(1) === 0x8b
+        && value.charCodeAt(value.length - emptyMemberLength) === 0x1f
+        && value.charCodeAt(value.length - emptyMemberLength + 1) === 0x8b) {
+        return originalBtoa(value.slice(0, -emptyMemberLength));
+      }
+      return originalBtoa(value);
+    };
+  });
+  await page.goto(pathToFileURL(path.join(fixture.candidateDir, 'report.html')).toString());
+
+  await expect(page.getByTestId('run-trace-state')).toHaveAttribute('data-trace-state', 'error');
+  await expect(page.getByTestId('run-trace-state')).toContainText('Trace data unavailable');
+  await expect(page.getByTestId('run-trace-search')).toBeDisabled();
+  await expect(page.getByTestId('run-exposure-message-select')).toBeEnabled();
+});
+
 test('candidate fails closed when platform gzip decoding is unsupported', async ({ page }, testInfo) => {
   test.setTimeout(180_000);
   const fixture = generateRobustnessFixture(testInfo.outputDir);

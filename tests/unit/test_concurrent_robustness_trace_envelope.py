@@ -14,6 +14,7 @@ from llm_abm_sim.concurrent_robustness_report import (
     _TRACE_ENCODING,
     _TRACE_ENVELOPE_SCHEMA,
     _TRACE_ROW_COUNT,
+    _TRACE_RUNTIME_BRIDGE,
     _TRACE_SCRIPT_OPEN,
     _decode_trace_envelope,
     _replace_trace_script,
@@ -131,6 +132,13 @@ def test_trace_envelope_rejects_digest_corruption_and_gzip_corruption() -> None:
     corrupt = {**valid, "payload": base64.b64encode(compressed).decode("ascii")}
     with pytest.raises(ValueError):
         _decode_trace_envelope(corrupt)
+
+
+def test_browser_bridge_consumes_the_gzip_stream_through_the_single_member_boundary() -> None:
+    assert "pipeThrough(new DecompressionStream('gzip')).getReader()" in _TRACE_RUNTIME_BRIDGE
+    assert "for (;;)" in _TRACE_RUNTIME_BRIDGE
+    assert "if (result.done) break" in _TRACE_RUNTIME_BRIDGE
+    assert "gzip as exactly one member" in _TRACE_RUNTIME_BRIDGE
 
 
 def test_trace_envelope_rejects_trailing_and_concatenated_gzip_members() -> None:
