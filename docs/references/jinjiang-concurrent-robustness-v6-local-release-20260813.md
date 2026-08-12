@@ -4,13 +4,13 @@
 
 - operational Ticket：[#181](https://github.com/liu-qingyuan/llm-abm-marketing-sim/issues/181)
 - 实现 commit：`ca638f44ef7424e3991c60ab1c1affc2144eec46`
-- 状态：**superseded；post-close review 后已删除本页旧 local artifacts，未部署 canonical**
+- 状态：**reviewed local production release ready；未部署 canonical**
 - Provider/API/image-generation calls：`0`
 - secrets 读取、打印或写入：否
 - SSH / remote switch：未执行
 - 本次 preflight 时 canonical `report.html` SHA-256：`541bcf04820c8643c73ca9e7d927fe6a1d44c23d02f849532bcb18ab6c5eeb43`
 
-> 重要：独立 review 后，`528dfb7` 加强了 candidate content identity 与 closure-download exclusion。下列旧 candidate/closure/release/snapshot 路径和 hashes 仅作为审计记录，均已删除且禁止部署；#181 已重新打开，等待基于 `528dfb7` 的全链重建。
+> 独立 review 后，`528dfb7` 加强了 candidate content identity、strict zero-call accounting 与 closure-download exclusion。原 local release 已删除；以下路径与 hashes 已按该 commit 全链重建并重新验收。
 
 ## 显式 lineage
 
@@ -19,11 +19,11 @@
 - immutable study root：`runs/jinjiang-concurrent-robustness-formal-v1-openai-codex-20260810T003438Z-workspace.study-root/`
 - Formal contracts：`runs/jinjiang-concurrent-robustness-formal-v1-openai-codex-20260810T003438Z-contracts/`
 - historical candidate：`runs/jinjiang-concurrent-robustness-formal-v1-openai-codex-20260810T003438Z-report-candidate/`
-- presentation candidate：`runs/jinjiang-concurrent-robustness-report-candidate-v3-20260813T000000Z/`
-- presentation closure：`runs/jinjiang-concurrent-robustness-presentation-closure-v1-20260813T000000Z.json`
-- immutable production source：`runs/jinjiang-concurrent-robustness-production-v6-20260813T000000Z/`
-- release contract：`runs/jinjiang-concurrent-robustness-production-v6-20260813T000000Z-release-contract.json`
-- physical snapshot：`runs/jinjiang-concurrent-robustness-production-v6-20260813T000000Z-physical-snapshot/`
+- presentation candidate：`runs/jinjiang-concurrent-robustness-report-candidate-v3-reviewed-20260813T000000Z/`
+- presentation closure：`runs/jinjiang-concurrent-robustness-presentation-closure-v1-reviewed-20260813T000000Z.json`
+- immutable production source：`runs/jinjiang-concurrent-robustness-production-v6-reviewed-20260813T000000Z/`
+- release contract：`runs/jinjiang-concurrent-robustness-production-v6-reviewed-20260813T000000Z-release-contract.json`
+- physical snapshot：`runs/jinjiang-concurrent-robustness-production-v6-reviewed-20260813T000000Z-physical-snapshot/`
 
 ## Candidate identity
 
@@ -38,14 +38,14 @@
 
 ## Closure 与 production identity
 
-- closure SHA-256：`77ead19dbc001c512c6537f60b0f9979bbd3d5a2a3aa874e1e04e86991b9f793`
-- release id：`jinjiang-concurrent-robustness-v6-20260813T000000Z`
+- closure SHA-256：`a58fff6d50ae735e100401cb571084862ea5540df7b8515f1847755caac9937e`
+- release id：`jinjiang-concurrent-robustness-v6-reviewed-20260813T000000Z`
 - release schema：`abm-report-release-contract-v6`
-- production report：`eb97b590ef6b061e87d17a2a8bb024bd8c8fd94d14327dd3046aeccdc287eb52`
-- production manifest：`e321c8819cdcfe62df2df07134068ae1fb49ea8089abc08989b5623cf91cfb5a`
-- production release identity：`9d7d84cb85034539b8a178edb19a4ba6f76ca4067914212fdd66694b470f6b8c`
+- production report：`ca476e617db2096a9b4511c8143c7bf48f22574d228e60ed483d48fed63beca0`
+- production manifest：`e7d0219dc97b1d1f84592fc91c08d51f1682c80654e90a7f3c8f9e7681374b1f`
+- production release identity：`8ac9a0c1f7df9d6f7ca029c6454fd82b5dff596e44f98abc174a97c662c36d64`
 - production inventory：42 files
-- snapshot inventory digest：`271b1c14ec6981325400a1cac5a7d4aac7118af8bf1e3bcedb5442256fdb5a85`
+- snapshot inventory digest：`6b4bbbc1faad2c2e68df330b730a2c9dae4f044ac9785464d979e613934f62fc`
 
 `presentation_closure_contract.json` 是 production inventory/release identity 的 regular artifact；它不是 Report approved download。production copy 与独立 closure bytes 相同。
 
@@ -65,4 +65,4 @@
 
 ## Deployment handoff
 
-本页记录的 release 已 supersede，**不得交给 #182**。只有 #181 基于 `528dfb7` 重建、重新验收并发布新的显式 contract/source/release id 后，才能进入部署。部署前仍须重新读取 remote `current` 作为 rollback identity，并使用 Deployment Module 的 physical snapshot、candidate health、atomic switch、rollback 和逐 artifact public acceptance，不得扫描“最新”目录。
+[#182](https://github.com/liu-qingyuan/llm-abm-marketing-sim/issues/182) 必须只使用本页 reviewed 显式 contract/source/release id。部署前重新读取 remote `current` 作为 rollback identity，并使用 Deployment Module 的 physical snapshot、candidate health、atomic switch、rollback 和逐 artifact public acceptance，不得扫描“最新”目录。
