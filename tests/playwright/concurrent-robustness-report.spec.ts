@@ -2,7 +2,7 @@ import { execFileSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { expect, test, type Page } from '@playwright/test';
+import { expect, test, type Locator, type Page } from '@playwright/test';
 
 type RobustnessFixture = {
   candidateDir: string;
@@ -140,6 +140,184 @@ async function expectPromptView(page: Page, messageId: string, metricId: string)
   expect(await sharedRows.evaluateAll((rows) => rows.map((row) => row.getAttribute('data-row-message-id')))).toEqual(
     Array(16).fill(messageId),
   );
+}
+
+async function expectSemanticEdge(
+  diagram: Locator,
+  edgeId: string,
+  expected: {
+    from: string;
+    to: string;
+    condition: string;
+    timing: string;
+    effect: string;
+    provenance: string;
+  },
+): Promise<void> {
+  const edge = diagram.locator(`[data-diagram-edge-id="${edgeId}"]`);
+  await expect(edge).toHaveCount(1);
+  await expect(edge).toHaveAttribute('data-from', expected.from);
+  await expect(edge).toHaveAttribute('data-to', expected.to);
+  await expect(edge).toHaveAttribute('data-direction', /^(forward|reverse)$/);
+  await expect(edge).toHaveAttribute('data-condition', expected.condition);
+  await expect(edge).toHaveAttribute('data-timing', expected.timing);
+  await expect(edge).toHaveAttribute('data-effect', expected.effect);
+  await expect(edge).toHaveAttribute('data-provenance', expected.provenance);
+}
+
+async function expectReaderDiagrams(page: Page): Promise<void> {
+  const project = page.getByTestId('project-evidence-chain-diagram');
+  await expect(project).toBeVisible();
+  await expect(project).toHaveAccessibleName('项目证据链');
+  await expect(project.locator('[data-diagram-node-id]')).toHaveCount(12);
+  await expect(project.locator('[data-diagram-edge-id]')).toHaveCount(14);
+  await expectSemanticEdge(project, 'project-edge-kernel-adapter', {
+    from: 'Kernel',
+    to: 'Adapter',
+    condition: 'user_message_pair_exposed',
+    timing: 'after_exposure',
+    effect: 'create_decision_input',
+    provenance: '_ConcurrentRuntimeKernel',
+  });
+  await expectSemanticEdge(project, 'project-edge-report-release', {
+    from: 'Report',
+    to: 'Release',
+    condition: 'presentation_bundle_valid',
+    timing: 'release_closure',
+    effect: 'close_inventory_and_hashes',
+    provenance: 'abm-report-release-contract-v5',
+  });
+
+  const batch = page.getByTestId('batch-mechanism-diagram');
+  await expect(batch).toBeVisible();
+  await expect(batch).toHaveAccessibleName('Concurrent Message 真实批次机制');
+  await expect(batch.locator('[data-diagram-node-id]')).toHaveCount(24);
+  await expect(batch.locator('[data-diagram-edge-id]')).toHaveCount(31);
+  await expect(batch.locator('[data-diagram-node-id="Rank1"]')).toContainText(/Message 1 独立 Per-Message Top\d+/);
+  await expect(batch.locator('[data-diagram-node-id="Rank2"]')).toContainText(/Message 2 独立 Per-Message Top\d+/);
+  await expect(batch.locator('[data-diagram-node-id="Rank3"]')).toContainText(/Message 3 独立 Per-Message Top\d+/);
+  await expect(batch.locator('[data-diagram-node-id="Exposure"]')).toContainText('每个 user-message pair 最多一次');
+  const compatibilityRasters = page.locator('[data-testid$="-visual-media"][aria-hidden="true"]');
+  await expect(compatibilityRasters).toHaveCount(5);
+  expect(await compatibilityRasters.evaluateAll(
+    (images) => images.every((image) => image.getAttribute('alt') === ''),
+  )).toBe(true);
+  await expect(page.locator('.robustness-compatibility-legend')).toHaveCount(5);
+  expect(await page.locator('.robustness-compatibility-legend').evaluateAll(
+    (legends) => legends.every((legend) => legend.getAttribute('aria-hidden') === 'true'),
+  )).toBe(true);
+  await expectSemanticEdge(batch, 'batch-edge-seed-fill', {
+    from: 'Seed',
+    to: 'Fill',
+    condition: 'seed_union_below_delivery_capacity',
+    timing: 'batch_zero_before_exposure',
+    effect: 'fill_each_message_independently_to_top_k',
+    provenance: 'SharedSeedLaunch',
+  });
+  await expectSemanticEdge(batch, 'batch-edge-rank1-exposure', {
+    from: 'Rank1',
+    to: 'Exposure',
+    condition: 'message_1_top_k_selected',
+    timing: 'ranking_before_exposure',
+    effect: 'expose_selected_message_1_pairs',
+    provenance: 'PlatformEnvironment',
+  });
+  await expectSemanticEdge(batch, 'batch-edge-historical-terminal', {
+    from: 'HistoricalMode',
+    to: 'Terminal',
+    condition: 'historical_formal_mode',
+    timing: 'terminal_closure',
+    effect: 'require_primary_and_shadow',
+    provenance: 'historical-formal-terminal-contract',
+  });
+  await expectSemanticEdge(batch, 'batch-edge-robustness-terminal', {
+    from: 'RobustnessMode',
+    to: 'Terminal',
+    condition: 'robustness_cell_mode',
+    timing: 'terminal_closure',
+    effect: 'require_primary_only',
+    provenance: 'primary-only-terminal-contract',
+  });
+  await expectSemanticEdge(batch, 'batch-edge-exposure-shadow', {
+    from: 'Exposure',
+    to: 'Shadow',
+    condition: 'historical_formal_mode',
+    timing: 'after_same_exposure',
+    effect: 'request_report_only_shadow',
+    provenance: 'DemographicShadowDecision',
+  });
+  await expectSemanticEdge(batch, 'batch-edge-positive-collect', {
+    from: 'Positive',
+    to: 'Collect',
+    condition: 'action_in_like_comment_share',
+    timing: 'pending_set_build',
+    effect: 'add_user_id',
+    provenance: 'campaign-positive-user-contract',
+  });
+  await expectSemanticEdge(batch, 'batch-edge-join-commit', {
+    from: 'Join',
+    to: 'Commit',
+    condition: 'barrier_closed_and_pending_set_finalized',
+    timing: 'after_full_batch',
+    effect: 'commit_campaign_user_set_unique_by_user_id',
+    provenance: 'campaign-user-id-deduplication-contract',
+  });
+  for (const [edgeId, target] of [
+    ['batch-edge-commit-next1', 'Next1'],
+    ['batch-edge-commit-next2', 'Next2'],
+    ['batch-edge-commit-next3', 'Next3'],
+  ] as const) {
+    await expectSemanticEdge(batch, edgeId, {
+      from: 'Commit',
+      to: target,
+      condition: 'next_batch_exists',
+      timing: 'next_batch_before_ranking',
+      effect: 'ranking_context_only_no_queue_injection_no_same_batch_writeback',
+      provenance: 'CampaignEngagementRankingSignal',
+    });
+  }
+  await expect(batch.locator('[data-from="Shadow"][data-to="Pending"], [data-from="Shadow"][data-to="Commit"]')).toHaveCount(0);
+  await expect(batch.locator('[data-from="NoFeedback"][data-to="Commit"]')).toHaveCount(0);
+  await expect(batch.locator('[data-from="Commit"][data-to="Rank1"], [data-from="Commit"][data-to="Rank2"], [data-from="Commit"][data-to="Rank3"]')).toHaveCount(0);
+
+  for (const [legendId, diagramId] of [
+    ['project-evidence-chain-legend', 'project-evidence-chain-diagram'],
+    ['batch-mechanism-legend', 'batch-mechanism-diagram'],
+  ] as const) {
+    const legend = page.getByTestId(legendId);
+    const diagramForLegend = page.getByTestId(diagramId);
+    const markIds = await legend.locator('[data-legend-mark-id]').evaluateAll((items) =>
+      items.map((item) => item.getAttribute('data-legend-mark-id') ?? ''),
+    );
+    for (const markId of markIds) {
+      await expect(diagramForLegend.locator(`[data-diagram-mark-id="${markId}"]`)).toHaveCount(1);
+    }
+  }
+
+  for (const testId of ['project-evidence-chain-mermaid-source', 'batch-mechanism-mermaid-source']) {
+    const source = page.getByTestId(testId);
+    await source.locator('summary').focus();
+    await source.locator('summary').press('Enter');
+    await expect(source).toHaveAttribute('open', '');
+    await expect(source.locator('pre:visible')).toContainText('flowchart TB');
+    await expect(source.locator('pre:visible')).toContainText('condition=');
+    await source.locator('summary').press('Enter');
+  }
+
+  for (const anchor of ['overview', 'sample', 'exposure-ranking', 'llm-decision', 'network-feedback']) {
+    await page.evaluate((value) => { window.location.hash = value; }, anchor);
+    await expect(page.locator(`[data-section-anchor="${anchor}"]:visible`).first()).toBeFocused();
+  }
+
+  const englishButton = page.locator('[data-report-language="en-US"]');
+  await englishButton.click();
+  await expect(project).toHaveAccessibleName('Project evidence chain');
+  await expect(batch).toHaveAccessibleName('Concurrent Message real batch mechanism');
+  await expect(project.locator('[data-diagram-node-id="Weight"]')).toContainText('Ranking Weight points');
+  await expect(batch.locator('[data-diagram-node-id="Rank1"]')).toContainText(/Message 1 independent Per-Message Top\d+/);
+  await expect(page.getByTestId('project-evidence-chain-fallback')).toContainText('Only a post-exposure DecisionInput');
+  await expect(page.getByTestId('batch-mechanism-fallback')).toContainText('neither injects users into a queue nor rewrites same-batch ranking');
+  await page.locator('[data-report-language="zh-CN"]').click();
 }
 
 async function expectPromptContractAndDiagram(page: Page): Promise<void> {
@@ -333,6 +511,7 @@ test('candidate and promoted production keep closed downloads, full controls, an
         `production_deploy_eligible=${stage.eligible}`,
       );
 
+      await expectReaderDiagrams(page);
       await expectPromptContractAndDiagram(page);
       await exerciseRobustnessInteractions(page);
 
@@ -374,12 +553,16 @@ test('candidate and promoted production keep closed downloads, full controls, an
         const section = document.querySelector<HTMLElement>(`[data-testid="${rootTestId}"]`);
         const visibleCharts = [...document.querySelectorAll<HTMLElement>('.robustness-chart-shell')]
           .filter((chart) => chart.offsetParent !== null);
-        const diagramScroller = document.querySelector<HTMLElement>('.robustness-factorial-scroll');
+        const diagramScrollers = [...document.querySelectorAll<HTMLElement>(
+          '.robustness-factorial-scroll, .robustness-reader-scroll',
+        )];
         return {
           horizontalOverflow: document.documentElement.scrollWidth > window.innerWidth + 1,
           sectionWidth: section?.getBoundingClientRect().width ?? 0,
           overflowingCharts: visibleCharts.filter((chart) => chart.scrollWidth > chart.clientWidth + 2).length,
-          diagramContained: !diagramScroller || diagramScroller.getBoundingClientRect().right <= window.innerWidth + 1,
+          diagramContained: diagramScrollers.every(
+            (scroller) => scroller.getBoundingClientRect().right <= window.innerWidth + 1,
+          ),
         };
       }, stage.rootTestId);
       expect(geometry.horizontalOverflow).toBe(false);

@@ -5,6 +5,7 @@ import hashlib
 import json
 import math
 import os
+import re
 from pathlib import Path
 from typing import Any, Literal, cast
 
@@ -3346,7 +3347,75 @@ def test_concurrent_robustness_composes_two_closed_sources_into_an_immutable_rep
     assert "每 cell 60 个 Primary judgments" in report_html
     assert "960 个 logical judgments" in report_html
     assert "2-batch realized path" in report_html
+    assert 'data-testid="project-evidence-chain-diagram"' in report_html
+    assert 'data-testid="batch-mechanism-diagram"' in report_html
     assert 'data-testid="prompt-model-factorial-diagram"' in report_html
+    assert report_html.count('aria-hidden="true" alt=""') == 5
+    assert report_html.count('robustness-compatibility-legend" aria-hidden="true"') == 5
+    semantic_node_tags = re.findall(
+        r'<g\b(?=[^>]*data-diagram-node-id="[^"]+")(?=[^>]*data-node-kind="[^"]+")[^>]*>',
+        report_html,
+    )
+    semantic_edge_tags = re.findall(
+        r'<path\b(?=[^>]*data-diagram-edge-id="[^"]+")(?=[^>]*data-from="[^"]+")[^>]*>',
+        report_html,
+    )
+    assert semantic_node_tags
+    assert semantic_edge_tags
+    assert all('data-node-kind="' in tag and 'data-provenance="' in tag for tag in semantic_node_tags)
+    assert all(
+        all(f'{attribute}="' in tag for attribute in (
+            "data-from",
+            "data-to",
+            "data-direction",
+            "data-condition",
+            "data-timing",
+            "data-effect",
+            "data-provenance",
+        ))
+        for tag in semantic_edge_tags
+    )
+    assert len(semantic_node_tags) == 50
+    assert len(semantic_edge_tags) == 62
+    assert all(
+        f'data-diagram-mark-id="{mark_id}"' in report_html
+        for mark_id in (
+            "project-mark-runtime",
+            "project-mark-evidence",
+            "project-mark-release",
+            "batch-mark-ranking",
+            "batch-mark-required",
+            "batch-mark-shadow",
+            "batch-mark-next",
+        )
+    )
+    assert all(
+        f'data-legend-mark-id="{mark_id}"' in report_html
+        for mark_id in (
+            "project-mark-runtime",
+            "project-mark-evidence",
+            "project-mark-release",
+            "batch-mark-ranking",
+            "batch-mark-required",
+            "batch-mark-shadow",
+            "batch-mark-next",
+        )
+    )
+    batch_feedback_edges = [
+        tag
+        for tag in semantic_edge_tags
+        if 'data-to="Commit"' in tag or 'data-to="Pending"' in tag
+    ]
+    assert all('data-from="Shadow"' not in tag for tag in batch_feedback_edges)
+    assert all('data-from="NoFeedback"' not in tag or 'data-to="Pending"' in tag for tag in batch_feedback_edges)
+    assert 'data-from="Commit" data-to="Next1"' in report_html
+    assert 'data-from="Commit" data-to="Next2"' in report_html
+    assert 'data-from="Commit" data-to="Next3"' in report_html
+    assert all(
+        f'data-from="Commit" data-to="{rank_node}"' not in report_html
+        for rank_node in ("Rank1", "Rank2", "Rank3")
+    )
+    assert 'data-effect="ranking_context_only_no_queue_injection_no_same_batch_writeback"' in report_html
     for node_id in (
         "Contract",
         "P0",
@@ -3463,6 +3532,31 @@ def test_report_presentation_interface_materializes_and_validates_production_bun
             corrupt_bundle,
             stage_facts=facts,
         )
+
+    for original, replacement in (
+        (
+            b'data-from="Shadow" data-to="Terminal"',
+            b'data-from="Shadow" data-to="Commit"',
+        ),
+        (
+            b'data-effect="ranking_context_only_no_queue_injection_no_same_batch_writeback"',
+            b'data-effect="same_batch_queue_injection"',
+        ),
+        (
+            b'data-legend-mark-id="batch-mark-shadow"',
+            b'data-legend-mark-id="batch-mark-missing"',
+        ),
+    ):
+        assert original in bundle.report_html
+        corrupt_diagram = concurrent_robustness_report_module._PresentationBundle(
+            report_payload=bundle.report_payload,
+            report_html=bundle.report_html.replace(original, replacement, 1),
+        )
+        with pytest.raises(concurrent_robustness_report_module._RobustnessReportClosureError):
+            concurrent_robustness_report_module._REPORT_PRESENTATION.validate_bundle(
+                corrupt_diagram,
+                stage_facts=facts,
+            )
 
 
 def test_concurrent_robustness_report_rejects_unsafe_destinations_without_touching_sources(

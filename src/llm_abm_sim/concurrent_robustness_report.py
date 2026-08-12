@@ -298,6 +298,167 @@ _PROMPT_PRESENTATION_COPY = {
     },
 }
 
+_READER_DIAGRAM_COPY = {
+    "zh-CN": {
+        "project.heading": "项目证据如何抵达当前网页",
+        "project.lead": "从固定研究输入到不可变发布，每条箭头都对应一个可验证的运行或发布边界。",
+        "project.title": "项目证据链",
+        "project.description": "Research Sample、互动图与三条 message 进入 Concurrent runtime。曝光后的 DecisionInput 由 LLMDecisionAdapter 返回结构化 Decision，历史 Formal evidence 与 Robustness study root 再由 Report Module 组合并完成不可变发布。",
+        "project.node.Inputs": "Research Sample、互动图与三条 messages",
+        "project.node.Runner": "ConcurrentMessageExperimentRunner",
+        "project.node.Kernel": "Concurrent runtime kernel",
+        "project.node.Adapter": "LLMDecisionAdapter",
+        "project.node.Formal": "Historical Formal source",
+        "project.node.Study": "ConcurrentRobustnessStudy",
+        "project.node.Weight": "{weight_point_count} 个 Ranking Weight points\n零 Provider calls",
+        "project.node.Matrix": "P0-P3 × {model_count} models\nPrimary-only",
+        "project.node.Root": "Immutable study root",
+        "project.node.Report": "Report Module",
+        "project.node.Release": "Immutable release closure",
+        "project.node.Canonical": "Canonical webpage",
+        "project.edge.decision_input": "曝光后形成 DecisionInput",
+        "project.edge.decision": "返回 Structured Decision",
+        "project.edge.persist": "持久化 runtime evidence",
+        "project.legend.runtime": "Runtime 调用路径",
+        "project.legend.evidence": "已关闭 evidence",
+        "project.legend.release": "不可变发布路径",
+        "project.source.summary": "查看项目证据链 Mermaid 语义母版",
+        "project.source.note": "页面不运行 Mermaid。Mermaid 与 inline SVG 使用相同 node 和 edge IDs，供审核与设计交接。",
+        "project.fallback.title": "项目证据链文本路径",
+        "project.fallback.inputs": "固定 Research Sample、互动图和三条 messages 进入 ConcurrentMessageExperimentRunner 与 runtime kernel。",
+        "project.fallback.decision": "只有 exposure 后的 DecisionInput 才进入 LLMDecisionAdapter；结构化 Decision 返回 runtime。",
+        "project.fallback.formal": "Runner 持久化 Historical Formal source，ConcurrentRobustnessStudy 从该 source 生成 Ranking Weight 与 Primary-only Prompt-Model evidence。",
+        "project.fallback.root": "两个 Robustness 分支共同关闭为 immutable study root。",
+        "project.fallback.publish": "Report Module 同时读取 Historical Formal source 与 study root；Release 完成不可变闭包后发布 canonical webpage。",
+        "batch.heading": "一个真实批次如何关闭并反馈",
+        "batch.lead": "三条 message 独立排序，selected pairs 全部到达当前 mode 的 required terminal 后，campaign feedback 才能提交给下一批。",
+        "batch.title": "Concurrent Message 真实批次机制",
+        "batch.description": "Batch start 先冻结 campaign snapshot。Batch 0 使用同一 seed union，并按 message 独立补足 Top20；后续是三条独立 Per-Message Top20。每个 user-message pair 最多 exposure 一次，ranking 先于 exposure 与 Decision。只有 terminal succeeded Primary 的 like、comment 或 share 按 user_id 跨 message 去重，并在 full-batch barrier 关闭后成为下一批的 ranking context。",
+        "batch.node.Input": "固定 sample、互动图与三条 messages",
+        "batch.node.Freeze": "Batch start 冻结 campaign snapshot",
+        "batch.node.Batch": "Batch 0？",
+        "batch.node.Seed": "Shared Seed Launch\n三条 message 使用相同 seeds",
+        "batch.node.Fill": "各 message 独立补足到 Top{delivery_capacity}",
+        "batch.node.Rank1": "Message 1 独立 Per-Message Top{delivery_capacity}\noverlap allowed",
+        "batch.node.Rank2": "Message 2 独立 Per-Message Top{delivery_capacity}\noverlap allowed",
+        "batch.node.Rank3": "Message 3 独立 Per-Message Top{delivery_capacity}\noverlap allowed",
+        "batch.node.Exposure": "Per-message exposure\n每个 user-message pair 最多一次",
+        "batch.node.Primary": "Primary Decision",
+        "batch.node.Shadow": "Shadow Decision\n仅 Historical Formal，report-only",
+        "batch.node.HistoricalMode": "Historical required terminals\nPrimary + Shadow",
+        "batch.node.RobustnessMode": "Robustness required terminals\nPrimary-only",
+        "batch.node.Positive": "terminal succeeded Primary\naction ∈ like / comment / share？",
+        "batch.node.Terminal": "所有 selected pairs 到达 required terminal set",
+        "batch.node.Collect": "收集 positive user_id",
+        "batch.node.NoFeedback": "ignore / provider_failed\n不产生 campaign feedback",
+        "batch.node.Pending": "完成 pending set\n允许为空",
+        "batch.node.Barrier": "Full-batch barrier closed",
+        "batch.node.Join": "AND：barrier closed + pending set finalized",
+        "batch.node.Commit": "Commit campaign set\n按 user_id 跨 message 去重",
+        "batch.node.Next1": "下一批 Message 1 独立 ranking context",
+        "batch.node.Next2": "下一批 Message 2 独立 ranking context",
+        "batch.node.Next3": "下一批 Message 3 独立 ranking context",
+        "batch.edge.yes": "是",
+        "batch.edge.no": "否",
+        "batch.edge.historical": "仅 Historical Formal",
+        "batch.edge.positive": "是：加入 user_id",
+        "batch.edge.no_feedback": "否：不反馈",
+        "batch.edge.next": "仅下一批 ranking context",
+        "batch.legend.ranking": "三条独立 ranking channel",
+        "batch.legend.required": "Required runtime flow",
+        "batch.legend.shadow": "Historical report-only flow",
+        "batch.legend.next": "Next-batch context only",
+        "batch.source.summary": "查看真实批次机制 Mermaid 语义母版",
+        "batch.source.note": "页面不运行 Mermaid。Edge metadata 明确 condition、timing、effect 与 provenance；不存在 Shadow、ignore 或 provider_failed 指向 campaign set 的 feedback edge。",
+        "batch.fallback.title": "真实批次机制文本路径",
+        "batch.fallback.freeze": "每批先冻结 campaign snapshot；Batch 0 使用相同 seed union，并由每条 message 独立补足到 Top{delivery_capacity}。",
+        "batch.fallback.rank": "Batch 1 起三条 Per-Message Top{delivery_capacity} 分别排序，允许跨 message overlap；ranking 总在 exposure 与 Decision 之前。",
+        "batch.fallback.exposure": "同一 user-message pair 最多 exposure 一次。Historical Formal 要求 Primary + Shadow terminal；Robustness cell 只要求 Primary terminal。",
+        "batch.fallback.feedback": "只有 terminal succeeded Primary 的 like、comment、share 能贡献 pending set；Shadow、ignore 与 provider_failed 不反馈。",
+        "batch.fallback.barrier": "所有 selected pairs 通过 full-batch barrier，且 pending set 完成后，才按 user_id 跨 message 去重并 commit campaign set。",
+        "batch.fallback.next": "Committed campaign set 只作为下一批三条独立 rankings 的 context；它不注入 queue，也不回写 same-batch ranking。",
+    },
+    "en-US": {
+        "project.heading": "How project evidence reaches this webpage",
+        "project.lead": "From fixed research inputs to immutable publication, every arrow maps to a verifiable runtime or release boundary.",
+        "project.title": "Project evidence chain",
+        "project.description": "The Research Sample, interaction graph, and three messages enter the Concurrent runtime. After exposure, LLMDecisionAdapter returns a Structured Decision for a DecisionInput. Historical Formal evidence and the Robustness study root are then composed by the Report Module and closed into an immutable release.",
+        "project.node.Inputs": "Research Sample, interaction graph, and three messages",
+        "project.node.Runner": "ConcurrentMessageExperimentRunner",
+        "project.node.Kernel": "Concurrent runtime kernel",
+        "project.node.Adapter": "LLMDecisionAdapter",
+        "project.node.Formal": "Historical Formal source",
+        "project.node.Study": "ConcurrentRobustnessStudy",
+        "project.node.Weight": "{weight_point_count} Ranking Weight points\nzero Provider calls",
+        "project.node.Matrix": "P0-P3 × {model_count} models\nPrimary-only",
+        "project.node.Root": "Immutable study root",
+        "project.node.Report": "Report Module",
+        "project.node.Release": "Immutable release closure",
+        "project.node.Canonical": "Canonical webpage",
+        "project.edge.decision_input": "DecisionInput after exposure",
+        "project.edge.decision": "Structured Decision returned",
+        "project.edge.persist": "Persisted runtime evidence",
+        "project.legend.runtime": "Runtime call path",
+        "project.legend.evidence": "Closed evidence",
+        "project.legend.release": "Immutable publication path",
+        "project.source.summary": "View the project evidence-chain Mermaid semantic master",
+        "project.source.note": "The page does not run Mermaid. The Mermaid source and inline SVG share the same node and edge IDs for review and design handoff.",
+        "project.fallback.title": "Project evidence-chain text path",
+        "project.fallback.inputs": "The fixed Research Sample, interaction graph, and three messages enter ConcurrentMessageExperimentRunner and the runtime kernel.",
+        "project.fallback.decision": "Only a post-exposure DecisionInput reaches LLMDecisionAdapter; the Structured Decision returns to the runtime.",
+        "project.fallback.formal": "The Runner persists the Historical Formal source. ConcurrentRobustnessStudy derives Ranking Weight and Primary-only Prompt-Model evidence from that source.",
+        "project.fallback.root": "The two Robustness branches close into one immutable study root.",
+        "project.fallback.publish": "The Report Module reads both the Historical Formal source and the study root. Release closes immutable evidence before publishing the canonical webpage.",
+        "batch.heading": "How one real batch closes and feeds forward",
+        "batch.lead": "Three messages rank independently. Campaign feedback can be committed to the next batch only after every selected pair reaches the required terminal for the current mode.",
+        "batch.title": "Concurrent Message real batch mechanism",
+        "batch.description": "Batch start freezes the campaign snapshot. Batch 0 uses one shared seed union with independent per-message fill to Top20; later batches use three independent Per-Message Top20 rankings. Each user-message pair is exposed at most once, and ranking precedes exposure and Decision. Only terminal succeeded Primary like, comment, or share actions are deduplicated by user_id across messages and become next-batch ranking context after the full-batch barrier closes.",
+        "batch.node.Input": "Fixed sample, interaction graph, and three messages",
+        "batch.node.Freeze": "Freeze campaign snapshot at batch start",
+        "batch.node.Batch": "Batch 0?",
+        "batch.node.Seed": "Shared Seed Launch\nthe same seeds for all three messages",
+        "batch.node.Fill": "Independent per-message fill to Top{delivery_capacity}",
+        "batch.node.Rank1": "Message 1 independent Per-Message Top{delivery_capacity}\noverlap allowed",
+        "batch.node.Rank2": "Message 2 independent Per-Message Top{delivery_capacity}\noverlap allowed",
+        "batch.node.Rank3": "Message 3 independent Per-Message Top{delivery_capacity}\noverlap allowed",
+        "batch.node.Exposure": "Per-message exposure\nonce per user-message pair",
+        "batch.node.Primary": "Primary Decision",
+        "batch.node.Shadow": "Shadow Decision\nHistorical Formal only, report-only",
+        "batch.node.HistoricalMode": "Historical required terminals\nPrimary + Shadow",
+        "batch.node.RobustnessMode": "Robustness required terminals\nPrimary-only",
+        "batch.node.Positive": "terminal succeeded Primary\naction in like / comment / share?",
+        "batch.node.Terminal": "Every selected pair reaches its required terminal set",
+        "batch.node.Collect": "Collect positive user_id values",
+        "batch.node.NoFeedback": "ignore / provider_failed\nno campaign feedback",
+        "batch.node.Pending": "Finalize the pending set\nit may be empty",
+        "batch.node.Barrier": "Full-batch barrier closed",
+        "batch.node.Join": "AND: barrier closed + pending set finalized",
+        "batch.node.Commit": "Commit campaign set\ndeduplicated by user_id across messages",
+        "batch.node.Next1": "Next-batch Message 1 independent ranking context",
+        "batch.node.Next2": "Next-batch Message 2 independent ranking context",
+        "batch.node.Next3": "Next-batch Message 3 independent ranking context",
+        "batch.edge.yes": "yes",
+        "batch.edge.no": "no",
+        "batch.edge.historical": "Historical Formal only",
+        "batch.edge.positive": "yes: add user_id",
+        "batch.edge.no_feedback": "no: no feedback",
+        "batch.edge.next": "next-batch ranking context only",
+        "batch.legend.ranking": "Three independent ranking channels",
+        "batch.legend.required": "Required runtime flow",
+        "batch.legend.shadow": "Historical report-only flow",
+        "batch.legend.next": "Next-batch context only",
+        "batch.source.summary": "View the real batch-mechanism Mermaid semantic master",
+        "batch.source.note": "The page does not run Mermaid. Edge metadata states condition, timing, effect, and provenance. No feedback edge connects Shadow, ignore, or provider_failed to the campaign set.",
+        "batch.fallback.title": "Real batch-mechanism text path",
+        "batch.fallback.freeze": "Each batch first freezes the campaign snapshot. Batch 0 uses the same seed union, then each message independently fills to Top{delivery_capacity}.",
+        "batch.fallback.rank": "From Batch 1, three Per-Message Top{delivery_capacity} rankings run independently and allow cross-message overlap. Ranking always precedes exposure and Decision.",
+        "batch.fallback.exposure": "A user-message pair is exposed at most once. Historical Formal requires Primary + Shadow terminals; a Robustness cell requires Primary only.",
+        "batch.fallback.feedback": "Only terminal succeeded Primary like, comment, or share actions can contribute to the pending set. Shadow, ignore, and provider_failed never feed back.",
+        "batch.fallback.barrier": "Only after every selected pair passes the full-batch barrier and the pending set is finalized may the campaign set be deduplicated by user_id across messages and committed.",
+        "batch.fallback.next": "The committed campaign set is context for three independent next-batch rankings only. It neither injects users into a queue nor rewrites same-batch ranking.",
+    },
+}
+
 
 class _RobustnessReportPathError(ValueError):
     pass
@@ -371,6 +532,40 @@ class _PromptModelPresentation:
     logical_judgments_per_cell: int
     logical_judgment_count: int
     horizon: int
+    delivery_capacity: int
+    weight_point_count: int
+
+
+@dataclass(frozen=True)
+class _DiagramNode:
+    node_id: str
+    label_key: str
+    x: int
+    y: int
+    width: int
+    height: int
+    kind: str
+    provenance: str
+    mark_id: str = ""
+
+
+@dataclass(frozen=True)
+class _DiagramEdge:
+    edge_id: str
+    source: str
+    target: str
+    path: str
+    condition: str
+    timing: str
+    effect: str
+    provenance: str
+    direction: str = "forward"
+    style: str = "solid"
+    label_key: str = ""
+    label_x: int = 0
+    label_y: int = 0
+    label_width: int = 0
+    mark_id: str = ""
 
 
 @dataclass(frozen=True)
@@ -1089,6 +1284,8 @@ def _build_prompt_model_presentation(
         logical_judgments_per_cell=manifest.request_caps.logical_judgments_per_cell,
         logical_judgment_count=manifest.request_caps.logical_judgment_cap,
         horizon=manifest.ranking_contract.horizon,
+        delivery_capacity=manifest.ranking_contract.delivery_capacity,
+        weight_point_count=len(manifest.weight_points),
     )
 
 
@@ -1113,6 +1310,29 @@ def _prompt_presentation_catalog(
     return {
         language: {key: text.format(**values) for key, text in copy.items()}
         for language, copy in _PROMPT_PRESENTATION_COPY.items()
+    }
+
+
+def _presentation_catalog(
+    presentation: _PromptModelPresentation,
+) -> dict[str, dict[str, str]]:
+    prompt_catalog = _prompt_presentation_catalog(presentation)
+    expected_reader_keys = set(_READER_DIAGRAM_COPY["zh-CN"])
+    if set(_READER_DIAGRAM_COPY) != {"zh-CN", "en-US"} or any(
+        set(copy) != expected_reader_keys for copy in _READER_DIAGRAM_COPY.values()
+    ):
+        raise _RobustnessReportClosureError("Reader diagram language catalog is asymmetric")
+    values = {
+        "delivery_capacity": str(presentation.delivery_capacity),
+        "model_count": str(presentation.model_count),
+        "weight_point_count": str(presentation.weight_point_count),
+    }
+    return {
+        language: {
+            **prompt_catalog[language],
+            **{key: text.format(**values) for key, text in _READER_DIAGRAM_COPY[language].items()},
+        }
+        for language in ("zh-CN", "en-US")
     }
 
 
@@ -1248,90 +1468,392 @@ def _prompt_contract_disclosure(
     )
 
 
+def _diagram_svg_node(
+    catalog: Mapping[str, Mapping[str, str]],
+    node: _DiagramNode,
+) -> str:
+    label = _robustness_i18n(
+        catalog,
+        node.label_key,
+        tag="div",
+        class_name="robustness-semantic-node-label",
+        attrs=' xmlns="http://www.w3.org/1999/xhtml"',
+    )
+    mark = (
+        f' id="{_escape(node.mark_id, quote=True)}" '
+        f'data-diagram-mark-id="{_escape(node.mark_id, quote=True)}"'
+        if node.mark_id
+        else ""
+    )
+    return (
+        f'<g class="robustness-semantic-node robustness-semantic-node-{_escape(node.kind, quote=True)}" '
+        f'data-diagram-node-id="{_escape(node.node_id, quote=True)}" '
+        f'data-node-kind="{_escape(node.kind, quote=True)}" '
+        f'data-provenance="{_escape(node.provenance, quote=True)}" '
+        f'transform="translate({node.x} {node.y})">'
+        f'<rect{mark} width="{node.width}" height="{node.height}" rx="8" ry="8"/>'
+        f'<foreignObject x="10" y="8" width="{node.width - 20}" height="{node.height - 16}">'
+        f"{label}</foreignObject></g>"
+    )
+
+
+def _diagram_svg_edge(
+    catalog: Mapping[str, Mapping[str, str]],
+    edge: _DiagramEdge,
+    *,
+    marker_id: str,
+) -> str:
+    mark = (
+        f' id="{_escape(edge.mark_id, quote=True)}" '
+        f'data-diagram-mark-id="{_escape(edge.mark_id, quote=True)}"'
+        if edge.mark_id
+        else ""
+    )
+    path = (
+        f'<path{mark} class="robustness-semantic-edge robustness-semantic-edge-{_escape(edge.style, quote=True)}" '
+        f'data-diagram-edge-id="{_escape(edge.edge_id, quote=True)}" '
+        f'data-from="{_escape(edge.source, quote=True)}" data-to="{_escape(edge.target, quote=True)}" '
+        f'data-direction="{_escape(edge.direction, quote=True)}" '
+        f'data-condition="{_escape(edge.condition, quote=True)}" '
+        f'data-timing="{_escape(edge.timing, quote=True)}" '
+        f'data-effect="{_escape(edge.effect, quote=True)}" '
+        f'data-provenance="{_escape(edge.provenance, quote=True)}" '
+        f'd="{_escape(edge.path, quote=True)}" marker-end="url(#{_escape(marker_id, quote=True)})"/>'
+    )
+    if not edge.label_key:
+        return path
+    label = _robustness_i18n(
+        catalog,
+        edge.label_key,
+        tag="div",
+        class_name="robustness-semantic-edge-label",
+        attrs=' xmlns="http://www.w3.org/1999/xhtml"',
+    )
+    return (
+        f"{path}<foreignObject class=\"robustness-semantic-edge-label-box\" "
+        f'x="{edge.label_x}" y="{edge.label_y}" width="{edge.label_width}" height="36">'
+        f"{label}</foreignObject>"
+    )
+
+
 def _mermaid_label(value: str) -> str:
     return " ".join(value.replace('"', "'").split())
+
+
+def _diagram_mermaid_source(
+    catalog: Mapping[str, Mapping[str, str]],
+    language: str,
+    *,
+    title_key: str,
+    description_key: str,
+    nodes: Sequence[_DiagramNode],
+    edges: Sequence[_DiagramEdge],
+) -> str:
+    copy = _mapping(catalog.get(language), f"{language} presentation copy")
+    node_lines = [
+        f'    {node.node_id}["{_mermaid_label(str(copy[node.label_key]))}"]'
+        for node in nodes
+    ]
+    edge_lines: list[str] = []
+    metadata_lines: list[str] = []
+    for edge in edges:
+        connector = "-.->" if edge.style == "dotted" else "-->"
+        label = f'|"{_mermaid_label(str(copy[edge.label_key]))}"|' if edge.label_key else ""
+        edge_lines.append(
+            f"    {edge.source} {edge.edge_id}@{connector}{label} {edge.target}"
+        )
+        metadata_lines.append(
+            "    %% edge "
+            f"{edge.edge_id} from={edge.source} to={edge.target} direction={edge.direction} "
+            f"condition={edge.condition} timing={edge.timing} effect={edge.effect} "
+            f"provenance={edge.provenance}"
+        )
+    node_metadata = [
+        f"    %% node {node.node_id} kind={node.kind} provenance={node.provenance}"
+        for node in nodes
+    ]
+    return "\n".join(
+        [
+            "flowchart TB",
+            f'    accTitle: {_mermaid_label(str(copy[title_key]))}',
+            f'    accDescr: {_mermaid_label(str(copy[description_key]))}',
+            *node_lines,
+            *edge_lines,
+            *node_metadata,
+            *metadata_lines,
+        ]
+    )
+
+
+def _project_evidence_chain_diagram(
+    catalog: Mapping[str, Mapping[str, str]],
+) -> str:
+    nodes = (
+        _DiagramNode("Inputs", "project.node.Inputs", 20, 40, 190, 70, "input", "concurrent-message-source-contract"),
+        _DiagramNode("Runner", "project.node.Runner", 260, 40, 230, 70, "runtime", "ConcurrentMessageExperimentRunner"),
+        _DiagramNode("Kernel", "project.node.Kernel", 540, 40, 230, 70, "runtime", "_ConcurrentRuntimeKernel"),
+        _DiagramNode("Adapter", "project.node.Adapter", 920, 40, 240, 70, "adapter", "LLMDecisionAdapter"),
+        _DiagramNode("Formal", "project.node.Formal", 260, 245, 230, 70, "evidence", "concurrent-formal-source", "project-mark-evidence"),
+        _DiagramNode("Study", "project.node.Study", 540, 245, 230, 70, "study", "ConcurrentRobustnessStudy"),
+        _DiagramNode("Weight", "project.node.Weight", 820, 190, 220, 82, "analysis", "concurrent-ranking-weight-sensitivity-v1"),
+        _DiagramNode("Matrix", "project.node.Matrix", 820, 300, 260, 82, "analysis", "concurrent-prompt-model-robustness-analysis-v1"),
+        _DiagramNode("Root", "project.node.Root", 1110, 245, 230, 70, "evidence", "concurrent-robustness-study-artifact-manifest-v1"),
+        _DiagramNode("Report", "project.node.Report", 540, 480, 230, 70, "report", "_ReportPresentationInterface"),
+        _DiagramNode("Release", "project.node.Release", 830, 480, 230, 70, "release", "abm-report-release-contract-v5", "project-mark-release"),
+        _DiagramNode("Canonical", "project.node.Canonical", 1120, 480, 220, 70, "canonical", "canonical-endpoint-contract"),
+    )
+    edges = (
+        _DiagramEdge("project-edge-inputs-runner", "Inputs", "Runner", "M210 75 H254", "fixed_inputs_closed", "run_preflight", "initialize_runner", "concurrent-message-source-contract", mark_id="project-mark-runtime"),
+        _DiagramEdge("project-edge-runner-kernel", "Runner", "Kernel", "M490 75 H534", "preflight_passed", "runtime", "execute_concurrent_batches", "ConcurrentMessageExperimentRunner"),
+        _DiagramEdge("project-edge-kernel-adapter", "Kernel", "Adapter", "M770 61 H914", "user_message_pair_exposed", "after_exposure", "create_decision_input", "_ConcurrentRuntimeKernel", label_key="project.edge.decision_input", label_x=775, label_y=17, label_width=138),
+        _DiagramEdge("project-edge-adapter-kernel", "Adapter", "Kernel", "M920 94 H776", "structured_decision_valid", "decision_return", "register_terminal_decision", "LLMDecisionAdapter", direction="reverse", label_key="project.edge.decision", label_x=780, label_y=101, label_width=134),
+        _DiagramEdge("project-edge-runner-formal", "Runner", "Formal", "M375 110 V239", "all_required_terminals_closed", "post_run", "persist_runtime_evidence", "ConcurrentMessageExperimentRunner", label_key="project.edge.persist", label_x=386, label_y=154, label_width=150),
+        _DiagramEdge("project-edge-formal-study", "Formal", "Study", "M490 280 H534", "formal_source_closed", "study_preflight", "validate_and_start_study", "ConcurrentRobustnessStudy"),
+        _DiagramEdge("project-edge-study-weight", "Study", "Weight", "M770 266 H794 V231 H814", "weight_manifest_closed", "offline_study", "produce_weight_sensitivity", "concurrent-ranking-weight-sensitivity-v1"),
+        _DiagramEdge("project-edge-study-matrix", "Study", "Matrix", "M770 294 H794 V341 H814", "all_prompt_model_cells_terminal", "formal_study", "produce_primary_only_matrix", "concurrent-prompt-model-robustness-analysis-v1"),
+        _DiagramEdge("project-edge-weight-root", "Weight", "Root", "M1040 231 H1070 V266 H1104", "weight_evidence_valid", "study_closure", "include_weight_evidence", "concurrent-robustness-study-artifact-manifest-v1"),
+        _DiagramEdge("project-edge-matrix-root", "Matrix", "Root", "M1080 341 H1092 V294 H1104", "matrix_evidence_valid", "study_closure", "include_prompt_model_evidence", "concurrent-robustness-study-artifact-manifest-v1"),
+        _DiagramEdge("project-edge-formal-report", "Formal", "Report", "M375 315 V430 H655 V474", "formal_lineage_closed", "report_composition", "supply_historical_evidence", "_ReportPresentationInterface"),
+        _DiagramEdge("project-edge-root-report", "Root", "Report", "M1225 315 V430 H655 V474", "study_lineage_closed", "report_composition", "supply_robustness_evidence", "_ReportPresentationInterface"),
+        _DiagramEdge("project-edge-report-release", "Report", "Release", "M770 515 H824", "presentation_bundle_valid", "release_closure", "close_inventory_and_hashes", "abm-report-release-contract-v5"),
+        _DiagramEdge("project-edge-release-canonical", "Release", "Canonical", "M1060 515 H1114", "immutable_release_accepted", "deployment", "publish_canonical_webpage", "canonical-endpoint-contract"),
+    )
+    source_blocks = "".join(
+        f'<pre data-robustness-language-variant="{language}"{shepherd}><code class="language-mermaid">'
+        f'{_escape(_diagram_mermaid_source(catalog, language, title_key="project.title", description_key="project.description", nodes=nodes, edges=edges))}'
+        "</code></pre>"
+        for language, shepherd in (("zh-CN", ""), ("en-US", " hidden"))
+    )
+    fallback_rows = "".join(
+        f'<li>{_robustness_i18n(catalog, f"project.fallback.{key}")}</li>'
+        for key in ("inputs", "decision", "formal", "root", "publish")
+    )
+    legend = "".join(
+        '<li class="robustness-semantic-legend-item" '
+        f'data-legend-mark-id="project-mark-{mark}"><span class="robustness-semantic-legend-swatch robustness-semantic-legend-swatch-{mark}" aria-hidden="true"></span>'
+        f'{_robustness_i18n(catalog, f"project.legend.{label}")}</li>'
+        for mark, label in (("runtime", "runtime"), ("evidence", "evidence"), ("release", "release"))
+    )
+    heading = _robustness_i18n(
+        catalog,
+        "project.heading",
+        tag="h2",
+        attrs=' id="project-evidence-chain-heading"',
+    )
+    title = _robustness_i18n(
+        catalog,
+        "project.title",
+        tag="title",
+        attrs=' id="project-evidence-chain-svg-title"',
+    )
+    description = _robustness_i18n(
+        catalog,
+        "project.description",
+        tag="desc",
+        attrs=' id="project-evidence-chain-svg-description"',
+    )
+    return (
+        '<div class="robustness-reader-diagram" data-testid="project-evidence-chain-diagram-section" '
+        'aria-labelledby="project-evidence-chain-heading">'
+        '<div class="robustness-reader-heading">'
+        f'{heading}{_robustness_i18n(catalog, "project.lead", tag="p")}</div>'
+        '<figure class="robustness-reader-figure">'
+        '<div class="robustness-reader-scroll" tabindex="0" '
+        f'{_robustness_i18n_attribute(catalog, "project.title", "aria-label")}>'
+        '<svg data-testid="project-evidence-chain-diagram" viewBox="0 0 1380 590" role="img" '
+        'aria-labelledby="project-evidence-chain-svg-title" '
+        'aria-describedby="project-evidence-chain-svg-description project-evidence-chain-fallback" focusable="false">'
+        '<defs><marker id="project-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z"/></marker></defs>'
+        f'{title}{description}'
+        f'<g class="robustness-semantic-edges">{"".join(_diagram_svg_edge(catalog, edge, marker_id="project-arrow") for edge in edges)}</g>'
+        f'<g class="robustness-semantic-nodes">{"".join(_diagram_svg_node(catalog, node) for node in nodes)}</g>'
+        '</svg></div>'
+        f'<ul class="robustness-semantic-legend" data-testid="project-evidence-chain-legend">{legend}</ul>'
+        '<figcaption id="project-evidence-chain-fallback" class="robustness-reader-fallback" data-testid="project-evidence-chain-fallback">'
+        f'{_robustness_i18n(catalog, "project.fallback.title", tag="h3")}<ol>{fallback_rows}</ol></figcaption>'
+        '</figure>'
+        '<details class="robustness-mermaid-source" data-testid="project-evidence-chain-mermaid-source">'
+        f'<summary>{_robustness_i18n(catalog, "project.source.summary")}</summary>'
+        f'{_robustness_i18n(catalog, "project.source.note", tag="p")}{source_blocks}</details>'
+        '</div>'
+    )
+
+
+def _batch_mechanism_diagram(
+    catalog: Mapping[str, Mapping[str, str]],
+) -> str:
+    nodes = (
+        _DiagramNode("Input", "batch.node.Input", 520, 20, 400, 70, "input", "concurrent-message-source-contract"),
+        _DiagramNode("Freeze", "batch.node.Freeze", 520, 120, 400, 70, "freeze", "_ConcurrentRuntimeKernel.plan_batch"),
+        _DiagramNode("Batch", "batch.node.Batch", 600, 225, 240, 70, "gate", "shared-seed-launch-contract"),
+        _DiagramNode("Seed", "batch.node.Seed", 80, 345, 300, 76, "seed", "SharedSeedLaunch"),
+        _DiagramNode("Fill", "batch.node.Fill", 80, 455, 300, 76, "ranking", "per-message-fill-contract"),
+        _DiagramNode("Rank1", "batch.node.Rank1", 450, 430, 290, 82, "ranking", "PerMessagePersonalizedTop20", "batch-mark-ranking"),
+        _DiagramNode("Rank2", "batch.node.Rank2", 780, 430, 290, 82, "ranking", "PerMessagePersonalizedTop20"),
+        _DiagramNode("Rank3", "batch.node.Rank3", 1110, 430, 290, 82, "ranking", "PerMessagePersonalizedTop20"),
+        _DiagramNode("Exposure", "batch.node.Exposure", 510, 580, 480, 82, "exposure", "MessageLevelSingleExposure"),
+        _DiagramNode("Primary", "batch.node.Primary", 380, 720, 300, 76, "decision", "PrimaryCampaignDecision"),
+        _DiagramNode("Shadow", "batch.node.Shadow", 850, 720, 300, 76, "shadow", "DemographicShadowDecision"),
+        _DiagramNode("HistoricalMode", "batch.node.HistoricalMode", 1110, 840, 330, 80, "mode", "historical-formal-terminal-contract"),
+        _DiagramNode("RobustnessMode", "batch.node.RobustnessMode", 1110, 950, 330, 80, "mode", "primary-only-terminal-contract"),
+        _DiagramNode("Positive", "batch.node.Positive", 180, 850, 330, 88, "gate", "positive-primary-action-contract"),
+        _DiagramNode("Terminal", "batch.node.Terminal", 620, 900, 400, 82, "terminal", "required-terminal-contract"),
+        _DiagramNode("Collect", "batch.node.Collect", 100, 1010, 280, 76, "feedback", "campaign-positive-user-contract"),
+        _DiagramNode("NoFeedback", "batch.node.NoFeedback", 420, 1010, 300, 76, "stop", "non-propagating-terminal-contract"),
+        _DiagramNode("Pending", "batch.node.Pending", 260, 1120, 340, 76, "feedback", "pending-feedback-set-contract"),
+        _DiagramNode("Barrier", "batch.node.Barrier", 700, 1120, 340, 76, "barrier", "full-batch-barrier-contract"),
+        _DiagramNode("Join", "batch.node.Join", 470, 1230, 430, 76, "gate", "batch-commit-join-contract"),
+        _DiagramNode("Commit", "batch.node.Commit", 470, 1335, 430, 84, "commit", "campaign-user-id-deduplication-contract"),
+        _DiagramNode("Next1", "batch.node.Next1", 90, 1480, 360, 82, "next", "PerMessagePersonalizedTop20"),
+        _DiagramNode("Next2", "batch.node.Next2", 570, 1480, 360, 82, "next", "PerMessagePersonalizedTop20"),
+        _DiagramNode("Next3", "batch.node.Next3", 1050, 1480, 360, 82, "next", "PerMessagePersonalizedTop20"),
+    )
+    edges = (
+        _DiagramEdge("batch-edge-input-freeze", "Input", "Freeze", "M720 90 V114", "fixed_inputs_closed", "batch_start", "freeze_campaign_snapshot", "_ConcurrentRuntimeKernel.plan_batch"),
+        _DiagramEdge("batch-edge-freeze-batch", "Freeze", "Batch", "M720 190 V219", "snapshot_frozen", "before_ranking", "select_launch_policy", "_ConcurrentRuntimeKernel.plan_batch"),
+        _DiagramEdge("batch-edge-batch-seed", "Batch", "Seed", "M600 260 H230 V339", "batch_index_equals_zero", "batch_zero_selection", "use_same_seed_union_for_three_messages", "SharedSeedLaunch", label_key="batch.edge.yes", label_x=395, label_y=231, label_width=54),
+        _DiagramEdge("batch-edge-seed-fill", "Seed", "Fill", "M230 421 V449", "seed_union_below_delivery_capacity", "batch_zero_before_exposure", "fill_each_message_independently_to_top_k", "SharedSeedLaunch"),
+        _DiagramEdge("batch-edge-seed-exposure", "Seed", "Exposure", "M380 383 H420 V605 H504", "seed_union_reaches_delivery_capacity", "batch_zero_before_exposure", "select_shared_seed_pairs", "SharedSeedLaunch"),
+        _DiagramEdge("batch-edge-fill-exposure", "Fill", "Exposure", "M380 493 H450 V621 H504", "per_message_fill_complete", "before_exposure", "select_message_local_pairs", "PerMessagePersonalizedTop20"),
+        _DiagramEdge("batch-edge-batch-rank1", "Batch", "Rank1", "M640 295 V390 H595 V424", "batch_index_greater_than_zero", "before_exposure", "rank_message_1_independently", "PerMessagePersonalizedTop20", label_key="batch.edge.no", label_x=585, label_y=328, label_width=54),
+        _DiagramEdge("batch-edge-batch-rank2", "Batch", "Rank2", "M720 295 V380 H925 V424", "batch_index_greater_than_zero", "before_exposure", "rank_message_2_independently", "PerMessagePersonalizedTop20"),
+        _DiagramEdge("batch-edge-batch-rank3", "Batch", "Rank3", "M800 295 V360 H1255 V424", "batch_index_greater_than_zero", "before_exposure", "rank_message_3_independently", "PerMessagePersonalizedTop20"),
+        _DiagramEdge("batch-edge-rank1-exposure", "Rank1", "Exposure", "M595 512 V550 H630 V574", "message_1_top_k_selected", "ranking_before_exposure", "expose_selected_message_1_pairs", "PlatformEnvironment"),
+        _DiagramEdge("batch-edge-rank2-exposure", "Rank2", "Exposure", "M925 512 V550 H870 V574", "message_2_top_k_selected", "ranking_before_exposure", "expose_selected_message_2_pairs", "PlatformEnvironment"),
+        _DiagramEdge("batch-edge-rank3-exposure", "Rank3", "Exposure", "M1255 512 V550 H960 V574", "message_3_top_k_selected", "ranking_before_exposure", "expose_selected_message_3_pairs", "PlatformEnvironment"),
+        _DiagramEdge("batch-edge-exposure-primary", "Exposure", "Primary", "M650 662 V714", "user_message_pair_exposed_once", "after_exposure", "request_primary_decision", "PrimaryCampaignDecision", mark_id="batch-mark-required"),
+        _DiagramEdge("batch-edge-exposure-shadow", "Exposure", "Shadow", "M850 662 V714", "historical_formal_mode", "after_same_exposure", "request_report_only_shadow", "DemographicShadowDecision", style="dotted", label_key="batch.edge.historical", label_x=865, label_y=670, label_width=150, mark_id="batch-mark-shadow"),
+        _DiagramEdge("batch-edge-historical-terminal", "HistoricalMode", "Terminal", "M1110 880 H1050 V930 H1026", "historical_formal_mode", "terminal_closure", "require_primary_and_shadow", "historical-formal-terminal-contract", style="dotted"),
+        _DiagramEdge("batch-edge-robustness-terminal", "RobustnessMode", "Terminal", "M1110 990 H1060 V958 H1026", "robustness_cell_mode", "terminal_closure", "require_primary_only", "primary-only-terminal-contract", style="dotted"),
+        _DiagramEdge("batch-edge-primary-positive", "Primary", "Positive", "M500 796 V820 H345 V844", "terminal_status_succeeded", "after_primary_terminal", "test_positive_action", "PrimaryCampaignDecision"),
+        _DiagramEdge("batch-edge-primary-terminal", "Primary", "Terminal", "M600 796 V860 H720 V894", "primary_terminal_recorded", "terminal_closure", "contribute_required_primary_terminal", "required-terminal-contract"),
+        _DiagramEdge("batch-edge-shadow-terminal", "Shadow", "Terminal", "M1000 796 V860 H920 V894", "historical_formal_mode_and_shadow_terminal_recorded", "terminal_closure", "contribute_required_shadow_terminal_only", "required-terminal-contract", style="dotted"),
+        _DiagramEdge("batch-edge-positive-collect", "Positive", "Collect", "M300 938 V970 H240 V1004", "action_in_like_comment_share", "pending_set_build", "add_user_id", "campaign-positive-user-contract", label_key="batch.edge.positive", label_x=120, label_y=949, label_width=150),
+        _DiagramEdge("batch-edge-positive-stop", "Positive", "NoFeedback", "M510 894 H570 V1004", "terminal_succeeded_primary_action_ignore", "pending_set_build", "no_campaign_feedback", "non-propagating-terminal-contract", label_key="batch.edge.no_feedback", label_x=520, label_y=909, label_width=126),
+        _DiagramEdge("batch-edge-failed-stop", "Primary", "NoFeedback", "M530 796 V970 H570 V1004", "provider_failed", "pending_set_build", "no_campaign_feedback", "non-propagating-terminal-contract"),
+        _DiagramEdge("batch-edge-collect-pending", "Collect", "Pending", "M240 1086 V1100 H430 V1114", "positive_user_ids_collected", "pending_set_finalize", "deduplicate_pending_user_ids", "pending-feedback-set-contract"),
+        _DiagramEdge("batch-edge-stop-pending", "NoFeedback", "Pending", "M570 1086 V1100 H430 V1114", "non_propagating_terminals_accounted", "pending_set_finalize", "allow_empty_pending_set", "pending-feedback-set-contract"),
+        _DiagramEdge("batch-edge-terminal-barrier", "Terminal", "Barrier", "M820 982 V1114", "all_selected_pairs_reached_required_terminal_set", "end_of_full_batch", "close_full_batch_barrier", "full-batch-barrier-contract"),
+        _DiagramEdge("batch-edge-pending-join", "Pending", "Join", "M430 1196 V1224", "pending_set_finalized", "batch_commit_gate", "satisfy_pending_operand", "batch-commit-join-contract"),
+        _DiagramEdge("batch-edge-barrier-join", "Barrier", "Join", "M870 1196 V1209 H685 V1224", "full_batch_barrier_closed", "batch_commit_gate", "satisfy_terminal_operand", "batch-commit-join-contract"),
+        _DiagramEdge("batch-edge-join-commit", "Join", "Commit", "M685 1306 V1329", "barrier_closed_and_pending_set_finalized", "after_full_batch", "commit_campaign_user_set_unique_by_user_id", "campaign-user-id-deduplication-contract"),
+        _DiagramEdge("batch-edge-commit-next1", "Commit", "Next1", "M580 1419 V1450 H270 V1474", "next_batch_exists", "next_batch_before_ranking", "ranking_context_only_no_queue_injection_no_same_batch_writeback", "CampaignEngagementRankingSignal", label_key="batch.edge.next", label_x=285, label_y=1426, label_width=220, mark_id="batch-mark-next"),
+        _DiagramEdge("batch-edge-commit-next2", "Commit", "Next2", "M685 1419 V1474", "next_batch_exists", "next_batch_before_ranking", "ranking_context_only_no_queue_injection_no_same_batch_writeback", "CampaignEngagementRankingSignal"),
+        _DiagramEdge("batch-edge-commit-next3", "Commit", "Next3", "M790 1419 V1450 H1230 V1474", "next_batch_exists", "next_batch_before_ranking", "ranking_context_only_no_queue_injection_no_same_batch_writeback", "CampaignEngagementRankingSignal"),
+    )
+    source_blocks = "".join(
+        f'<pre data-robustness-language-variant="{language}"{hidden}><code class="language-mermaid">'
+        f'{_escape(_diagram_mermaid_source(catalog, language, title_key="batch.title", description_key="batch.description", nodes=nodes, edges=edges))}'
+        "</code></pre>"
+        for language, hidden in (("zh-CN", ""), ("en-US", " hidden"))
+    )
+    fallback_rows = "".join(
+        f'<li>{_robustness_i18n(catalog, f"batch.fallback.{key}")}</li>'
+        for key in ("freeze", "rank", "exposure", "feedback", "barrier", "next")
+    )
+    legend = "".join(
+        '<li class="robustness-semantic-legend-item" '
+        f'data-legend-mark-id="batch-mark-{mark}"><span class="robustness-semantic-legend-swatch robustness-semantic-legend-swatch-{mark}" aria-hidden="true"></span>'
+        f'{_robustness_i18n(catalog, f"batch.legend.{mark}")}</li>'
+        for mark in ("ranking", "required", "shadow", "next")
+    )
+    heading = _robustness_i18n(
+        catalog,
+        "batch.heading",
+        tag="h2",
+        attrs=' id="batch-mechanism-heading"',
+    )
+    title = _robustness_i18n(
+        catalog,
+        "batch.title",
+        tag="title",
+        attrs=' id="batch-mechanism-svg-title"',
+    )
+    description = _robustness_i18n(
+        catalog,
+        "batch.description",
+        tag="desc",
+        attrs=' id="batch-mechanism-svg-description"',
+    )
+    return (
+        '<div class="robustness-reader-diagram robustness-batch-diagram" data-testid="batch-mechanism-diagram-section" '
+        'aria-labelledby="batch-mechanism-heading">'
+        '<div class="robustness-reader-heading">'
+        f'{heading}{_robustness_i18n(catalog, "batch.lead", tag="p")}</div>'
+        '<figure class="robustness-reader-figure">'
+        '<div class="robustness-reader-scroll" tabindex="0" '
+        f'{_robustness_i18n_attribute(catalog, "batch.title", "aria-label")}>'
+        '<svg data-testid="batch-mechanism-diagram" viewBox="0 0 1500 1600" role="img" '
+        'aria-labelledby="batch-mechanism-svg-title" '
+        'aria-describedby="batch-mechanism-svg-description batch-mechanism-fallback" focusable="false">'
+        '<defs><marker id="batch-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z"/></marker></defs>'
+        f'{title}{description}'
+        f'<g class="robustness-semantic-edges">{"".join(_diagram_svg_edge(catalog, edge, marker_id="batch-arrow") for edge in edges)}</g>'
+        f'<g class="robustness-semantic-nodes">{"".join(_diagram_svg_node(catalog, node) for node in nodes)}</g>'
+        '</svg></div>'
+        f'<ul class="robustness-semantic-legend robustness-semantic-legend-four" data-testid="batch-mechanism-legend">{legend}</ul>'
+        '<figcaption id="batch-mechanism-fallback" class="robustness-reader-fallback" data-testid="batch-mechanism-fallback">'
+        f'{_robustness_i18n(catalog, "batch.fallback.title", tag="h3")}<ol>{fallback_rows}</ol></figcaption>'
+        '</figure>'
+        '<details class="robustness-mermaid-source" data-testid="batch-mechanism-mermaid-source">'
+        f'<summary>{_robustness_i18n(catalog, "batch.source.summary")}</summary>'
+        f'{_robustness_i18n(catalog, "batch.source.note", tag="p")}{source_blocks}</details>'
+        '</div>'
+    )
+
+
+def _prompt_model_nodes() -> tuple[_DiagramNode, ...]:
+    return (
+        _DiagramNode("Contract", "diagram.node.Contract", 180, 25, 600, 76, "contract", "PromptContractRegistry"),
+        _DiagramNode("P0", "diagram.node.P0", 30, 160, 170, 76, "prompt", "PromptContractRegistry.P0"),
+        _DiagramNode("P1", "diagram.node.P1", 220, 160, 170, 76, "prompt", "PromptContractRegistry.P1"),
+        _DiagramNode("P2", "diagram.node.P2", 410, 160, 170, 76, "prompt", "PromptContractRegistry.P2"),
+        _DiagramNode("P3", "diagram.node.P3", 600, 160, 190, 76, "prompt", "PromptContractRegistry.P3"),
+        _DiagramNode("Models", "diagram.node.Models", 910, 160, 240, 76, "model", "ConcurrentRobustnessManifest.prompt_model_cells"),
+        _DiagramNode("Cross", "diagram.node.Cross", 465, 290, 270, 76, "operator", "ConcurrentRobustnessManifest.prompt_model_cells"),
+        _DiagramNode("Cells", "diagram.node.Cells", 465, 420, 270, 76, "result", "ConcurrentRobustnessManifest.prompt_model_cells"),
+        _DiagramNode("Runtime", "diagram.node.Runtime", 355, 550, 490, 86, "contract", "ConcurrentRobustnessManifest.ranking_contract"),
+        _DiagramNode("Count", "diagram.node.Count", 70, 710, 265, 76, "metric", "ConcurrentRobustnessManifest.request_caps"),
+        _DiagramNode("Direct", "diagram.node.Direct", 445, 710, 260, 76, "direct", "prompt-model-shared-seed-panel"),
+        _DiagramNode("Paths", "diagram.node.Paths", 820, 710, 300, 76, "path", "prompt-model-realized-paths"),
+        _DiagramNode("Total", "diagram.node.Total", 70, 855, 265, 76, "metric", "ConcurrentRobustnessManifest.request_caps"),
+        _DiagramNode("Views", "diagram.node.Views", 610, 855, 400, 76, "result", "prompt-model-reporting-projection"),
+    )
+
+
+def _prompt_model_edges() -> tuple[_DiagramEdge, ...]:
+    return (
+        _DiagramEdge("edge_contract_p0", "Contract", "P0", "M480 101 V126 H115 V154", "variant_p0_declared", "contract_projection", "define_baseline_prompt", "PromptContractRegistry"),
+        _DiagramEdge("edge_contract_p1", "Contract", "P1", "M480 101 V126 H305 V154", "variant_p1_declared", "contract_projection", "change_wording_only", "PromptContractRegistry"),
+        _DiagramEdge("edge_contract_p2", "Contract", "P2", "M480 101 V154", "variant_p2_declared", "contract_projection", "change_information_order_only", "PromptContractRegistry"),
+        _DiagramEdge("edge_contract_p3", "Contract", "P3", "M480 101 V126 H695 V154", "variant_p3_declared", "contract_projection", "add_structured_rubric_only", "PromptContractRegistry"),
+        _DiagramEdge("edge_p0_cross", "P0", "Cross", "M115 236 V260 H500 V284", "prompt_variant_declared", "cell_construction", "cross_with_models", "ConcurrentRobustnessManifest.prompt_model_cells"),
+        _DiagramEdge("edge_p1_cross", "P1", "Cross", "M305 236 V270 H545 V284", "prompt_variant_declared", "cell_construction", "cross_with_models", "ConcurrentRobustnessManifest.prompt_model_cells"),
+        _DiagramEdge("edge_p2_cross", "P2", "Cross", "M495 236 V284", "prompt_variant_declared", "cell_construction", "cross_with_models", "ConcurrentRobustnessManifest.prompt_model_cells"),
+        _DiagramEdge("edge_p3_cross", "P3", "Cross", "M695 236 V284", "prompt_variant_declared", "cell_construction", "cross_with_models", "ConcurrentRobustnessManifest.prompt_model_cells"),
+        _DiagramEdge("edge_models_cross", "Models", "Cross", "M1030 236 V328 H741", "qualified_model_identity_closed", "cell_construction", "cross_with_prompts", "ConcurrentRobustnessManifest.prompt_model_cells"),
+        _DiagramEdge("edge_cross_cells", "Cross", "Cells", "M600 366 V414", "cartesian_product_complete", "manifest_closure", "form_independent_execution_cells", "ConcurrentRobustnessManifest.prompt_model_cells"),
+        _DiagramEdge("edge_cells_runtime", "Cells", "Runtime", "M600 496 V544", "cell_identity_valid", "cell_execution", "apply_shared_runtime_contract", "ConcurrentRobustnessStudy"),
+        _DiagramEdge("edge_runtime_count", "Runtime", "Count", "M600 636 V665 H203 V704", "cell_path_closed", "analysis", "count_primary_judgments_per_cell", "ConcurrentRobustnessManifest.request_caps"),
+        _DiagramEdge("edge_count_total", "Count", "Total", "M203 786 V849", "all_cells_closed", "analysis", "sum_logical_judgments", "ConcurrentRobustnessManifest.request_caps"),
+        _DiagramEdge("edge_runtime_direct", "Runtime", "Direct", "M600 636 V704", "batch_zero_shared_seed_panel", "batch_zero", "form_direct_paired_panel", "prompt-model-shared-seed-panel"),
+        _DiagramEdge("edge_runtime_paths", "Runtime", "Paths", "M600 636 V665 H970 V704", "cell_runtime_complete", "batches_one_to_terminal", "form_one_realized_path_per_cell", "prompt-model-realized-paths"),
+        _DiagramEdge("edge_direct_views", "Direct", "Views", "M575 786 V820 H740 V849", "direct_panel_closed", "report_projection", "expand_across_messages", "prompt-model-reporting-projection"),
+        _DiagramEdge("edge_paths_views", "Paths", "Views", "M970 786 V820 H880 V849", "realized_paths_closed", "report_projection", "expand_across_messages", "prompt-model-reporting-projection"),
+    )
 
 
 def _prompt_model_mermaid_source(
     catalog: Mapping[str, Mapping[str, str]],
     language: str,
 ) -> str:
-    copy = _mapping(catalog.get(language), f"{language} Prompt presentation copy")
-    node_order = (
-        "Contract",
-        "P0",
-        "P1",
-        "P2",
-        "P3",
-        "Models",
-        "Cross",
-        "Cells",
-        "Runtime",
-        "Count",
-        "Total",
-        "Direct",
-        "Paths",
-        "Views",
-    )
-    node_lines = [f'    {node}["{_mermaid_label(str(copy[f"diagram.node.{node}"]))}"]' for node in node_order]
-    edges = (
-        ("edge_contract_p0", "Contract", "P0"),
-        ("edge_contract_p1", "Contract", "P1"),
-        ("edge_contract_p2", "Contract", "P2"),
-        ("edge_contract_p3", "Contract", "P3"),
-        ("edge_p0_cross", "P0", "Cross"),
-        ("edge_p1_cross", "P1", "Cross"),
-        ("edge_p2_cross", "P2", "Cross"),
-        ("edge_p3_cross", "P3", "Cross"),
-        ("edge_models_cross", "Models", "Cross"),
-        ("edge_cross_cells", "Cross", "Cells"),
-        ("edge_cells_runtime", "Cells", "Runtime"),
-        ("edge_runtime_count", "Runtime", "Count"),
-        ("edge_count_total", "Count", "Total"),
-        ("edge_runtime_direct", "Runtime", "Direct"),
-        ("edge_runtime_paths", "Runtime", "Paths"),
-        ("edge_direct_views", "Direct", "Views"),
-        ("edge_paths_views", "Paths", "Views"),
-    )
-    edge_lines = [
-        f"    {source} {edge_id}@--> {target}"
-        for edge_id, source, target in edges
-    ]
-    return "\n".join(
-        [
-            "flowchart TB",
-            f'    accTitle: {_mermaid_label(str(copy["diagram.title"]))}',
-            f'    accDescr: {_mermaid_label(str(copy["diagram.description"]))}',
-            *node_lines,
-            *edge_lines,
-        ]
-    )
-
-
-def _factorial_svg_node(
-    catalog: Mapping[str, Mapping[str, str]],
-    node_id: str,
-    *,
-    x: int,
-    y: int,
-    width: int,
-    height: int,
-    kind: str = "default",
-) -> str:
-    key = f"diagram.node.{node_id}"
-    label = _robustness_i18n(
+    return _diagram_mermaid_source(
         catalog,
-        key,
-        tag="div",
-        class_name="robustness-factorial-node-label",
-        attrs=' xmlns="http://www.w3.org/1999/xhtml"',
-    )
-    return (
-        f'<g class="robustness-factorial-node robustness-factorial-node-{kind}" '
-        f'data-diagram-node-id="{node_id}" transform="translate({x} {y})">'
-        f'<rect width="{width}" height="{height}" rx="6" ry="6"/>'
-        f'<foreignObject x="10" y="8" width="{width - 20}" height="{height - 16}">'
-        f"{label}</foreignObject></g>"
+        language,
+        title_key="diagram.title",
+        description_key="diagram.description",
+        nodes=_prompt_model_nodes(),
+        edges=_prompt_model_edges(),
     )
 
 
@@ -1339,56 +1861,12 @@ def _prompt_model_factorial_diagram(
     presentation: _PromptModelPresentation,
     catalog: Mapping[str, Mapping[str, str]],
 ) -> str:
-    nodes = (
-        ("Contract", 180, 25, 600, 76, "contract"),
-        ("P0", 30, 160, 170, 76, "prompt"),
-        ("P1", 220, 160, 170, 76, "prompt"),
-        ("P2", 410, 160, 170, 76, "prompt"),
-        ("P3", 600, 160, 190, 76, "prompt"),
-        ("Models", 910, 160, 240, 76, "model"),
-        ("Cross", 465, 290, 270, 76, "operator"),
-        ("Cells", 465, 420, 270, 76, "result"),
-        ("Runtime", 355, 550, 490, 86, "contract"),
-        ("Count", 70, 710, 265, 76, "metric"),
-        ("Direct", 445, 710, 260, 76, "direct"),
-        ("Paths", 820, 710, 300, 76, "path"),
-        ("Total", 70, 855, 265, 76, "metric"),
-        ("Views", 610, 855, 400, 76, "result"),
-    )
-    node_markup = "".join(
-        _factorial_svg_node(
-            catalog,
-            node_id,
-            x=x,
-            y=y,
-            width=width,
-            height=height,
-            kind=kind,
-        )
-        for node_id, x, y, width, height, kind in nodes
-    )
-    edges = (
-        ("edge_contract_p0", "M480 101 V126 H115 V154"),
-        ("edge_contract_p1", "M480 101 V126 H305 V154"),
-        ("edge_contract_p2", "M480 101 V154"),
-        ("edge_contract_p3", "M480 101 V126 H695 V154"),
-        ("edge_p0_cross", "M115 236 V260 H500 V284"),
-        ("edge_p1_cross", "M305 236 V270 H545 V284"),
-        ("edge_p2_cross", "M495 236 V284"),
-        ("edge_p3_cross", "M695 236 V284"),
-        ("edge_models_cross", "M1030 236 V328 H741"),
-        ("edge_cross_cells", "M600 366 V414"),
-        ("edge_cells_runtime", "M600 496 V544"),
-        ("edge_runtime_count", "M600 636 V665 H203 V704"),
-        ("edge_count_total", "M203 786 V849"),
-        ("edge_runtime_direct", "M600 636 V704"),
-        ("edge_runtime_paths", "M600 636 V665 H970 V704"),
-        ("edge_direct_views", "M575 786 V820 H740 V849"),
-        ("edge_paths_views", "M970 786 V820 H880 V849"),
-    )
+    nodes = _prompt_model_nodes()
+    node_markup = "".join(_diagram_svg_node(catalog, node) for node in nodes)
+    edges = _prompt_model_edges()
     edge_markup = "".join(
-        f'<path data-diagram-edge-id="{edge_id}" d="{path}" marker-end="url(#factorial-arrow)"/>'
-        for edge_id, path in edges
+        _diagram_svg_edge(catalog, edge, marker_id="factorial-arrow")
+        for edge in edges
     )
     source_blocks = "".join(
         f'<pre data-robustness-language-variant="{language}"{"" if language == "zh-CN" else " hidden"}>'
@@ -1431,7 +1909,7 @@ def _prompt_model_factorial_diagram(
         '<defs><marker id="factorial-arrow" viewBox="0 0 10 10" refX="9" refY="5" '
         'markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z"/></marker></defs>'
         f"{diagram_title}{diagram_description}"
-        f'<g class="robustness-factorial-edges" aria-hidden="true">{edge_markup}</g>'
+        f'<g class="robustness-factorial-edges">{edge_markup}</g>'
         f'<g class="robustness-factorial-nodes">{node_markup}</g></svg></div>'
         '<figcaption id="prompt-model-factorial-fallback" class="robustness-factorial-fallback" '
         'data-testid="prompt-model-factorial-fallback">'
@@ -1754,6 +2232,12 @@ def _validate_presentation_bundle(
         'data-testid="ranking-weight-sensitivity-section"',
         'data-testid="prompt-model-robustness-section"',
         'data-testid="prompt-model-contract-disclosure"',
+        'data-testid="project-evidence-chain-diagram"',
+        'data-testid="project-evidence-chain-fallback"',
+        'data-testid="project-evidence-chain-mermaid-source"',
+        'data-testid="batch-mechanism-diagram"',
+        'data-testid="batch-mechanism-fallback"',
+        'data-testid="batch-mechanism-mermaid-source"',
         'data-testid="prompt-model-factorial-diagram"',
         'data-testid="prompt-model-factorial-fallback"',
         'data-testid="prompt-model-factorial-mermaid-source"',
@@ -1763,6 +2247,114 @@ def _validate_presentation_bundle(
     )
     if any(marker not in html_document for marker in required):
         raise ValueError("report presentation is missing required historical or robustness evidence")
+    diagram_ids = (
+        "project-evidence-chain-diagram",
+        "batch-mechanism-diagram",
+        "prompt-model-factorial-diagram",
+    )
+    for diagram_id in diagram_ids:
+        svg_match = re.search(
+            rf'<svg\b(?=[^>]*data-testid="{re.escape(diagram_id)}")[^>]*>(.*?)</svg>',
+            html_document,
+            re.DOTALL,
+        )
+        if svg_match is None:
+            raise ValueError("semantic reader diagram is missing")
+        svg = svg_match.group(1)
+        node_tags = re.findall(r'<g\b(?=[^>]*data-diagram-node-id="[^"]+")[^>]*>', svg)
+        edge_tags = re.findall(r'<path\b(?=[^>]*data-diagram-edge-id="[^"]+")[^>]*>', svg)
+        if not node_tags or not edge_tags:
+            raise ValueError("semantic reader diagram has no queryable nodes or edges")
+        node_ids = [
+            match
+            for tag in node_tags
+            for match in re.findall(r'data-diagram-node-id="([^"]+)"', tag)
+        ]
+        edge_ids = [
+            match
+            for tag in edge_tags
+            for match in re.findall(r'data-diagram-edge-id="([^"]+)"', tag)
+        ]
+        if len(node_ids) != len(set(node_ids)) or len(edge_ids) != len(set(edge_ids)):
+            raise ValueError("semantic reader diagram IDs are not unique")
+        if any(
+            'data-node-kind="' not in tag or 'data-provenance="' not in tag
+            for tag in node_tags
+        ):
+            raise ValueError("semantic reader diagram node metadata is incomplete")
+        edge_attributes = (
+            "data-from",
+            "data-to",
+            "data-direction",
+            "data-condition",
+            "data-timing",
+            "data-effect",
+            "data-provenance",
+        )
+        if any(
+            any(f'{attribute}="' not in tag for attribute in edge_attributes)
+            for tag in edge_tags
+        ):
+            raise ValueError("semantic reader diagram edge metadata is incomplete")
+        edge_endpoints = [
+            (source, target)
+            for tag in edge_tags
+            for source in re.findall(r'data-from="([^"]+)"', tag)
+            for target in re.findall(r'data-to="([^"]+)"', tag)
+        ]
+        if len(edge_endpoints) != len(edge_tags) or any(
+            source not in node_ids or target not in node_ids
+            for source, target in edge_endpoints
+        ):
+            raise ValueError("semantic reader diagram edge references an unknown node")
+    batch_edge_tags = re.findall(
+        r'<path\b(?=[^>]*data-diagram-edge-id="batch-edge-[^"]+")[^>]*>',
+        html_document,
+    )
+    forbidden_feedback_edges = (
+        ('data-from="Shadow"', 'data-to="Commit"'),
+        ('data-from="Shadow"', 'data-to="Pending"'),
+        ('data-from="NoFeedback"', 'data-to="Commit"'),
+    )
+    if any(
+        all(fragment in tag for fragment in pair)
+        for tag in batch_edge_tags
+        for pair in forbidden_feedback_edges
+    ):
+        raise ValueError("non-propagating batch outcome has a campaign feedback edge")
+    required_next_edges = {
+        ("Commit", "Next1"),
+        ("Commit", "Next2"),
+        ("Commit", "Next3"),
+    }
+    observed_next_edges = {
+        (source, target)
+        for tag in batch_edge_tags
+        for source in re.findall(r'data-from="([^"]+)"', tag)
+        for target in re.findall(r'data-to="([^"]+)"', tag)
+        if source == "Commit" and target.startswith("Next")
+    }
+    next_edge_contract = (
+        'data-condition="next_batch_exists"',
+        'data-timing="next_batch_before_ranking"',
+        'data-effect="ranking_context_only_no_queue_injection_no_same_batch_writeback"',
+        'data-provenance="CampaignEngagementRankingSignal"',
+    )
+    if observed_next_edges != required_next_edges or any(
+        any(fragment not in tag for fragment in next_edge_contract)
+        for tag in batch_edge_tags
+        if 'data-from="Commit"' in tag and 'data-to="Next' in tag
+    ):
+        raise ValueError("campaign set must feed exactly three next-batch ranking contexts")
+    legend_mark_ids = set(re.findall(r'data-legend-mark-id="([^"]+)"', html_document))
+    diagram_mark_ids = set(re.findall(r'data-diagram-mark-id="([^"]+)"', html_document))
+    if (
+        not legend_mark_ids
+        or legend_mark_ids != diagram_mark_ids
+        or any(html_document.count(f'data-legend-mark-id="{mark_id}"') != 1 for mark_id in legend_mark_ids)
+        or any(html_document.count(f'data-diagram-mark-id="{mark_id}"') != 1 for mark_id in diagram_mark_ids)
+    ):
+        raise ValueError("semantic diagram legend does not bind one-to-one to real marks")
     for contract in CONCURRENT_ROBUSTNESS_PROMPT_REGISTRY.all():
         controlled_change = CONCURRENT_ROBUSTNESS_PROMPT_REGISTRY.controlled_change(contract.variant_id)
         required_identity = (
@@ -1944,6 +2536,14 @@ def _validate_csv(path: Path, fields: Sequence[str], expected_rows: int) -> None
         raise ValueError(f"{path.name} row count does not close")
 
 
+def _compatibility_raster_tag(match: re.Match[str]) -> str:
+    tag = match.group(0)
+    if " aria-hidden=" in tag or " alt=" not in tag or " data-i18n-alt=" not in tag:
+        raise _RobustnessReportClosureError("compatibility raster image contract is malformed")
+    tag = re.sub(r' data-i18n-alt="[^"]*"', "", tag, count=1)
+    return re.sub(r' alt="[^"]*"', ' aria-hidden="true" alt=""', tag, count=1)
+
+
 def _render_additive_report(
     formal_html: str,
     *,
@@ -1956,6 +2556,15 @@ def _render_additive_report(
     insertion_marker = '<aside id="trace-drawer"'
     if formal_html.count(insertion_marker) != 1:
         raise _RobustnessReportClosureError("historical Editorial shell does not expose the private composition marker")
+    presentation_catalog = _presentation_catalog(prompt_model_presentation)
+    project_diagram_html = _project_evidence_chain_diagram(presentation_catalog)
+    batch_diagram_html = _batch_mechanism_diagram(presentation_catalog)
+    overview_figure_marker = '<figure class="editorial-figure editorial-figure-overview"'
+    ranking_figure_marker = '<figure class="editorial-figure editorial-figure-exposure-ranking"'
+    if formal_html.count(overview_figure_marker) != 1 or formal_html.count(ranking_figure_marker) != 1:
+        raise _RobustnessReportClosureError(
+            "historical Editorial shell does not expose one overview and ranking presentation marker"
+        )
     section_html = _robustness_sections(
         payload,
         prompt_model_presentation=prompt_model_presentation,
@@ -1971,7 +2580,7 @@ def _render_additive_report(
         "robustness-report-release" if stage_facts is not None else "robustness-report-candidate"
     )
     prompt_catalog_json = json.dumps(
-        _prompt_presentation_catalog(prompt_model_presentation),
+        presentation_catalog,
         ensure_ascii=False,
         separators=(",", ":"),
     ).replace("</", "<\\/")
@@ -1979,7 +2588,30 @@ def _render_additive_report(
         _ROBUSTNESS_SCRIPT.replace("__REPORT_STAGE_TEST_ID__", stage_test_id)
         .replace("__PROMPT_PRESENTATION_CATALOG__", prompt_catalog_json)
     )
-    rendered = formal_html.replace("</head>", f"{head_addition}</head>", 1)
+    rendered = formal_html.replace(
+        overview_figure_marker,
+        f"{project_diagram_html}{overview_figure_marker}",
+        1,
+    )
+    rendered = rendered.replace(
+        ranking_figure_marker,
+        f"{batch_diagram_html}{ranking_figure_marker}",
+        1,
+    )
+    rendered, raster_count = re.subn(
+        r'<img\b(?=[^>]*data-testid="mechanism-[^"]+-visual-media")[^>]*>',
+        _compatibility_raster_tag,
+        rendered,
+    )
+    if raster_count != 5:
+        raise _RobustnessReportClosureError(
+            "historical Editorial shell does not expose five compatibility raster images"
+        )
+    rendered = rendered.replace(
+        '<div class="editorial-legend editorial-legend-v2 editorial-legend-v3"',
+        '<div class="editorial-legend editorial-legend-v2 editorial-legend-v3 robustness-compatibility-legend" aria-hidden="true"',
+    )
+    rendered = rendered.replace("</head>", f"{head_addition}</head>", 1)
     rendered = rendered.replace(insertion_marker, f"{section_html}\n        {insertion_marker}", 1)
     rendered = rendered.replace("</body>", f"<script>{script}</script>\n</body>", 1)
     return rendered
@@ -2016,7 +2648,7 @@ def _robustness_sections(
     thresholds = _object_sequence(prompt_model["practical_threshold_rows"], "threshold rows")
     message_ids = list(dict.fromkeys(str(row["message_id"]) for row in weight_messages))
     models = list(dict.fromkeys(str(row["requested_model"]) for row in prompt_messages))
-    prompt_catalog = _prompt_presentation_catalog(prompt_model_presentation)
+    prompt_catalog = _presentation_catalog(prompt_model_presentation)
     prompt_contract_html = _prompt_contract_disclosure(prompt_model_presentation, prompt_catalog)
     prompt_factorial_html = _prompt_model_factorial_diagram(prompt_model_presentation, prompt_catalog)
     prompt_title_html = _robustness_i18n(
@@ -2499,11 +3131,12 @@ _ROBUSTNESS_CSS = r"""
 .robustness-lineage{display:grid;grid-template-columns:minmax(0,1fr) auto minmax(0,1fr);gap:1rem;align-items:stretch;margin:3rem 0 1rem}.robustness-lineage article{border-top:3px solid var(--rob-accent);background:white;padding:1.35rem;min-width:0}.robustness-lineage article span{display:block;color:var(--rob-muted);font-size:.8rem;text-transform:uppercase;letter-spacing:.08em}.robustness-lineage article strong{display:block;font-size:1.15rem;margin:.55rem 0}.robustness-lineage article code{display:block;overflow-wrap:anywhere;font-size:.74rem;color:var(--rob-muted)}.robustness-lineage article p{line-height:1.55;margin:1rem 0 0}.robustness-lineage-arrow{align-self:center;font-size:2rem;color:var(--rob-muted)}.robustness-source-warning{border-left:4px solid #b45309;background:#fff8eb;padding:1rem 1.2rem;line-height:1.55;margin:0 0 6rem}
 .robustness-section{padding:5rem 0;border-top:1px solid var(--rob-line)}.robustness-section-heading{display:flex;align-items:end;justify-content:space-between;gap:2rem;margin-bottom:2rem}.robustness-section-heading>div:first-child{max-width:820px}.robustness-section h2{font-size:clamp(1.8rem,3vw,3.2rem);letter-spacing:-.035em;margin:0 0 .8rem}.robustness-section-heading p,.robustness-subsection-heading p{color:var(--rob-muted);line-height:1.6;margin:0;max-width:72ch}.robustness-section label{display:grid;gap:.45rem;color:var(--rob-muted);font-size:.78rem;font-weight:700;letter-spacing:.06em;text-transform:uppercase}.robustness-section select{min-width:14rem;background:white;border:1px solid #aeb7c5;border-radius:.35rem;padding:.72rem 2.2rem .72rem .75rem;color:var(--rob-ink);font:inherit;text-transform:none;letter-spacing:0}.robustness-section select:focus-visible,.robustness-download:focus-visible,.robustness-table-disclosure summary:focus-visible{outline:3px solid rgba(21,94,117,.32);outline-offset:3px}
 .robustness-message-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:1rem}.robustness-message-panel,.robustness-model-panel{min-width:0;background:white;border-top:2px solid #aeb7c5;padding:1.1rem}.robustness-message-panel header,.robustness-model-panel header{min-height:4.7rem}.robustness-message-panel h3,.robustness-model-panel h4{margin:0 0 .35rem;font-size:1rem}.robustness-message-panel p,.robustness-model-panel p{margin:0;color:var(--rob-muted);font-size:.82rem;line-height:1.45}.robustness-chart-shell{display:grid;grid-template-columns:minmax(0,1fr) minmax(8.5rem,.38fr);gap:.8rem;align-items:start;margin-top:1rem}.robustness-chart{min-width:0}.robustness-chart svg{display:block;width:100%;height:auto;aspect-ratio:3.2/1;background:var(--rob-surface);overflow:visible}.robustness-grid line{stroke:#dce2ea;stroke-width:1}.robustness-grid text,.robustness-axis-label{fill:#697386;font-size:11px}.robustness-legend{list-style:none;margin:0;padding:0;display:grid;gap:.35rem}.robustness-legend-item{width:100%;display:grid;grid-template-columns:52px minmax(0,1fr);align-items:center;gap:.45rem;padding:.28rem;color:var(--rob-ink);font-size:.7rem;line-height:1.25}.robustness-legend-sample{display:block;width:52px;height:16px}.robustness-model-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:1rem}.robustness-controls{display:flex;gap:1rem;flex-wrap:wrap}.robustness-subsection-heading{margin:4rem 0 1.2rem}.robustness-subsection-heading h3{font-size:1.45rem;margin:0 0 .45rem}
-.robustness-prompt-contract{margin:1rem 0 5rem;padding:2rem;border:1px solid var(--rob-line);background:#f7fafc}.robustness-contract-heading{display:grid;gap:.6rem;max-width:820px}.robustness-contract-heading h3{font-size:1.65rem;letter-spacing:-.02em;margin:0}.robustness-contract-heading p,.robustness-dimension-note{color:var(--rob-muted);line-height:1.6;margin:0}.robustness-denominator-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:1px;margin:2rem 0 1rem;background:var(--rob-line);border:1px solid var(--rob-line)}.robustness-denominator-grid article{display:grid;gap:.55rem;padding:1.25rem;background:white}.robustness-denominator-grid strong{font-size:1.12rem;line-height:1.35}.robustness-denominator-grid span{color:var(--rob-muted);font-size:.78rem}.robustness-prompt-contract-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:1rem;margin:2.25rem 0}.robustness-prompt-contract-row{min-width:0;padding:1rem;border-top:4px solid var(--rob-accent);background:white}.robustness-prompt-contract-row:nth-child(2){border-top-color:#b45309}.robustness-prompt-contract-row:nth-child(3){border-top-color:#4d7c0f}.robustness-prompt-contract-row:nth-child(4){border-top-color:#7c3aed}.robustness-prompt-contract-row header{display:grid;gap:.75rem}.robustness-prompt-contract-row header>p,.robustness-prompt-model-note{color:var(--rob-muted);font-size:.78rem;line-height:1.55;margin:0}.robustness-prompt-identity{display:grid;grid-template-columns:52px auto minmax(0,1fr);gap:.5rem;align-items:center}.robustness-prompt-identity strong{font-size:1.25rem}.robustness-prompt-change{font-size:.72rem;font-weight:700;overflow-wrap:anywhere}.robustness-prompt-token{margin:1.1rem 0}.robustness-prompt-token dt{color:var(--rob-muted);font-size:.68rem}.robustness-prompt-token dd{margin:.35rem 0 0}.robustness-prompt-token code,.robustness-prompt-hash code{display:block;color:var(--rob-ink);font-size:.68rem;overflow-wrap:anywhere}.robustness-prompt-hash{margin:.8rem 0}.robustness-prompt-hash summary{cursor:pointer;color:var(--rob-accent);font-size:.74rem;font-weight:700}.robustness-prompt-hash code{padding-top:.65rem}.robustness-shared-contract{border-top:1px solid var(--rob-line);background:white}.robustness-shared-contract>summary{cursor:pointer;padding:1rem;font-weight:700}.robustness-shared-contract>p{color:var(--rob-muted);line-height:1.6;margin:0;padding:0 1rem 1rem}.robustness-shared-contract-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:1px;background:var(--rob-line);border-top:1px solid var(--rob-line)}.robustness-shared-contract-grid section{min-width:0;padding:1rem;background:white}.robustness-shared-contract-grid h4{font-size:.9rem;margin:0 0 .75rem}.robustness-shared-contract-grid ul{display:grid;gap:.45rem;margin:0;padding:0;list-style:none}.robustness-shared-contract-grid li{min-width:0}.robustness-shared-contract-grid code,.robustness-output-contract code{font-size:.68rem;overflow-wrap:anywhere}.robustness-output-contract{display:grid;gap:.8rem;margin:1rem 0 0}.robustness-output-contract dt{color:var(--rob-muted);font-size:.7rem}.robustness-output-contract dd{margin:.25rem 0 0}.robustness-factorial-scope{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:1rem;margin-top:1.5rem}.robustness-factorial-scope article{padding-top:1rem;border-top:2px solid var(--rob-line)}.robustness-factorial-scope h4{margin:0 0 .45rem;font-size:.9rem}.robustness-factorial-scope p{color:var(--rob-muted);font-size:.78rem;line-height:1.55;margin:0}.robustness-factorial{margin:0 0 5rem}.robustness-factorial-figure{margin:0}.robustness-factorial-scroll{max-width:100%;overflow:auto;border:1px solid var(--rob-line);background:#f7fafc}.robustness-factorial-scroll:focus-visible{outline:3px solid rgba(21,94,117,.32);outline-offset:3px}.robustness-factorial-scroll>svg{display:block;width:100%;min-width:760px;height:auto}.robustness-factorial-edges path{fill:none;stroke:#687386;stroke-width:2}.robustness-factorial-edges marker path{fill:#687386;stroke:none}.robustness-factorial-node rect{fill:white;stroke:#aeb7c5;stroke-width:1.5}.robustness-factorial-node-contract rect{fill:#edf5f7;stroke:#155e75}.robustness-factorial-node-model rect,.robustness-factorial-node-path rect{fill:#f3f1f8;stroke:#635b8a}.robustness-factorial-node-result rect{fill:#eff7f1;stroke:#4d7c0f}.robustness-factorial-node-metric rect{fill:#fff8eb;stroke:#b45309}.robustness-factorial-node-label{display:flex;align-items:center;justify-content:center;width:100%;height:100%;color:#172033;font:600 15px/1.3 system-ui,-apple-system,sans-serif;text-align:center}.robustness-factorial-fallback{display:grid;gap:.75rem;padding:1rem;border:1px solid var(--rob-line);border-top:0;background:white}.robustness-factorial-fallback h4{margin:0}.robustness-factorial-fallback ol{display:grid;gap:.5rem;margin:0;padding-left:1.3rem;color:var(--rob-muted);font-size:.82rem;line-height:1.5}.robustness-mermaid-source{margin-top:1rem;border-top:1px solid var(--rob-line);background:white}.robustness-mermaid-source>summary{cursor:pointer;padding:1rem;font-weight:700}.robustness-mermaid-source>p{color:var(--rob-muted);margin:0;padding:0 1rem 1rem}.robustness-mermaid-source pre{max-width:100%;margin:0;padding:1rem;overflow:auto;background:#172033;color:#eef5f7;font:12px/1.55 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;white-space:pre}.robustness-mermaid-source pre[hidden]{display:none}
+.robustness-prompt-contract{margin:1rem 0 5rem;padding:2rem;border:1px solid var(--rob-line);background:#f7fafc}.robustness-contract-heading{display:grid;gap:.6rem;max-width:820px}.robustness-contract-heading h3{font-size:1.65rem;letter-spacing:-.02em;margin:0}.robustness-contract-heading p,.robustness-dimension-note{color:var(--rob-muted);line-height:1.6;margin:0}.robustness-denominator-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:1px;margin:2rem 0 1rem;background:var(--rob-line);border:1px solid var(--rob-line)}.robustness-denominator-grid article{display:grid;gap:.55rem;padding:1.25rem;background:white}.robustness-denominator-grid strong{font-size:1.12rem;line-height:1.35}.robustness-denominator-grid span{color:var(--rob-muted);font-size:.78rem}.robustness-prompt-contract-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:1rem;margin:2.25rem 0}.robustness-prompt-contract-row{min-width:0;padding:1rem;border-top:4px solid var(--rob-accent);background:white}.robustness-prompt-contract-row:nth-child(2){border-top-color:#b45309}.robustness-prompt-contract-row:nth-child(3){border-top-color:#4d7c0f}.robustness-prompt-contract-row:nth-child(4){border-top-color:#7c3aed}.robustness-prompt-contract-row header{display:grid;gap:.75rem}.robustness-prompt-contract-row header>p,.robustness-prompt-model-note{color:var(--rob-muted);font-size:.78rem;line-height:1.55;margin:0}.robustness-prompt-identity{display:grid;grid-template-columns:52px auto minmax(0,1fr);gap:.5rem;align-items:center}.robustness-prompt-identity strong{font-size:1.25rem}.robustness-prompt-change{font-size:.72rem;font-weight:700;overflow-wrap:anywhere}.robustness-prompt-token{margin:1.1rem 0}.robustness-prompt-token dt{color:var(--rob-muted);font-size:.68rem}.robustness-prompt-token dd{margin:.35rem 0 0}.robustness-prompt-token code,.robustness-prompt-hash code{display:block;color:var(--rob-ink);font-size:.68rem;overflow-wrap:anywhere}.robustness-prompt-hash{margin:.8rem 0}.robustness-prompt-hash summary{cursor:pointer;color:var(--rob-accent);font-size:.74rem;font-weight:700}.robustness-prompt-hash code{padding-top:.65rem}.robustness-shared-contract{border-top:1px solid var(--rob-line);background:white}.robustness-shared-contract>summary{cursor:pointer;padding:1rem;font-weight:700}.robustness-shared-contract>p{color:var(--rob-muted);line-height:1.6;margin:0;padding:0 1rem 1rem}.robustness-shared-contract-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:1px;background:var(--rob-line);border-top:1px solid var(--rob-line)}.robustness-shared-contract-grid section{min-width:0;padding:1rem;background:white}.robustness-shared-contract-grid h4{font-size:.9rem;margin:0 0 .75rem}.robustness-shared-contract-grid ul{display:grid;gap:.45rem;margin:0;padding:0;list-style:none}.robustness-shared-contract-grid li{min-width:0}.robustness-shared-contract-grid code,.robustness-output-contract code{font-size:.68rem;overflow-wrap:anywhere}.robustness-output-contract{display:grid;gap:.8rem;margin:1rem 0 0}.robustness-output-contract dt{color:var(--rob-muted);font-size:.7rem}.robustness-output-contract dd{margin:.25rem 0 0}.robustness-factorial-scope{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:1rem;margin-top:1.5rem}.robustness-factorial-scope article{padding-top:1rem;border-top:2px solid var(--rob-line)}.robustness-factorial-scope h4{margin:0 0 .45rem;font-size:.9rem}.robustness-factorial-scope p{color:var(--rob-muted);font-size:.78rem;line-height:1.55;margin:0}
+.robustness-reader-diagram{margin:3rem 0 4rem;padding-top:1px;color:#172033}.robustness-reader-heading{display:grid;gap:.65rem;max-width:840px;margin-bottom:1.4rem}.robustness-reader-heading h2{font-size:clamp(1.7rem,3vw,2.7rem);letter-spacing:-.035em;line-height:1.05;margin:0}.robustness-reader-heading p{max-width:72ch;color:#5b6473;line-height:1.65;margin:0}.robustness-reader-figure{margin:0}.robustness-reader-scroll{max-width:100%;overflow:auto;border:1px solid #d9dee7;background:#f7fafc}.robustness-reader-scroll:focus-visible{outline:3px solid rgba(21,94,117,.32);outline-offset:3px}.robustness-reader-scroll>svg{display:block;width:100%;min-width:1080px;height:auto}.robustness-semantic-edge{fill:none;stroke:#536174;stroke-width:2.2}.robustness-semantic-edge-dotted{stroke-dasharray:8 7}.robustness-semantic-edges marker path{fill:#536174;stroke:none}.robustness-semantic-node rect{fill:#fff;stroke:#aeb7c5;stroke-width:1.6}.robustness-semantic-node-runtime rect,.robustness-semantic-node-adapter rect{fill:#eef4ff;stroke:#175cd3}.robustness-semantic-node-evidence rect,.robustness-semantic-node-study rect{fill:#edf7f2;stroke:#00875a}.robustness-semantic-node-analysis rect{fill:#fff8eb;stroke:#c76a00}.robustness-semantic-node-ranking rect,.robustness-semantic-node-seed rect,.robustness-semantic-node-next rect{fill:#eef4ff;stroke:#175cd3}.robustness-semantic-node-exposure rect,.robustness-semantic-node-decision rect,.robustness-semantic-node-feedback rect{fill:#edf7f2;stroke:#00875a}.robustness-semantic-node-shadow rect,.robustness-semantic-node-mode rect{fill:#f3f1f8;stroke:#635b8a}.robustness-semantic-node-gate rect,.robustness-semantic-node-terminal rect,.robustness-semantic-node-barrier rect,.robustness-semantic-node-commit rect{fill:#fff8eb;stroke:#c76a00}.robustness-semantic-node-stop rect{fill:#f1f4f8;stroke:#687386}.robustness-semantic-node-report rect,.robustness-semantic-node-release rect,.robustness-semantic-node-canonical rect{fill:#f1f4f8;stroke:#163456}.robustness-semantic-node-label{display:flex;align-items:center;justify-content:center;width:100%;height:100%;padding:0 2px;color:#172033;font:650 15px/1.28 system-ui,-apple-system,sans-serif;text-align:center;overflow-wrap:anywhere;white-space:pre-line}.robustness-semantic-edge-label-box{overflow:visible}.robustness-semantic-edge-label{display:flex;align-items:center;justify-content:center;width:100%;height:100%;padding:2px 5px;border:1px solid #d9dee7;background:#fbfcfe;color:#465164;font:600 11px/1.2 system-ui,-apple-system,sans-serif;text-align:center}.robustness-semantic-legend{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:1px;margin:0;padding:1px;background:#d9dee7;list-style:none}.robustness-semantic-legend-four{grid-template-columns:repeat(4,minmax(0,1fr))}.robustness-semantic-legend-item{display:grid;grid-template-columns:48px minmax(0,1fr);align-items:center;gap:.7rem;min-width:0;padding:.8rem 1rem;background:#fff;font-size:.8rem;font-weight:650}.robustness-semantic-legend-swatch{display:block;width:44px;height:12px;border-top:3px solid #175cd3}.robustness-semantic-legend-swatch-evidence{height:18px;border:2px solid #00875a;background:#edf7f2}.robustness-semantic-legend-swatch-release{height:18px;border:2px solid #163456;background:#f1f4f8}.robustness-semantic-legend-swatch-ranking{height:18px;border:2px solid #175cd3;background:#eef4ff}.robustness-semantic-legend-swatch-required{border-top-color:#536174}.robustness-semantic-legend-swatch-shadow{border-top:3px dashed #635b8a}.robustness-semantic-legend-swatch-next{border-top:3px solid #c76a00}.robustness-reader-fallback{display:grid;gap:.7rem;padding:1rem;border:1px solid #d9dee7;border-top:0;background:#fff}.robustness-reader-fallback h3{margin:0;font-size:1rem}.robustness-reader-fallback ol{display:grid;gap:.45rem;margin:0;padding-left:1.3rem;color:#5b6473;font-size:.84rem;line-height:1.5}.robustness-factorial{margin:0 0 5rem}.robustness-factorial-figure{margin:0}.robustness-factorial-scroll{max-width:100%;overflow:auto;border:1px solid var(--rob-line);background:#f7fafc}.robustness-factorial-scroll:focus-visible{outline:3px solid rgba(21,94,117,.32);outline-offset:3px}.robustness-factorial-scroll>svg{display:block;width:100%;min-width:760px;height:auto}.robustness-factorial-edges path{fill:none;stroke:#687386;stroke-width:2}.robustness-factorial-edges marker path{fill:#687386;stroke:none}.robustness-factorial .robustness-semantic-node-contract rect{fill:#edf5f7;stroke:#155e75}.robustness-factorial .robustness-semantic-node-model rect,.robustness-factorial .robustness-semantic-node-path rect{fill:#f3f1f8;stroke:#635b8a}.robustness-factorial .robustness-semantic-node-result rect{fill:#eff7f1;stroke:#4d7c0f}.robustness-factorial .robustness-semantic-node-metric rect{fill:#fff8eb;stroke:#b45309}.robustness-factorial-fallback{display:grid;gap:.75rem;padding:1rem;border:1px solid var(--rob-line);border-top:0;background:white}.robustness-factorial-fallback h4{margin:0}.robustness-factorial-fallback ol{display:grid;gap:.5rem;margin:0;padding-left:1.3rem;color:var(--rob-muted);font-size:.82rem;line-height:1.5}.robustness-mermaid-source{margin-top:1rem;border-top:1px solid var(--rob-line);background:white}.robustness-mermaid-source>summary{cursor:pointer;padding:1rem;font-weight:700}.robustness-mermaid-source>p{color:var(--rob-muted);margin:0;padding:0 1rem 1rem}.robustness-mermaid-source pre{max-width:100%;margin:0;padding:1rem;overflow:auto;background:#172033;color:#eef5f7;font:12px/1.55 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;white-space:pre}.robustness-mermaid-source pre[hidden]{display:none}
 .robustness-table-disclosure{margin-top:2rem;border-top:1px solid var(--rob-line);background:white}.robustness-table-disclosure summary{cursor:pointer;padding:1rem;font-weight:700}.robustness-table-wrap{max-width:100%;overflow:auto;border-top:1px solid var(--rob-line)}.robustness-table-wrap table{width:max-content;min-width:100%;border-collapse:collapse;font-size:.75rem}.robustness-table-wrap th,.robustness-table-wrap td{padding:.62rem .7rem;border-bottom:1px solid #e6eaf0;text-align:left;white-space:nowrap}.robustness-table-wrap th{position:sticky;top:0;background:#eef2f7;color:#465164}.robustness-threshold-summary{display:grid;grid-template-columns:auto auto minmax(0,1fr);gap:1rem;align-items:center;margin:3rem 0;background:#eef3f6;padding:1.25rem}.robustness-threshold-summary article{display:grid;gap:.2rem}.robustness-threshold-summary strong{font-size:1.65rem}.robustness-threshold-summary span,.robustness-threshold-summary p{font-size:.78rem;color:var(--rob-muted);margin:0}.robustness-download-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:.65rem}.robustness-download{display:grid;gap:.35rem;padding:1rem;border:1px solid var(--rob-line);background:white;color:var(--rob-ink);text-decoration:none}.robustness-download:hover{border-color:var(--rob-accent)}.robustness-download span{font-weight:700}.robustness-download code{font-size:.72rem;color:var(--rob-muted);overflow-wrap:anywhere}
 @media(max-width:1100px){.robustness-prompt-contract-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
 @media(max-width:980px){.robustness-message-grid,.robustness-model-grid{grid-template-columns:1fr}.robustness-chart-shell{grid-template-columns:1fr}.robustness-legend{grid-template-columns:repeat(2,minmax(0,1fr))}.robustness-message-panel header,.robustness-model-panel header{min-height:0}.robustness-section-heading{align-items:start;flex-direction:column}.robustness-lineage{grid-template-columns:1fr}.robustness-lineage-arrow{justify-self:center}.robustness-download-grid{grid-template-columns:1fr}.robustness-shared-contract-grid,.robustness-factorial-scope{grid-template-columns:1fr}}
-@media(max-width:640px){.robustness-report{padding-inline:1rem}.robustness-section{padding:3.5rem 0}.robustness-source-warning{margin-bottom:4rem}.robustness-legend{grid-template-columns:1fr}.robustness-controls{display:grid;width:100%}.robustness-section label,.robustness-section select{width:100%;min-width:0}.robustness-threshold-summary,.robustness-denominator-grid,.robustness-prompt-contract-grid{grid-template-columns:1fr}.robustness-prompt-contract{padding:1rem}.robustness-hero h2{font-size:2.35rem}.robustness-chart svg{min-width:0}.robustness-factorial-scroll>svg{min-width:720px}}
+@media(max-width:640px){.robustness-semantic-legend,.robustness-semantic-legend-four{grid-template-columns:1fr}.robustness-report{padding-inline:1rem}.robustness-section{padding:3.5rem 0}.robustness-source-warning{margin-bottom:4rem}.robustness-legend{grid-template-columns:1fr}.robustness-controls{display:grid;width:100%}.robustness-section label,.robustness-section select{width:100%;min-width:0}.robustness-threshold-summary,.robustness-denominator-grid,.robustness-prompt-contract-grid{grid-template-columns:1fr}.robustness-prompt-contract{padding:1rem}.robustness-hero h2{font-size:2.35rem}.robustness-chart svg{min-width:0}.robustness-factorial-scroll>svg{min-width:720px}}
 """
 
 
@@ -2520,15 +3153,15 @@ _ROBUSTNESS_SCRIPT = r"""
     const editorialRoot = document.querySelector('[data-testid="editorial-report"]');
     const language = editorialRoot?.dataset.reportLanguage || document.documentElement.lang || 'zh-CN';
     const copy = promptCatalog[language] || promptCatalog['zh-CN'];
-    report.querySelectorAll('[data-robustness-i18n]').forEach((element) => {
+    document.querySelectorAll('[data-robustness-i18n]').forEach((element) => {
       const key = element.dataset.robustnessI18n;
       if (key && copy[key]) element.textContent = copy[key];
     });
-    report.querySelectorAll('[data-robustness-i18n-aria-label]').forEach((element) => {
+    document.querySelectorAll('[data-robustness-i18n-aria-label]').forEach((element) => {
       const key = element.dataset.robustnessI18nAriaLabel;
       if (key && copy[key]) element.setAttribute('aria-label', copy[key]);
     });
-    report.querySelectorAll('[data-robustness-language-variant]').forEach((element) => {
+    document.querySelectorAll('[data-robustness-language-variant]').forEach((element) => {
       element.hidden = element.dataset.robustnessLanguageVariant !== language;
     });
   };
