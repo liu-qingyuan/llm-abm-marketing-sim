@@ -23,6 +23,7 @@ from .concurrent_message_report import (
     ConcurrentMessageArtifactClosure,
     close_concurrent_message_artifacts,
 )
+from .prompt_contracts import CONCURRENT_ROBUSTNESS_PROMPT_REGISTRY
 
 if TYPE_CHECKING:
     from .concurrent_robustness_study import ConcurrentRobustnessManifest
@@ -172,6 +173,131 @@ _PROMPT_STYLES = {
     "P3": _SERIES_STYLES[3],
 }
 
+_PROMPT_PRESENTATION_COPY = {
+    "zh-CN": {
+        "prompt.title": "Prompt-Model 稳健性",
+        "prompt.lead": "每个 model panel 只显示 P0-P3 四条曲线。后续路径是描述性结果；只有共享 seed 的 Batch 0 Decisions 构成预声明直接配对 panel。",
+        "prompt.panel_note": "四条曲线对应相同声明信息集与输出合同的受控 Prompt 变体。",
+        "contract.title": "Prompt-Model 实验合同",
+        "contract.lead": "P0-P3 是相同声明信息集与输出合同的受控变体，不代表结果相同或统计等价。",
+        "contract.cells": "独立 execution cells",
+        "contract.slices": "message-level reporting slices",
+        "contract.dimension_note": "Message 是每个 cell 内的报告维度，不是额外独立运行。",
+        "contract.token": "Stable token",
+        "contract.hash_summary": "展开 canonical hash",
+        "contract.models": "该 Prompt 与 {model_count} 个 qualified models 各形成一个 cell。",
+        "variant.baseline.label": "baseline",
+        "variant.baseline.body": "基线 Prompt，复用当前 Primary Prompt contract。",
+        "variant.wording_only.label": "wording-only",
+        "variant.wording_only.body": "只改变措辞，不改变字段顺序、task、action semantics 或输出 schema。",
+        "variant.information_order_only.label": "information-order-only",
+        "variant.information_order_only.body": "只重排同一信息，不增加、删除或替换声明可见字段。",
+        "variant.structured_rubric_only.label": "structured-rubric-only",
+        "variant.structured_rubric_only.body": "只增加结构化核对 rubric；不请求、不输出也不持久化 chain-of-thought。",
+        "common.summary": "共同声明信息集与输出合同",
+        "common.note": "以下内容直接投影自 PromptContractRegistry。页面不展示 per-user rendered Prompt、raw Provider payload 或 raw response。",
+        "common.fields": "LLM 可见字段 allowlist",
+        "common.task": "Task semantics",
+        "common.actions": "Action semantics",
+        "common.output": "Structured output contract",
+        "common.output_fields": "Required fields",
+        "common.output_actions": "Action values",
+        "common.engage_rules": "Engage-action rules",
+        "scope.direct.title": "Batch 0 direct comparison",
+        "scope.direct.body": "共享 seed 的同一 user-message panel 用于预声明直接配对比较。",
+        "scope.paths.title": "Later realized path",
+        "scope.paths.body": "Batch 1 起每个 execution cell 只有一条 realized path；路径不是重复运行或随机性估计。",
+        "scope.shadow.title": "Primary-only factorial",
+        "scope.shadow.body": "{cell_count} cells 只运行 Primary。Historical Demographic Shadow 保留在历史 Formal source，不属于该 factorial。",
+        "diagram.heading": "从受控 Prompt 到报告切片",
+        "diagram.lead": "Prompt 与 model 定义 execution cell；message 只展开同一 cell 的报告视图。",
+        "diagram.title": "Prompt-Model factorial 设计",
+        "diagram.description": "{prompt_count} 个受控 Prompt 与 {model_count} 个 qualified models 形成 {cell_count} 个独立 cells。每个 cell 共享 sample、graph、messages、seeds 和 ranking policy，形成一条 realized path，并按 {message_count} 条 message 展开 {slice_count} 个报告切片。",
+        "diagram.node.Contract": "相同声明字段、task、action semantics 与输出 schema",
+        "diagram.node.P0": "P0 baseline",
+        "diagram.node.P1": "P1 wording-only",
+        "diagram.node.P2": "P2 information-order-only",
+        "diagram.node.P3": "P3 structured-rubric-only",
+        "diagram.node.Models": "{model_count} 个 qualified models",
+        "diagram.node.Cross": "Cartesian product",
+        "diagram.node.Cells": "{cell_count} 个独立 Prompt-Model cells",
+        "diagram.node.Runtime": "相同 sample、graph、messages、seeds 与 ranking policy",
+        "diagram.node.Count": "每 cell {per_cell} 个 Primary judgments",
+        "diagram.node.Total": "{total} 个 logical judgments",
+        "diagram.node.Direct": "Batch 0 shared-seed direct panel",
+        "diagram.node.Paths": "每 cell 一条 {horizon}-batch realized path",
+        "diagram.node.Views": "{slice_count} 个 message-level reporting slices",
+        "diagram.source.summary": "查看 Mermaid 语义母版",
+        "diagram.source.note": "页面不运行 Mermaid。两种语言使用相同 node IDs；源代码只用于审核和设计交接。",
+        "diagram.fallback.title": "文本路径",
+        "diagram.fallback.contract": "共同合同只分出 P0 baseline、P1 wording-only、P2 information-order-only 与 P3 structured-rubric-only。",
+        "diagram.fallback.cells": "{prompt_count} 个 Prompt 与 {model_count} 个 qualified models 做 Cartesian product，形成 {cell_count} 个独立 execution cells。",
+        "diagram.fallback.runtime": "每个 cell 使用相同 sample、graph、三条 messages、seeds 与 ranking policy，完成一条 realized path。",
+        "diagram.fallback.reporting": "Batch 0 是直接配对 panel；{cell_count} cells 再按 {message_count} 条 message 展开 {slice_count} 个 reporting slices，message 不是额外运行。",
+    },
+    "en-US": {
+        "prompt.title": "Prompt-Model robustness",
+        "prompt.lead": "Each model panel shows only the four P0-P3 series. Later paths are descriptive; only shared-seed Batch 0 Decisions form the predeclared direct paired panel.",
+        "prompt.panel_note": "The four series are controlled Prompt variants with the same declared information and output contract.",
+        "contract.title": "Prompt-Model experiment contract",
+        "contract.lead": "P0-P3 are controlled variants with the same declared information and output contract. This does not claim equal results or statistical equivalence.",
+        "contract.cells": "independent execution cells",
+        "contract.slices": "message-level reporting slices",
+        "contract.dimension_note": "Message is a reporting dimension inside each cell, not an additional independent run.",
+        "contract.token": "Stable token",
+        "contract.hash_summary": "Show canonical hash",
+        "contract.models": "This Prompt forms one cell with each of the {model_count} qualified models.",
+        "variant.baseline.label": "baseline",
+        "variant.baseline.body": "The baseline Prompt reuses the current Primary Prompt contract.",
+        "variant.wording_only.label": "wording-only",
+        "variant.wording_only.body": "Changes wording only, without changing field order, task, action semantics, or output schema.",
+        "variant.information_order_only.label": "information-order-only",
+        "variant.information_order_only.body": "Reorders the same information only, without adding, removing, or replacing declared visible fields.",
+        "variant.structured_rubric_only.label": "structured-rubric-only",
+        "variant.structured_rubric_only.body": "Adds only a structured checking rubric. It does not request, output, or persist chain-of-thought.",
+        "common.summary": "Shared declared information and output contract",
+        "common.note": "The content below is projected directly from PromptContractRegistry. The page does not expose per-user rendered Prompts, raw Provider payloads, or raw responses.",
+        "common.fields": "LLM-visible field allowlist",
+        "common.task": "Task semantics",
+        "common.actions": "Action semantics",
+        "common.output": "Structured output contract",
+        "common.output_fields": "Required fields",
+        "common.output_actions": "Action values",
+        "common.engage_rules": "Engage-action rules",
+        "scope.direct.title": "Batch 0 direct comparison",
+        "scope.direct.body": "The same shared-seed user-message panel supports the predeclared direct paired comparison.",
+        "scope.paths.title": "Later realized path",
+        "scope.paths.body": "From Batch 1, each execution cell has one realized path. A path is not a repeated run or an estimate of model randomness.",
+        "scope.shadow.title": "Primary-only factorial",
+        "scope.shadow.body": "The {cell_count} cells run Primary only. Historical Demographic Shadow remains in the historical Formal source and is outside this factorial.",
+        "diagram.heading": "From controlled Prompts to reporting slices",
+        "diagram.lead": "Prompt and model define an execution cell. Message only expands reporting views inside that cell.",
+        "diagram.title": "Prompt-Model factorial design",
+        "diagram.description": "{prompt_count} controlled Prompts and {model_count} qualified models form {cell_count} independent cells. Every cell shares the sample, graph, messages, seeds, and ranking policy, produces one realized path, and expands across {message_count} messages into {slice_count} reporting slices.",
+        "diagram.node.Contract": "Same declared fields, task, action semantics, and output schema",
+        "diagram.node.P0": "P0 baseline",
+        "diagram.node.P1": "P1 wording-only",
+        "diagram.node.P2": "P2 information-order-only",
+        "diagram.node.P3": "P3 structured-rubric-only",
+        "diagram.node.Models": "{model_count} qualified models",
+        "diagram.node.Cross": "Cartesian product",
+        "diagram.node.Cells": "{cell_count} independent Prompt-Model cells",
+        "diagram.node.Runtime": "Same sample, graph, messages, seeds, and ranking policy",
+        "diagram.node.Count": "{per_cell} Primary judgments per cell",
+        "diagram.node.Total": "{total} logical judgments",
+        "diagram.node.Direct": "Batch 0 shared-seed direct panel",
+        "diagram.node.Paths": "One realized {horizon}-batch path per cell",
+        "diagram.node.Views": "{slice_count} message-level reporting slices",
+        "diagram.source.summary": "View the Mermaid semantic master",
+        "diagram.source.note": "The page does not run Mermaid. Both languages use the same node IDs; source code is provided only for review and design handoff.",
+        "diagram.fallback.title": "Text path",
+        "diagram.fallback.contract": "The shared contract branches only into P0 baseline, P1 wording-only, P2 information-order-only, and P3 structured-rubric-only.",
+        "diagram.fallback.cells": "{prompt_count} Prompts cross {model_count} qualified models to form {cell_count} independent execution cells.",
+        "diagram.fallback.runtime": "Each cell uses the same sample, graph, three messages, seeds, and ranking policy to complete one realized path.",
+        "diagram.fallback.reporting": "Batch 0 is the direct paired panel. The {cell_count} cells then expand across {message_count} messages into {slice_count} reporting slices; message is not another run.",
+    },
+}
+
 
 class _RobustnessReportPathError(ValueError):
     pass
@@ -219,6 +345,35 @@ class _ReportRows:
 
 
 @dataclass(frozen=True)
+class _PromptContractDisclosure:
+    variant_id: str
+    controlled_change: str
+    prompt_version: str
+    canonical_hash: str
+    model_count: int
+
+
+@dataclass(frozen=True)
+class _PromptModelPresentation:
+    contracts: tuple[_PromptContractDisclosure, ...]
+    visible_field_allowlist: tuple[str, ...]
+    task_semantics: tuple[str, ...]
+    action_semantics: tuple[str, ...]
+    output_schema_version: str
+    output_fields: tuple[str, ...]
+    output_action_values: tuple[str, ...]
+    engage_action_rules: tuple[str, ...]
+    prompt_count: int
+    model_count: int
+    cell_count: int
+    message_count: int
+    reporting_slice_count: int
+    logical_judgments_per_cell: int
+    logical_judgment_count: int
+    horizon: int
+
+
+@dataclass(frozen=True)
 class _ProductionPresentationFacts:
     """Release-approved facts that the Report Module may present but must not decide."""
 
@@ -246,6 +401,7 @@ class _CandidateProjection:
     manifest: ConcurrentRobustnessManifest
     manifest_sha256: str
     rows: _ReportRows
+    prompt_model_presentation: _PromptModelPresentation
     report_payload: dict[str, Any]
     payloads: dict[str, bytes]
 
@@ -325,6 +481,7 @@ class _ReportPresentationInterface:
             report_html=_render_additive_report(
                 render_report(projection.formal.report_payload),
                 payload=report_payload,
+                prompt_model_presentation=projection.prompt_model_presentation,
                 stage_facts=stage_facts,
             ).encode("utf-8"),
         )
@@ -557,6 +714,7 @@ def _build_candidate_projection(
         formal_manifest_sha256=formal_manifest_hash,
     )
     rows = _build_report_rows(closed_study, manifest)
+    prompt_model_presentation = _build_prompt_model_presentation(manifest)
     report_payload = _build_report_payload(
         formal=formal,
         study=closed_study,
@@ -570,6 +728,7 @@ def _build_candidate_projection(
         manifest=manifest,
         manifest_sha256=manifest_sha256,
         rows=rows,
+        prompt_model_presentation=prompt_model_presentation,
         report_payload=report_payload,
     )
     return _CandidateProjection(
@@ -578,6 +737,7 @@ def _build_candidate_projection(
         manifest=manifest,
         manifest_sha256=manifest_sha256,
         rows=rows,
+        prompt_model_presentation=prompt_model_presentation,
         report_payload=report_payload,
         payloads=payloads,
     )
@@ -863,6 +1023,427 @@ def _build_report_rows(study: _ClosedStudy, manifest: ConcurrentRobustnessManife
     return report_rows
 
 
+def _build_prompt_model_presentation(
+    manifest: ConcurrentRobustnessManifest,
+) -> _PromptModelPresentation:
+    contracts = CONCURRENT_ROBUSTNESS_PROMPT_REGISTRY.all()
+    if len(contracts) != 4:
+        raise _RobustnessReportClosureError("Prompt disclosure requires exactly four registry contracts")
+    baseline = contracts[0]
+    shared_contract_fields = (
+        "visible_field_allowlist",
+        "task_semantics",
+        "action_semantics",
+        "output_schema",
+    )
+    if any(
+        any(getattr(contract, field) != getattr(baseline, field) for field in shared_contract_fields)
+        for contract in contracts[1:]
+    ):
+        raise _RobustnessReportClosureError("Prompt variants do not share one declared information and output contract")
+
+    manifest_cells = tuple(manifest.prompt_model_cells)
+    model_ids = tuple(dict.fromkeys(cell.requested_model for cell in manifest_cells))
+    disclosure_rows: list[_PromptContractDisclosure] = []
+    for contract in contracts:
+        cells = tuple(cell for cell in manifest_cells if cell.prompt_variant == contract.variant_id)
+        if (
+            tuple(cell.requested_model for cell in cells) != model_ids
+            or any(cell.prompt_version != contract.prompt_version for cell in cells)
+            or any(cell.prompt_canonical_hash != contract.canonical_hash for cell in cells)
+        ):
+            raise _RobustnessReportClosureError("Prompt disclosure is crossed with the verified Manifest identity")
+        disclosure_rows.append(
+            _PromptContractDisclosure(
+                variant_id=contract.variant_id,
+                controlled_change=CONCURRENT_ROBUSTNESS_PROMPT_REGISTRY.controlled_change(
+                    contract.variant_id
+                ),
+                prompt_version=contract.prompt_version,
+                canonical_hash=contract.canonical_hash,
+                model_count=len(cells),
+            )
+        )
+
+    prompt_count = len(disclosure_rows)
+    model_count = len(model_ids)
+    cell_count = len(manifest_cells)
+    message_count = len(manifest.message_ids)
+    if cell_count != prompt_count * model_count or model_count != 4 or message_count != 3:
+        raise _RobustnessReportClosureError("Prompt-Model presentation denominator does not close")
+    output_schema = baseline.output_schema
+    return _PromptModelPresentation(
+        contracts=tuple(disclosure_rows),
+        visible_field_allowlist=baseline.visible_field_allowlist,
+        task_semantics=baseline.task_semantics,
+        action_semantics=baseline.action_semantics,
+        output_schema_version=output_schema.schema_version,
+        output_fields=output_schema.required_fields,
+        output_action_values=output_schema.action_values,
+        engage_action_rules=output_schema.engage_action_rules,
+        prompt_count=prompt_count,
+        model_count=model_count,
+        cell_count=cell_count,
+        message_count=message_count,
+        reporting_slice_count=cell_count * message_count,
+        logical_judgments_per_cell=manifest.request_caps.logical_judgments_per_cell,
+        logical_judgment_count=manifest.request_caps.logical_judgment_cap,
+        horizon=manifest.ranking_contract.horizon,
+    )
+
+
+def _prompt_presentation_catalog(
+    presentation: _PromptModelPresentation,
+) -> dict[str, dict[str, str]]:
+    expected_keys = set(_PROMPT_PRESENTATION_COPY["zh-CN"])
+    if set(_PROMPT_PRESENTATION_COPY) != {"zh-CN", "en-US"} or any(
+        set(copy) != expected_keys for copy in _PROMPT_PRESENTATION_COPY.values()
+    ):
+        raise _RobustnessReportClosureError("Prompt presentation language catalog is asymmetric")
+    values = {
+        "prompt_count": str(presentation.prompt_count),
+        "model_count": str(presentation.model_count),
+        "cell_count": str(presentation.cell_count),
+        "message_count": str(presentation.message_count),
+        "slice_count": str(presentation.reporting_slice_count),
+        "per_cell": f"{presentation.logical_judgments_per_cell:,}",
+        "total": f"{presentation.logical_judgment_count:,}",
+        "horizon": str(presentation.horizon),
+    }
+    return {
+        language: {key: text.format(**values) for key, text in copy.items()}
+        for language, copy in _PROMPT_PRESENTATION_COPY.items()
+    }
+
+
+def _robustness_i18n(
+    catalog: Mapping[str, Mapping[str, str]],
+    key: str,
+    *,
+    tag: str = "span",
+    class_name: str = "",
+    attrs: str = "",
+) -> str:
+    default = _mapping(catalog.get("zh-CN"), "zh-CN Prompt presentation copy")
+    if key not in default:
+        raise _RobustnessReportClosureError(f"Prompt presentation copy key is missing: {key}")
+    classes = f' class="{_escape(class_name, quote=True)}"' if class_name else ""
+    return (
+        f'<{tag}{classes} data-robustness-i18n="{_escape(key, quote=True)}"{attrs}>'
+        f"{_escape(default[key])}</{tag}>"
+    )
+
+
+def _robustness_i18n_attribute(
+    catalog: Mapping[str, Mapping[str, str]],
+    key: str,
+    attribute: str,
+) -> str:
+    default = _mapping(catalog.get("zh-CN"), "zh-CN Prompt presentation copy")
+    if key not in default:
+        raise _RobustnessReportClosureError(f"Prompt presentation copy key is missing: {key}")
+    return (
+        f'data-robustness-i18n-{_escape(attribute, quote=True)}="{_escape(key, quote=True)}" '
+        f'{attribute}="{_escape(default[key], quote=True)}"'
+    )
+
+
+def _contract_token_list(values: Sequence[str]) -> str:
+    return "".join(f"<li><code>{_escape(value)}</code></li>" for value in values)
+
+
+def _prompt_contract_disclosure(
+    presentation: _PromptModelPresentation,
+    catalog: Mapping[str, Mapping[str, str]],
+) -> str:
+    rows: list[str] = []
+    for contract in presentation.contracts:
+        row_id = f"prompt-contract-row-{contract.variant_id.lower()}"
+        label_key = f"variant.{contract.controlled_change}.label"
+        body_key = f"variant.{contract.controlled_change}.body"
+        rows.append(
+            f'<article id="{row_id}" class="robustness-prompt-contract-row" role="listitem" '
+            f'data-testid="{row_id}" data-prompt-variant="{contract.variant_id}" '
+            f'data-controlled-change="{contract.controlled_change}" '
+            f'data-prompt-version="{_escape(contract.prompt_version, quote=True)}" '
+            f'data-prompt-canonical-hash="{_escape(contract.canonical_hash, quote=True)}" '
+            f'data-model-count="{contract.model_count}">'
+            '<header><div class="robustness-prompt-identity">'
+            f'{_legend_sample(_PROMPT_STYLES[contract.variant_id])}'
+            f'<strong>{contract.variant_id}</strong>'
+            f'{_robustness_i18n(catalog, label_key, class_name="robustness-prompt-change")}'
+            "</div>"
+            f'{_robustness_i18n(catalog, body_key, tag="p")}</header>'
+            '<dl class="robustness-prompt-token"><div>'
+            f'<dt>{_robustness_i18n(catalog, "contract.token")}</dt>'
+            f'<dd><code>{_escape(contract.prompt_version)}</code></dd></div></dl>'
+            '<details class="robustness-prompt-hash">'
+            f'<summary>{_robustness_i18n(catalog, "contract.hash_summary")}</summary>'
+            f'<code>{_escape(contract.canonical_hash)}</code></details>'
+            f'{_robustness_i18n(catalog, "contract.models", tag="p", class_name="robustness-prompt-model-note")}'
+            "</article>"
+        )
+
+    cells_formula = (
+        f"{presentation.prompt_count} Prompt × {presentation.model_count} model = "
+        f"{presentation.cell_count} execution cells"
+    )
+    slices_formula = (
+        f"{presentation.cell_count} cells × {presentation.message_count} messages = "
+        f"{presentation.reporting_slice_count} message-level reporting slices"
+    )
+    shared_contract = (
+        '<details class="robustness-shared-contract" data-testid="prompt-model-shared-contract">'
+        f'<summary>{_robustness_i18n(catalog, "common.summary")}</summary>'
+        f'{_robustness_i18n(catalog, "common.note", tag="p")}'
+        '<div class="robustness-shared-contract-grid">'
+        '<section><h4>'
+        f'{_robustness_i18n(catalog, "common.fields")}</h4><ul>'
+        f'{_contract_token_list(presentation.visible_field_allowlist)}</ul></section>'
+        '<section><h4>'
+        f'{_robustness_i18n(catalog, "common.task")}</h4><ul>'
+        f'{_contract_token_list(presentation.task_semantics)}</ul>'
+        '<h4>'
+        f'{_robustness_i18n(catalog, "common.actions")}</h4><ul>'
+        f'{_contract_token_list(presentation.action_semantics)}</ul></section>'
+        '<section><h4>'
+        f'{_robustness_i18n(catalog, "common.output")}</h4>'
+        f'<p><code>{_escape(presentation.output_schema_version)}</code></p>'
+        '<dl class="robustness-output-contract">'
+        f'<div><dt>{_robustness_i18n(catalog, "common.output_fields")}</dt>'
+        f'<dd><code>{_escape(" / ".join(presentation.output_fields))}</code></dd></div>'
+        f'<div><dt>{_robustness_i18n(catalog, "common.output_actions")}</dt>'
+        f'<dd><code>{_escape(" / ".join(presentation.output_action_values))}</code></dd></div>'
+        f'<div><dt>{_robustness_i18n(catalog, "common.engage_rules")}</dt>'
+        f'<dd><code>{_escape("; ".join(presentation.engage_action_rules))}</code></dd></div>'
+        "</dl></section></div></details>"
+    )
+    scope_rows = "".join(
+        '<article><h4>'
+        f'{_robustness_i18n(catalog, f"scope.{scope}.title")}</h4>'
+        f'{_robustness_i18n(catalog, f"scope.{scope}.body", tag="p")}</article>'
+        for scope in ("direct", "paths", "shadow")
+    )
+    contract_title = _robustness_i18n(
+        catalog,
+        "contract.title",
+        tag="h3",
+        attrs=' id="prompt-model-contract-title"',
+    )
+    return (
+        '<section class="robustness-prompt-contract" data-testid="prompt-model-contract-disclosure" '
+        'aria-labelledby="prompt-model-contract-title">'
+        '<div class="robustness-contract-heading">'
+        f'{contract_title}{_robustness_i18n(catalog, "contract.lead", tag="p")}</div>'
+        '<div class="robustness-denominator-grid" aria-label="Prompt-Model denominators">'
+        f'<article data-testid="prompt-model-cell-denominator"><strong>{_escape(cells_formula)}</strong>'
+        f'{_robustness_i18n(catalog, "contract.cells")}</article>'
+        f'<article data-testid="prompt-model-slice-denominator"><strong>{_escape(slices_formula)}</strong>'
+        f'{_robustness_i18n(catalog, "contract.slices")}</article></div>'
+        f'{_robustness_i18n(catalog, "contract.dimension_note", tag="p", class_name="robustness-dimension-note")}'
+        f'<div class="robustness-prompt-contract-grid" role="list">{"".join(rows)}</div>'
+        f"{shared_contract}"
+        f'<div class="robustness-factorial-scope">{scope_rows}</div>'
+        "</section>"
+    )
+
+
+def _mermaid_label(value: str) -> str:
+    return " ".join(value.replace('"', "'").split())
+
+
+def _prompt_model_mermaid_source(
+    catalog: Mapping[str, Mapping[str, str]],
+    language: str,
+) -> str:
+    copy = _mapping(catalog.get(language), f"{language} Prompt presentation copy")
+    node_order = (
+        "Contract",
+        "P0",
+        "P1",
+        "P2",
+        "P3",
+        "Models",
+        "Cross",
+        "Cells",
+        "Runtime",
+        "Count",
+        "Total",
+        "Direct",
+        "Paths",
+        "Views",
+    )
+    node_lines = [f'    {node}["{_mermaid_label(str(copy[f"diagram.node.{node}"]))}"]' for node in node_order]
+    edges = (
+        ("edge_contract_p0", "Contract", "P0"),
+        ("edge_contract_p1", "Contract", "P1"),
+        ("edge_contract_p2", "Contract", "P2"),
+        ("edge_contract_p3", "Contract", "P3"),
+        ("edge_p0_cross", "P0", "Cross"),
+        ("edge_p1_cross", "P1", "Cross"),
+        ("edge_p2_cross", "P2", "Cross"),
+        ("edge_p3_cross", "P3", "Cross"),
+        ("edge_models_cross", "Models", "Cross"),
+        ("edge_cross_cells", "Cross", "Cells"),
+        ("edge_cells_runtime", "Cells", "Runtime"),
+        ("edge_runtime_count", "Runtime", "Count"),
+        ("edge_count_total", "Count", "Total"),
+        ("edge_runtime_direct", "Runtime", "Direct"),
+        ("edge_runtime_paths", "Runtime", "Paths"),
+        ("edge_direct_views", "Direct", "Views"),
+        ("edge_paths_views", "Paths", "Views"),
+    )
+    edge_lines = [
+        f"    {source} {edge_id}@--> {target}"
+        for edge_id, source, target in edges
+    ]
+    return "\n".join(
+        [
+            "flowchart TB",
+            f'    accTitle: {_mermaid_label(str(copy["diagram.title"]))}',
+            f'    accDescr: {_mermaid_label(str(copy["diagram.description"]))}',
+            *node_lines,
+            *edge_lines,
+        ]
+    )
+
+
+def _factorial_svg_node(
+    catalog: Mapping[str, Mapping[str, str]],
+    node_id: str,
+    *,
+    x: int,
+    y: int,
+    width: int,
+    height: int,
+    kind: str = "default",
+) -> str:
+    key = f"diagram.node.{node_id}"
+    label = _robustness_i18n(
+        catalog,
+        key,
+        tag="div",
+        class_name="robustness-factorial-node-label",
+        attrs=' xmlns="http://www.w3.org/1999/xhtml"',
+    )
+    return (
+        f'<g class="robustness-factorial-node robustness-factorial-node-{kind}" '
+        f'data-diagram-node-id="{node_id}" transform="translate({x} {y})">'
+        f'<rect width="{width}" height="{height}" rx="6" ry="6"/>'
+        f'<foreignObject x="10" y="8" width="{width - 20}" height="{height - 16}">'
+        f"{label}</foreignObject></g>"
+    )
+
+
+def _prompt_model_factorial_diagram(
+    presentation: _PromptModelPresentation,
+    catalog: Mapping[str, Mapping[str, str]],
+) -> str:
+    nodes = (
+        ("Contract", 180, 25, 600, 76, "contract"),
+        ("P0", 30, 160, 170, 76, "prompt"),
+        ("P1", 220, 160, 170, 76, "prompt"),
+        ("P2", 410, 160, 170, 76, "prompt"),
+        ("P3", 600, 160, 190, 76, "prompt"),
+        ("Models", 910, 160, 240, 76, "model"),
+        ("Cross", 465, 290, 270, 76, "operator"),
+        ("Cells", 465, 420, 270, 76, "result"),
+        ("Runtime", 355, 550, 490, 86, "contract"),
+        ("Count", 70, 710, 265, 76, "metric"),
+        ("Direct", 445, 710, 260, 76, "direct"),
+        ("Paths", 820, 710, 300, 76, "path"),
+        ("Total", 70, 855, 265, 76, "metric"),
+        ("Views", 610, 855, 400, 76, "result"),
+    )
+    node_markup = "".join(
+        _factorial_svg_node(
+            catalog,
+            node_id,
+            x=x,
+            y=y,
+            width=width,
+            height=height,
+            kind=kind,
+        )
+        for node_id, x, y, width, height, kind in nodes
+    )
+    edges = (
+        ("edge_contract_p0", "M480 101 V126 H115 V154"),
+        ("edge_contract_p1", "M480 101 V126 H305 V154"),
+        ("edge_contract_p2", "M480 101 V154"),
+        ("edge_contract_p3", "M480 101 V126 H695 V154"),
+        ("edge_p0_cross", "M115 236 V260 H500 V284"),
+        ("edge_p1_cross", "M305 236 V270 H545 V284"),
+        ("edge_p2_cross", "M495 236 V284"),
+        ("edge_p3_cross", "M695 236 V284"),
+        ("edge_models_cross", "M1030 236 V328 H741"),
+        ("edge_cross_cells", "M600 366 V414"),
+        ("edge_cells_runtime", "M600 496 V544"),
+        ("edge_runtime_count", "M600 636 V665 H203 V704"),
+        ("edge_count_total", "M203 786 V849"),
+        ("edge_runtime_direct", "M600 636 V704"),
+        ("edge_runtime_paths", "M600 636 V665 H970 V704"),
+        ("edge_direct_views", "M575 786 V820 H740 V849"),
+        ("edge_paths_views", "M970 786 V820 H880 V849"),
+    )
+    edge_markup = "".join(
+        f'<path data-diagram-edge-id="{edge_id}" d="{path}" marker-end="url(#factorial-arrow)"/>'
+        for edge_id, path in edges
+    )
+    source_blocks = "".join(
+        f'<pre data-robustness-language-variant="{language}"{"" if language == "zh-CN" else " hidden"}>'
+        f'<code class="language-mermaid">{_escape(_prompt_model_mermaid_source(catalog, language))}</code></pre>'
+        for language in ("zh-CN", "en-US")
+    )
+    fallback_rows = "".join(
+        f'<li>{_robustness_i18n(catalog, f"diagram.fallback.{key}")}</li>'
+        for key in ("contract", "cells", "runtime", "reporting")
+    )
+    diagram_heading = _robustness_i18n(
+        catalog,
+        "diagram.heading",
+        tag="h3",
+        attrs=' id="prompt-model-factorial-heading"',
+    )
+    diagram_title = _robustness_i18n(
+        catalog,
+        "diagram.title",
+        tag="title",
+        attrs=' id="prompt-model-factorial-svg-title"',
+    )
+    diagram_description = _robustness_i18n(
+        catalog,
+        "diagram.description",
+        tag="desc",
+        attrs=' id="prompt-model-factorial-svg-description"',
+    )
+    return (
+        '<section class="robustness-factorial" data-testid="prompt-model-factorial-diagram-section" '
+        'aria-labelledby="prompt-model-factorial-heading">'
+        '<div class="robustness-subsection-heading">'
+        f'{diagram_heading}{_robustness_i18n(catalog, "diagram.lead", tag="p")}</div>'
+        '<figure class="robustness-factorial-figure">'
+        '<div class="robustness-factorial-scroll" tabindex="0" '
+        f'{_robustness_i18n_attribute(catalog, "diagram.title", "aria-label")}>'
+        '<svg data-testid="prompt-model-factorial-diagram" viewBox="0 0 1200 970" role="img" '
+        'aria-labelledby="prompt-model-factorial-svg-title" '
+        'aria-describedby="prompt-model-factorial-svg-description prompt-model-factorial-fallback" focusable="false">'
+        '<defs><marker id="factorial-arrow" viewBox="0 0 10 10" refX="9" refY="5" '
+        'markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z"/></marker></defs>'
+        f"{diagram_title}{diagram_description}"
+        f'<g class="robustness-factorial-edges" aria-hidden="true">{edge_markup}</g>'
+        f'<g class="robustness-factorial-nodes">{node_markup}</g></svg></div>'
+        '<figcaption id="prompt-model-factorial-fallback" class="robustness-factorial-fallback" '
+        'data-testid="prompt-model-factorial-fallback">'
+        f'{_robustness_i18n(catalog, "diagram.fallback.title", tag="h4")}<ol>{fallback_rows}</ol></figcaption>'
+        "</figure>"
+        '<details class="robustness-mermaid-source" data-testid="prompt-model-factorial-mermaid-source">'
+        f'<summary>{_robustness_i18n(catalog, "diagram.source.summary")}</summary>'
+        f'{_robustness_i18n(catalog, "diagram.source.note", tag="p")}{source_blocks}</details>'
+        "</section>"
+    )
+
+
 def _build_report_payload(
     *,
     formal: ConcurrentMessageArtifactClosure,
@@ -947,6 +1528,7 @@ def _candidate_payloads(
     manifest: ConcurrentRobustnessManifest,
     manifest_sha256: str,
     rows: _ReportRows,
+    prompt_model_presentation: _PromptModelPresentation,
     report_payload: Mapping[str, Any],
 ) -> dict[str, bytes]:
     payloads: dict[str, bytes] = {}
@@ -971,6 +1553,7 @@ def _candidate_payloads(
     payloads[CONCURRENT_MESSAGE_REPORT_HTML] = _render_additive_report(
         formal_html,
         payload=report_payload,
+        prompt_model_presentation=prompt_model_presentation,
     ).encode("utf-8")
     content_hashes = {path: _sha256_bytes(payload) for path, payload in payloads.items()}
     content_identity = _sha256_bytes(_json_bytes(dict(sorted(content_hashes.items()))))
@@ -1170,10 +1753,35 @@ def _validate_presentation_bundle(
         'data-testid="robustness-source-lineage"',
         'data-testid="ranking-weight-sensitivity-section"',
         'data-testid="prompt-model-robustness-section"',
+        'data-testid="prompt-model-contract-disclosure"',
+        'data-testid="prompt-model-factorial-diagram"',
+        'data-testid="prompt-model-factorial-fallback"',
+        'data-testid="prompt-model-factorial-mermaid-source"',
+        "4 Prompt × 4 model = 16 execution cells",
+        "16 cells × 3 messages = 48 message-level reporting slices",
         "Demographic Shadow evidence remains bound to the historical Formal source",
     )
     if any(marker not in html_document for marker in required):
         raise ValueError("report presentation is missing required historical or robustness evidence")
+    for contract in CONCURRENT_ROBUSTNESS_PROMPT_REGISTRY.all():
+        controlled_change = CONCURRENT_ROBUSTNESS_PROMPT_REGISTRY.controlled_change(contract.variant_id)
+        required_identity = (
+            f'data-testid="prompt-contract-row-{contract.variant_id.lower()}"',
+            f'data-controlled-change="{controlled_change}"',
+            f'data-prompt-version="{contract.prompt_version}"',
+            f'data-prompt-canonical-hash="{contract.canonical_hash}"',
+        )
+        if any(marker not in html_document for marker in required_identity):
+            raise ValueError("Prompt disclosure is crossed with the registry identity")
+    expected_disclosure_ids = {
+        f"prompt-contract-row-{contract.variant_id.lower()}"
+        for contract in CONCURRENT_ROBUSTNESS_PROMPT_REGISTRY.all()
+    }
+    observed_disclosure_ids = set(
+        re.findall(r'data-prompt-disclosure-id="([^"]+)"', html_document)
+    )
+    if observed_disclosure_ids != expected_disclosure_ids:
+        raise ValueError("Prompt chart series do not map one-to-one to disclosure rows")
     if re.search(
         r"<(?:script|link|img)\b[^>]*(?:src|href)=[\"']https?://",
         html_document,
@@ -1340,6 +1948,7 @@ def _render_additive_report(
     formal_html: str,
     *,
     payload: Mapping[str, Any],
+    prompt_model_presentation: _PromptModelPresentation,
     stage_facts: _ProductionPresentationFacts | None = None,
 ) -> str:
     if formal_html.count("</head>") != 1 or formal_html.count("</body>") != 1:
@@ -1347,7 +1956,11 @@ def _render_additive_report(
     insertion_marker = '<aside id="trace-drawer"'
     if formal_html.count(insertion_marker) != 1:
         raise _RobustnessReportClosureError("historical Editorial shell does not expose the private composition marker")
-    section_html = _robustness_sections(payload, stage_facts=stage_facts)
+    section_html = _robustness_sections(
+        payload,
+        prompt_model_presentation=prompt_model_presentation,
+        stage_facts=stage_facts,
+    )
     head_addition = f"<style>{_ROBUSTNESS_CSS}</style>\n"
     if stage_facts is not None:
         head_addition += (
@@ -1357,7 +1970,15 @@ def _render_additive_report(
     stage_test_id = (
         "robustness-report-release" if stage_facts is not None else "robustness-report-candidate"
     )
-    script = _ROBUSTNESS_SCRIPT.replace("__REPORT_STAGE_TEST_ID__", stage_test_id)
+    prompt_catalog_json = json.dumps(
+        _prompt_presentation_catalog(prompt_model_presentation),
+        ensure_ascii=False,
+        separators=(",", ":"),
+    ).replace("</", "<\\/")
+    script = (
+        _ROBUSTNESS_SCRIPT.replace("__REPORT_STAGE_TEST_ID__", stage_test_id)
+        .replace("__PROMPT_PRESENTATION_CATALOG__", prompt_catalog_json)
+    )
     rendered = formal_html.replace("</head>", f"{head_addition}</head>", 1)
     rendered = rendered.replace(insertion_marker, f"{section_html}\n        {insertion_marker}", 1)
     rendered = rendered.replace("</body>", f"<script>{script}</script>\n</body>", 1)
@@ -1367,6 +1988,7 @@ def _render_additive_report(
 def _robustness_sections(
     payload: Mapping[str, Any],
     *,
+    prompt_model_presentation: _PromptModelPresentation,
     stage_facts: _ProductionPresentationFacts | None = None,
 ) -> str:
     if stage_facts is None:
@@ -1394,6 +2016,15 @@ def _robustness_sections(
     thresholds = _object_sequence(prompt_model["practical_threshold_rows"], "threshold rows")
     message_ids = list(dict.fromkeys(str(row["message_id"]) for row in weight_messages))
     models = list(dict.fromkeys(str(row["requested_model"]) for row in prompt_messages))
+    prompt_catalog = _prompt_presentation_catalog(prompt_model_presentation)
+    prompt_contract_html = _prompt_contract_disclosure(prompt_model_presentation, prompt_catalog)
+    prompt_factorial_html = _prompt_model_factorial_diagram(prompt_model_presentation, prompt_catalog)
+    prompt_title_html = _robustness_i18n(
+        prompt_catalog,
+        "prompt.title",
+        tag="h2",
+        attrs=' id="prompt-model-title"',
+    )
 
     family_pairs = [
         ("network-feedback", "base_network_relevance", "campaign_engaged_neighbor_signal"),
@@ -1474,12 +2105,13 @@ def _robustness_sections(
                             "label": prompt,
                             "values": [float(row[field]) for row in rows],
                             "style": _PROMPT_STYLES[prompt],
+                            "disclosure_id": f"prompt-contract-row-{prompt.lower()}",
                         }
                     )
                 chart_id = f"prompt-{message_id}-{metric_id}-{_safe_id(model)}"
                 model_cards.append(
                     f'<article class="robustness-model-panel" data-testid="prompt-model-panel-{_safe_id(message_id)}-{_safe_id(model)}-{metric_id}">'
-                    f'<header><h4>{_escape(model)}</h4><p>Four information-equivalent Prompt series.</p></header>'
+                    f'<header><h4>{_escape(model)}</h4>{_robustness_i18n(prompt_catalog, "prompt.panel_note", tag="p")}</header>'
                     f'{_line_chart(chart_id=chart_id, title=f"{model} · {label}", series=model_series, y_max=y_max)}'
                     "</article>"
                 )
@@ -1508,6 +2140,7 @@ def _robustness_sections(
                     "label": prompt,
                     "values": [float(row["cumulative_campaign_deduplicated_positive_user_count"]) for row in rows],
                     "style": _PROMPT_STYLES[prompt],
+                    "disclosure_id": f"prompt-contract-row-{prompt.lower()}",
                 }
             )
         growth_cards.append(
@@ -1570,12 +2203,14 @@ def _robustness_sections(
 
           <section class="robustness-section" data-testid="prompt-model-robustness-section" aria-labelledby="prompt-model-title">
             <div class="robustness-section-heading">
-              <div><h2 id="prompt-model-title">Prompt–Model Robustness</h2><p>Each model panel carries at most the four P0–P3 series. Later paths are descriptive; only shared-seed Batch 0 Decisions form the predeclared direct paired panel.</p></div>
+              <div>{prompt_title_html}{_robustness_i18n(prompt_catalog, "prompt.lead", tag="p")}</div>
               <div class="robustness-controls">
                 <label>Message<select data-testid="prompt-model-message-select" data-prompt-message-select>{message_options}</select></label>
                 <label>Dynamic metric<select data-testid="prompt-model-metric-select" data-prompt-metric-select><option value="engagement">Engagement rate</option><option value="audience">Audience distance</option></select></label>
               </div>
             </div>
+            {prompt_contract_html}
+            {prompt_factorial_html}
             <div data-testid="prompt-model-dynamic-panels">{"".join(prompt_views)}</div>
             <div class="robustness-subsection-heading"><h3>Shared-seed direct Decisions</h3><p>Binary engage is primary; probability and confidence are secondary. Rows follow the selected message.</p></div>
             <div data-testid="prompt-model-shared-seed-table">{_table(_SHARED_SEED_FIELDS, shared_seed, test_id="shared-seed-exact-table", row_attribute="message_id")}</div>
@@ -1632,6 +2267,9 @@ def _line_chart(
     for row in series:
         values = [float(value) for value in _sequence(row["values"], "chart values")]
         style = _mapping(row["style"], "chart series style")
+        disclosure_id = row.get("disclosure_id")
+        if disclosure_id is not None and not isinstance(disclosure_id, str):
+            raise _RobustnessReportClosureError("chart disclosure identity must be a string")
         points = [
             (
                 left + plot_width * index / denominator,
@@ -1646,11 +2284,17 @@ def _line_chart(
         marker_markup = "".join(
             _marker(str(style["marker"]), x, y, str(style["color"])) for x, y in points
         )
+        disclosure_attribute = (
+            f' data-prompt-disclosure-id="{_escape(disclosure_id, quote=True)}"'
+            f' aria-describedby="{_escape(disclosure_id, quote=True)}"'
+            if disclosure_id is not None
+            else ""
+        )
         marks.append(
-            f'<g data-series-id="{_escape(series_id, quote=True)}"><polyline points="{point_text}" fill="none" stroke="{_escape(style["color"], quote=True)}" stroke-width="2.6" vector-effect="non-scaling-stroke"{dash_attr}/>{marker_markup}</g>'
+            f'<g data-series-id="{_escape(series_id, quote=True)}"{disclosure_attribute}><polyline points="{point_text}" fill="none" stroke="{_escape(style["color"], quote=True)}" stroke-width="2.6" vector-effect="non-scaling-stroke"{dash_attr}/>{marker_markup}</g>'
         )
         legends.append(
-            f'<li class="robustness-legend-item" data-legend-series-id="{_escape(series_id, quote=True)}">'
+            f'<li class="robustness-legend-item" data-legend-series-id="{_escape(series_id, quote=True)}"{disclosure_attribute}>'
             f'{_legend_sample(style)}<span>{_escape(row["label"])}</span></li>'
         )
     return (
@@ -1855,9 +2499,11 @@ _ROBUSTNESS_CSS = r"""
 .robustness-lineage{display:grid;grid-template-columns:minmax(0,1fr) auto minmax(0,1fr);gap:1rem;align-items:stretch;margin:3rem 0 1rem}.robustness-lineage article{border-top:3px solid var(--rob-accent);background:white;padding:1.35rem;min-width:0}.robustness-lineage article span{display:block;color:var(--rob-muted);font-size:.8rem;text-transform:uppercase;letter-spacing:.08em}.robustness-lineage article strong{display:block;font-size:1.15rem;margin:.55rem 0}.robustness-lineage article code{display:block;overflow-wrap:anywhere;font-size:.74rem;color:var(--rob-muted)}.robustness-lineage article p{line-height:1.55;margin:1rem 0 0}.robustness-lineage-arrow{align-self:center;font-size:2rem;color:var(--rob-muted)}.robustness-source-warning{border-left:4px solid #b45309;background:#fff8eb;padding:1rem 1.2rem;line-height:1.55;margin:0 0 6rem}
 .robustness-section{padding:5rem 0;border-top:1px solid var(--rob-line)}.robustness-section-heading{display:flex;align-items:end;justify-content:space-between;gap:2rem;margin-bottom:2rem}.robustness-section-heading>div:first-child{max-width:820px}.robustness-section h2{font-size:clamp(1.8rem,3vw,3.2rem);letter-spacing:-.035em;margin:0 0 .8rem}.robustness-section-heading p,.robustness-subsection-heading p{color:var(--rob-muted);line-height:1.6;margin:0;max-width:72ch}.robustness-section label{display:grid;gap:.45rem;color:var(--rob-muted);font-size:.78rem;font-weight:700;letter-spacing:.06em;text-transform:uppercase}.robustness-section select{min-width:14rem;background:white;border:1px solid #aeb7c5;border-radius:.35rem;padding:.72rem 2.2rem .72rem .75rem;color:var(--rob-ink);font:inherit;text-transform:none;letter-spacing:0}.robustness-section select:focus-visible,.robustness-download:focus-visible,.robustness-table-disclosure summary:focus-visible{outline:3px solid rgba(21,94,117,.32);outline-offset:3px}
 .robustness-message-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:1rem}.robustness-message-panel,.robustness-model-panel{min-width:0;background:white;border-top:2px solid #aeb7c5;padding:1.1rem}.robustness-message-panel header,.robustness-model-panel header{min-height:4.7rem}.robustness-message-panel h3,.robustness-model-panel h4{margin:0 0 .35rem;font-size:1rem}.robustness-message-panel p,.robustness-model-panel p{margin:0;color:var(--rob-muted);font-size:.82rem;line-height:1.45}.robustness-chart-shell{display:grid;grid-template-columns:minmax(0,1fr) minmax(8.5rem,.38fr);gap:.8rem;align-items:start;margin-top:1rem}.robustness-chart{min-width:0}.robustness-chart svg{display:block;width:100%;height:auto;aspect-ratio:3.2/1;background:var(--rob-surface);overflow:visible}.robustness-grid line{stroke:#dce2ea;stroke-width:1}.robustness-grid text,.robustness-axis-label{fill:#697386;font-size:11px}.robustness-legend{list-style:none;margin:0;padding:0;display:grid;gap:.35rem}.robustness-legend-item{width:100%;display:grid;grid-template-columns:52px minmax(0,1fr);align-items:center;gap:.45rem;padding:.28rem;color:var(--rob-ink);font-size:.7rem;line-height:1.25}.robustness-legend-sample{display:block;width:52px;height:16px}.robustness-model-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:1rem}.robustness-controls{display:flex;gap:1rem;flex-wrap:wrap}.robustness-subsection-heading{margin:4rem 0 1.2rem}.robustness-subsection-heading h3{font-size:1.45rem;margin:0 0 .45rem}
+.robustness-prompt-contract{margin:1rem 0 5rem;padding:2rem;border:1px solid var(--rob-line);background:#f7fafc}.robustness-contract-heading{display:grid;gap:.6rem;max-width:820px}.robustness-contract-heading h3{font-size:1.65rem;letter-spacing:-.02em;margin:0}.robustness-contract-heading p,.robustness-dimension-note{color:var(--rob-muted);line-height:1.6;margin:0}.robustness-denominator-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:1px;margin:2rem 0 1rem;background:var(--rob-line);border:1px solid var(--rob-line)}.robustness-denominator-grid article{display:grid;gap:.55rem;padding:1.25rem;background:white}.robustness-denominator-grid strong{font-size:1.12rem;line-height:1.35}.robustness-denominator-grid span{color:var(--rob-muted);font-size:.78rem}.robustness-prompt-contract-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:1rem;margin:2.25rem 0}.robustness-prompt-contract-row{min-width:0;padding:1rem;border-top:4px solid var(--rob-accent);background:white}.robustness-prompt-contract-row:nth-child(2){border-top-color:#b45309}.robustness-prompt-contract-row:nth-child(3){border-top-color:#4d7c0f}.robustness-prompt-contract-row:nth-child(4){border-top-color:#7c3aed}.robustness-prompt-contract-row header{display:grid;gap:.75rem}.robustness-prompt-contract-row header>p,.robustness-prompt-model-note{color:var(--rob-muted);font-size:.78rem;line-height:1.55;margin:0}.robustness-prompt-identity{display:grid;grid-template-columns:52px auto minmax(0,1fr);gap:.5rem;align-items:center}.robustness-prompt-identity strong{font-size:1.25rem}.robustness-prompt-change{font-size:.72rem;font-weight:700;overflow-wrap:anywhere}.robustness-prompt-token{margin:1.1rem 0}.robustness-prompt-token dt{color:var(--rob-muted);font-size:.68rem}.robustness-prompt-token dd{margin:.35rem 0 0}.robustness-prompt-token code,.robustness-prompt-hash code{display:block;color:var(--rob-ink);font-size:.68rem;overflow-wrap:anywhere}.robustness-prompt-hash{margin:.8rem 0}.robustness-prompt-hash summary{cursor:pointer;color:var(--rob-accent);font-size:.74rem;font-weight:700}.robustness-prompt-hash code{padding-top:.65rem}.robustness-shared-contract{border-top:1px solid var(--rob-line);background:white}.robustness-shared-contract>summary{cursor:pointer;padding:1rem;font-weight:700}.robustness-shared-contract>p{color:var(--rob-muted);line-height:1.6;margin:0;padding:0 1rem 1rem}.robustness-shared-contract-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:1px;background:var(--rob-line);border-top:1px solid var(--rob-line)}.robustness-shared-contract-grid section{min-width:0;padding:1rem;background:white}.robustness-shared-contract-grid h4{font-size:.9rem;margin:0 0 .75rem}.robustness-shared-contract-grid ul{display:grid;gap:.45rem;margin:0;padding:0;list-style:none}.robustness-shared-contract-grid li{min-width:0}.robustness-shared-contract-grid code,.robustness-output-contract code{font-size:.68rem;overflow-wrap:anywhere}.robustness-output-contract{display:grid;gap:.8rem;margin:1rem 0 0}.robustness-output-contract dt{color:var(--rob-muted);font-size:.7rem}.robustness-output-contract dd{margin:.25rem 0 0}.robustness-factorial-scope{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:1rem;margin-top:1.5rem}.robustness-factorial-scope article{padding-top:1rem;border-top:2px solid var(--rob-line)}.robustness-factorial-scope h4{margin:0 0 .45rem;font-size:.9rem}.robustness-factorial-scope p{color:var(--rob-muted);font-size:.78rem;line-height:1.55;margin:0}.robustness-factorial{margin:0 0 5rem}.robustness-factorial-figure{margin:0}.robustness-factorial-scroll{max-width:100%;overflow:auto;border:1px solid var(--rob-line);background:#f7fafc}.robustness-factorial-scroll:focus-visible{outline:3px solid rgba(21,94,117,.32);outline-offset:3px}.robustness-factorial-scroll>svg{display:block;width:100%;min-width:760px;height:auto}.robustness-factorial-edges path{fill:none;stroke:#687386;stroke-width:2}.robustness-factorial-edges marker path{fill:#687386;stroke:none}.robustness-factorial-node rect{fill:white;stroke:#aeb7c5;stroke-width:1.5}.robustness-factorial-node-contract rect{fill:#edf5f7;stroke:#155e75}.robustness-factorial-node-model rect,.robustness-factorial-node-path rect{fill:#f3f1f8;stroke:#635b8a}.robustness-factorial-node-result rect{fill:#eff7f1;stroke:#4d7c0f}.robustness-factorial-node-metric rect{fill:#fff8eb;stroke:#b45309}.robustness-factorial-node-label{display:flex;align-items:center;justify-content:center;width:100%;height:100%;color:#172033;font:600 15px/1.3 system-ui,-apple-system,sans-serif;text-align:center}.robustness-factorial-fallback{display:grid;gap:.75rem;padding:1rem;border:1px solid var(--rob-line);border-top:0;background:white}.robustness-factorial-fallback h4{margin:0}.robustness-factorial-fallback ol{display:grid;gap:.5rem;margin:0;padding-left:1.3rem;color:var(--rob-muted);font-size:.82rem;line-height:1.5}.robustness-mermaid-source{margin-top:1rem;border-top:1px solid var(--rob-line);background:white}.robustness-mermaid-source>summary{cursor:pointer;padding:1rem;font-weight:700}.robustness-mermaid-source>p{color:var(--rob-muted);margin:0;padding:0 1rem 1rem}.robustness-mermaid-source pre{max-width:100%;margin:0;padding:1rem;overflow:auto;background:#172033;color:#eef5f7;font:12px/1.55 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;white-space:pre}.robustness-mermaid-source pre[hidden]{display:none}
 .robustness-table-disclosure{margin-top:2rem;border-top:1px solid var(--rob-line);background:white}.robustness-table-disclosure summary{cursor:pointer;padding:1rem;font-weight:700}.robustness-table-wrap{max-width:100%;overflow:auto;border-top:1px solid var(--rob-line)}.robustness-table-wrap table{width:max-content;min-width:100%;border-collapse:collapse;font-size:.75rem}.robustness-table-wrap th,.robustness-table-wrap td{padding:.62rem .7rem;border-bottom:1px solid #e6eaf0;text-align:left;white-space:nowrap}.robustness-table-wrap th{position:sticky;top:0;background:#eef2f7;color:#465164}.robustness-threshold-summary{display:grid;grid-template-columns:auto auto minmax(0,1fr);gap:1rem;align-items:center;margin:3rem 0;background:#eef3f6;padding:1.25rem}.robustness-threshold-summary article{display:grid;gap:.2rem}.robustness-threshold-summary strong{font-size:1.65rem}.robustness-threshold-summary span,.robustness-threshold-summary p{font-size:.78rem;color:var(--rob-muted);margin:0}.robustness-download-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:.65rem}.robustness-download{display:grid;gap:.35rem;padding:1rem;border:1px solid var(--rob-line);background:white;color:var(--rob-ink);text-decoration:none}.robustness-download:hover{border-color:var(--rob-accent)}.robustness-download span{font-weight:700}.robustness-download code{font-size:.72rem;color:var(--rob-muted);overflow-wrap:anywhere}
-@media(max-width:980px){.robustness-message-grid,.robustness-model-grid{grid-template-columns:1fr}.robustness-chart-shell{grid-template-columns:1fr}.robustness-legend{grid-template-columns:repeat(2,minmax(0,1fr))}.robustness-message-panel header,.robustness-model-panel header{min-height:0}.robustness-section-heading{align-items:start;flex-direction:column}.robustness-lineage{grid-template-columns:1fr}.robustness-lineage-arrow{justify-self:center}.robustness-download-grid{grid-template-columns:1fr}}
-@media(max-width:640px){.robustness-report{padding-inline:1rem}.robustness-section{padding:3.5rem 0}.robustness-source-warning{margin-bottom:4rem}.robustness-legend{grid-template-columns:1fr}.robustness-controls{display:grid;width:100%}.robustness-section label,.robustness-section select{width:100%;min-width:0}.robustness-threshold-summary{grid-template-columns:1fr}.robustness-hero h2{font-size:2.35rem}.robustness-chart svg{min-width:0}}
+@media(max-width:1100px){.robustness-prompt-contract-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:980px){.robustness-message-grid,.robustness-model-grid{grid-template-columns:1fr}.robustness-chart-shell{grid-template-columns:1fr}.robustness-legend{grid-template-columns:repeat(2,minmax(0,1fr))}.robustness-message-panel header,.robustness-model-panel header{min-height:0}.robustness-section-heading{align-items:start;flex-direction:column}.robustness-lineage{grid-template-columns:1fr}.robustness-lineage-arrow{justify-self:center}.robustness-download-grid{grid-template-columns:1fr}.robustness-shared-contract-grid,.robustness-factorial-scope{grid-template-columns:1fr}}
+@media(max-width:640px){.robustness-report{padding-inline:1rem}.robustness-section{padding:3.5rem 0}.robustness-source-warning{margin-bottom:4rem}.robustness-legend{grid-template-columns:1fr}.robustness-controls{display:grid;width:100%}.robustness-section label,.robustness-section select{width:100%;min-width:0}.robustness-threshold-summary,.robustness-denominator-grid,.robustness-prompt-contract-grid{grid-template-columns:1fr}.robustness-prompt-contract{padding:1rem}.robustness-hero h2{font-size:2.35rem}.robustness-chart svg{min-width:0}.robustness-factorial-scroll>svg{min-width:720px}}
 """
 
 
@@ -1868,6 +2514,24 @@ _ROBUSTNESS_SCRIPT = r"""
   const familySelect = report.querySelector('[data-weight-family-select]');
   const messageSelect = report.querySelector('[data-prompt-message-select]');
   const metricSelect = report.querySelector('[data-prompt-metric-select]');
+  const promptCatalog = __PROMPT_PRESENTATION_CATALOG__;
+
+  const applyPromptLanguage = () => {
+    const editorialRoot = document.querySelector('[data-testid="editorial-report"]');
+    const language = editorialRoot?.dataset.reportLanguage || document.documentElement.lang || 'zh-CN';
+    const copy = promptCatalog[language] || promptCatalog['zh-CN'];
+    report.querySelectorAll('[data-robustness-i18n]').forEach((element) => {
+      const key = element.dataset.robustnessI18n;
+      if (key && copy[key]) element.textContent = copy[key];
+    });
+    report.querySelectorAll('[data-robustness-i18n-aria-label]').forEach((element) => {
+      const key = element.dataset.robustnessI18nAriaLabel;
+      if (key && copy[key]) element.setAttribute('aria-label', copy[key]);
+    });
+    report.querySelectorAll('[data-robustness-language-variant]').forEach((element) => {
+      element.hidden = element.dataset.robustnessLanguageVariant !== language;
+    });
+  };
 
   const applyWeightFamily = () => {
     const value = familySelect?.value || 'network-feedback';
@@ -1889,7 +2553,11 @@ _ROBUSTNESS_SCRIPT = r"""
   familySelect?.addEventListener('change', applyWeightFamily);
   messageSelect?.addEventListener('change', applyPromptView);
   metricSelect?.addEventListener('change', applyPromptView);
+  document.querySelectorAll('[data-report-language]').forEach((button) => {
+    button.addEventListener('click', () => queueMicrotask(applyPromptLanguage));
+  });
   applyWeightFamily();
   applyPromptView();
+  applyPromptLanguage();
 })();
 """

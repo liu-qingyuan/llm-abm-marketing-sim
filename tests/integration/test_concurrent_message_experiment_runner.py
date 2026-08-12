@@ -3332,6 +3332,60 @@ def test_concurrent_robustness_composes_two_closed_sources_into_an_immutable_rep
     assert 'data-testid="robustness-source-lineage"' in report_html
     assert 'data-testid="ranking-weight-sensitivity-section"' in report_html
     assert 'data-testid="prompt-model-robustness-section"' in report_html
+    assert 'data-testid="prompt-model-contract-disclosure"' in report_html
+    for contract in CONCURRENT_ROBUSTNESS_PROMPT_REGISTRY.all():
+        controlled_change = CONCURRENT_ROBUSTNESS_PROMPT_REGISTRY.controlled_change(contract.variant_id)
+        assert f'data-testid="prompt-contract-row-{contract.variant_id.lower()}"' in report_html
+        assert f'data-controlled-change="{controlled_change}"' in report_html
+        assert f'data-prompt-version="{contract.prompt_version}"' in report_html
+        assert f'data-prompt-canonical-hash="{contract.canonical_hash}"' in report_html
+        assert 'data-model-count="4"' in report_html
+    assert "相同声明信息集与输出合同的受控变体" in report_html
+    assert "4 Prompt × 4 model = 16 execution cells" in report_html
+    assert "16 cells × 3 messages = 48 message-level reporting slices" in report_html
+    assert "每 cell 60 个 Primary judgments" in report_html
+    assert "960 个 logical judgments" in report_html
+    assert "2-batch realized path" in report_html
+    assert 'data-testid="prompt-model-factorial-diagram"' in report_html
+    for node_id in (
+        "Contract",
+        "P0",
+        "P1",
+        "P2",
+        "P3",
+        "Models",
+        "Cross",
+        "Cells",
+        "Runtime",
+        "Count",
+        "Total",
+        "Direct",
+        "Paths",
+        "Views",
+    ):
+        assert f'data-diagram-node-id="{node_id}"' in report_html
+    for edge_id in (
+        "edge_contract_p0",
+        "edge_contract_p1",
+        "edge_contract_p2",
+        "edge_contract_p3",
+        "edge_p0_cross",
+        "edge_p1_cross",
+        "edge_p2_cross",
+        "edge_p3_cross",
+        "edge_models_cross",
+        "edge_cross_cells",
+        "edge_cells_runtime",
+        "edge_runtime_count",
+        "edge_count_total",
+        "edge_runtime_direct",
+        "edge_runtime_paths",
+        "edge_direct_views",
+        "edge_paths_views",
+    ):
+        assert f'data-diagram-edge-id="{edge_id}"' in report_html
+        assert f"{edge_id}@--&gt;" in report_html
+    assert 'data-testid="prompt-model-factorial-fallback"' in report_html
     assert "Demographic Shadow evidence remains bound to the historical Formal source" in report_html
     assert "production_deploy_eligible=false" in report_html
 

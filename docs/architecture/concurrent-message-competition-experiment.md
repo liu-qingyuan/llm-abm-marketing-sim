@@ -45,7 +45,7 @@ personalized_delivery_score
 | Decision Adapter | 对已曝光 `user × message` pair 生成 Primary/Shadow typed decisions；不选择 exposure |
 | `ConcurrentCampaignDiagnostics` | 从 persisted candidate/pair rows 重建 funnel、allocation、response、feedback 和 sensitivity diagnostics |
 | `ConcurrentRobustnessStudy` | 通过唯一公开 `run(...)` Interface 验证显式 hashed source，生成 19-point Ranking Weight workspace；在 exact 16-cell Adapter map 与 execution contract 通过全量 preflight 后运行或恢复独立 Primary-only cells，关闭 immutable study root，并调用 Report package-internal Interface 生成独立 candidate |
-| Report Module | package-internal compose/materialize/validate Interface，统一拥有双 lineage closure、renderer、payload/HTML composition、stage formatting、DOM/selector/href、destination safety 与 presentation validation；不从 package root 公开 |
+| Report Module | package-internal compose/materialize/validate Interface，统一拥有双 lineage closure、renderer、payload/HTML composition、Prompt disclosure、deterministic semantic SVG、stage formatting、DOM/selector/href、destination safety 与 presentation validation；不从 package root 公开 |
 | Editorial candidate | bilingual presentation grouping、五个 mechanism media derivatives、run evidence surface 和 canonical report bytes |
 | Release Module / deploy | 独占 Formal eligibility、双 lineage、artifact inventory、approved downloads、release metadata、production identity 与 hash closure；只把已批准 stage facts 交给 Report Interface，并继续负责显式 contract、candidate health、atomic `current` 和公网验收 |
 
@@ -65,11 +65,15 @@ Diagnostics 的 source of truth 是同一 run 的 persisted candidate rows 与 p
 
 16 cells 全部闭合后，producer 才把完整 cell evidence 与 registry 加入 private workspace；缺失 terminal 永远不会伪装成 `ignore` 或 partial final artifact。分析 artifacts、cell evidence、validation、claim audit、Manifest 和全量 artifact hashes 通过 sibling staging 原子关闭为 immutable study root。动态调用随后自动使用显式 destination（未提供时使用该 output identity 的 deterministic sibling candidate）调用 Report package-internal Interface：Interface 重新执行未修改的 Concurrent source closure，独立验证 study root 的 schema、manifest、row counts、source links 和 hashes，再从两条只读 lineage 生成 companion JSON/CSV、增量页面和 `production_deploy_eligible=false` release evidence。candidate 保留原页面的 mechanism、Run Evidence、field lineage、Demographic Shadow 与 Primary + Shadow barrier，并把旧 Shadow 明确标为历史 Formal evidence；新增 Weight small multiples 和每个 model 最多四条 Prompt series，不改变历史 renderer 或 single-root rebuild。重复 dynamic resume 会验证而不重写既有 root/candidate。
 
+Prompt disclosure 由 Report Module 在 candidate composition 时从已验证 `PromptContractRegistry` 与 Manifest cell identity 投影：registry 从受控 template 结构判定 baseline、wording-only、information-order-only 与 structured-rubric-only，Manifest 关闭每个 variant 的 stable token、canonical hash 和四 model cell coverage。页面只本地化这些已验证语义，展示共同 allowlist、task/action semantics 与 structured output contract，不持久化新的 Prompt schema，也不展示 rendered Prompt 或 Provider payload。`4 × 4 = 16` 是 execution-cell denominator；三条 message 只把它展开为 48 个 reporting slices。Batch 0 direct panel、每 cell 一条 30-batch realized path、Primary-only factorial 与 Historical Demographic Shadow 使用独立 scope 文案。
+
+同一 projection 生成带稳定 node/edge ID 的 bilingual Mermaid 语义母版和 deterministic inline SVG。浏览器只加载 inline SVG、title、description 与 text fallback；不运行 Mermaid、不请求 CDN。Prompt chart 的每条 P0-P3 mark 和 legend 都引用对应 disclosure row，language switch 只替换 `zh-CN` / `en-US` label，不改变 source token、hash、diagram identity 或数据 series。
+
 ## Prompt–Model request contract
 
 Robustness 请求侧是 additive Module，不改变现有 Concurrent Formal runtime：
 
-- `PromptContractRegistry` 持有 `P0`–`P3` 的稳定 token、pinned canonical hash、LLM-visible field allowlist、排除字段、任务/动作语义、structured Decision schema 和等价性清单；模板字段增加、遗漏或同 token 漂移会在使用前失败。
+- `PromptContractRegistry` 持有 `P0`–`P3` 的稳定 token、pinned canonical hash、LLM-visible field allowlist、排除字段、任务/动作语义、structured Decision schema、等价性清单与基于 template 结构验证的 controlled-change identity；模板字段增加、遗漏、跨维度变化或同 token 漂移会在使用前失败。
 - `P0` 复用当前 Primary Prompt bytes；`P1` 只改词汇，`P2` 只重排同一信息，`P3` 只增加不输出 chain-of-thought 的结构化 rubric。四者继续只返回 `engage/probability/reason/confidence/action`。
 - `provider-request-contract-v1` 把 Prompt hash、requested model、Responses wire、显式 `reasoning_effort=low`、output-token ceiling、structured schema hash、timeout/retry 和 sampling 参数省略固定在同一请求合同；response accounting 仍独立记录 observed model 与 usage。若 subscription transport 不接受 wire-level `max_output_tokens`，合同仍冻结 256-token ceiling，并在 transport 返回后、Decision 进入 runtime 前按 complete usage fail closed。
 - 未配置 request settings 的历史 Adapter 保持原调用形状和 safe metadata。P1–P3 或显式 Robustness request 合同不完整时在 Provider 调用前 fail closed。

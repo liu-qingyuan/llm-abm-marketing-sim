@@ -11,6 +11,12 @@ from typing import Literal
 from .schemas import LATENT_VALUE_DIMENSIONS
 
 PromptVariantId = Literal["P0", "P1", "P2", "P3"]
+PromptControlledChange = Literal[
+    "baseline",
+    "wording_only",
+    "information_order_only",
+    "structured_rubric_only",
+]
 
 CONCURRENT_MESSAGE_PRIMARY_PROMPT_VERSION = "jinjiang-concurrent-message-primary-prompt-v1"
 CONCURRENT_ROBUSTNESS_P1_PROMPT_VERSION = "jinjiang-concurrent-message-primary-robustness-p1-v1"
@@ -263,8 +269,13 @@ class PromptContractRegistry:
         contracts: list[ConcurrentPromptContract] = []
         templates_by_token: dict[str, _PromptTemplate] = {}
         contracts_by_key: dict[str, ConcurrentPromptContract] = {}
+        controlled_changes_by_key: dict[str, PromptControlledChange] = {}
+        baseline_template = templates[0][2]
+        controlled_changes: list[PromptControlledChange] = []
         for variant_id, prompt_version, template in templates:
             self._validate_template(variant_id, template)
+            controlled_change = self._classify_controlled_change(template, baseline_template)
+            controlled_changes.append(controlled_change)
             canonical_hash = self._canonical_hash(variant_id, prompt_version, template)
             if canonical_hash != CONCURRENT_ROBUSTNESS_PROMPT_CANONICAL_HASHES.get(prompt_version):
                 raise ValueError(f"{variant_id} canonical Prompt hash changed without a new stable token")
@@ -284,12 +295,30 @@ class PromptContractRegistry:
             templates_by_token[prompt_version] = template
             contracts_by_key[prompt_version] = contract
             contracts_by_key[variant_id] = contract
+            controlled_changes_by_key[prompt_version] = controlled_change
+            controlled_changes_by_key[variant_id] = controlled_change
+        if tuple(controlled_changes) != (
+            "baseline",
+            "wording_only",
+            "information_order_only",
+            "structured_rubric_only",
+        ):
+            raise ValueError("Prompt registry templates do not form the declared controlled variants")
         self._contracts = tuple(contracts)
         self._templates_by_token = MappingProxyType(templates_by_token)
         self._contracts_by_key = MappingProxyType(contracts_by_key)
+        self._controlled_changes_by_key = MappingProxyType(controlled_changes_by_key)
 
     def all(self) -> tuple[ConcurrentPromptContract, ...]:
         return self._contracts
+
+    def controlled_change(self, token_or_variant: str) -> PromptControlledChange:
+        """Classify a variant from registry-owned template structure without exposing template text."""
+
+        try:
+            return self._controlled_changes_by_key[token_or_variant]
+        except KeyError as exc:
+            raise ValueError(f"unsupported concurrent robustness prompt: {token_or_variant}") from exc
 
     def resolve(self, token_or_variant: str) -> ConcurrentPromptContract:
         try:
@@ -321,6 +350,42 @@ class PromptContractRegistry:
             raise ValueError(f"{variant_id} must not add a reasoning rubric")
         if variant_id == "P3" and (template.rubric is None or "chain-of-thought" not in template.rubric):
             raise ValueError("P3 must explicitly forbid chain-of-thought output")
+
+    @staticmethod
+    def _classify_controlled_change(
+        template: _PromptTemplate,
+        baseline: _PromptTemplate,
+    ) -> PromptControlledChange:
+        if template == baseline:
+            return "baseline"
+        if (
+            tuple(section.field_key for section in template.sections)
+            == tuple(section.field_key for section in baseline.sections)
+            and template.output_instruction == baseline.output_instruction
+            and template.rubric == baseline.rubric
+            and (
+                template.system_content != baseline.system_content
+                or tuple(section.heading for section in template.sections)
+                != tuple(section.heading for section in baseline.sections)
+            )
+        ):
+            return "wording_only"
+        if (
+            template.system_content == baseline.system_content
+            and template.output_instruction == baseline.output_instruction
+            and template.rubric == baseline.rubric
+            and Counter(template.sections) == Counter(baseline.sections)
+            and template.sections != baseline.sections
+        ):
+            return "information_order_only"
+        if (
+            template.system_content == baseline.system_content
+            and template.sections == baseline.sections
+            and template.output_instruction == baseline.output_instruction
+            and template.rubric is not None
+        ):
+            return "structured_rubric_only"
+        raise ValueError("Prompt template changes more than one declared controlled dimension")
 
     @staticmethod
     def _canonical_hash(variant_id: PromptVariantId, prompt_version: str, template: _PromptTemplate) -> str:

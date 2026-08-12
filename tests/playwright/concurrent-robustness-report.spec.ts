@@ -118,14 +118,116 @@ async function expectPromptView(page: Page, messageId: string, metricId: string)
   await expect(view.locator('.robustness-model-panel')).toHaveCount(4);
   for (let index = 0; index < 4; index += 1) {
     const panel = view.locator('.robustness-model-panel').nth(index);
-    await expect(panel.locator('svg .robustness-series > g:visible')).toHaveCount(4);
-    await expect(panel.locator('.robustness-legend-item:visible')).toHaveCount(4);
+    const series = panel.locator('svg .robustness-series > g:visible');
+    const legends = panel.locator('.robustness-legend-item:visible');
+    await expect(series).toHaveCount(4);
+    await expect(legends).toHaveCount(4);
+    const expectedDisclosureIds = [
+      'prompt-contract-row-p0',
+      'prompt-contract-row-p1',
+      'prompt-contract-row-p2',
+      'prompt-contract-row-p3',
+    ];
+    expect(await series.evaluateAll((rows) => rows.map((row) => row.getAttribute('data-prompt-disclosure-id')))).toEqual(
+      expectedDisclosureIds,
+    );
+    expect(await legends.evaluateAll((rows) => rows.map((row) => row.getAttribute('data-prompt-disclosure-id')))).toEqual(
+      expectedDisclosureIds,
+    );
   }
   const sharedRows = page.getByTestId('shared-seed-exact-table').locator('tbody tr:visible');
   await expect(sharedRows).toHaveCount(16);
   expect(await sharedRows.evaluateAll((rows) => rows.map((row) => row.getAttribute('data-row-message-id')))).toEqual(
     Array(16).fill(messageId),
   );
+}
+
+async function expectPromptContractAndDiagram(page: Page): Promise<void> {
+  const disclosure = page.getByTestId('prompt-model-contract-disclosure');
+  await expect(disclosure).toBeVisible();
+  await expect(disclosure).toContainText('4 Prompt × 4 model = 16 execution cells');
+  await expect(disclosure).toContainText('16 cells × 3 messages = 48 message-level reporting slices');
+  await expect(disclosure).toContainText('Message 是每个 cell 内的报告维度，不是额外独立运行');
+
+  const expectedContracts = [
+    {
+      variant: 'P0',
+      change: 'baseline',
+      token: 'jinjiang-concurrent-message-primary-prompt-v1',
+      hash: 'sha256:cc50affc4e658a9a1804f5e1824710cb073003aff3cc6af8f8c5cd8edf5cdc7c',
+    },
+    {
+      variant: 'P1',
+      change: 'wording_only',
+      token: 'jinjiang-concurrent-message-primary-robustness-p1-v1',
+      hash: 'sha256:67b38d5edfc562bf43a115d9a7aaebc856d51049614dc4cc633c431dd57bf0e1',
+    },
+    {
+      variant: 'P2',
+      change: 'information_order_only',
+      token: 'jinjiang-concurrent-message-primary-robustness-p2-v1',
+      hash: 'sha256:6784ecc2163e6b2426631d81672994376c3781791fa265c3e0f67d1428b71cb4',
+    },
+    {
+      variant: 'P3',
+      change: 'structured_rubric_only',
+      token: 'jinjiang-concurrent-message-primary-robustness-p3-v1',
+      hash: 'sha256:a3ac934d194437f6ee86011b92666cf1ea19fb086a383fb7b7407cf5f44bd7ea',
+    },
+  ];
+  for (const contract of expectedContracts) {
+    const row = page.getByTestId(`prompt-contract-row-${contract.variant.toLowerCase()}`);
+    await expect(row).toHaveAttribute('data-controlled-change', contract.change);
+    await expect(row).toHaveAttribute('data-prompt-version', contract.token);
+    await expect(row).toHaveAttribute('data-prompt-canonical-hash', contract.hash);
+    const hashDisclosure = row.locator('details');
+    await hashDisclosure.locator('summary').focus();
+    await hashDisclosure.locator('summary').press('Enter');
+    await expect(hashDisclosure).toHaveAttribute('open', '');
+    await expect(hashDisclosure.locator('code')).toHaveText(contract.hash);
+  }
+
+  const sharedContract = page.getByTestId('prompt-model-shared-contract');
+  await sharedContract.locator('summary').focus();
+  await sharedContract.locator('summary').press('Enter');
+  await expect(sharedContract).toHaveAttribute('open', '');
+  await expect(sharedContract).toContainText('engage / probability / reason / confidence / action');
+  await expect(sharedContract).toContainText('engage=false => action=ignore');
+
+  const diagram = page.getByTestId('prompt-model-factorial-diagram');
+  await expect(diagram).toBeVisible();
+  await expect(diagram).toHaveAccessibleName('Prompt-Model factorial 设计');
+  await expect(diagram.locator('[data-diagram-node-id]')).toHaveCount(14);
+  await expect(diagram.locator('[data-diagram-edge-id]')).toHaveCount(17);
+  await expect(diagram).toContainText('每 cell 60 个 Primary judgments');
+  await expect(diagram).toContainText('960 个 logical judgments');
+  await expect(diagram).toContainText('每 cell 一条 2-batch realized path');
+  await expect(page.getByTestId('prompt-model-factorial-fallback')).toContainText('message 不是额外运行');
+  const diagramScroller = page.locator('.robustness-factorial-scroll');
+  await diagramScroller.focus();
+  await expect(diagramScroller).toBeFocused();
+
+  const mermaid = page.getByTestId('prompt-model-factorial-mermaid-source');
+  await mermaid.locator('summary').focus();
+  await mermaid.locator('summary').press('Enter');
+  await expect(mermaid).toHaveAttribute('open', '');
+  await expect(mermaid.locator('pre:visible')).toContainText('flowchart TB');
+  await expect(mermaid.locator('pre:visible')).toContainText('Contract edge_contract_p0@--> P0');
+  const svgEdgeIds = await diagram.locator('[data-diagram-edge-id]').evaluateAll(
+    (edges) => edges.map((edge) => edge.getAttribute('data-diagram-edge-id') ?? ''),
+  );
+  const mermaidSource = await mermaid.locator('pre:visible').innerText();
+  expect(svgEdgeIds.every((edgeId) => mermaidSource.includes(`${edgeId}@-->`))).toBe(true);
+  await expect(page.locator('script[src*="mermaid"], link[href*="mermaid"]')).toHaveCount(0);
+
+  const englishButton = page.locator('[data-report-language="en-US"]');
+  await englishButton.focus();
+  await englishButton.press('Enter');
+  await expect(disclosure).toContainText('Message is a reporting dimension inside each cell');
+  await expect(diagram).toHaveAccessibleName('Prompt-Model factorial design');
+  await expect(mermaid.locator('pre:visible')).toContainText('Same declared fields');
+  await page.locator('[data-report-language="zh-CN"]').click();
+  await expect(diagram).toHaveAccessibleName('Prompt-Model factorial 设计');
 }
 
 async function exerciseRobustnessInteractions(page: Page): Promise<void> {
@@ -173,7 +275,17 @@ async function exerciseRobustnessInteractions(page: Page): Promise<void> {
   const growthPanels = page.getByTestId('prompt-model-growth-panels').locator('.robustness-model-panel');
   await expect(growthPanels).toHaveCount(4);
   for (let index = 0; index < 4; index += 1) {
-    await expect(growthPanels.nth(index).locator('svg .robustness-series > g:visible')).toHaveCount(4);
+    const panel = growthPanels.nth(index);
+    const expectedDisclosureIds = [
+      'prompt-contract-row-p0',
+      'prompt-contract-row-p1',
+      'prompt-contract-row-p2',
+      'prompt-contract-row-p3',
+    ];
+    await expect(panel.locator('svg .robustness-series > g:visible')).toHaveCount(4);
+    expect(await panel.locator('.robustness-legend-item').evaluateAll(
+      (rows) => rows.map((row) => row.getAttribute('data-prompt-disclosure-id')),
+    )).toEqual(expectedDisclosureIds);
   }
   await expect(page.getByTestId('practical-threshold-summary')).toContainText('small_observed_difference');
 }
@@ -221,6 +333,7 @@ test('candidate and promoted production keep closed downloads, full controls, an
         `production_deploy_eligible=${stage.eligible}`,
       );
 
+      await expectPromptContractAndDiagram(page);
       await exerciseRobustnessInteractions(page);
 
       const visibleMappingFailures = await page.locator('.robustness-chart-shell:visible').evaluateAll((shells) =>
@@ -261,15 +374,18 @@ test('candidate and promoted production keep closed downloads, full controls, an
         const section = document.querySelector<HTMLElement>(`[data-testid="${rootTestId}"]`);
         const visibleCharts = [...document.querySelectorAll<HTMLElement>('.robustness-chart-shell')]
           .filter((chart) => chart.offsetParent !== null);
+        const diagramScroller = document.querySelector<HTMLElement>('.robustness-factorial-scroll');
         return {
           horizontalOverflow: document.documentElement.scrollWidth > window.innerWidth + 1,
           sectionWidth: section?.getBoundingClientRect().width ?? 0,
           overflowingCharts: visibleCharts.filter((chart) => chart.scrollWidth > chart.clientWidth + 2).length,
+          diagramContained: !diagramScroller || diagramScroller.getBoundingClientRect().right <= window.innerWidth + 1,
         };
       }, stage.rootTestId);
       expect(geometry.horizontalOverflow).toBe(false);
       expect(geometry.sectionWidth).toBeLessThanOrEqual(viewport.width + 1);
       expect(geometry.overflowingCharts).toBe(0);
+      expect(geometry.diagramContained).toBe(true);
     }
   }
 

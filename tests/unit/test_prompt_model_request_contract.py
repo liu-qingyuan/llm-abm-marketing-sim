@@ -32,6 +32,10 @@ def test_prompt_registry_exposes_four_frozen_information_equivalent_contracts() 
     contracts = CONCURRENT_ROBUSTNESS_PROMPT_REGISTRY.all()
 
     assert tuple(contract.variant_id for contract in contracts) == ("P0", "P1", "P2", "P3")
+    assert tuple(
+        CONCURRENT_ROBUSTNESS_PROMPT_REGISTRY.controlled_change(contract.variant_id)
+        for contract in contracts
+    ) == ("baseline", "wording_only", "information_order_only", "structured_rubric_only")
     assert tuple(contract.prompt_version for contract in contracts) == CONCURRENT_ROBUSTNESS_PROMPT_TOKENS
     assert contracts[0].prompt_version == CONCURRENT_MESSAGE_PRIMARY_PROMPT_VERSION
     assert len({contract.prompt_version for contract in contracts}) == 4
