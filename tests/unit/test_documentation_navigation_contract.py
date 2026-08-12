@@ -34,6 +34,7 @@ EXPECTED_REFERENCE_FILES = {
     "docs/references/jinjiang-concurrent-message-editorial-v2-formal-release-20260807.md",
     "docs/references/jinjiang-concurrent-message-editorial-v3-formal-release-20260807.md",
     "docs/references/jinjiang-concurrent-robustness-formal-release-20260810.md",
+    "docs/references/jinjiang-concurrent-robustness-semantic-release-handoff-20260812.md",
     "docs/references/concurrent-message-legend-visual-semantics-audit-20260803.md",
     "docs/references/concurrent-message-sensitivity-curve-visual-reference-20260803.md",
     "docs/references/concurrent-message-sensitivity-curve-visual-reference-20260803.jpg",
@@ -225,7 +226,14 @@ def test_required_evidence_and_weekly_navigation_remain() -> None:
 
 def test_references_reading_order_and_root_navigation_contract() -> None:
     references = _read(DOCS_ROOT / "references" / "README.md")
-    for marker in ("默认读取", "按需 research", "按需 presentation audit", "按需 rollback", "forensic-only"):
+    for marker in (
+        "默认读取",
+        "按需 research",
+        "按需 presentation audit",
+        "按需 rollback",
+        "按需 operational handoff",
+        "forensic-only",
+    ):
         assert marker in references
     assert "默认 AI 阅读顺序不超过" in references
 
