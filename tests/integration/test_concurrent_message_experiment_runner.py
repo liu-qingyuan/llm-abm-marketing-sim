@@ -3336,6 +3336,81 @@ def test_concurrent_robustness_composes_two_closed_sources_into_an_immutable_rep
     assert "production_deploy_eligible=false" in report_html
 
 
+def test_report_presentation_interface_materializes_and_validates_production_bundle(
+    tmp_path: Path,
+) -> None:
+    source_dir = _make_validation_report_source(tmp_path, "robustness-presentation-source")
+    manifest = _robustness_manifest_for_source(source_dir, output_identity="fixture-presentation-v1")
+    workspace = tmp_path / "robustness-presentation-workspace"
+    destination = tmp_path / "robustness-presentation-candidate"
+    study = ConcurrentRobustnessStudy()
+
+    study.run(manifest, None, workspace)
+    _install_deterministic_robustness_cell_fixture(workspace, manifest)
+    result = study.run(manifest, None, workspace, report_destination=destination)
+    assert result.study_root is not None
+    candidate_before = {
+        path.relative_to(destination).as_posix(): path.read_bytes()
+        for path in destination.rglob("*")
+        if path.is_file()
+    }
+    candidate_payload = _read_json(destination / "concurrent_robustness_report_payload.json")
+    approved_downloads = dict(candidate_payload["downloads"])
+    approved_downloads["release_evidence"] = "robustness_production_release_evidence.json"
+    facts = concurrent_robustness_report_module._ProductionPresentationFacts(
+        release_id="robustness-presentation-test",
+        release_contract_schema="abm-report-release-contract-v5",
+        canonical_endpoint="https://abm.q1ngyuan.top/",
+        production_evidence_schema="concurrent-robustness-production-release-evidence-v1",
+        formal_logical_judgments=960,
+        formal_physical_attempts=962,
+        provider_transport="deterministic-test",
+        subscription_billed_cost_usd=0.0,
+        approved_downloads=approved_downloads,
+    )
+
+    bundle = concurrent_robustness_report_module._REPORT_PRESENTATION.materialize_production(
+        formal_root=source_dir,
+        study_root=result.study_root,
+        candidate_dir=destination,
+        stage_facts=facts,
+    )
+    concurrent_robustness_report_module._REPORT_PRESENTATION.validate_bundle(
+        bundle,
+        stage_facts=facts,
+    )
+
+    production_payload = json.loads(bundle.report_payload)
+    production_html = bundle.report_html.decode("utf-8")
+    assert production_payload["production_deploy_eligible"] is True
+    assert production_payload["downloads"] == approved_downloads
+    assert production_payload["production_release"]["release_id"] == facts.release_id
+    assert 'data-testid="robustness-report-release"' in production_html
+    assert f'data-release-id="{facts.release_id}"' in production_html
+    assert 'data-testid="robustness-report-candidate"' not in production_html
+    assert "production_deploy_eligible=false" not in production_html
+    assert f'href="{approved_downloads["release_evidence"]}"' in production_html
+    assert candidate_before == {
+        path.relative_to(destination).as_posix(): path.read_bytes()
+        for path in destination.rglob("*")
+        if path.is_file()
+    }
+
+    corrupt_bundle = concurrent_robustness_report_module._PresentationBundle(
+        report_payload=bundle.report_payload,
+        report_html=bundle.report_html.replace(
+            b'data-testid="robustness-report-release"',
+            b'data-testid="robustness-report-candidate"',
+            1,
+        ),
+    )
+    with pytest.raises(concurrent_robustness_report_module._RobustnessReportClosureError):
+        concurrent_robustness_report_module._REPORT_PRESENTATION.validate_bundle(
+            corrupt_bundle,
+            stage_facts=facts,
+        )
+
+
 def test_concurrent_robustness_report_rejects_unsafe_destinations_without_touching_sources(
     tmp_path: Path,
 ) -> None:

@@ -44,8 +44,8 @@ personalized_delivery_score
 | `PlatformEnvironment` / ranking | 每条 message 的 candidates、delivery capacity、Top20、exposure gate 和稳定 tie-break |
 | Decision Adapter | 对已曝光 `user × message` pair 生成 Primary/Shadow typed decisions；不选择 exposure |
 | `ConcurrentCampaignDiagnostics` | 从 persisted candidate/pair rows 重建 funnel、allocation、response、feedback 和 sensitivity diagnostics |
-| `ConcurrentRobustnessStudy` | 通过唯一公开 `run(...)` Interface 验证显式 hashed source，生成 19-point Ranking Weight workspace；在 exact 16-cell Adapter map 与 execution contract 通过全量 preflight 后运行或恢复独立 Primary-only cells，关闭 immutable study root，并自动调用私有双-lineage composer 生成独立 candidate |
-| Report Module | typed closure、report payload、approved downloads、manifest 和 read-only rebuild |
+| `ConcurrentRobustnessStudy` | 通过唯一公开 `run(...)` Interface 验证显式 hashed source，生成 19-point Ranking Weight workspace；在 exact 16-cell Adapter map 与 execution contract 通过全量 preflight 后运行或恢复独立 Primary-only cells，关闭 immutable study root，并调用 Report package-internal Interface 生成独立 candidate |
+| Report Module | package-internal compose/materialize/validate Interface，统一拥有双 lineage closure、renderer、payload/HTML composition、stage formatting、DOM/selector/href、destination safety 与 presentation validation；不从 package root 公开 |
 | Editorial candidate | bilingual presentation grouping、五个 mechanism media derivatives、run evidence surface 和 canonical report bytes |
 | Release validator/deploy | 显式 contract、source directory、release id、candidate health、atomic `current` 和公网验收 |
 
@@ -63,7 +63,7 @@ Diagnostics 的 source of truth 是同一 run 的 persisted candidate rows 与 p
 
 通过验证后，同一个 `run(...)` resume path 私下计算 Batch 0 shared-seed strict paired `engage` panel、secondary action/probability/confidence/disagreement、逐 message 双 engagement-rate 分母、Provider failures、audience overlap/first divergence 和 campaign-deduplicated positive-user growth。Prompt、model、message 都按 fixed categorical factors 汇总；planned model contrasts、Prompt × model interaction 和 user-blocked deterministic bootstrap 只条件于 fixed sample、fixed graph 和 one realized path。阈值以下只标为 `small_observed_difference`，claim audit 不允许越界研究结论。
 
-16 cells 全部闭合后，producer 才把完整 cell evidence 与 registry 加入 private workspace；缺失 terminal 永远不会伪装成 `ignore` 或 partial final artifact。分析 artifacts、cell evidence、validation、claim audit、Manifest 和全量 artifact hashes 通过 sibling staging 原子关闭为 immutable study root。动态调用随后自动使用显式 destination（未提供时使用该 output identity 的 deterministic sibling candidate）调用私有 composer：先重新执行未修改的 Concurrent source closure，再独立验证 study root 的 schema、manifest、row counts、source links 和 hashes；随后从两条只读 lineage 生成 companion JSON/CSV、增量页面和 `production_deploy_eligible=false` release evidence。candidate 保留原页面的 mechanism、Run Evidence、field lineage、Demographic Shadow 与 Primary + Shadow barrier，并把旧 Shadow 明确标为历史 Formal evidence；新增 Weight small multiples 和每个 model 最多四条 Prompt series，不改变历史 renderer 或 single-root rebuild。重复 dynamic resume 会验证而不重写既有 root/candidate。
+16 cells 全部闭合后，producer 才把完整 cell evidence 与 registry 加入 private workspace；缺失 terminal 永远不会伪装成 `ignore` 或 partial final artifact。分析 artifacts、cell evidence、validation、claim audit、Manifest 和全量 artifact hashes 通过 sibling staging 原子关闭为 immutable study root。动态调用随后自动使用显式 destination（未提供时使用该 output identity 的 deterministic sibling candidate）调用 Report package-internal Interface：Interface 重新执行未修改的 Concurrent source closure，独立验证 study root 的 schema、manifest、row counts、source links 和 hashes，再从两条只读 lineage 生成 companion JSON/CSV、增量页面和 `production_deploy_eligible=false` release evidence。candidate 保留原页面的 mechanism、Run Evidence、field lineage、Demographic Shadow 与 Primary + Shadow barrier，并把旧 Shadow 明确标为历史 Formal evidence；新增 Weight small multiples 和每个 model 最多四条 Prompt series，不改变历史 renderer 或 single-root rebuild。重复 dynamic resume 会验证而不重写既有 root/candidate。
 
 ## Prompt–Model request contract
 

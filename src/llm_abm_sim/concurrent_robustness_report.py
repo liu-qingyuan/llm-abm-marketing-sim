@@ -13,7 +13,7 @@ import tempfile
 from collections import defaultdict
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING, Any
 
 from .concurrent_message_renderer import render_report
@@ -32,6 +32,7 @@ _REPORT_MANIFEST_SCHEMA = "concurrent-robustness-report-candidate-manifest-v1"
 _RELEASE_EVIDENCE_SCHEMA = "concurrent-robustness-report-release-evidence-v1"
 _STUDY_MANIFEST_SCHEMA = "concurrent-robustness-study-artifact-manifest-v1"
 _STUDY_VALIDATION_SCHEMA = "concurrent-robustness-complete-validation-v1"
+_CLOSED_STUDY_ROOT_SUFFIX = ".study-root"
 _WEIGHT_SCHEMA = "concurrent-ranking-weight-sensitivity-v1"
 _PROMPT_MODEL_SCHEMA = "concurrent-prompt-model-robustness-analysis-v1"
 _CLAIM_AUDIT_SCHEMA = "concurrent-robustness-claim-audit-v1"
@@ -217,6 +218,252 @@ class _ReportRows:
         }
 
 
+@dataclass(frozen=True)
+class _ProductionPresentationFacts:
+    """Release-approved facts that the Report Module may present but must not decide."""
+
+    release_id: str
+    release_contract_schema: str
+    canonical_endpoint: str
+    production_evidence_schema: str
+    formal_logical_judgments: int
+    formal_physical_attempts: int
+    provider_transport: str
+    subscription_billed_cost_usd: float
+    approved_downloads: Mapping[str, str]
+
+
+@dataclass(frozen=True)
+class _PresentationBundle:
+    report_payload: bytes
+    report_html: bytes
+
+
+@dataclass(frozen=True)
+class _CandidateProjection:
+    formal: ConcurrentMessageArtifactClosure
+    study: _ClosedStudy
+    manifest: ConcurrentRobustnessManifest
+    manifest_sha256: str
+    rows: _ReportRows
+    report_payload: dict[str, Any]
+    payloads: dict[str, bytes]
+
+
+class _ReportPresentationInterface:
+    """Package-internal seam for deterministic report composition and presentation stages."""
+
+    def compose_candidate(
+        self,
+        *,
+        formal_root: str | Path,
+        study_root: str | Path,
+        destination_dir: str | Path,
+        reuse_existing: bool = False,
+    ) -> Path:
+        """Close two immutable lineages and create or reproduce one candidate atomically."""
+        formal_path = Path(formal_root)
+        study_path = Path(study_root)
+        workspace_path = _workspace_root_for_study(study_path)
+        manifest, manifest_payload, manifest_sha256 = _load_study_manifest(study_path)
+        if reuse_existing and os.path.lexists(destination_dir):
+            candidate, _ = self._validate_candidate_from_inputs(
+                formal_root=formal_path,
+                study_root=study_path,
+                workspace_root=workspace_path,
+                manifest=manifest,
+                manifest_payload=manifest_payload,
+                manifest_sha256=manifest_sha256,
+                candidate_dir=destination_dir,
+            )
+            return candidate
+        return self._compose_candidate_from_inputs(
+            formal_root=formal_path,
+            study_root=study_path,
+            workspace_root=workspace_path,
+            manifest=manifest,
+            manifest_payload=manifest_payload,
+            manifest_sha256=manifest_sha256,
+            destination_dir=destination_dir,
+        )
+
+    def materialize_production(
+        self,
+        *,
+        formal_root: str | Path,
+        study_root: str | Path,
+        candidate_dir: str | Path,
+        stage_facts: _ProductionPresentationFacts,
+    ) -> _PresentationBundle:
+        """Render production presentation bytes from an immutable candidate and approved facts."""
+        formal_path = Path(formal_root)
+        study_path = Path(study_root)
+        workspace_path = _workspace_root_for_study(study_path)
+        manifest, manifest_payload, manifest_sha256 = _load_study_manifest(study_path)
+        candidate, projection = self._validate_candidate_from_inputs(
+            formal_root=formal_path,
+            study_root=study_path,
+            workspace_root=workspace_path,
+            manifest=manifest,
+            manifest_payload=manifest_payload,
+            manifest_sha256=manifest_sha256,
+            candidate_dir=candidate_dir,
+        )
+        candidate_before = {path.name: _sha256_file(path) for path in candidate.iterdir()}
+        approved_downloads = _validate_production_facts(stage_facts)
+        report_payload = _read_json(candidate / _REPORT_PAYLOAD)
+        if report_payload.get("production_deploy_eligible") is not False:
+            raise _RobustnessReportClosureError("candidate report payload is not validation-only")
+        candidate_downloads = _string_mapping(report_payload.get("downloads"), "candidate downloads")
+        if set(candidate_downloads) != set(approved_downloads):
+            raise _RobustnessReportClosureError("production presentation changed the approved download keys")
+        report_payload["downloads"] = approved_downloads
+        report_payload["production_deploy_eligible"] = True
+        report_payload["production_release"] = _production_release_payload(stage_facts)
+        bundle = _PresentationBundle(
+            report_payload=_json_bytes(report_payload),
+            report_html=_render_additive_report(
+                render_report(projection.formal.report_payload),
+                payload=report_payload,
+                stage_facts=stage_facts,
+            ).encode("utf-8"),
+        )
+        self.validate_bundle(bundle, stage_facts=stage_facts)
+        if candidate_before != {path.name: _sha256_file(path) for path in candidate.iterdir()}:
+            raise _RobustnessReportClosureError("production presentation mutated the validation candidate")
+        _assert_formal_unchanged(projection.formal, dict(projection.formal.artifact_hashes))
+        _assert_study_unchanged(projection.study, dict(projection.study.file_hashes))
+        return bundle
+
+    def validate_bundle(
+        self,
+        bundle: _PresentationBundle,
+        *,
+        stage_facts: _ProductionPresentationFacts | None = None,
+    ) -> None:
+        """Validate payload, DOM stage, selectors, links, copy, and offline presentation safety."""
+        try:
+            _validate_presentation_bundle(bundle, stage_facts=stage_facts)
+        except _RobustnessReportClosureError:
+            raise
+        except (TypeError, ValueError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise _RobustnessReportClosureError("report presentation bundle failed validation") from exc
+
+    def _compose_candidate_from_inputs(
+        self,
+        *,
+        formal_root: Path,
+        study_root: Path,
+        workspace_root: Path,
+        manifest: ConcurrentRobustnessManifest,
+        manifest_payload: bytes,
+        manifest_sha256: str,
+        destination_dir: str | Path,
+    ) -> Path:
+        destination = _validate_destination(
+            Path(destination_dir),
+            protected_roots=(formal_root, study_root, workspace_root),
+        )
+        projection = _build_candidate_projection(
+            formal_root=formal_root,
+            study_root=study_root,
+            manifest=manifest,
+            manifest_payload=manifest_payload,
+            manifest_sha256=manifest_sha256,
+        )
+        formal_before = dict(projection.formal.artifact_hashes)
+        study_before = dict(projection.study.file_hashes)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        if destination.parent.is_symlink():
+            raise _RobustnessReportPathError("robustness report destination parent must not be a symlink")
+        staging = Path(
+            tempfile.mkdtemp(
+                prefix=f".{destination.name}.{manifest.output_identity}.",
+                suffix=".staging",
+                dir=destination.parent,
+            )
+        )
+        try:
+            if os.stat(staging).st_dev != os.stat(destination.parent).st_dev:
+                raise _RobustnessReportPathError("robustness report staging must share the destination filesystem")
+            for relative_path, payload in projection.payloads.items():
+                target = staging / relative_path
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(payload)
+            _validate_candidate(
+                staging,
+                expected_payloads=projection.payloads,
+                expected_row_counts=projection.rows.counts(),
+            )
+            _assert_formal_unchanged(projection.formal, formal_before)
+            _assert_study_unchanged(projection.study, study_before)
+            if os.path.lexists(destination):
+                raise _RobustnessReportConflictError("robustness report destination appeared during publication")
+            os.replace(staging, destination)
+        except Exception:
+            if os.path.lexists(staging):
+                shutil.rmtree(staging, ignore_errors=True)
+            raise
+        _validate_candidate(
+            destination,
+            expected_payloads=projection.payloads,
+            expected_row_counts=projection.rows.counts(),
+        )
+        _assert_formal_unchanged(projection.formal, formal_before)
+        _assert_study_unchanged(projection.study, study_before)
+        return destination
+
+    def _validate_candidate_from_inputs(
+        self,
+        *,
+        formal_root: Path,
+        study_root: Path,
+        workspace_root: Path,
+        manifest: ConcurrentRobustnessManifest,
+        manifest_payload: bytes,
+        manifest_sha256: str,
+        candidate_dir: str | Path,
+    ) -> tuple[Path, _CandidateProjection]:
+        candidate = Path(candidate_dir)
+        try:
+            if ".." in candidate.parts:
+                raise ValueError("candidate contains an unsafe parent traversal")
+            absolute = Path(os.path.abspath(candidate))
+            resolved = candidate.resolve(strict=True)
+            if absolute != resolved or candidate.is_symlink() or not resolved.is_dir():
+                raise ValueError("candidate is not a real directory")
+            protected = tuple(root.resolve(strict=True) for root in (formal_root, study_root, workspace_root))
+            if any(
+                resolved == root or resolved.is_relative_to(root) or root.is_relative_to(resolved)
+                for root in protected
+            ):
+                raise ValueError("candidate overlaps a protected source root")
+            projection = _build_candidate_projection(
+                formal_root=formal_root,
+                study_root=study_root,
+                manifest=manifest,
+                manifest_payload=manifest_payload,
+                manifest_sha256=manifest_sha256,
+            )
+            formal_before = dict(projection.formal.artifact_hashes)
+            study_before = dict(projection.study.file_hashes)
+            _validate_candidate(
+                resolved,
+                expected_payloads=projection.payloads,
+                expected_row_counts=projection.rows.counts(),
+            )
+            _assert_formal_unchanged(projection.formal, formal_before)
+            _assert_study_unchanged(projection.study, study_before)
+            return resolved, projection
+        except (_RobustnessReportPathError, _RobustnessReportConflictError, _RobustnessReportClosureError):
+            raise
+        except (FileNotFoundError, OSError, TypeError, ValueError, json.JSONDecodeError) as exc:
+            raise _RobustnessReportClosureError("existing robustness report candidate failed closure") from exc
+
+
+_REPORT_PRESENTATION = _ReportPresentationInterface()
+
+
 def _compose_concurrent_robustness_report_candidate(
     *,
     formal_root: Path,
@@ -227,75 +474,16 @@ def _compose_concurrent_robustness_report_candidate(
     manifest_sha256: str,
     destination_dir: str | Path,
 ) -> Path:
-    """Privately close two explicit lineages and atomically publish one validation candidate."""
-    destination = _validate_destination(
-        Path(destination_dir),
-        protected_roots=(formal_root, study_root, workspace_root),
-    )
-    try:
-        formal = close_concurrent_message_artifacts(formal_root)
-    except (FileNotFoundError, OSError, TypeError, ValueError, json.JSONDecodeError) as exc:
-        raise _RobustnessReportClosureError("historical Concurrent Formal closure failed") from exc
-    formal_manifest_hash = formal.artifact_hashes.get(CONCURRENT_MESSAGE_ARTIFACT_MANIFEST_JSON)
-    if formal_manifest_hash is None or formal_manifest_hash != manifest.source.manifest_sha256:
-        raise _RobustnessReportClosureError("historical Formal source is crossed with the robustness manifest")
-    closed_study = _close_study_root(
-        study_root,
+    """Compatibility path retained until the Release caller migrates to the package Interface."""
+    return _REPORT_PRESENTATION._compose_candidate_from_inputs(
+        formal_root=formal_root,
+        study_root=study_root,
+        workspace_root=workspace_root,
         manifest=manifest,
         manifest_payload=manifest_payload,
         manifest_sha256=manifest_sha256,
-        formal_manifest_sha256=formal_manifest_hash,
+        destination_dir=destination_dir,
     )
-    formal_before = dict(formal.artifact_hashes)
-    study_before = dict(closed_study.file_hashes)
-    rows = _build_report_rows(closed_study, manifest)
-    report_payload = _build_report_payload(
-        formal=formal,
-        study=closed_study,
-        manifest=manifest,
-        manifest_sha256=manifest_sha256,
-        rows=rows,
-    )
-    payloads = _candidate_payloads(
-        formal=formal,
-        study=closed_study,
-        manifest=manifest,
-        manifest_sha256=manifest_sha256,
-        rows=rows,
-        report_payload=report_payload,
-    )
-
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    if destination.parent.is_symlink():
-        raise _RobustnessReportPathError("robustness report destination parent must not be a symlink")
-    staging = Path(
-        tempfile.mkdtemp(
-            prefix=f".{destination.name}.{manifest.output_identity}.",
-            suffix=".staging",
-            dir=destination.parent,
-        )
-    )
-    try:
-        if os.stat(staging).st_dev != os.stat(destination.parent).st_dev:
-            raise _RobustnessReportPathError("robustness report staging must share the destination filesystem")
-        for relative_path, payload in payloads.items():
-            target = staging / relative_path
-            target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_bytes(payload)
-        _validate_candidate(staging, expected_payloads=payloads, expected_row_counts=rows.counts())
-        _assert_formal_unchanged(formal, formal_before)
-        _assert_study_unchanged(closed_study, study_before)
-        if os.path.lexists(destination):
-            raise _RobustnessReportConflictError("robustness report destination appeared during publication")
-        os.replace(staging, destination)
-    except Exception:
-        if os.path.lexists(staging):
-            shutil.rmtree(staging, ignore_errors=True)
-        raise
-    _validate_candidate(destination, expected_payloads=payloads, expected_row_counts=rows.counts())
-    _assert_formal_unchanged(formal, formal_before)
-    _assert_study_unchanged(closed_study, study_before)
-    return destination
 
 
 def _validate_concurrent_robustness_report_candidate(
@@ -308,56 +496,44 @@ def _validate_concurrent_robustness_report_candidate(
     manifest_sha256: str,
     candidate_dir: str | Path,
 ) -> Path:
-    """Reproduce and validate an already-published candidate without rewriting it."""
-    candidate = Path(candidate_dir)
+    """Compatibility path retained until the Release caller migrates to the package Interface."""
+    candidate, _ = _REPORT_PRESENTATION._validate_candidate_from_inputs(
+        formal_root=formal_root,
+        study_root=study_root,
+        workspace_root=workspace_root,
+        manifest=manifest,
+        manifest_payload=manifest_payload,
+        manifest_sha256=manifest_sha256,
+        candidate_dir=candidate_dir,
+    )
+    return candidate
+
+
+def _workspace_root_for_study(study_root: Path) -> Path:
+    if not study_root.name.endswith(_CLOSED_STUDY_ROOT_SUFFIX):
+        raise _RobustnessReportPathError("immutable study root does not identify its protected workspace")
+    workspace_name = study_root.name[: -len(_CLOSED_STUDY_ROOT_SUFFIX)]
+    if not workspace_name:
+        raise _RobustnessReportPathError("immutable study root has an invalid workspace identity")
+    return study_root.with_name(workspace_name)
+
+
+def _load_study_manifest(
+    study_root: Path,
+) -> tuple[ConcurrentRobustnessManifest, bytes, str]:
     try:
-        absolute = Path(os.path.abspath(candidate))
-        resolved = candidate.resolve(strict=True)
-        if absolute != resolved or candidate.is_symlink() or not resolved.is_dir():
-            raise ValueError("candidate is not a real directory")
-        protected = tuple(root.resolve(strict=True) for root in (formal_root, study_root, workspace_root))
-        if any(
-            resolved == root or resolved.is_relative_to(root) or root.is_relative_to(resolved)
-            for root in protected
-        ):
-            raise ValueError("candidate overlaps a protected source root")
-        formal = close_concurrent_message_artifacts(formal_root)
-        formal_manifest_hash = formal.artifact_hashes.get(CONCURRENT_MESSAGE_ARTIFACT_MANIFEST_JSON)
-        if formal_manifest_hash is None or formal_manifest_hash != manifest.source.manifest_sha256:
-            raise ValueError("historical Formal source is crossed with the robustness manifest")
-        closed_study = _close_study_root(
-            study_root,
-            manifest=manifest,
-            manifest_payload=manifest_payload,
-            manifest_sha256=manifest_sha256,
-            formal_manifest_sha256=formal_manifest_hash,
-        )
-        formal_before = dict(formal.artifact_hashes)
-        study_before = dict(closed_study.file_hashes)
-        rows = _build_report_rows(closed_study, manifest)
-        report_payload = _build_report_payload(
-            formal=formal,
-            study=closed_study,
-            manifest=manifest,
-            manifest_sha256=manifest_sha256,
-            rows=rows,
-        )
-        expected_payloads = _candidate_payloads(
-            formal=formal,
-            study=closed_study,
-            manifest=manifest,
-            manifest_sha256=manifest_sha256,
-            rows=rows,
-            report_payload=report_payload,
-        )
-        _validate_candidate(resolved, expected_payloads=expected_payloads, expected_row_counts=rows.counts())
-        _assert_formal_unchanged(formal, formal_before)
-        _assert_study_unchanged(closed_study, study_before)
-        return resolved
-    except (_RobustnessReportPathError, _RobustnessReportConflictError, _RobustnessReportClosureError):
+        from .concurrent_robustness_study import ConcurrentRobustnessManifest as ManifestModel
+
+        manifest_path = study_root / "study_manifest.json"
+        if manifest_path.is_symlink() or not manifest_path.is_file():
+            raise ValueError("study manifest is not a regular file")
+        payload = manifest_path.read_bytes()
+        manifest = ManifestModel.model_validate_json(payload)
+        return manifest, payload, _sha256_bytes(payload)
+    except _RobustnessReportClosureError:
         raise
-    except (FileNotFoundError, OSError, TypeError, ValueError, json.JSONDecodeError) as exc:
-        raise _RobustnessReportClosureError("existing robustness report candidate failed closure") from exc
+    except (OSError, TypeError, ValueError, json.JSONDecodeError) as exc:
+        raise _RobustnessReportClosureError("immutable study lineage has an invalid manifest") from exc
 
 
 def _validate_destination(destination: Path, *, protected_roots: Sequence[Path]) -> Path:
@@ -401,6 +577,55 @@ def _validate_destination(destination: Path, *, protected_roots: Sequence[Path])
     if any(os.stat(root).st_dev != os.stat(existing_parent).st_dev for root in roots):
         raise _RobustnessReportPathError("robustness report sources and destination must share a filesystem")
     return resolved
+
+
+def _build_candidate_projection(
+    *,
+    formal_root: Path,
+    study_root: Path,
+    manifest: ConcurrentRobustnessManifest,
+    manifest_payload: bytes,
+    manifest_sha256: str,
+) -> _CandidateProjection:
+    try:
+        formal = close_concurrent_message_artifacts(formal_root)
+    except (FileNotFoundError, OSError, TypeError, ValueError, json.JSONDecodeError) as exc:
+        raise _RobustnessReportClosureError("historical Concurrent Formal closure failed") from exc
+    formal_manifest_hash = formal.artifact_hashes.get(CONCURRENT_MESSAGE_ARTIFACT_MANIFEST_JSON)
+    if formal_manifest_hash is None or formal_manifest_hash != manifest.source.manifest_sha256:
+        raise _RobustnessReportClosureError("historical Formal source is crossed with the robustness manifest")
+    closed_study = _close_study_root(
+        study_root,
+        manifest=manifest,
+        manifest_payload=manifest_payload,
+        manifest_sha256=manifest_sha256,
+        formal_manifest_sha256=formal_manifest_hash,
+    )
+    rows = _build_report_rows(closed_study, manifest)
+    report_payload = _build_report_payload(
+        formal=formal,
+        study=closed_study,
+        manifest=manifest,
+        manifest_sha256=manifest_sha256,
+        rows=rows,
+    )
+    payloads = _candidate_payloads(
+        formal=formal,
+        study=closed_study,
+        manifest=manifest,
+        manifest_sha256=manifest_sha256,
+        rows=rows,
+        report_payload=report_payload,
+    )
+    return _CandidateProjection(
+        formal=formal,
+        study=closed_study,
+        manifest=manifest,
+        manifest_sha256=manifest_sha256,
+        rows=rows,
+        report_payload=report_payload,
+        payloads=payloads,
+    )
 
 
 def _close_study_root(
@@ -861,6 +1086,184 @@ def _artifact_mapping(
     return dict(sorted(mapping.items()))
 
 
+def _validate_production_facts(facts: _ProductionPresentationFacts) -> dict[str, str]:
+    strings = (
+        facts.release_id,
+        facts.release_contract_schema,
+        facts.canonical_endpoint,
+        facts.production_evidence_schema,
+        facts.provider_transport,
+    )
+    if any(not isinstance(value, str) or not value for value in strings):
+        raise _RobustnessReportClosureError("production presentation facts contain an empty string")
+    if (
+        type(facts.formal_logical_judgments) is not int
+        or facts.formal_logical_judgments < 0
+        or type(facts.formal_physical_attempts) is not int
+        or facts.formal_physical_attempts < 0
+    ):
+        raise _RobustnessReportClosureError("production presentation judgment counts are invalid")
+    billed_cost = facts.subscription_billed_cost_usd
+    if isinstance(billed_cost, bool) or not isinstance(billed_cost, (int, float)) or not math.isfinite(billed_cost):
+        raise _RobustnessReportClosureError("production presentation billed cost is invalid")
+    downloads = _string_mapping(facts.approved_downloads, "production approved downloads")
+    for key, relative_path in downloads.items():
+        path = PurePosixPath(relative_path)
+        if (
+            _safe_id(key) != key
+            or "\\" in relative_path
+            or path.is_absolute()
+            or path.as_posix() != relative_path
+            or ".." in path.parts
+        ):
+            raise _RobustnessReportClosureError("production presentation download mapping is unsafe")
+    return downloads
+
+
+def _production_release_payload(facts: _ProductionPresentationFacts) -> dict[str, Any]:
+    return {
+        "schema_version": facts.production_evidence_schema,
+        "release_id": facts.release_id,
+        "canonical_endpoint": facts.canonical_endpoint,
+        "formal_logical_judgments": facts.formal_logical_judgments,
+        "formal_physical_attempts": facts.formal_physical_attempts,
+        "provider_transport": facts.provider_transport,
+        "subscription_billed_cost_usd": facts.subscription_billed_cost_usd,
+    }
+
+
+def _validate_presentation_bundle(
+    bundle: _PresentationBundle,
+    *,
+    stage_facts: _ProductionPresentationFacts | None,
+) -> None:
+    payload_value = json.loads(bundle.report_payload)
+    payload = _mapping(payload_value, "report presentation payload")
+    html_document = bundle.report_html.decode("utf-8")
+    if payload.get("schema_version") != _REPORT_PAYLOAD_SCHEMA:
+        raise ValueError("report presentation payload schema is unsupported")
+    downloads = _string_mapping(payload.get("downloads"), "report presentation downloads")
+
+    if stage_facts is None:
+        stage_test_id = "robustness-report-candidate"
+        other_test_id = "robustness-report-release"
+        eligibility = False
+        release_attribute = ' aria-labelledby="robustness-title"'
+        expected_copy = "values in this candidate"
+        if "production_release" in payload:
+            raise ValueError("candidate presentation contains production release metadata")
+    else:
+        approved_downloads = _validate_production_facts(stage_facts)
+        if downloads != approved_downloads:
+            raise ValueError("production payload downloads differ from approved presentation facts")
+        if _mapping(payload.get("production_release"), "production release metadata") != (
+            _production_release_payload(stage_facts)
+        ):
+            raise ValueError("production release metadata is crossed")
+        stage_test_id = "robustness-report-release"
+        other_test_id = "robustness-report-candidate"
+        eligibility = True
+        release_attribute = f' data-release-id="{_escape(stage_facts.release_id, quote=True)}"'
+        expected_copy = "values in this production release"
+
+    if payload.get("production_deploy_eligible") is not eligibility:
+        raise ValueError("report payload eligibility is crossed with its presentation stage")
+    root_signature = f'data-testid="{stage_test_id}"{release_attribute}'
+    selector = f"document.querySelector('[data-testid=\"{stage_test_id}\"]')"
+    stage_marker = f'data-testid="{stage_test_id}"'
+    other_marker = f'data-testid="{other_test_id}"'
+    eligibility_text = str(eligibility).lower()
+    eligibility_marker = (
+        'data-testid="robustness-production-eligibility">'
+        f"production_deploy_eligible={eligibility_text}"
+    )
+    if (
+        html_document.count(root_signature) != 1
+        or html_document.count(stage_marker) != 2
+        or html_document.count(selector) != 1
+        or other_marker in html_document
+        or html_document.count(eligibility_marker) != 1
+        or f"production_deploy_eligible={str(not eligibility).lower()}" in html_document
+        or expected_copy not in html_document
+    ):
+        raise ValueError("report DOM stage, selector, eligibility, or copy is crossed")
+
+    if stage_facts is None:
+        if (
+            "data-release-id=" in html_document
+            or 'name="abm-release-id"' in html_document
+            or 'name="abm-release-contract"' in html_document
+        ):
+            raise ValueError("candidate presentation contains production stage metadata")
+    else:
+        release_id = _escape(stage_facts.release_id, quote=True)
+        release_schema = _escape(stage_facts.release_contract_schema, quote=True)
+        release_meta = f'<meta name="abm-release-id" content="{release_id}">'
+        contract_meta = f'<meta name="abm-release-contract" content="{release_schema}">'
+        if (
+            html_document.count(release_meta) != 1
+            or html_document.count(contract_meta) != 1
+            or len(re.findall(r'\bdata-release-id="[^"]*"', html_document)) != 1
+            or len(re.findall(r'<meta\s+name="abm-release-id"\s+content="[^"]*">', html_document)) != 1
+        ):
+            raise ValueError("production presentation release metadata is crossed")
+
+    required = (
+        'data-testid="mechanism-overview-section"',
+        'data-testid="run-evidence-mode-panel"',
+        'data-testid="run-trace-lineage-data"',
+        'data-testid="robustness-source-lineage"',
+        'data-testid="ranking-weight-sensitivity-section"',
+        'data-testid="prompt-model-robustness-section"',
+        "Demographic Shadow evidence remains bound to the historical Formal source",
+    )
+    if any(marker not in html_document for marker in required):
+        raise ValueError("report presentation is missing required historical or robustness evidence")
+    if re.search(
+        r"<(?:script|link|img)\b[^>]*(?:src|href)=[\"']https?://",
+        html_document,
+        re.IGNORECASE,
+    ):
+        raise ValueError("report presentation requests an external resource")
+    if _presentation_downloads_from_html(html_document) != downloads:
+        raise ValueError("report presentation hrefs differ from its payload downloads")
+
+
+def _presentation_downloads_from_html(html_document: str) -> dict[str, str]:
+    section_starts = list(
+        re.finditer(
+            r'<section\b(?=[^>]*\bdata-testid="robustness-downloads-section")[^>]*>',
+            html_document,
+            re.IGNORECASE,
+        )
+    )
+    if len(section_starts) != 1:
+        raise ValueError("report download section is missing or ambiguous")
+    section_end = html_document.find("</section>", section_starts[0].end())
+    if section_end < 0:
+        raise ValueError("report download section is not closed")
+    section = html_document[section_starts[0].end():section_end]
+    downloads: dict[str, str] = {}
+    for anchor in re.findall(r"<a\b[^>]*>", section, re.IGNORECASE):
+        pairs = re.findall(r'([A-Za-z_:][A-Za-z0-9_.:-]*)="([^"]*)"', anchor)
+        attributes = {key: html.unescape(value) for key, value in pairs}
+        if len(attributes) != len(pairs):
+            raise ValueError("report download link attributes are ambiguous")
+        test_id = attributes.get("data-testid", "")
+        prefix = "robustness-download-"
+        key = test_id.removeprefix(prefix)
+        href = attributes.get("href")
+        if (
+            not test_id.startswith(prefix)
+            or not re.fullmatch(r"[A-Za-z0-9_-]+", key)
+            or href is None
+            or key in downloads
+        ):
+            raise ValueError("report download link mapping is invalid")
+        downloads[key] = href
+    return downloads
+
+
 def _validate_candidate(
     candidate: Path,
     *,
@@ -948,21 +1351,13 @@ def _validate_candidate(
             raise ValueError("release evidence Formal source is crossed")
         if release.get("study_manifest_sha256") != manifest_study.get("manifest_sha256"):
             raise ValueError("release evidence study source is crossed")
-        report_html = (candidate / CONCURRENT_MESSAGE_REPORT_HTML).read_text(encoding="utf-8")
-        for required in (
-            'data-testid="mechanism-overview-section"',
-            'data-testid="run-evidence-mode-panel"',
-            'data-testid="run-trace-lineage-data"',
-            'data-testid="robustness-source-lineage"',
-            'data-testid="ranking-weight-sensitivity-section"',
-            'data-testid="prompt-model-robustness-section"',
-            "Demographic Shadow evidence remains bound to the historical Formal source",
-            "production_deploy_eligible=false",
-        ):
-            if required not in report_html:
-                raise ValueError(f"candidate report is missing a required evidence marker: {required}")
-        if re.search(r"<(?:script|link|img)\b[^>]*(?:src|href)=[\"']https?://", report_html, re.IGNORECASE):
-            raise ValueError("candidate report requests an external chart, font, or image resource")
+        _validate_presentation_bundle(
+            _PresentationBundle(
+                report_payload=(candidate / _REPORT_PAYLOAD).read_bytes(),
+                report_html=(candidate / CONCURRENT_MESSAGE_REPORT_HTML).read_bytes(),
+            ),
+            stage_facts=None,
+        )
         _validate_csv(candidate / _WEIGHT_MESSAGE_CSV, _WEIGHT_MESSAGE_FIELDS, expected_row_counts["ranking_weight_message_summary"])
         _validate_csv(candidate / _WEIGHT_BATCH_CSV, _WEIGHT_BATCH_FIELDS, expected_row_counts["ranking_weight_batch_diagnostics"])
         _validate_csv(candidate / _SHARED_SEED_CSV, _SHARED_SEED_FIELDS, expected_row_counts["prompt_model_shared_seed_summary"])
@@ -986,20 +1381,49 @@ def _validate_csv(path: Path, fields: Sequence[str], expected_rows: int) -> None
         raise ValueError(f"{path.name} row count does not close")
 
 
-def _render_additive_report(formal_html: str, *, payload: Mapping[str, Any]) -> str:
+def _render_additive_report(
+    formal_html: str,
+    *,
+    payload: Mapping[str, Any],
+    stage_facts: _ProductionPresentationFacts | None = None,
+) -> str:
     if formal_html.count("</head>") != 1 or formal_html.count("</body>") != 1:
         raise _RobustnessReportClosureError("historical report renderer did not return one closed HTML document")
     insertion_marker = '<aside id="trace-drawer"'
     if formal_html.count(insertion_marker) != 1:
         raise _RobustnessReportClosureError("historical Editorial shell does not expose the private composition marker")
-    section_html = _robustness_sections(payload)
-    rendered = formal_html.replace("</head>", f"<style>{_ROBUSTNESS_CSS}</style>\n</head>", 1)
+    section_html = _robustness_sections(payload, stage_facts=stage_facts)
+    head_addition = f"<style>{_ROBUSTNESS_CSS}</style>\n"
+    if stage_facts is not None:
+        head_addition += (
+            f'<meta name="abm-release-contract" content="{_escape(stage_facts.release_contract_schema, quote=True)}">'
+            f'<meta name="abm-release-id" content="{_escape(stage_facts.release_id, quote=True)}">'
+        )
+    stage_test_id = (
+        "robustness-report-release" if stage_facts is not None else "robustness-report-candidate"
+    )
+    script = _ROBUSTNESS_SCRIPT.replace("__REPORT_STAGE_TEST_ID__", stage_test_id)
+    rendered = formal_html.replace("</head>", f"{head_addition}</head>", 1)
     rendered = rendered.replace(insertion_marker, f"{section_html}\n        {insertion_marker}", 1)
-    rendered = rendered.replace("</body>", f"<script>{_ROBUSTNESS_SCRIPT}</script>\n</body>", 1)
+    rendered = rendered.replace("</body>", f"<script>{script}</script>\n</body>", 1)
     return rendered
 
 
-def _robustness_sections(payload: Mapping[str, Any]) -> str:
+def _robustness_sections(
+    payload: Mapping[str, Any],
+    *,
+    stage_facts: _ProductionPresentationFacts | None = None,
+) -> str:
+    if stage_facts is None:
+        stage_test_id = "robustness-report-candidate"
+        stage_attribute = ""
+        eligibility = "false"
+        download_scope = "candidate"
+    else:
+        stage_test_id = "robustness-report-release"
+        stage_attribute = f' data-release-id="{_escape(stage_facts.release_id, quote=True)}"'
+        eligibility = "true"
+        download_scope = "production release"
     lineage = _mapping(payload["source_lineage"], "source lineage")
     formal = _mapping(lineage["formal"], "Formal source")
     study = _mapping(lineage["study"], "study source")
@@ -1149,12 +1573,12 @@ def _robustness_sections(payload: Mapping[str, Any]) -> str:
     )
 
     return f"""
-        <section id="robustness-evidence" class="robustness-report" data-testid="robustness-report-candidate" aria-labelledby="robustness-title">
+        <section id="robustness-evidence" class="robustness-report" data-testid="{stage_test_id}"{stage_attribute} aria-labelledby="robustness-title">
           <div class="robustness-hero">
             <p class="robustness-kicker">Additive evidence · 增量证据</p>
             <h2 id="robustness-title">Ranking policy and Prompt–Model robustness, without relabelling the historical run</h2>
             <p>One fixed sample, one fixed graph, and one realized path per cell. These descriptive comparisons use no ground truth and make no causal, Calibration, or statistical-equivalence claim.</p>
-            <code data-testid="robustness-production-eligibility">production_deploy_eligible=false</code>
+            <code data-testid="robustness-production-eligibility">production_deploy_eligible={eligibility}</code>
           </div>
           <div class="robustness-lineage" data-testid="robustness-source-lineage">
             <article data-source-kind="formal">
@@ -1218,7 +1642,7 @@ def _robustness_sections(payload: Mapping[str, Any]) -> str:
           </section>
 
           <section class="robustness-section robustness-downloads" data-testid="robustness-downloads-section" aria-labelledby="robustness-downloads-title">
-            <div class="robustness-section-heading"><div><h2 id="robustness-downloads-title">Approved robustness downloads</h2><p>Companion JSON and CSV files close to the schemas, row counts, hashes, and exact values in this candidate. No raw Prompt, Provider payload, response, or credential is included.</p></div></div>
+            <div class="robustness-section-heading"><div><h2 id="robustness-downloads-title">Approved robustness downloads</h2><p>Companion JSON and CSV files close to the schemas, row counts, hashes, and exact values in this {download_scope}. No raw Prompt, Provider payload, response, or credential is included.</p></div></div>
             <div class="robustness-download-grid">{download_links}</div>
           </section>
         </section>
@@ -1484,7 +1908,7 @@ _ROBUSTNESS_CSS = r"""
 
 _ROBUSTNESS_SCRIPT = r"""
 (() => {
-  const report = document.querySelector('[data-testid="robustness-report-candidate"]');
+  const report = document.querySelector('[data-testid="__REPORT_STAGE_TEST_ID__"]');
   if (!report) return;
   const familySelect = report.querySelector('[data-weight-family-select]');
   const messageSelect = report.querySelector('[data-prompt-message-select]');

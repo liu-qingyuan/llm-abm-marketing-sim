@@ -35,11 +35,10 @@ from .concurrent_message_report import (
     close_concurrent_message_artifacts,
 )
 from .concurrent_robustness_report import (
-    _compose_concurrent_robustness_report_candidate,
+    _REPORT_PRESENTATION,
     _RobustnessReportClosureError,
     _RobustnessReportConflictError,
     _RobustnessReportPathError,
-    _validate_concurrent_robustness_report_candidate,
 )
 from .decision import LLMDecisionAdapter
 from .final_research import FORMAL_RUN_STATUS, SEED_FIRST_SAMPLING_METHOD, VALIDATION_RUN_STATUS
@@ -4444,26 +4443,12 @@ class ConcurrentRobustnessStudy:
                 effective_report_destination = _dynamic_report_destination(output_path)
             if effective_report_destination is not None:
                 try:
-                    if dynamic_preflight is not None and os.path.lexists(effective_report_destination):
-                        report_candidate = _validate_concurrent_robustness_report_candidate(
-                            formal_root=source_path,
-                            study_root=study_root,
-                            workspace_root=output_path,
-                            manifest=manifest,
-                            manifest_payload=manifest_payload,
-                            manifest_sha256=manifest_sha256,
-                            candidate_dir=effective_report_destination,
-                        )
-                    else:
-                        report_candidate = _compose_concurrent_robustness_report_candidate(
-                            formal_root=source_path,
-                            study_root=study_root,
-                            workspace_root=output_path,
-                            manifest=manifest,
-                            manifest_payload=manifest_payload,
-                            manifest_sha256=manifest_sha256,
-                            destination_dir=effective_report_destination,
-                        )
+                    report_candidate = _REPORT_PRESENTATION.compose_candidate(
+                        formal_root=source_path,
+                        study_root=study_root,
+                        destination_dir=effective_report_destination,
+                        reuse_existing=dynamic_preflight is not None,
+                    )
                 except _RobustnessReportPathError as exc:
                     raise ConcurrentRobustnessError(
                         ConcurrentRobustnessErrorCode.PATH_VIOLATION,
