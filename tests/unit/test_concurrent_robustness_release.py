@@ -10,6 +10,7 @@ from types import SimpleNamespace
 import pytest
 
 from llm_abm_sim import concurrent_robustness_release as release
+from llm_abm_sim import concurrent_robustness_report as report
 from llm_abm_sim.providers.pi_subscription import PI_SUBSCRIPTION_MODEL_ALIASES
 
 
@@ -60,24 +61,24 @@ class _FakeCellEvidenceModel:
         )
 
 
-def _candidate(candidate: Path) -> None:
+def _candidate(
+    candidate: Path,
+    *,
+    formal_manifest_sha256: str,
+    study_manifest_sha256: str,
+    study_artifact_manifest_sha256: str,
+) -> None:
     candidate.mkdir()
-    _write_json(
-        candidate / "artifact_manifest.json",
-        {
-            "schema_version": "concurrent-robustness-report-candidate-manifest-v1",
-            "candidate_type": "immutable_combined_robustness_report",
-            "candidate_identity_sha256": "b" * 64,
-            "formal_source": {"manifest_sha256": "a" * 64},
-            "study_source": {"root_identity_sha256": "c" * 64},
-            "production_deploy_eligible": False,
-        },
-    )
     _write_json(
         candidate / "release_evidence.json",
         {
             "schema_version": "concurrent-robustness-report-release-evidence-v1",
             "candidate_content_identity_sha256": "d" * 64,
+            "formal_source_manifest_sha256": formal_manifest_sha256,
+            "study_manifest_sha256": study_manifest_sha256,
+            "study_root_identity_sha256": "c" * 64,
+            "provider_calls_during_composition": 0,
+            "image_generation_triggered": False,
             "production_deploy_eligible": False,
         },
     )
@@ -96,83 +97,98 @@ def _candidate(candidate: Path) -> None:
     (candidate / "sample_manifest.json").write_text("{}\n", encoding="utf-8")
     (candidate / "sample_manifest.csv").write_text("user_id\nu1\n", encoding="utf-8")
     (candidate / "report.html").write_text(
-        """<!doctype html><html><head><title>test</title></head><body>
-<div data-testid="mechanism-overview-section"></div>
-<div data-testid="run-evidence-mode-panel"></div>
-<div data-testid="run-trace-lineage-data"></div>
-<section data-testid="robustness-report-candidate">
-<code data-testid="robustness-production-eligibility">production_deploy_eligible=false</code>
-<div data-testid="robustness-source-lineage"></div>
-<section data-testid="ranking-weight-sensitivity-section">
-<select data-testid="ranking-weight-family-select" data-weight-family-select>
-<option value="network-feedback">network-feedback</option>
-<option value="network-fit">network-fit</option>
-<option value="feedback-fit">feedback-fit</option>
-</select>
-<div data-weight-family="network-feedback"></div>
-<div data-weight-family="network-fit" hidden></div>
-<div data-weight-family="feedback-fit" hidden></div>
-</section>
-<section data-testid="prompt-model-robustness-section">
-<select data-testid="prompt-model-message-select" data-prompt-message-select>
-<option value="message_1">message_1</option><option value="message_2">message_2</option><option value="message_3">message_3</option>
-</select>
-<select data-testid="prompt-model-metric-select" data-prompt-metric-select>
-<option value="engagement">engagement</option><option value="audience">audience</option>
-</select>
-<div data-prompt-view="message_1|engagement"></div>
-<div data-prompt-view="message_1|audience" hidden></div>
-<div data-prompt-view="message_2|engagement" hidden></div>
-<div data-prompt-view="message_2|audience" hidden></div>
-<div data-prompt-view="message_3|engagement" hidden></div>
-<div data-prompt-view="message_3|audience" hidden></div>
-<table data-testid="shared-seed-exact-table"><tbody>
-<tr data-row-message-id="message_1"><td>message_1</td></tr>
-<tr data-row-message-id="message_2" hidden><td>message_2</td></tr>
-<tr data-row-message-id="message_3" hidden><td>message_3</td></tr>
-</tbody></table>
-</section>
-<section data-testid="robustness-downloads-section">
-<a data-testid="robustness-download-weight" href="ranking_weight_sensitivity.json">weight</a>
-<a data-testid="robustness-download-release_evidence" href="release_evidence.json">release evidence</a>
-</section>
-<p>Demographic Shadow evidence remains bound to the historical Formal source</p>
-<p>values in this candidate</p>
-</section>
-<script>
-(() => {
-  const report = document.querySelector('[data-testid="robustness-report-candidate"]');
-  if (!report) return;
-  const familySelect = report.querySelector('[data-weight-family-select]');
-  const messageSelect = report.querySelector('[data-prompt-message-select]');
-  const metricSelect = report.querySelector('[data-prompt-metric-select]');
-
-  const applyWeightFamily = () => {
-    const value = familySelect?.value || 'network-feedback';
-    report.querySelectorAll('[data-weight-family]').forEach((panel) => {
-      panel.hidden = panel.dataset.weightFamily !== value;
-    });
-  };
-  const applyPromptView = () => {
-    const message = messageSelect?.value || 'message_1';
-    const metric = metricSelect?.value || 'engagement';
-    report.querySelectorAll('[data-prompt-view]').forEach((panel) => {
-      panel.hidden = panel.dataset.promptView !== `${message}|${metric}`;
-    });
-    report.querySelectorAll('[data-row-message-id]').forEach((row) => {
-      row.hidden = row.dataset.rowMessageId !== message;
-    });
-  };
-
-  familySelect?.addEventListener('change', applyWeightFamily);
-  messageSelect?.addEventListener('change', applyPromptView);
-  metricSelect?.addEventListener('change', applyPromptView);
-  applyWeightFamily();
-  applyPromptView();
-})();
-</script></body></html>""",
+        "opaque candidate presentation owned by the Report Module\n",
         encoding="utf-8",
     )
+    artifact_paths = {
+        "release_evidence_json": "release_evidence.json",
+        "report_html": "report.html",
+        "report_payload_json": "concurrent_robustness_report_payload.json",
+        "sample_manifest_csv": "sample_manifest.csv",
+        "sample_manifest_json": "sample_manifest.json",
+        "weight_json": "ranking_weight_sensitivity.json",
+    }
+    artifact_hashes = {
+        name: _sha256(candidate / relative_path)
+        for name, relative_path in artifact_paths.items()
+    }
+    identity_rows = {
+        relative_path: artifact_hashes[name]
+        for name, relative_path in sorted(artifact_paths.items())
+    }
+    _write_json(
+        candidate / "artifact_manifest.json",
+        {
+            "schema_version": "concurrent-robustness-report-candidate-manifest-v1",
+            "candidate_type": "immutable_combined_robustness_report",
+            "candidate_identity_sha256": hashlib.sha256(
+                (
+                    json.dumps(identity_rows, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+                    + "\n"
+                ).encode()
+            ).hexdigest(),
+            "formal_source": {"manifest_sha256": formal_manifest_sha256},
+            "study_source": {
+                "manifest_sha256": study_manifest_sha256,
+                "artifact_manifest_sha256": study_artifact_manifest_sha256,
+                "root_identity_sha256": "c" * 64,
+            },
+            "artifacts": artifact_paths,
+            "sha256": artifact_hashes,
+            "approved_downloads": [
+                "ranking_weight_sensitivity.json",
+                "release_evidence.json",
+            ],
+            "production_deploy_eligible": False,
+        },
+    )
+
+
+class _FakeReportPresentation:
+    def __init__(
+        self,
+        *,
+        report_html: bytes = b"<!doctype html><html><body>report-owned production presentation</body></html>",
+    ) -> None:
+        self.report_html = report_html
+        self.calls: list[tuple[str, object]] = []
+        self.validation_error: ValueError | None = None
+
+    def materialize_production(self, **kwargs: object) -> report._PresentationBundle:
+        self.calls.append(("materialize", kwargs))
+        candidate = Path(str(kwargs["candidate_dir"]))
+        facts = kwargs["stage_facts"]
+        assert isinstance(facts, report._ProductionPresentationFacts)
+        payload = json.loads(
+            (candidate / "concurrent_robustness_report_payload.json").read_text(encoding="utf-8")
+        )
+        payload["downloads"] = dict(facts.approved_downloads)
+        payload["production_deploy_eligible"] = True
+        payload["production_release"] = {
+            "schema_version": facts.production_evidence_schema,
+            "release_id": facts.release_id,
+            "canonical_endpoint": facts.canonical_endpoint,
+            "formal_logical_judgments": facts.formal_logical_judgments,
+            "formal_physical_attempts": facts.formal_physical_attempts,
+            "provider_transport": facts.provider_transport,
+            "subscription_billed_cost_usd": facts.subscription_billed_cost_usd,
+        }
+        return report._PresentationBundle(
+            report_payload=(
+                json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n"
+            ).encode("utf-8"),
+            report_html=self.report_html,
+        )
+
+    def validate_bundle(
+        self,
+        bundle: report._PresentationBundle,
+        *,
+        stage_facts: report._ProductionPresentationFacts | None = None,
+    ) -> None:
+        self.calls.append(("validate", (bundle, stage_facts)))
+        if self.validation_error is not None:
+            raise self.validation_error
 
 
 def _promote_fixture(
@@ -180,6 +196,7 @@ def _promote_fixture(
     monkeypatch: pytest.MonkeyPatch,
     *,
     mutate_candidate: Callable[[Path], None] | None = None,
+    presentation: _FakeReportPresentation | None = None,
 ) -> SimpleNamespace:
     formal = tmp_path / "formal"
     study = tmp_path / "study"
@@ -187,11 +204,17 @@ def _promote_fixture(
     candidate = tmp_path / "candidate"
     for path in (formal, study, workspace):
         path.mkdir()
-    _candidate(candidate)
-    if mutate_candidate is not None:
-        mutate_candidate(candidate)
+    _write_json(formal / "artifact_manifest.json", {"fixture": "formal"})
     _write_json(study / "study_manifest.json", {"fixture": True})
     _write_json(study / "artifact_manifest.json", {"root_identity_sha256": "c" * 64})
+    _candidate(
+        candidate,
+        formal_manifest_sha256=_sha256(formal / "artifact_manifest.json"),
+        study_manifest_sha256=_sha256(study / "study_manifest.json"),
+        study_artifact_manifest_sha256=_sha256(study / "artifact_manifest.json"),
+    )
+    if mutate_candidate is not None:
+        mutate_candidate(candidate)
     _write_json(
         study / "prompt_model_cell_evidence.json",
         {
@@ -210,6 +233,7 @@ def _promote_fixture(
     execution_contract = contracts / "formal-run-contract.json"
     _write_json(execution_contract, {"fixture": True})
     fake_manifest = _fake_manifest(formal)
+    fake_manifest.source.manifest_sha256 = _sha256(formal / "artifact_manifest.json")
 
     class FakeManifestModel:
         @staticmethod
@@ -232,8 +256,14 @@ def _promote_fixture(
     monkeypatch.setattr(release, "_CellEvidenceDocument", _FakeCellEvidenceModel)
     monkeypatch.setattr(release, "_validate_cell_evidence_contract", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(release, "_validate_completed_dynamic_root", lambda **_kwargs: None)
-    monkeypatch.setattr(release, "_validate_concurrent_robustness_report_candidate", lambda **_kwargs: candidate)
     monkeypatch.setattr(release, "_validate_execution_contract", lambda **_kwargs: execution_document)
+    report_presentation = presentation or _FakeReportPresentation()
+    monkeypatch.setattr(release, "_REPORT_PRESENTATION", report_presentation)
+    candidate_before = {
+        path.relative_to(candidate): path.read_bytes()
+        for path in candidate.rglob("*")
+        if path.is_file()
+    }
 
     promoted = release.promote_concurrent_robustness_release(
         repo_root=tmp_path,
@@ -253,6 +283,8 @@ def _promote_fixture(
         study=study,
         workspace=workspace,
         execution_contract=execution_contract,
+        report_presentation=report_presentation,
+        candidate_before=candidate_before,
     )
 
 
@@ -287,78 +319,28 @@ def _reclose_tampered_release(source: Path, contract_path: Path) -> dict[str, ob
     return contract
 
 
+def test_promotion_delegates_opaque_presentation_to_report_module(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    opaque_html = b"<!doctype html><html><body>opaque Report presentation</body></html>"
+    presentation = _FakeReportPresentation(report_html=opaque_html)
+
+    fixture = _promote_fixture(tmp_path, monkeypatch, presentation=presentation)
+
+    assert (fixture.promoted.source_dir / "report.html").read_bytes() == opaque_html
+    assert presentation.calls[0][0] == "materialize"
+    assert any(kind == "validate" for kind, _payload in presentation.calls)
+
+
 def test_formal_candidate_promotes_without_mutating_validation_evidence(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    formal = tmp_path / "formal"
-    study = tmp_path / "study"
-    workspace = tmp_path / "workspace"
-    candidate = tmp_path / "candidate"
-    for path in (formal, study, workspace):
-        path.mkdir()
-    _candidate(candidate)
-    _write_json(study / "study_manifest.json", {"fixture": True})
-    _write_json(study / "artifact_manifest.json", {"root_identity_sha256": "c" * 64})
-    _write_json(
-        study / "prompt_model_cell_evidence.json",
-        {
-            "schema_version": "concurrent-robustness-cell-evidence-v1",
-            "evidence_profile": "formal_live",
-            "cell_count": 16,
-            "logical_judgment_count": 28_800,
-            "physical_attempt_count": 28_800,
-            "external_request_invocations": 28_800,
-            "live_api_triggered": True,
-            "production_deploy_eligible": False,
-        },
-    )
-    contracts = tmp_path / "contracts"
-    contracts.mkdir()
-    execution_contract = contracts / "formal-run-contract.json"
-    _write_json(execution_contract, {"fixture": True})
-    fake_manifest = _fake_manifest(formal)
-
-    class FakeManifestModel:
-        @staticmethod
-        def model_validate(_payload: object) -> SimpleNamespace:
-            return fake_manifest
-
-        @staticmethod
-        def model_validate_json(_payload: bytes) -> SimpleNamespace:
-            return fake_manifest
-
-    execution_document = {
-        "implementation_commit": "1234567",
-        "closure_implementation_commit": "7654321",
-        "closure_replay_sha256": "e" * 64,
-        "physical_provider_attempts": 28_800,
-        "subscription_nominal_reference_cost_usd": 1.25,
-        "subscription_billed_cost_usd": 0.0,
-    }
-    monkeypatch.setattr(release, "ConcurrentRobustnessManifest", FakeManifestModel)
-    monkeypatch.setattr(release, "_CellEvidenceDocument", _FakeCellEvidenceModel)
-    monkeypatch.setattr(release, "_validate_cell_evidence_contract", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(release, "_validate_completed_dynamic_root", lambda **_kwargs: None)
-    monkeypatch.setattr(release, "_validate_concurrent_robustness_report_candidate", lambda **_kwargs: candidate)
-    monkeypatch.setattr(release, "_validate_execution_contract", lambda **_kwargs: execution_document)
-
-    candidate_before = {
-        path.relative_to(candidate): path.read_bytes()
-        for path in candidate.rglob("*")
-        if path.is_file()
-    }
-    promoted = release.promote_concurrent_robustness_release(
-        repo_root=tmp_path,
-        formal_root=formal,
-        study_root=study,
-        workspace_root=workspace,
-        candidate_dir=candidate,
-        execution_contract_path=execution_contract,
-        destination_dir=tmp_path / "production-release",
-        release_contract_path=tmp_path / "release-contract.json",
-        release_id="robustness-release-test",
-    )
+    fixture = _promote_fixture(tmp_path, monkeypatch)
+    candidate = fixture.candidate
+    candidate_before = fixture.candidate_before
+    promoted = fixture.promoted
 
     assert candidate_before == {
         path.relative_to(candidate): path.read_bytes()
@@ -367,17 +349,9 @@ def test_formal_candidate_promotes_without_mutating_validation_evidence(
     }
     assert promoted.source_dir.is_dir()
     assert promoted.contract_path.is_file()
-    production_html = (promoted.source_dir / "report.html").read_text(encoding="utf-8")
-    assert "production_deploy_eligible=true" in production_html
-    assert "production_deploy_eligible=false" not in production_html
-    assert production_html.count('data-testid="robustness-report-release"') == 2
-    assert 'data-testid="robustness-report-candidate"' not in production_html
-    assert production_html.count(
-        'document.querySelector(\'[data-testid="robustness-report-release"]\')'
-    ) == 1
-    assert 'document.querySelector(\'[data-testid="robustness-report-candidate"]\')' not in production_html
-    assert 'href="robustness_production_release_evidence.json"' in production_html
-    assert 'href="release_evidence.json"' not in production_html
+    assert (promoted.source_dir / "report.html").read_bytes() == (
+        fixture.report_presentation.report_html
+    )
     production_payload = json.loads(
         (promoted.source_dir / "concurrent_robustness_report_payload.json").read_text(encoding="utf-8")
     )
@@ -416,33 +390,89 @@ def test_formal_candidate_promotes_without_mutating_validation_evidence(
 
 
 @pytest.mark.parametrize(
-    "mutation",
-    ["missing-root", "ambiguous-root", "missing-selector", "ambiguous-selector", "preexisting-release-id"],
+    ("mutation", "error"),
+    [
+        ("crossed-lineage", "lineage"),
+        ("inventory-mismatch", "inventory"),
+        ("hash-mutation", "hash"),
+    ],
 )
-def test_promotion_rejects_missing_or_ambiguous_stage_markers(
+def test_release_rejects_candidate_closure_before_report_materialization(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     mutation: str,
+    error: str,
 ) -> None:
-    def mutate(candidate: Path) -> None:
-        html_path = candidate / "report.html"
-        html = html_path.read_text(encoding="utf-8")
-        candidate_root = 'data-testid="robustness-report-candidate"'
-        candidate_selector = "document.querySelector('[data-testid=\"robustness-report-candidate\"]')"
-        if mutation == "missing-root":
-            html = html.replace(candidate_root, 'data-testid="missing-robustness-root"', 1)
-        elif mutation == "ambiguous-root":
-            html = html.replace("</body>", f"<div {candidate_root}></div></body>")
-        elif mutation == "missing-selector":
-            html = html.replace(candidate_selector, "document.querySelector('[data-testid=\"missing\"]')")
-        elif mutation == "ambiguous-selector":
-            html = html.replace("</script>", f"\n// {candidate_selector}\n</script>")
-        else:
-            html = html.replace("<section data-testid=", '<section data-release-id="legacy" data-testid=', 1)
-        html_path.write_text(html, encoding="utf-8")
+    presentation = _FakeReportPresentation()
 
-    with pytest.raises(release.ConcurrentRobustnessReleaseError, match="missing|ambiguous|transformed"):
-        _promote_fixture(tmp_path, monkeypatch, mutate_candidate=mutate)
+    def mutate(candidate: Path) -> None:
+        manifest_path = candidate / "artifact_manifest.json"
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        if mutation == "crossed-lineage":
+            manifest["formal_source"]["manifest_sha256"] = "b" * 64
+            _write_json(manifest_path, manifest)
+        elif mutation == "inventory-mismatch":
+            manifest["artifacts"].pop("weight_json")
+            manifest["sha256"].pop("weight_json")
+            _write_json(manifest_path, manifest)
+        else:
+            with (candidate / "ranking_weight_sensitivity.json").open("a", encoding="utf-8") as stream:
+                stream.write("mutated")
+
+    with pytest.raises(release.ConcurrentRobustnessReleaseError, match=error):
+        _promote_fixture(
+            tmp_path,
+            monkeypatch,
+            mutate_candidate=mutate,
+            presentation=presentation,
+        )
+
+    assert presentation.calls == []
+    assert not (tmp_path / "production-release").exists()
+    assert not (tmp_path / "release-contract.json").exists()
+
+
+def test_promotion_fails_closed_when_report_rejects_candidate_presentation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class RejectingReportPresentation(_FakeReportPresentation):
+        def materialize_production(self, **kwargs: object) -> report._PresentationBundle:
+            raise report._RobustnessReportClosureError("candidate presentation is invalid")
+
+    with pytest.raises(
+        release.ConcurrentRobustnessReleaseError,
+        match="Report production presentation failed closure",
+    ):
+        _promote_fixture(
+            tmp_path,
+            monkeypatch,
+            presentation=RejectingReportPresentation(),
+        )
+
+    assert not (tmp_path / "production-release").exists()
+    assert not (tmp_path / "release-contract.json").exists()
+    assert not list(tmp_path.glob(".production-release.*.staging"))
+
+
+def test_promotion_cleans_staging_when_report_rejects_production_bundle(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    presentation = _FakeReportPresentation()
+    presentation.validation_error = report._RobustnessReportClosureError(
+        "production presentation is invalid"
+    )
+
+    with pytest.raises(
+        release.ConcurrentRobustnessReleaseError,
+        match="Report production presentation failed validation",
+    ):
+        _promote_fixture(tmp_path, monkeypatch, presentation=presentation)
+
+    assert not (tmp_path / "production-release").exists()
+    assert not (tmp_path / "release-contract.json").exists()
+    assert not list(tmp_path.glob(".production-release.*.staging"))
 
 
 def test_production_validator_rejects_validation_candidate_evidence_as_approved_download(
@@ -456,14 +486,6 @@ def test_production_validator_rejects_validation_candidate_evidence_as_approved_
     payload["downloads"]["release_evidence"] = "validation_candidate_release_evidence.json"
     _write_json(payload_path, payload)
 
-    html_path = source / "report.html"
-    html_path.write_text(
-        html_path.read_text(encoding="utf-8").replace(
-            'href="robustness_production_release_evidence.json"',
-            'href="validation_candidate_release_evidence.json"',
-        ),
-        encoding="utf-8",
-    )
     manifest_path = source / "artifact_manifest.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     manifest["approved_downloads"]["release_evidence"] = "validation_candidate_release_evidence.json"
@@ -478,27 +500,24 @@ def test_production_validator_rejects_validation_candidate_evidence_as_approved_
         )
 
 
-def test_production_validator_rejects_crossed_bootstrap_stage_selector(
+def test_production_validator_delegates_presentation_bundle_validation(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     fixture = _promote_fixture(tmp_path, monkeypatch)
-    source = fixture.promoted.source_dir
-    html_path = source / "report.html"
-    html_path.write_text(
-        html_path.read_text(encoding="utf-8").replace(
-            "document.querySelector('[data-testid=\"robustness-report-release\"]')",
-            "document.querySelector('[data-testid=\"robustness-report-candidate\"]')",
-        ),
-        encoding="utf-8",
+    fixture.report_presentation.validation_error = report._RobustnessReportClosureError(
+        "production DOM contract is crossed"
     )
-    contract = _reclose_tampered_release(source, fixture.promoted.contract_path)
+    contract = json.loads(fixture.promoted.contract_path.read_text(encoding="utf-8"))
 
-    with pytest.raises(release.ConcurrentRobustnessReleaseError, match="bootstrap|stage"):
+    with pytest.raises(
+        release.ConcurrentRobustnessReleaseError,
+        match="Report production presentation failed validation",
+    ):
         release.validate_concurrent_robustness_production_release(
             repo_root=tmp_path,
             contract_document=contract,
-            source_dir=source,
+            source_dir=fixture.promoted.source_dir,
         )
 
 
@@ -507,7 +526,6 @@ def test_production_validator_rejects_crossed_bootstrap_stage_selector(
     [
         ("payload-crossed", "payload and manifest"),
         ("manifest-crossed", "payload and manifest"),
-        ("html-crossed", "HTML and approved"),
         ("path-escape", "escapes|inventory"),
         ("missing-file", "missing|inventory"),
     ],
@@ -522,21 +540,16 @@ def test_production_validator_rejects_crossed_or_unsafe_download_closure(
     source = fixture.promoted.source_dir
     payload_path = source / "concurrent_robustness_report_payload.json"
     manifest_path = source / "artifact_manifest.json"
-    html_path = source / "report.html"
     payload = json.loads(payload_path.read_text(encoding="utf-8"))
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    html = html_path.read_text(encoding="utf-8")
 
     if mutation == "payload-crossed":
         payload["downloads"]["weight"] = "sample_manifest.json"
     elif mutation == "manifest-crossed":
         manifest["approved_downloads"]["weight"] = "sample_manifest.json"
-    elif mutation == "html-crossed":
-        html = html.replace('href="ranking_weight_sensitivity.json"', 'href="sample_manifest.json"')
     elif mutation == "path-escape":
         payload["downloads"]["weight"] = "../outside.json"
         manifest["approved_downloads"]["weight"] = "../outside.json"
-        html = html.replace('href="ranking_weight_sensitivity.json"', 'href="../outside.json"')
     else:
         (source / "ranking_weight_sensitivity.json").unlink()
         logical_name = next(
@@ -549,7 +562,6 @@ def test_production_validator_rejects_crossed_or_unsafe_download_closure(
 
     _write_json(payload_path, payload)
     _write_json(manifest_path, manifest)
-    html_path.write_text(html, encoding="utf-8")
     contract = _reclose_tampered_release(source, fixture.promoted.contract_path)
 
     with pytest.raises(release.ConcurrentRobustnessReleaseError, match=error):
@@ -604,66 +616,7 @@ def test_production_release_rejects_post_close_report_mutation(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    formal = tmp_path / "formal"
-    study = tmp_path / "study"
-    workspace = tmp_path / "workspace"
-    candidate = tmp_path / "candidate"
-    for path in (formal, study, workspace):
-        path.mkdir()
-    _candidate(candidate)
-    _write_json(study / "study_manifest.json", {})
-    _write_json(study / "artifact_manifest.json", {"root_identity_sha256": "c" * 64})
-    _write_json(
-        study / "prompt_model_cell_evidence.json",
-        {
-            "schema_version": "concurrent-robustness-cell-evidence-v1",
-            "evidence_profile": "formal_live",
-            "cell_count": 16,
-            "logical_judgment_count": 28_800,
-            "physical_attempt_count": 28_800,
-            "external_request_invocations": 28_800,
-            "live_api_triggered": True,
-            "production_deploy_eligible": False,
-        },
-    )
-    contracts = tmp_path / "contracts"
-    contracts.mkdir()
-    execution_contract = contracts / "formal-run-contract.json"
-    _write_json(execution_contract, {})
-    fake_manifest = _fake_manifest(formal)
-
-    class FakeManifestModel:
-        @staticmethod
-        def model_validate(_payload: object) -> SimpleNamespace:
-            return fake_manifest
-
-    monkeypatch.setattr(release, "ConcurrentRobustnessManifest", FakeManifestModel)
-    monkeypatch.setattr(release, "_CellEvidenceDocument", _FakeCellEvidenceModel)
-    monkeypatch.setattr(release, "_validate_cell_evidence_contract", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(release, "_validate_completed_dynamic_root", lambda **_kwargs: None)
-    monkeypatch.setattr(release, "_validate_concurrent_robustness_report_candidate", lambda **_kwargs: candidate)
-    monkeypatch.setattr(
-        release,
-        "_validate_execution_contract",
-        lambda **_kwargs: {
-            "implementation_commit": "1234567",
-            "closure_implementation_commit": "7654321",
-            "closure_replay_sha256": "e" * 64,
-            "physical_provider_attempts": 28_800,
-            "subscription_nominal_reference_cost_usd": 1.25,
-        },
-    )
-    promoted = release.promote_concurrent_robustness_release(
-        repo_root=tmp_path,
-        formal_root=formal,
-        study_root=study,
-        workspace_root=workspace,
-        candidate_dir=candidate,
-        execution_contract_path=execution_contract,
-        destination_dir=tmp_path / "production-release",
-        release_contract_path=tmp_path / "release-contract.json",
-        release_id="robustness-release-test",
-    )
+    promoted = _promote_fixture(tmp_path, monkeypatch).promoted
     with (promoted.source_dir / "report.html").open("a", encoding="utf-8") as stream:
         stream.write("mutated")
 

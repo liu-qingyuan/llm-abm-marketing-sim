@@ -464,51 +464,6 @@ class _ReportPresentationInterface:
 _REPORT_PRESENTATION = _ReportPresentationInterface()
 
 
-def _compose_concurrent_robustness_report_candidate(
-    *,
-    formal_root: Path,
-    study_root: Path,
-    workspace_root: Path,
-    manifest: ConcurrentRobustnessManifest,
-    manifest_payload: bytes,
-    manifest_sha256: str,
-    destination_dir: str | Path,
-) -> Path:
-    """Compatibility path retained until the Release caller migrates to the package Interface."""
-    return _REPORT_PRESENTATION._compose_candidate_from_inputs(
-        formal_root=formal_root,
-        study_root=study_root,
-        workspace_root=workspace_root,
-        manifest=manifest,
-        manifest_payload=manifest_payload,
-        manifest_sha256=manifest_sha256,
-        destination_dir=destination_dir,
-    )
-
-
-def _validate_concurrent_robustness_report_candidate(
-    *,
-    formal_root: Path,
-    study_root: Path,
-    workspace_root: Path,
-    manifest: ConcurrentRobustnessManifest,
-    manifest_payload: bytes,
-    manifest_sha256: str,
-    candidate_dir: str | Path,
-) -> Path:
-    """Compatibility path retained until the Release caller migrates to the package Interface."""
-    candidate, _ = _REPORT_PRESENTATION._validate_candidate_from_inputs(
-        formal_root=formal_root,
-        study_root=study_root,
-        workspace_root=workspace_root,
-        manifest=manifest,
-        manifest_payload=manifest_payload,
-        manifest_sha256=manifest_sha256,
-        candidate_dir=candidate_dir,
-    )
-    return candidate
-
-
 def _workspace_root_for_study(study_root: Path) -> Path:
     if not study_root.name.endswith(_CLOSED_STUDY_ROOT_SUFFIX):
         raise _RobustnessReportPathError("immutable study root does not identify its protected workspace")

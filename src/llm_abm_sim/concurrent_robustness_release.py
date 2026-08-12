@@ -16,7 +16,11 @@ from .concurrent_message_report import (
     CONCURRENT_MESSAGE_ARTIFACT_MANIFEST_JSON,
     CONCURRENT_MESSAGE_REPORT_HTML,
 )
-from .concurrent_robustness_report import _validate_concurrent_robustness_report_candidate
+from .concurrent_robustness_report import (
+    _REPORT_PRESENTATION,
+    _PresentationBundle,
+    _ProductionPresentationFacts,
+)
 from .concurrent_robustness_study import (
     CONCURRENT_ROBUSTNESS_SUBSCRIPTION_ADAPTER_IDENTITY,
     ConcurrentRobustnessManifest,
@@ -117,24 +121,19 @@ def promote_concurrent_robustness_release(
     if Path(manifest.source.source_dir).resolve(strict=True) != formal:
         raise ConcurrentRobustnessReleaseError("Formal study source path is crossed")
 
-    _validate_concurrent_robustness_report_candidate(
-        formal_root=formal,
-        study_root=study,
-        workspace_root=workspace,
-        manifest=manifest,
-        manifest_payload=manifest_payload,
-        manifest_sha256=manifest_sha256,
-        candidate_dir=candidate,
-    )
     candidate_manifest = _json_object(candidate / CONCURRENT_MESSAGE_ARTIFACT_MANIFEST_JSON)
     candidate_evidence = _json_object(candidate / ROBUSTNESS_CANDIDATE_RELEASE_EVIDENCE)
-    if (
-        candidate_manifest.get("schema_version") != "concurrent-robustness-report-candidate-manifest-v1"
-        or candidate_manifest.get("production_deploy_eligible") is not False
-        or candidate_evidence.get("schema_version") != "concurrent-robustness-report-release-evidence-v1"
-        or candidate_evidence.get("production_deploy_eligible") is not False
-    ):
-        raise ConcurrentRobustnessReleaseError("validation candidate did not preserve its non-production contract")
+    candidate_report_payload = _json_object(candidate / ROBUSTNESS_REPORT_PAYLOAD)
+    _validate_candidate_release_contract(
+        candidate=candidate,
+        candidate_manifest=candidate_manifest,
+        candidate_evidence=candidate_evidence,
+        candidate_report_payload=candidate_report_payload,
+        manifest=manifest,
+        manifest_sha256=manifest_sha256,
+        formal=formal,
+        study=study,
+    )
 
     execution_contract = _validate_execution_contract(
         root=root,
@@ -171,7 +170,21 @@ def promote_concurrent_robustness_release(
     candidate_manifest_sha256 = candidate_hashes[CONCURRENT_MESSAGE_ARTIFACT_MANIFEST_JSON]
     candidate_evidence_sha256 = candidate_hashes[ROBUSTNESS_CANDIDATE_RELEASE_EVIDENCE]
     execution_contract_sha256 = _sha256_file(execution_contract_file)
-    payloads = _production_payloads(
+    approved_downloads = _production_approved_downloads(candidate_report_payload)
+    stage_facts = _production_presentation_facts(
+        release_id=release_id,
+        physical_attempts=physical_attempts,
+        approved_downloads=approved_downloads,
+    )
+    presentation = _materialize_production_presentation(
+        formal=formal,
+        study=study,
+        candidate=candidate,
+        stage_facts=stage_facts,
+    )
+    if _flat_file_hashes(candidate) != candidate_hashes:
+        raise ConcurrentRobustnessReleaseError("validation candidate was mutated during presentation materialization")
+    payloads = _build_production_release_payloads(
         candidate=candidate,
         candidate_hashes=candidate_hashes,
         candidate_manifest=candidate_manifest,
@@ -183,6 +196,8 @@ def promote_concurrent_robustness_release(
         execution_contract_sha256=execution_contract_sha256,
         release_id=release_id,
         physical_attempts=physical_attempts,
+        presentation=presentation,
+        approved_downloads=approved_downloads,
     )
     destination.parent.mkdir(parents=True, exist_ok=True)
     contract_path.parent.mkdir(parents=True, exist_ok=True)
@@ -193,7 +208,7 @@ def promote_concurrent_robustness_release(
             target = staging / relative_path
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_bytes(payload)
-        _validate_production_release_dir(staging, release_id=release_id)
+        _validate_production_release_dir(staging, stage_facts=stage_facts)
         release_hashes = _flat_file_hashes(staging)
         contract_document = {
             "schema_version": ROBUSTNESS_RELEASE_CONTRACT_SCHEMA,
@@ -240,7 +255,7 @@ def promote_concurrent_robustness_release(
             contract_staging.unlink(missing_ok=True)
         raise
 
-    _validate_production_release_dir(destination, release_id=release_id)
+    _validate_production_release_dir(destination, stage_facts=stage_facts)
     final_hashes = _flat_file_hashes(destination)
     if final_hashes != contract_document["artifact_sha256"]:
         raise ConcurrentRobustnessReleaseError("published production release drifted after atomic close")
@@ -351,7 +366,16 @@ def validate_concurrent_robustness_production_release(
     actual_hashes = _flat_file_hashes(evidence_dir)
     if actual_hashes != expected_hashes:
         raise ConcurrentRobustnessReleaseError("v5 source inventory or artifact hashes differ from the contract")
-    _validate_production_release_dir(evidence_dir, release_id=release_id)
+    production_manifest = _json_object(evidence_dir / CONCURRENT_MESSAGE_ARTIFACT_MANIFEST_JSON)
+    stage_facts = _production_presentation_facts(
+        release_id=release_id,
+        physical_attempts=physical_attempts,
+        approved_downloads=_string_mapping(
+            production_manifest.get("approved_downloads"),
+            "production approved downloads",
+        ),
+    )
+    _validate_production_release_dir(evidence_dir, stage_facts=stage_facts)
 
     formal = _repo_directory(
         root,
@@ -391,15 +415,32 @@ def validate_concurrent_robustness_production_release(
     manifest = ConcurrentRobustnessManifest.model_validate_json(manifest_payload)
     if manifest.source.manifest_sha256 != contract_document.get("historical_formal_manifest_sha256"):
         raise ConcurrentRobustnessReleaseError("v5 historical Formal manifest lineage is crossed")
-    _validate_concurrent_robustness_report_candidate(
-        formal_root=formal,
-        study_root=study,
-        workspace_root=workspace,
+    candidate_manifest = _json_object(candidate / CONCURRENT_MESSAGE_ARTIFACT_MANIFEST_JSON)
+    candidate_evidence = _json_object(candidate / ROBUSTNESS_CANDIDATE_RELEASE_EVIDENCE)
+    candidate_report_payload = _json_object(candidate / ROBUSTNESS_REPORT_PAYLOAD)
+    _validate_candidate_release_contract(
+        candidate=candidate,
+        candidate_manifest=candidate_manifest,
+        candidate_evidence=candidate_evidence,
+        candidate_report_payload=candidate_report_payload,
         manifest=manifest,
-        manifest_payload=manifest_payload,
         manifest_sha256=_sha256_bytes(manifest_payload),
-        candidate_dir=candidate,
+        formal=formal,
+        study=study,
     )
+    expected_presentation = _materialize_production_presentation(
+        formal=formal,
+        study=study,
+        candidate=candidate,
+        stage_facts=stage_facts,
+    )
+    if (
+        expected_presentation.report_payload != (evidence_dir / ROBUSTNESS_REPORT_PAYLOAD).read_bytes()
+        or expected_presentation.report_html != (evidence_dir / CONCURRENT_MESSAGE_REPORT_HTML).read_bytes()
+    ):
+        raise ConcurrentRobustnessReleaseError(
+            "production presentation differs from the Report materialization contract"
+        )
     execution_contract = _validate_execution_contract(
         root=root,
         path=execution_contract_file,
@@ -848,7 +889,173 @@ def _validate_execution_contract(
     return document
 
 
-def _production_payloads(
+def _validate_candidate_release_contract(
+    *,
+    candidate: Path,
+    candidate_manifest: Mapping[str, Any],
+    candidate_evidence: Mapping[str, Any],
+    candidate_report_payload: Mapping[str, Any],
+    manifest: ConcurrentRobustnessManifest,
+    manifest_sha256: str,
+    formal: Path,
+    study: Path,
+) -> None:
+    candidate_hashes = _flat_file_hashes(candidate)
+    artifacts = _string_mapping(candidate_manifest.get("artifacts"), "candidate artifacts")
+    declared_hashes = _string_mapping(candidate_manifest.get("sha256"), "candidate artifact hashes")
+    if (
+        candidate_manifest.get("schema_version")
+        != "concurrent-robustness-report-candidate-manifest-v1"
+        or candidate_manifest.get("candidate_type") != "immutable_combined_robustness_report"
+        or candidate_manifest.get("production_deploy_eligible") is not False
+        or candidate_evidence.get("schema_version")
+        != "concurrent-robustness-report-release-evidence-v1"
+        or candidate_evidence.get("production_deploy_eligible") is not False
+        or candidate_report_payload.get("schema_version")
+        != "concurrent-robustness-report-payload-v1"
+        or candidate_report_payload.get("production_deploy_eligible") is not False
+    ):
+        raise ConcurrentRobustnessReleaseError(
+            "validation candidate did not preserve its non-production contract"
+        )
+    if set(artifacts) != set(declared_hashes) or len(set(artifacts.values())) != len(artifacts):
+        raise ConcurrentRobustnessReleaseError("validation candidate artifact inventory is crossed")
+    if set(artifacts.values()) != set(candidate_hashes) - {CONCURRENT_MESSAGE_ARTIFACT_MANIFEST_JSON}:
+        raise ConcurrentRobustnessReleaseError("validation candidate artifact inventory is incomplete")
+    for name, relative_path in artifacts.items():
+        if declared_hashes[name] != candidate_hashes[relative_path]:
+            raise ConcurrentRobustnessReleaseError("validation candidate artifact hash mismatch")
+    identity_rows = dict(sorted((path, declared_hashes[name]) for name, path in artifacts.items()))
+    if candidate_manifest.get("candidate_identity_sha256") != _sha256_bytes(_json_bytes(identity_rows)):
+        raise ConcurrentRobustnessReleaseError("validation candidate identity hash is crossed")
+
+    formal_source = candidate_manifest.get("formal_source")
+    study_source = candidate_manifest.get("study_source")
+    if not isinstance(formal_source, Mapping) or not isinstance(study_source, Mapping):
+        raise ConcurrentRobustnessReleaseError("validation candidate lineage is missing")
+    formal_manifest_sha256 = _sha256_file(formal / CONCURRENT_MESSAGE_ARTIFACT_MANIFEST_JSON)
+    study_artifact_sha256 = _sha256_file(study / "artifact_manifest.json")
+    study_root_identity = _string(
+        _json_object(study / "artifact_manifest.json").get("root_identity_sha256"),
+        "study root identity",
+    )
+    if (
+        formal_source.get("manifest_sha256") != manifest.source.manifest_sha256
+        or manifest.source.manifest_sha256 != formal_manifest_sha256
+        or study_source.get("manifest_sha256") != manifest_sha256
+        or study_source.get("artifact_manifest_sha256") != study_artifact_sha256
+        or study_source.get("root_identity_sha256") != study_root_identity
+        or candidate_evidence.get("formal_source_manifest_sha256")
+        != manifest.source.manifest_sha256
+        or candidate_evidence.get("study_manifest_sha256") != manifest_sha256
+        or candidate_evidence.get("study_root_identity_sha256") != study_root_identity
+    ):
+        raise ConcurrentRobustnessReleaseError("validation candidate lineage is crossed")
+
+    payload_downloads = _string_mapping(
+        candidate_report_payload.get("downloads"),
+        "candidate report downloads",
+    )
+    raw_manifest_downloads = candidate_manifest.get("approved_downloads")
+    if not isinstance(raw_manifest_downloads, list) or any(
+        not isinstance(value, str) or not value for value in raw_manifest_downloads
+    ):
+        raise ConcurrentRobustnessReleaseError("validation candidate approved downloads are invalid")
+    manifest_downloads = list(raw_manifest_downloads)
+    if (
+        len(set(manifest_downloads)) != len(manifest_downloads)
+        or set(manifest_downloads) != set(payload_downloads.values())
+        or candidate_evidence.get("provider_calls_during_composition") != 0
+        or candidate_evidence.get("image_generation_triggered") is not False
+    ):
+        raise ConcurrentRobustnessReleaseError(
+            "validation candidate approved downloads or eligibility evidence is crossed"
+        )
+    inventory = set(artifacts.values()) | {CONCURRENT_MESSAGE_ARTIFACT_MANIFEST_JSON}
+    for relative_path in manifest_downloads:
+        path = PurePosixPath(relative_path)
+        target = candidate / relative_path
+        if (
+            "\\" in relative_path
+            or path.is_absolute()
+            or path.as_posix() != relative_path
+            or ".." in path.parts
+            or relative_path not in inventory
+            or target.is_symlink()
+            or not target.is_file()
+        ):
+            raise ConcurrentRobustnessReleaseError(
+                "validation candidate approved download escapes or is absent from inventory"
+            )
+
+
+def _production_approved_downloads(candidate_report_payload: Mapping[str, Any]) -> dict[str, str]:
+    downloads = _string_mapping(candidate_report_payload.get("downloads"), "candidate report downloads")
+    if downloads.get("release_evidence") != ROBUSTNESS_CANDIDATE_RELEASE_EVIDENCE:
+        raise ConcurrentRobustnessReleaseError("candidate release-evidence download mapping is crossed")
+    approved_downloads = dict(downloads)
+    approved_downloads["release_evidence"] = ROBUSTNESS_PRODUCTION_EVIDENCE
+    if len(set(approved_downloads.values())) != len(approved_downloads):
+        raise ConcurrentRobustnessReleaseError("production approved downloads are not one-to-one")
+    return approved_downloads
+
+
+def _production_presentation_facts(
+    *,
+    release_id: str,
+    physical_attempts: int,
+    approved_downloads: Mapping[str, str],
+) -> _ProductionPresentationFacts:
+    return _ProductionPresentationFacts(
+        release_id=release_id,
+        release_contract_schema=ROBUSTNESS_RELEASE_CONTRACT_SCHEMA,
+        canonical_endpoint=ROBUSTNESS_CANONICAL_ENDPOINT,
+        production_evidence_schema=ROBUSTNESS_PRODUCTION_EVIDENCE_SCHEMA,
+        formal_logical_judgments=ROBUSTNESS_FORMAL_LOGICAL_JUDGMENTS,
+        formal_physical_attempts=physical_attempts,
+        provider_transport="openai-codex",
+        subscription_billed_cost_usd=0.0,
+        approved_downloads=dict(approved_downloads),
+    )
+
+
+def _materialize_production_presentation(
+    *,
+    formal: Path,
+    study: Path,
+    candidate: Path,
+    stage_facts: _ProductionPresentationFacts,
+) -> _PresentationBundle:
+    try:
+        bundle = _REPORT_PRESENTATION.materialize_production(
+            formal_root=formal,
+            study_root=study,
+            candidate_dir=candidate,
+            stage_facts=stage_facts,
+        )
+        if not isinstance(bundle, _PresentationBundle):
+            raise TypeError("Report materialization returned an invalid bundle")
+        return bundle
+    except (OSError, TypeError, ValueError) as exc:
+        raise ConcurrentRobustnessReleaseError(
+            "Report production presentation failed closure"
+        ) from exc
+
+
+def _validate_production_presentation(
+    bundle: _PresentationBundle,
+    *,
+    stage_facts: _ProductionPresentationFacts,
+) -> None:
+    try:
+        _REPORT_PRESENTATION.validate_bundle(bundle, stage_facts=stage_facts)
+    except (OSError, TypeError, ValueError) as exc:
+        raise ConcurrentRobustnessReleaseError(
+            "Report production presentation failed validation"
+        ) from exc
+
+
+def _build_production_release_payloads(
     *,
     candidate: Path,
     candidate_hashes: Mapping[str, str],
@@ -861,6 +1068,8 @@ def _production_payloads(
     execution_contract_sha256: str,
     release_id: str,
     physical_attempts: int,
+    presentation: _PresentationBundle,
+    approved_downloads: Mapping[str, str],
 ) -> dict[str, bytes]:
     payloads: dict[str, bytes] = {}
     for relative_path in sorted(candidate_hashes):
@@ -877,67 +1086,8 @@ def _production_payloads(
         candidate / ROBUSTNESS_CANDIDATE_RELEASE_EVIDENCE
     ).read_bytes()
 
-    report_payload = _json_object(candidate / ROBUSTNESS_REPORT_PAYLOAD)
-    if report_payload.get("production_deploy_eligible") is not False:
-        raise ConcurrentRobustnessReleaseError("candidate report payload is not a validation-only artifact")
-    downloads = _string_mapping(report_payload.get("downloads"), "candidate report downloads")
-    if downloads.get("release_evidence") != ROBUSTNESS_CANDIDATE_RELEASE_EVIDENCE:
-        raise ConcurrentRobustnessReleaseError("candidate release-evidence download mapping is crossed")
-    downloads["release_evidence"] = ROBUSTNESS_PRODUCTION_EVIDENCE
-    report_payload["downloads"] = downloads
-    report_payload["production_deploy_eligible"] = True
-    report_payload["production_release"] = {
-        "schema_version": ROBUSTNESS_PRODUCTION_EVIDENCE_SCHEMA,
-        "release_id": release_id,
-        "canonical_endpoint": ROBUSTNESS_CANONICAL_ENDPOINT,
-        "formal_logical_judgments": ROBUSTNESS_FORMAL_LOGICAL_JUDGMENTS,
-        "formal_physical_attempts": physical_attempts,
-        "provider_transport": "openai-codex",
-        "subscription_billed_cost_usd": 0.0,
-    }
-    payloads[ROBUSTNESS_REPORT_PAYLOAD] = _json_bytes(report_payload)
-
-    report_html = (candidate / CONCURRENT_MESSAGE_REPORT_HTML).read_text(encoding="utf-8")
-    if 'data-release-id=' in report_html or 'name="abm-release-id"' in report_html:
-        raise ConcurrentRobustnessReleaseError("candidate release id is ambiguous or already transformed")
-    report_html = _replace_once(
-        report_html,
-        "production_deploy_eligible=false",
-        "production_deploy_eligible=true",
-        label="candidate production marker",
-    )
-    report_html = _replace_once(
-        report_html,
-        "document.querySelector('[data-testid=\"robustness-report-candidate\"]')",
-        "document.querySelector('[data-testid=\"robustness-report-release\"]')",
-        label="candidate bootstrap selector",
-    )
-    report_html = _replace_once(
-        report_html,
-        'data-testid="robustness-report-candidate"',
-        f'data-testid="robustness-report-release" data-release-id="{release_id}"',
-        label="candidate report root",
-    )
-    report_html = _replace_once(
-        report_html,
-        f'href="{ROBUSTNESS_CANDIDATE_RELEASE_EVIDENCE}"',
-        f'href="{ROBUSTNESS_PRODUCTION_EVIDENCE}"',
-        label="candidate release-evidence href",
-    )
-    report_html = _replace_once(
-        report_html,
-        "values in this candidate",
-        "values in this production release",
-        label="candidate download description",
-    )
-    meta = (
-        f'<meta name="abm-release-contract" content="{ROBUSTNESS_RELEASE_CONTRACT_SCHEMA}">'
-        f'<meta name="abm-release-id" content="{release_id}">'
-    )
-    if report_html.count("</head>") != 1:
-        raise ConcurrentRobustnessReleaseError("candidate report has an invalid head boundary")
-    report_html = report_html.replace("</head>", meta + "</head>", 1)
-    payloads[CONCURRENT_MESSAGE_REPORT_HTML] = report_html.encode("utf-8")
+    payloads[ROBUSTNESS_REPORT_PAYLOAD] = presentation.report_payload
+    payloads[CONCURRENT_MESSAGE_REPORT_HTML] = presentation.report_html
 
     production_evidence = {
         "schema_version": ROBUSTNESS_PRODUCTION_EVIDENCE_SCHEMA,
@@ -1010,14 +1160,19 @@ def _production_payloads(
             for name, path in sorted(artifact_mapping.items())
         },
         "release_identity_sha256": release_identity,
-        "approved_downloads": report_payload["downloads"],
+        "approved_downloads": dict(approved_downloads),
         "production_deploy_eligible": True,
     }
     payloads[CONCURRENT_MESSAGE_ARTIFACT_MANIFEST_JSON] = _json_bytes(production_manifest)
     return payloads
 
 
-def _validate_production_release_dir(source: Path, *, release_id: str) -> None:
+def _validate_production_release_dir(
+    source: Path,
+    *,
+    stage_facts: _ProductionPresentationFacts,
+) -> None:
+    release_id = stage_facts.release_id
     if source.is_symlink() or not source.is_dir():
         raise ConcurrentRobustnessReleaseError("production release source is not a real directory")
     hashes = _flat_file_hashes(source)
@@ -1064,49 +1219,19 @@ def _validate_production_release_dir(source: Path, *, release_id: str) -> None:
         or candidate_evidence.get("production_deploy_eligible") is not False
     ):
         raise ConcurrentRobustnessReleaseError("validation candidate eligibility was mutated during promotion")
-    html = (source / CONCURRENT_MESSAGE_REPORT_HTML).read_text(encoding="utf-8")
-    _validate_production_stage_html(html, release_id=release_id)
     _validate_production_downloads(
         source,
         payload=payload,
         manifest=manifest,
         artifacts=artifacts,
-        html=html,
     )
-    required = (
-        'data-testid="mechanism-overview-section"',
-        'data-testid="run-evidence-mode-panel"',
-        'data-testid="run-trace-lineage-data"',
-        'data-testid="robustness-report-release"',
-        'data-testid="robustness-source-lineage"',
-        'data-testid="ranking-weight-sensitivity-section"',
-        'data-testid="prompt-model-robustness-section"',
-        'data-testid="robustness-production-eligibility">production_deploy_eligible=true',
-        "Demographic Shadow evidence remains bound to the historical Formal source",
-        f'<meta name="abm-release-id" content="{release_id}">',
+    _validate_production_presentation(
+        _PresentationBundle(
+            report_payload=(source / ROBUSTNESS_REPORT_PAYLOAD).read_bytes(),
+            report_html=(source / CONCURRENT_MESSAGE_REPORT_HTML).read_bytes(),
+        ),
+        stage_facts=stage_facts,
     )
-    if any(marker not in html for marker in required) or "production_deploy_eligible=false" in html:
-        raise ConcurrentRobustnessReleaseError("production report is missing a required release or lineage marker")
-    if re.search(r"<(?:script|link|img)\b[^>]*(?:src|href)=[\"']https?://", html, re.IGNORECASE):
-        raise ConcurrentRobustnessReleaseError("production report requests an external resource")
-
-
-def _validate_production_stage_html(html: str, *, release_id: str) -> None:
-    root = f'data-testid="robustness-report-release" data-release-id="{release_id}"'
-    bootstrap = "document.querySelector('[data-testid=\"robustness-report-release\"]')"
-    release_meta = f'<meta name="abm-release-id" content="{release_id}">'
-    if (
-        html.count(root) != 1
-        or html.count(bootstrap) != 1
-        or html.count('data-testid="robustness-report-release"') != 2
-        or html.count(release_meta) != 1
-        or len(re.findall(r'\bdata-release-id="[^"]*"', html)) != 1
-        or len(re.findall(r'<meta\s+name="abm-release-id"\s+content="[^"]*">', html)) != 1
-        or 'data-testid="robustness-report-candidate"' in html
-    ):
-        raise ConcurrentRobustnessReleaseError(
-            "production report stage root, release id, or bootstrap selector is crossed"
-        )
 
 
 def _validate_production_downloads(
@@ -1115,7 +1240,6 @@ def _validate_production_downloads(
     payload: Mapping[str, Any],
     manifest: Mapping[str, Any],
     artifacts: Mapping[str, str],
-    html: str,
 ) -> None:
     payload_downloads = _string_mapping(payload.get("downloads"), "production payload downloads")
     approved_downloads = _string_mapping(
@@ -1155,48 +1279,6 @@ def _validate_production_downloads(
             raise ConcurrentRobustnessReleaseError(
                 "production approved download is missing or is not a regular file"
             )
-
-    section_starts = list(
-        re.finditer(
-            r'<section\b(?=[^>]*\bdata-testid="robustness-downloads-section")[^>]*>',
-            html,
-            re.IGNORECASE,
-        )
-    )
-    if len(section_starts) != 1:
-        raise ConcurrentRobustnessReleaseError("production download section is missing or ambiguous")
-    section_end = html.find("</section>", section_starts[0].end())
-    if section_end < 0:
-        raise ConcurrentRobustnessReleaseError("production download section is not closed")
-    section = html[section_starts[0].end():section_end]
-    html_downloads: dict[str, str] = {}
-    for anchor in re.findall(r"<a\b[^>]*>", section, re.IGNORECASE):
-        pairs = re.findall(r'([A-Za-z_:][A-Za-z0-9_.:-]*)="([^"]*)"', anchor)
-        attributes = dict(pairs)
-        if len(attributes) != len(pairs):
-            raise ConcurrentRobustnessReleaseError("production download link attributes are ambiguous")
-        test_id = attributes.get("data-testid", "")
-        prefix = "robustness-download-"
-        key = test_id.removeprefix(prefix)
-        href = attributes.get("href")
-        if (
-            not test_id.startswith(prefix)
-            or not re.fullmatch(r"[A-Za-z0-9_-]+", key)
-            or href is None
-            or key in html_downloads
-        ):
-            raise ConcurrentRobustnessReleaseError("production download link mapping is invalid")
-        html_downloads[key] = href
-    if html_downloads != approved_downloads:
-        raise ConcurrentRobustnessReleaseError(
-            "production HTML and approved download mappings are crossed"
-        )
-
-
-def _replace_once(document: str, before: str, after: str, *, label: str) -> str:
-    if document.count(before) != 1 or after in document:
-        raise ConcurrentRobustnessReleaseError(f"{label} is missing, ambiguous, or already transformed")
-    return document.replace(before, after, 1)
 
 
 def _logical_name(relative_path: str) -> str:

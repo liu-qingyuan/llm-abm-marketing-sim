@@ -50,6 +50,7 @@ contracts.mkdir()
 execution_contract = contracts / 'formal-run-contract.json'
 _write_json(execution_contract, {'fixture': True})
 fake_manifest = _fake_manifest(formal)
+fake_manifest.source.manifest_sha256 = manifest.source.manifest_sha256
 
 class FakeManifestModel:
     @staticmethod
@@ -73,7 +74,6 @@ with (
     patch.object(release, '_CellEvidenceDocument', _FakeCellEvidenceModel),
     patch.object(release, '_validate_cell_evidence_contract', lambda *_args, **_kwargs: None),
     patch.object(release, '_validate_completed_dynamic_root', lambda **_kwargs: None),
-    patch.object(release, '_validate_concurrent_robustness_report_candidate', lambda **_kwargs: candidate),
     patch.object(release, '_validate_execution_contract', lambda **_kwargs: execution_document),
 ):
     release.promote_concurrent_robustness_release(

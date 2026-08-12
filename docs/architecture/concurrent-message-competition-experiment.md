@@ -47,7 +47,7 @@ personalized_delivery_score
 | `ConcurrentRobustnessStudy` | 通过唯一公开 `run(...)` Interface 验证显式 hashed source，生成 19-point Ranking Weight workspace；在 exact 16-cell Adapter map 与 execution contract 通过全量 preflight 后运行或恢复独立 Primary-only cells，关闭 immutable study root，并调用 Report package-internal Interface 生成独立 candidate |
 | Report Module | package-internal compose/materialize/validate Interface，统一拥有双 lineage closure、renderer、payload/HTML composition、stage formatting、DOM/selector/href、destination safety 与 presentation validation；不从 package root 公开 |
 | Editorial candidate | bilingual presentation grouping、五个 mechanism media derivatives、run evidence surface 和 canonical report bytes |
-| Release validator/deploy | 显式 contract、source directory、release id、candidate health、atomic `current` 和公网验收 |
+| Release Module / deploy | 独占 Formal eligibility、双 lineage、artifact inventory、approved downloads、release metadata、production identity 与 hash closure；只把已批准 stage facts 交给 Report Interface，并继续负责显式 contract、candidate health、atomic `current` 和公网验收 |
 
 Diagnostics 的 source of truth 是同一 run 的 persisted candidate rows 与 pair rows。in-memory rows 在写出前会安全化，但不构成第二份事实来源；report writer 和 release validator 都会重新 rebuild 并比较 diagnostics、summary、schema tokens、manifest 与 approved artifact set。
 
@@ -92,7 +92,7 @@ Robustness 请求侧是 additive Module，不改变现有 Concurrent Formal runt
 3. **final source directory**：显式 runner output，包含 runtime rows、diagnostics、report、downloads 和 manifest；只有通过显式 Formal contract 才能进入 candidate deploy。
 4. **canonical release**：使用明确 contract、source directory 和 release id 完成 candidate、health、atomic `current`、public acceptance 和失败回退。
 
-Robustness production promotion 额外使用 `abm-report-release-contract-v5`。它先重建并验证历史 Formal source、immutable study root、private workspace journals、28,800 logical judgments、provider-observed model aliases、qualification/authorization/pricing 与 `production_deploy_eligible=false` validation candidate；随后在新目录中保留原 candidate manifest/evidence bytes，只对 production report/payload 建立显式 `production_deploy_eligible=true` release layer。promotion 不调用 Provider，不能原地翻转 candidate，也不能接受 fixture、partial root、crossed hash 或超出 86,400 physical-attempt cap 的证据。部署仍必须显式传入 v5 contract、source directory 和 release id，并完成公网 artifact hash、Robustness markers、旧 Shadow/barrier lineage 与 responsive Playwright 验收。
+Robustness production promotion 额外使用 `abm-report-release-contract-v5`。它先重建并验证历史 Formal source、immutable study root、private workspace journals、28,800 logical judgments、provider-observed model aliases、qualification/authorization/pricing 与 `production_deploy_eligible=false` validation candidate；Release Module 再把已批准 stage facts 交给 Report Interface，由 Report materialize/validate production presentation，Release 随后在新目录中保留原 candidate manifest/evidence bytes并关闭 inventory、production identity 与 hashes。promotion 不调用 Provider，不能原地翻转 candidate，也不能接受 fixture、partial root、crossed hash、invalid presentation bundle 或超出 86,400 physical-attempt cap 的证据。部署仍必须显式传入 v5 contract、source directory 和 release id，并完成公网 artifact hash、Robustness markers、旧 Shadow/barrier lineage 与 responsive Playwright 验收。
 
 普通 run 与 `contract-protected` Formal/release run 都遵守同一重建语义：前者可以删除后重建，后者仍必须按显式 contract 保留和验证；`contract-protected` Formal/release roots 不能仅按目录类型推断删除。workspace 或 staging 的存在不能替代 journal replay、source closure、release validation 或 deployment authorization。
 
