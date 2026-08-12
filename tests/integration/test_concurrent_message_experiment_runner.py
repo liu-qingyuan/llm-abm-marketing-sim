@@ -2689,6 +2689,245 @@ def test_concurrent_robustness_runs_exact_dynamic_validation_matrix_and_composes
     }
 
 
+def test_concurrent_robustness_dynamic_rejects_crossed_persisted_engage_action_and_resumes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source_dir = _make_validation_report_source(tmp_path, "robustness-terminal-crossed-source")
+    manifest = _dynamic_validation_manifest_for_source(
+        source_dir,
+        output_identity="fixture-terminal-crossed-v1",
+    )
+    adapters, clients = _dynamic_validation_adapters(manifest)
+    workspace = tmp_path / "robustness-terminal-crossed-workspace"
+    source_before = {path.name: path.read_bytes() for path in source_dir.iterdir() if path.is_file()}
+    original_run_new = concurrent_message_experiment_module._PrimaryOnlyConcurrentRuntimeConsumer.run_new
+    mutated = False
+
+    def run_new_with_crossed_terminal(
+        consumer: Any,
+        output_dir: str | Path,
+    ) -> Any:
+        nonlocal mutated
+        result = original_run_new(consumer, output_dir)
+        if not mutated:
+            result.terminal_rows[0]["engage"] = "false"
+            result.terminal_rows[0]["action"] = "like"
+            mutated = True
+        return result
+
+    monkeypatch.setattr(
+        concurrent_message_experiment_module._PrimaryOnlyConcurrentRuntimeConsumer,
+        "run_new",
+        run_new_with_crossed_terminal,
+    )
+
+    with pytest.raises(ConcurrentRobustnessError) as captured:
+        ConcurrentRobustnessStudy().run(manifest, adapters, workspace)
+
+    assert captured.value.code == ConcurrentRobustnessErrorCode.WORKSPACE_CORRUPT
+    assert len(clients[0].calls) == manifest.request_caps.logical_judgments_per_cell
+    assert all(client.calls == [] for client in clients[1:])
+    assert source_before == {path.name: path.read_bytes() for path in source_dir.iterdir() if path.is_file()}
+    assert not (workspace / "prompt_model_cell_evidence.json").exists()
+    assert not workspace.with_name(f"{workspace.name}.study-root").exists()
+    assert not workspace.with_name(f"{workspace.name}.report-candidate").exists()
+    workspace_before_resume = {path.name: path.read_bytes() for path in workspace.iterdir()}
+
+    monkeypatch.setattr(
+        concurrent_message_experiment_module._PrimaryOnlyConcurrentRuntimeConsumer,
+        "run_new",
+        original_run_new,
+    )
+    resume_adapters, resume_clients = _dynamic_validation_adapters(manifest)
+    resumed = ConcurrentRobustnessStudy().run(manifest, resume_adapters, workspace)
+
+    assert resumed.status == ConcurrentRobustnessStudyStatus.COMPLETE
+    assert resume_clients[0].calls == []
+    assert all(
+        len(client.calls) == manifest.request_caps.logical_judgments_per_cell
+        for client in resume_clients[1:]
+    )
+    assert source_before == {path.name: path.read_bytes() for path in source_dir.iterdir() if path.is_file()}
+    assert workspace_before_resume == {
+        name: (workspace / name).read_bytes()
+        for name in workspace_before_resume
+    }
+    evidence = _read_json(workspace / "prompt_model_cell_evidence.json")
+    first_terminal = evidence["cells"][0]["terminal_rows"][0]
+    assert evidence["schema_version"] == "concurrent-robustness-cell-evidence-v1"
+    assert first_terminal["engage"] is True
+    assert first_terminal["action"] == "like"
+
+
+@pytest.mark.parametrize("corruption", ["missing_engage", "malformed_action", "true_with_ignore"])
+def test_concurrent_robustness_dynamic_rejects_invalid_succeeded_decision_fields(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    corruption: str,
+) -> None:
+    source_dir = _make_validation_report_source(tmp_path, f"robustness-terminal-{corruption}-source")
+    manifest = _dynamic_validation_manifest_for_source(
+        source_dir,
+        output_identity=f"fixture-terminal-{corruption}-v1",
+    )
+    adapters, clients = _dynamic_validation_adapters(manifest)
+    workspace = tmp_path / f"robustness-terminal-{corruption}-workspace"
+    source_before = {path.name: path.read_bytes() for path in source_dir.iterdir() if path.is_file()}
+    original_run_new = concurrent_message_experiment_module._PrimaryOnlyConcurrentRuntimeConsumer.run_new
+    mutated = False
+
+    def run_new_with_invalid_terminal(
+        consumer: Any,
+        output_dir: str | Path,
+    ) -> Any:
+        nonlocal mutated
+        result = original_run_new(consumer, output_dir)
+        if not mutated:
+            terminal = result.terminal_rows[0]
+            if corruption == "missing_engage":
+                terminal.pop("engage")
+            elif corruption == "malformed_action":
+                terminal["action"] = "save"
+            else:
+                terminal["action"] = "ignore"
+            mutated = True
+        return result
+
+    monkeypatch.setattr(
+        concurrent_message_experiment_module._PrimaryOnlyConcurrentRuntimeConsumer,
+        "run_new",
+        run_new_with_invalid_terminal,
+    )
+
+    with pytest.raises(ConcurrentRobustnessError) as captured:
+        ConcurrentRobustnessStudy().run(manifest, adapters, workspace)
+
+    assert captured.value.code == ConcurrentRobustnessErrorCode.WORKSPACE_CORRUPT
+    assert len(clients[0].calls) == manifest.request_caps.logical_judgments_per_cell
+    assert all(client.calls == [] for client in clients[1:])
+    assert source_before == {path.name: path.read_bytes() for path in source_dir.iterdir() if path.is_file()}
+    assert not (workspace / "prompt_model_cell_evidence.json").exists()
+    assert not workspace.with_name(f"{workspace.name}.study-root").exists()
+    assert not workspace.with_name(f"{workspace.name}.report-candidate").exists()
+
+
+def test_concurrent_robustness_dynamic_rejects_crossed_terminal_cell_identity(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source_dir = _make_validation_report_source(tmp_path, "robustness-terminal-identity-source")
+    manifest = _dynamic_validation_manifest_for_source(
+        source_dir,
+        output_identity="fixture-terminal-identity-v1",
+    )
+    adapters, clients = _dynamic_validation_adapters(manifest)
+    workspace = tmp_path / "robustness-terminal-identity-workspace"
+    source_before = {path.name: path.read_bytes() for path in source_dir.iterdir() if path.is_file()}
+    original_run_new = concurrent_message_experiment_module._PrimaryOnlyConcurrentRuntimeConsumer.run_new
+    mutated = False
+
+    def run_new_with_crossed_identity(
+        consumer: Any,
+        output_dir: str | Path,
+    ) -> Any:
+        nonlocal mutated
+        result = original_run_new(consumer, output_dir)
+        if not mutated:
+            result.terminal_rows[0]["prompt_version"] = manifest.prompt_model_cells[4].prompt_version
+            mutated = True
+        return result
+
+    monkeypatch.setattr(
+        concurrent_message_experiment_module._PrimaryOnlyConcurrentRuntimeConsumer,
+        "run_new",
+        run_new_with_crossed_identity,
+    )
+
+    with pytest.raises(ConcurrentRobustnessError) as captured:
+        ConcurrentRobustnessStudy().run(manifest, adapters, workspace)
+
+    assert captured.value.code == ConcurrentRobustnessErrorCode.WORKSPACE_CORRUPT
+    assert len(clients[0].calls) == manifest.request_caps.logical_judgments_per_cell
+    assert all(client.calls == [] for client in clients[1:])
+    assert source_before == {path.name: path.read_bytes() for path in source_dir.iterdir() if path.is_file()}
+    assert not (workspace / "prompt_model_cell_evidence.json").exists()
+    assert not workspace.with_name(f"{workspace.name}.study-root").exists()
+    assert not workspace.with_name(f"{workspace.name}.report-candidate").exists()
+
+
+@pytest.mark.parametrize("corruption", ["missing_action", "persisted_engage"])
+def test_concurrent_robustness_dynamic_rejects_invalid_provider_failed_decision_fields(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    corruption: str,
+) -> None:
+    source_dir = _make_validation_report_source(tmp_path, f"robustness-terminal-{corruption}-source")
+    manifest = _dynamic_validation_manifest_for_source(
+        source_dir,
+        output_identity=f"fixture-terminal-{corruption}-v1",
+    )
+    adapters, clients = _dynamic_validation_adapters(manifest)
+    observed_model = manifest.prompt_model_cells[0].required_observed_model
+    assert observed_model is not None
+    failure_script: list[ProviderResponseEnvelope | Exception] = [
+        TimeoutError("deterministic validation failure") for _ in range(3)
+    ]
+    failure_script.extend(
+        _deterministic_robustness_response(
+            observed_model=observed_model,
+            cell_index=0,
+            logical_index=logical_index,
+        )
+        for logical_index in range(1, manifest.request_caps.logical_judgments_per_cell)
+    )
+    adapters[manifest.prompt_model_cells[0].cell_id], clients[0] = _dynamic_validation_adapter(
+        manifest,
+        0,
+        responses=failure_script,
+    )
+    workspace = tmp_path / f"robustness-terminal-{corruption}-workspace"
+    source_before = {path.name: path.read_bytes() for path in source_dir.iterdir() if path.is_file()}
+    original_run_new = concurrent_message_experiment_module._PrimaryOnlyConcurrentRuntimeConsumer.run_new
+    mutated = False
+
+    def run_new_with_invalid_provider_failure(
+        consumer: Any,
+        output_dir: str | Path,
+    ) -> Any:
+        nonlocal mutated
+        result = original_run_new(consumer, output_dir)
+        if not mutated:
+            failed_row = next(
+                row for row in result.terminal_rows if row["terminal_status"] == "provider_failed"
+            )
+            if corruption == "missing_action":
+                failed_row.pop("action")
+            else:
+                failed_row["engage"] = "false"
+            mutated = True
+        return result
+
+    monkeypatch.setattr(
+        concurrent_message_experiment_module._PrimaryOnlyConcurrentRuntimeConsumer,
+        "run_new",
+        run_new_with_invalid_provider_failure,
+    )
+
+    with pytest.raises(ConcurrentRobustnessError) as captured:
+        ConcurrentRobustnessStudy().run(manifest, adapters, workspace)
+
+    assert captured.value.code == ConcurrentRobustnessErrorCode.WORKSPACE_CORRUPT
+    assert len(clients[0].calls) == manifest.request_contract.max_retries + 1 + (
+        manifest.request_caps.logical_judgments_per_cell - 1
+    )
+    assert all(client.calls == [] for client in clients[1:])
+    assert source_before == {path.name: path.read_bytes() for path in source_dir.iterdir() if path.is_file()}
+    assert not (workspace / "prompt_model_cell_evidence.json").exists()
+    assert not workspace.with_name(f"{workspace.name}.study-root").exists()
+    assert not workspace.with_name(f"{workspace.name}.report-candidate").exists()
+
+
 @pytest.mark.parametrize("corruption", [None, "journal", "identity", "snapshot"])
 def test_concurrent_robustness_dynamic_resumes_closed_cells_and_rejects_mutated_checkpoints(
     tmp_path: Path,
@@ -2848,7 +3087,11 @@ def test_concurrent_robustness_dynamic_retries_and_provider_failure_close_accoun
     assert first["request_invocations"] == 3
     assert first["provider_response_count"] == 0
     assert first["successful_decision_count"] == 0
+    assert first["engage"] is None
+    assert first["probability"] is None
+    assert first["confidence"] is None
     assert first["action"] is None
+    assert first["reason"] is None
     assert second["terminal_status"] == "succeeded"
     assert second["request_invocations"] == 2
     assert second["provider_response_count"] == 1

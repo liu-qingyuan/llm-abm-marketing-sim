@@ -3792,6 +3792,22 @@ def _json_mapping_cell(value: object, label: str) -> dict[str, int]:
     return {str(key): _as_int(count, label) for key, count in mapping.items()}
 
 
+def _required_terminal_field(row: Mapping[str, Any], field_name: str) -> object:
+    if field_name not in row:
+        raise ValueError(f"dynamic terminal row is missing persisted {field_name}")
+    return row[field_name]
+
+
+def _optional_bool_cell(value: object) -> bool | None:
+    if value is None or value == "":
+        return None
+    if value is True or value == "true":
+        return True
+    if value is False or value == "false":
+        return False
+    raise ValueError("terminal engage Decision field is malformed")
+
+
 def _optional_float_cell(value: object) -> float | None:
     if value is None or value == "":
         return None
@@ -3819,10 +3835,16 @@ def _build_dynamic_cell_evidence(
         if terminal_status_raw not in {"succeeded", "provider_failed"}:
             raise ValueError("dynamic terminal status is unsupported")
         terminal_status = cast(Literal["succeeded", "provider_failed"], terminal_status_raw)
-        action_raw = str(row.get("action", "")) or None
-        if action_raw not in {None, "like", "comment", "share", "ignore"}:
+        prompt_version = str(_required_terminal_field(row, "prompt_version"))
+        if prompt_version != cell.prompt_version:
+            raise ValueError("dynamic terminal Prompt identity is crossed")
+        action_raw = _required_terminal_field(row, "action")
+        if action_raw is None or action_raw == "":
+            action_value = None
+        elif isinstance(action_raw, str) and action_raw in {"like", "comment", "share", "ignore"}:
+            action_value = cast(Literal["like", "comment", "share", "ignore"], action_raw)
+        else:
             raise ValueError("dynamic terminal action is unsupported")
-        action_value = cast(Literal["like", "comment", "share", "ignore"] | None, action_raw)
         reason_value = str(row.get("reason", "")) or None
         failure_value = str(row.get("failure_type", "")) or None
         terminal_rows.append(
@@ -3836,12 +3858,12 @@ def _build_dynamic_cell_evidence(
                 is_seed=_candidate_bool(primary_row["is_seed"]),
                 selection_reason=str(primary_row["selection_reason"]),
                 decision_variant="primary",
-                prompt_version=str(row["prompt_version"]),
+                prompt_version=prompt_version,
                 prompt_canonical_hash=cell.prompt_canonical_hash,
                 requested_model=cell.requested_model,
                 request_contract_sha256=request_contract_sha256,
                 terminal_status=terminal_status,
-                engage=None if terminal_status == "provider_failed" else action_value in _POSITIVE_ACTIONS,
+                engage=_optional_bool_cell(_required_terminal_field(row, "engage")),
                 probability=_optional_float_cell(row.get("probability")),
                 confidence=_optional_float_cell(row.get("confidence")),
                 action=action_value,
