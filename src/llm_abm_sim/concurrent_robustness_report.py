@@ -2218,6 +2218,28 @@ def _reject_json_constant(value: str) -> Any:
     raise ValueError(f"non-standard JSON constant is not allowed: {value}")
 
 
+def _validate_trace_row_shape(row: object, index: int) -> None:
+    if type(row) is not dict:
+        raise ValueError(f"trace row {index} must be an object")
+    required_strings = (
+        "trace_id",
+        "pair_id",
+        "message_id",
+        "message_title",
+        "user_id",
+        "latent_class",
+        "primary_action",
+        "shadow_action",
+        "provider_status",
+    )
+    if any(not isinstance(row.get(field), str) or not row[field] for field in required_strings):
+        raise ValueError(f"trace row {index} has missing or invalid identity/status fields")
+    if type(row.get("time_step")) is not int or type(row.get("ranking_position")) is not int:
+        raise ValueError(f"trace row {index} has invalid batch or ranking position")
+    if type(row.get("disagreement")) is not bool:
+        raise ValueError(f"trace row {index} has invalid disagreement flag")
+
+
 def _trace_envelope_for_json(trace_json: str, *, expected_row_count: int = _TRACE_ROW_COUNT) -> str:
     if type(expected_row_count) is not int or expected_row_count <= 0:
         raise _RobustnessReportClosureError("trace row count must be a positive strict integer")
@@ -2228,10 +2250,15 @@ def _trace_envelope_for_json(trace_json: str, *, expected_row_count: int = _TRAC
         rows = json.loads(trace_json, parse_constant=_reject_json_constant)
     except (json.JSONDecodeError, ValueError) as exc:
         raise _RobustnessReportClosureError("trace rows are not valid JSON") from exc
-    if type(rows) is not list or len(rows) != expected_row_count or any(type(row) is not dict for row in rows):
+    if type(rows) is not list or len(rows) != expected_row_count:
         raise _RobustnessReportClosureError(
             f"trace rows must be a list of exactly {expected_row_count:,} objects"
         )
+    try:
+        for index, row in enumerate(rows):
+            _validate_trace_row_shape(row, index)
+    except ValueError as exc:
+        raise _RobustnessReportClosureError("trace rows do not satisfy the persisted view contract") from exc
 
     compressed_buffer = io.BytesIO()
     with gzip.GzipFile(fileobj=compressed_buffer, mode="wb", filename="", mtime=0) as stream:
@@ -2340,8 +2367,10 @@ def _decode_trace_envelope(
         rows_value = json.loads(raw.decode("utf-8"), parse_constant=_reject_json_constant)
     except (UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
         raise ValueError("trace envelope payload is not valid UTF-8 JSON") from exc
-    if type(rows_value) is not list or len(rows_value) != expected_row_count or any(type(row) is not dict for row in rows_value):
+    if type(rows_value) is not list or len(rows_value) != expected_row_count:
         raise ValueError(f"trace envelope rows are not exactly {expected_row_count:,} objects")
+    for index, row in enumerate(rows_value):
+        _validate_trace_row_shape(row, index)
     return rows_value
 
 
@@ -2514,8 +2543,18 @@ _TRACE_RUNTIME_BRIDGE = r"""
     if (digest !== envelope.sha256) throw new Error('trace envelope digest does not match');
     const text = new TextDecoder('utf-8', { fatal: true }).decode(raw);
     const rows = JSON.parse(text);
+    const requiredStringFields = [
+      'trace_id', 'pair_id', 'message_id', 'message_title', 'user_id',
+      'latent_class', 'primary_action', 'shadow_action', 'provider_status',
+    ];
     if (!Array.isArray(rows) || rows.length !== expectedRowCount
-      || rows.some((row) => !row || typeof row !== 'object' || Array.isArray(row))) {
+      || rows.some((row) => !row
+        || typeof row !== 'object'
+        || Array.isArray(row)
+        || requiredStringFields.some((field) => typeof row[field] !== 'string' || !row[field])
+        || !Number.isInteger(row.time_step)
+        || !Number.isInteger(row.ranking_position)
+        || typeof row.disagreement !== 'boolean')) {
       throw new Error('trace envelope rows are invalid');
     }
     return rows;
@@ -2586,6 +2625,8 @@ def _validate_presentation_bundle(
         payload.get("trace_row_count"),
         "report trace row count",
     )
+    if stage_facts is not None and expected_trace_rows != _TRACE_ROW_COUNT:
+        raise ValueError("production presentation requires exactly 1,800 trace rows")
     _validate_trace_envelope_html(
         html_document,
         expected_row_count=expected_trace_rows,
@@ -3040,6 +3081,8 @@ def _render_additive_report(
         payload.get("trace_row_count"),
         "report trace row count",
     )
+    if stage_facts is not None and expected_trace_rows != _TRACE_ROW_COUNT:
+        raise _RobustnessReportClosureError("production presentation requires exactly 1,800 trace rows")
     rendered = _replace_trace_script(
         formal_html,
         expected_row_count=expected_trace_rows,

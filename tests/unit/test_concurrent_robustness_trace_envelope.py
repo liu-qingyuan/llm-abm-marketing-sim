@@ -41,8 +41,25 @@ def _envelope_for_raw(raw: bytes, *, payload: bytes | None = None) -> dict[str, 
     }
 
 
+def _trace_row(index: int) -> dict[str, object]:
+    return {
+        "trace_id": f"trace-{index}",
+        "pair_id": f"pair-{index}",
+        "message_id": "message_1",
+        "message_title": "Message 1",
+        "user_id": f"u{index}",
+        "latent_class": "class-a",
+        "primary_action": "ignore",
+        "shadow_action": "ignore",
+        "provider_status": "succeeded",
+        "time_step": index // 20,
+        "ranking_position": (index % 20) + 1,
+        "disagreement": False,
+    }
+
+
 def test_trace_envelope_bytes_are_deterministic_and_zero_mtime() -> None:
-    trace_json = json.dumps([{"trace_id": str(index)} for index in range(1800)], separators=(",", ":"))
+    trace_json = json.dumps([_trace_row(index) for index in range(1800)], separators=(",", ":"))
 
     first = _trace_envelope_for_json(trace_json)
     second = _trace_envelope_for_json(trace_json)
@@ -55,7 +72,7 @@ def test_trace_envelope_bytes_are_deterministic_and_zero_mtime() -> None:
 
 
 def test_trace_script_replacement_requires_one_exact_marker() -> None:
-    trace_json = json.dumps([{} for _ in range(1800)], separators=(",", ":"))
+    trace_json = json.dumps([_trace_row(index) for index in range(1800)], separators=(",", ":"))
     html = f"<main>{_TRACE_SCRIPT_OPEN}{trace_json}</script><p>stable</p></main>"
 
     replaced = _replace_trace_script(html)
