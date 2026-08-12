@@ -62,28 +62,77 @@ _validate_cell_evidence_contract = _evidence._validate_cell_evidence_contract
 _validate_completed_dynamic_root = _evidence._validate_completed_dynamic_root
 
 
-def _validate_execution_contract(**kwargs: object) -> dict[str, Any]:
+def _validate_execution_contract(
+    *,
+    root: Path,
+    path: Path,
+    formal: Path,
+    study: Path,
+    workspace: Path,
+    candidate: Path,
+    manifest: ConcurrentRobustnessManifest,
+    manifest_sha256: str,
+) -> dict[str, Any]:
     try:
-        return _evidence._validate_execution_contract(**kwargs)
-    except ConcurrentRobustnessEvidenceError as exc:
-        raise ConcurrentRobustnessReleaseError(str(exc)) from exc
-
-
-def _close_formal_cell_evidence(**kwargs: object) -> Any:
-    try:
-        return _evidence.close_formal_cell_evidence(
-            evidence_model=_CellEvidenceDocument,
-            cell_validator=_validate_cell_evidence_contract,
-            dynamic_validator=_validate_completed_dynamic_root,
-            **kwargs,
+        return _evidence._validate_execution_contract(
+            root=root,
+            path=path,
+            formal=formal,
+            study=study,
+            workspace=workspace,
+            candidate=candidate,
+            manifest=manifest,
+            manifest_sha256=manifest_sha256,
         )
     except ConcurrentRobustnessEvidenceError as exc:
         raise ConcurrentRobustnessReleaseError(str(exc)) from exc
 
 
-def _validate_candidate_release_contract(**kwargs: object) -> None:
+def _close_formal_cell_evidence(
+    *,
+    study: Path,
+    workspace: Path,
+    formal: Path,
+    manifest: ConcurrentRobustnessManifest,
+    manifest_sha256: str,
+) -> Any:
     try:
-        _evidence._validate_candidate_release_contract(**kwargs)
+        return _evidence.close_formal_cell_evidence(
+            study=study,
+            workspace=workspace,
+            formal=formal,
+            manifest=manifest,
+            manifest_sha256=manifest_sha256,
+            evidence_model=_CellEvidenceDocument,
+            cell_validator=_validate_cell_evidence_contract,
+            dynamic_validator=_validate_completed_dynamic_root,
+        )
+    except ConcurrentRobustnessEvidenceError as exc:
+        raise ConcurrentRobustnessReleaseError(str(exc)) from exc
+
+
+def _validate_candidate_release_contract(
+    *,
+    candidate: Path,
+    candidate_manifest: Mapping[str, Any],
+    candidate_evidence: Mapping[str, Any],
+    candidate_report_payload: Mapping[str, Any],
+    manifest: ConcurrentRobustnessManifest,
+    manifest_sha256: str,
+    formal: Path,
+    study: Path,
+) -> None:
+    try:
+        _evidence._validate_candidate_release_contract(
+            candidate=candidate,
+            candidate_manifest=candidate_manifest,
+            candidate_evidence=candidate_evidence,
+            candidate_report_payload=candidate_report_payload,
+            manifest=manifest,
+            manifest_sha256=manifest_sha256,
+            formal=formal,
+            study=study,
+        )
     except ConcurrentRobustnessEvidenceError as exc:
         raise ConcurrentRobustnessReleaseError(str(exc)) from exc
 
