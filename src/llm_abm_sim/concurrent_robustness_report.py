@@ -2628,8 +2628,12 @@ def _validate_presentation_bundle(
         payload.get("trace_row_count"),
         "report trace row count",
     )
-    if stage_facts is not None and expected_trace_rows != _TRACE_ROW_COUNT:
-        raise ValueError("production presentation requires exactly 1,800 trace rows")
+    if (
+        stage_facts is not None
+        and stage_facts.release_contract_schema == "abm-report-release-contract-v6"
+        and expected_trace_rows != _TRACE_ROW_COUNT
+    ):
+        raise ValueError("v6 production presentation requires exactly 1,800 trace rows")
     _validate_trace_envelope_html(
         html_document,
         expected_row_count=expected_trace_rows,
@@ -3084,8 +3088,12 @@ def _render_additive_report(
         payload.get("trace_row_count"),
         "report trace row count",
     )
-    if stage_facts is not None and expected_trace_rows != _TRACE_ROW_COUNT:
-        raise _RobustnessReportClosureError("production presentation requires exactly 1,800 trace rows")
+    if (
+        stage_facts is not None
+        and stage_facts.release_contract_schema == "abm-report-release-contract-v6"
+        and expected_trace_rows != _TRACE_ROW_COUNT
+    ):
+        raise _RobustnessReportClosureError("v6 production presentation requires exactly 1,800 trace rows")
     rendered = _replace_trace_script(
         formal_html,
         expected_row_count=expected_trace_rows,

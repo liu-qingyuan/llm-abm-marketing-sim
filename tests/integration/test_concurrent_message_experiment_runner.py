@@ -3486,10 +3486,23 @@ def test_concurrent_robustness_composes_two_closed_sources_into_an_immutable_rep
     assert "production_deploy_eligible=false" in report_html
 
 
+@pytest.mark.parametrize(
+    ("release_contract_schema", "report_sized"),
+    [
+        ("abm-report-release-contract-v5", False),
+        ("abm-report-release-contract-v6", True),
+    ],
+)
 def test_report_presentation_interface_materializes_and_validates_production_bundle(
     tmp_path: Path,
+    release_contract_schema: str,
+    report_sized: bool,
 ) -> None:
-    source_dir = _make_validation_report_source(tmp_path, "robustness-presentation-source")
+    source_dir = _make_validation_report_source(
+        tmp_path,
+        "robustness-presentation-source",
+        report_sized=report_sized,
+    )
     manifest = _robustness_manifest_for_source(source_dir, output_identity="fixture-presentation-v1")
     workspace = tmp_path / "robustness-presentation-workspace"
     destination = tmp_path / "robustness-presentation-candidate"
@@ -3509,7 +3522,7 @@ def test_report_presentation_interface_materializes_and_validates_production_bun
     approved_downloads["release_evidence"] = "robustness_production_release_evidence.json"
     facts = concurrent_robustness_report_module._ProductionPresentationFacts(
         release_id="robustness-presentation-test",
-        release_contract_schema="abm-report-release-contract-v5",
+        release_contract_schema=release_contract_schema,
         canonical_endpoint="https://abm.q1ngyuan.top/",
         production_evidence_schema="concurrent-robustness-production-release-evidence-v1",
         formal_logical_judgments=960,
