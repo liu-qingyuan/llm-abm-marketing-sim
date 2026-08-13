@@ -1063,15 +1063,15 @@ def test_deploy_preserves_candidate_checks_atomic_switch_and_transaction_rollbac
         'docker exec "${candidate_name}" test -f /usr/share/nginx/html/report.html',
         candidate_healthy,
     )
-    current_switched = remote_transaction.index('atomic_current "${remote_release}"', candidate_report_checked)
     host_guard = remote_transaction.index('grep -Fq "${managed_marker}" "${site_available}"')
-    host_config_checked = remote_transaction.index("nginx -t", current_switched)
+    host_config_checked = remote_transaction.index("nginx -t", candidate_report_checked)
+    current_switched = remote_transaction.index('atomic_current "${remote_release}"', host_config_checked)
+    host_reloaded = remote_transaction.index("systemctl reload nginx", current_switched)
     rollback_started = remote_transaction.index("rollback() {")
     rollback_previous = remote_transaction.index('atomic_current "${previous_release}"', rollback_started)
 
     assert host_guard < candidate_started < candidate_name_bound < candidate_healthy < candidate_report_checked
-    assert candidate_report_checked < current_switched
-    assert current_switched < host_config_checked
+    assert candidate_report_checked < host_config_checked < current_switched < host_reloaded
     assert rollback_started < rollback_previous
     assert "trap finish EXIT" in remote_transaction
 
@@ -1088,8 +1088,8 @@ def test_deploy_rolls_back_when_public_acceptance_fails(tmp_path: Path):
             {
                 "schema_version": "abm-report-release-contract-v2",
                 "artifact_sha256": {
-                    "artifact_manifest.json": "0" * 64,
-                    "report.html": "0" * 64,
+                    "artifact_manifest.json": _sha256(source / "artifact_manifest.json"),
+                    "report.html": _sha256(source / "report.html"),
                 },
             },
             sort_keys=True,
@@ -1111,14 +1111,28 @@ if [[ \"$1\" == \"-\" ]]; then
   exec {sys.executable} \"$@\"
 fi
 source_dir=""
+snapshot_dir=""
+contract=""
+facts_output=""
+release_id=""
+domain=""
 while (( $# > 0 )); do
-  if [[ "$1" == "--source-dir" ]]; then
-    source_dir="$2"
-    shift 2
-  else
-    shift
-  fi
+  case "$1" in
+    --source-dir) source_dir="$2"; shift 2 ;;
+    --snapshot-dir) snapshot_dir="$2"; shift 2 ;;
+    --contract) contract="$2"; shift 2 ;;
+    --deployment-facts-output) facts_output="$2"; shift 2 ;;
+    --deployment-release-id) release_id="$2"; shift 2 ;;
+    --deployment-domain) domain="$2"; shift 2 ;;
+    *) shift ;;
+  esac
 done
+report_sha="$(shasum -a 256 "${{snapshot_dir}}/report.html" | awk '{{print $1}}')"
+manifest_sha="$(shasum -a 256 "${{snapshot_dir}}/artifact_manifest.json" | awk '{{print $1}}')"
+contract_sha="$(shasum -a 256 "${{contract}}" | awk '{{print $1}}')"
+cat > "${{facts_output}}" <<JSON
+{{"approved_downloads":[],"artifact_sha256":{{"artifact_manifest.json":"${{manifest_sha}}","report.html":"${{report_sha}}"}},"canonical_domain":"${{domain}}","canonical_endpoint":"https://${{domain}}/","contract_sha256":"${{contract_sha}}","manifest_sha256":"${{manifest_sha}}","public_acceptance_artifacts":["artifact_manifest.json","report.html"],"release_contract_schema_version":"abm-report-release-contract-v2","release_id":"${{release_id}}","release_identity_sha256":"","report_kind":"final-research","report_sha256":"${{report_sha}}","schema_version":"abm-report-deployment-facts-v1"}}
+JSON
 printf 'tampered after validation' > "${{source_dir}}/report.html"
 exit 0
 """,
@@ -1137,7 +1151,10 @@ else
   while IFS= read -r _line; do :; done
 fi
 if [[ "${count}" == "1" ]]; then
-  printf '%s\n' '/tmp/abm-report/releases/previous'
+  printf '%s\t%s\t%s\n' \
+    '/tmp/abm-report/releases/previous' \
+    'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' \
+    'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'
 fi
 exit 0
 """,

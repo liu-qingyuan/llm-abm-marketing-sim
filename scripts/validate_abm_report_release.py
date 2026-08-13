@@ -5,11 +5,13 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import stat
 import sys
 from collections import Counter
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, Literal, TypedDict
+from urllib.parse import urlparse
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
@@ -266,9 +268,7 @@ class _ConcurrentVariantProviderAccounting(BaseModel):
         if observed_total != self.responses:
             raise ValueError("observed model accounting must cover every Provider response")
         usage_total = (
-            self.usage_complete_response_count
-            + self.usage_missing_response_count
-            + self.usage_malformed_response_count
+            self.usage_complete_response_count + self.usage_missing_response_count + self.usage_malformed_response_count
         )
         if usage_total != self.responses:
             raise ValueError("usage accounting must cover every Provider response")
@@ -428,7 +428,9 @@ class _ReleaseContractV4(BaseModel):
             if accounting.observed_model_missing_response_count or accounting.observed_model_malformed_response_count:
                 raise ValueError(f"{variant_name} observed_model accounting must be complete")
             if accounting.usage_complete_attempts != expected_successes or accounting.usage_incomplete_attempts != 0:
-                raise ValueError(f"{variant_name} usage attempt accounting must cover only complete successful attempts")
+                raise ValueError(
+                    f"{variant_name} usage attempt accounting must cover only complete successful attempts"
+                )
             if (
                 accounting.usage_complete_response_count != accounting.responses
                 or accounting.usage_missing_response_count
@@ -1162,7 +1164,11 @@ def _validate_v4(
         contract.campaign_diagnostics_schema_version,
         "v4 campaign diagnostics schema",
     )
-    _expect_equal(campaign_diagnostics.get("schema_version"), contract.campaign_diagnostics_schema_version, "v4 campaign diagnostics artifact schema")
+    _expect_equal(
+        campaign_diagnostics.get("schema_version"),
+        contract.campaign_diagnostics_schema_version,
+        "v4 campaign diagnostics artifact schema",
+    )
 
     prompt_contract = validation_summary.get("prompt_contract")
     if not isinstance(prompt_contract, dict):
@@ -1171,55 +1177,110 @@ def _validate_v4(
     shadow_prompt = prompt_contract.get("shadow")
     if not isinstance(primary_prompt, dict) or not isinstance(shadow_prompt, dict):
         raise ReleaseValidationError("v4 prompt_contract must contain primary and shadow objects")
-    _expect_equal(primary_prompt.get("prompt_version"), contract.primary_prompt_token, "v4 primary prompt contract token")
+    _expect_equal(
+        primary_prompt.get("prompt_version"), contract.primary_prompt_token, "v4 primary prompt contract token"
+    )
     _expect_equal(shadow_prompt.get("prompt_version"), contract.shadow_prompt_token, "v4 shadow prompt contract token")
 
     _expect_equal(payload.schema_version, contract.payload_schema_version, "v4 payload schema")
     _expect_equal(users_document.schema_version, contract.users_schema_version, "v4 users schema")
     _expect_equal(runtime_document.schema_version, contract.runtime_schema_version, "v4 runtime schema")
     _expect_equal(diagnostics_document.schema_version, contract.diagnostics_schema_version, "v4 diagnostics schema")
-    _expect_equal(decision_trace_document.schema_version, contract.decision_trace_schema_version, "v4 decision trace schema")
-    _expect_equal(field_lineage_document.schema_version, contract.field_lineage_schema_version, "v4 field lineage schema")
+    _expect_equal(
+        decision_trace_document.schema_version, contract.decision_trace_schema_version, "v4 decision trace schema"
+    )
+    _expect_equal(
+        field_lineage_document.schema_version, contract.field_lineage_schema_version, "v4 field lineage schema"
+    )
     _expect_equal(validation_summary.get("schema_version"), contract.validation_schema_version, "v4 validation schema")
 
     _expect_equal(validation_summary.get("sampling_method"), contract.sampling_method, "v4 validation sampling_method")
     _expect_equal(validation_summary.get("sampling_status"), contract.sampling_status, "v4 validation sampling_status")
     _expect_equal(config_snapshot.get("sampling_method"), contract.sampling_method, "v4 config sampling_method")
     _expect_equal(config_snapshot.get("sampling_status"), contract.sampling_status, "v4 config sampling_status")
-    _expect_equal(runtime_document.configuration.get("sampling_method"), contract.sampling_method, "v4 runtime sampling_method")
-    _expect_equal(runtime_document.configuration.get("sampling_status"), contract.sampling_status, "v4 runtime sampling_status")
+    _expect_equal(
+        runtime_document.configuration.get("sampling_method"), contract.sampling_method, "v4 runtime sampling_method"
+    )
+    _expect_equal(
+        runtime_document.configuration.get("sampling_status"), contract.sampling_status, "v4 runtime sampling_status"
+    )
     _expect_equal(payload.run.get("sampling_method"), contract.sampling_method, "v4 payload sampling_method")
     _expect_equal(payload.run.get("sampling_status"), contract.sampling_status, "v4 payload sampling_status")
     _expect_equal(sample_audit.get("sampling_method"), contract.sampling_method, "v4 sample audit sampling_method")
     _expect_equal(sample_audit.get("sampling_status"), contract.sampling_status, "v4 sample audit sampling_status")
 
-    _expect_equal(validation_summary.get("production_deploy_eligible"), contract.production_deploy_eligible, "v4 validation production_deploy_eligible")
-    _expect_equal(config_snapshot.get("production_deploy_eligible"), contract.production_deploy_eligible, "v4 config production_deploy_eligible")
-    _expect_equal(runtime_document.configuration.get("production_deploy_eligible"), contract.production_deploy_eligible, "v4 runtime production_deploy_eligible")
-    _expect_equal(payload.run.get("production_deploy_eligible"), contract.production_deploy_eligible, "v4 payload production_deploy_eligible")
+    _expect_equal(
+        validation_summary.get("production_deploy_eligible"),
+        contract.production_deploy_eligible,
+        "v4 validation production_deploy_eligible",
+    )
+    _expect_equal(
+        config_snapshot.get("production_deploy_eligible"),
+        contract.production_deploy_eligible,
+        "v4 config production_deploy_eligible",
+    )
+    _expect_equal(
+        runtime_document.configuration.get("production_deploy_eligible"),
+        contract.production_deploy_eligible,
+        "v4 runtime production_deploy_eligible",
+    )
+    _expect_equal(
+        payload.run.get("production_deploy_eligible"),
+        contract.production_deploy_eligible,
+        "v4 payload production_deploy_eligible",
+    )
 
-    _expect_equal(config_snapshot.get("configuration_profile"), contract.configuration_profile, "v4 config configuration_profile")
-    _expect_equal(validation_summary.get("configuration", {}).get("configuration_profile") if isinstance(validation_summary.get("configuration"), dict) else None, contract.configuration_profile, "v4 validation configuration_profile")
+    _expect_equal(
+        config_snapshot.get("configuration_profile"), contract.configuration_profile, "v4 config configuration_profile"
+    )
+    _expect_equal(
+        validation_summary.get("configuration", {}).get("configuration_profile")
+        if isinstance(validation_summary.get("configuration"), dict)
+        else None,
+        contract.configuration_profile,
+        "v4 validation configuration_profile",
+    )
     _expect_equal(config_snapshot.get("sample_size"), contract.counts.sample_users, "v4 config sample_size")
     _expect_equal(config_snapshot.get("horizon"), 30, "v4 config horizon")
     _expect_equal(config_snapshot.get("delivery_capacity"), 20, "v4 config delivery_capacity")
 
-    _expect_equal(runtime_document.prompt_tokens.get("primary"), contract.primary_prompt_token, "v4 runtime primary prompt token")
-    _expect_equal(runtime_document.prompt_tokens.get("shadow"), contract.shadow_prompt_token, "v4 runtime shadow prompt token")
-    _expect_equal(payload.run.get("prompt_tokens"), {"primary": contract.primary_prompt_token, "shadow": contract.shadow_prompt_token}, "v4 payload prompt tokens")
-    _expect_equal(decision_trace_document.primary_prompt_token, contract.primary_prompt_token, "v4 decision trace primary prompt token")
-    _expect_equal(decision_trace_document.shadow_prompt_token, contract.shadow_prompt_token, "v4 decision trace shadow prompt token")
+    _expect_equal(
+        runtime_document.prompt_tokens.get("primary"), contract.primary_prompt_token, "v4 runtime primary prompt token"
+    )
+    _expect_equal(
+        runtime_document.prompt_tokens.get("shadow"), contract.shadow_prompt_token, "v4 runtime shadow prompt token"
+    )
+    _expect_equal(
+        payload.run.get("prompt_tokens"),
+        {"primary": contract.primary_prompt_token, "shadow": contract.shadow_prompt_token},
+        "v4 payload prompt tokens",
+    )
+    _expect_equal(
+        decision_trace_document.primary_prompt_token,
+        contract.primary_prompt_token,
+        "v4 decision trace primary prompt token",
+    )
+    _expect_equal(
+        decision_trace_document.shadow_prompt_token,
+        contract.shadow_prompt_token,
+        "v4 decision trace shadow prompt token",
+    )
 
     expected_counts = contract.counts.model_dump(mode="json")
-    expected_per_message = {message_id: payload.model_dump(mode="json") for message_id, payload in contract.per_message.items()}
+    expected_per_message = {
+        message_id: payload.model_dump(mode="json") for message_id, payload in contract.per_message.items()
+    }
     expected_provider_accounting = {
-        name: accounting.model_dump(mode="json")
-        for name, accounting in contract.variant_provider_accounting.items()
+        name: accounting.model_dump(mode="json") for name, accounting in contract.variant_provider_accounting.items()
     }
     _expect_equal(validation_summary.get("counts"), expected_counts, "v4 counts")
     _expect_equal(runtime_document.counts, expected_counts, "v4 runtime counts")
     _expect_equal(validation_summary.get("per_message"), expected_per_message, "v4 per_message counts")
-    _expect_equal(validation_summary.get("variant_provider_accounting"), expected_provider_accounting, "v4 variant provider accounting")
+    _expect_equal(
+        validation_summary.get("variant_provider_accounting"),
+        expected_provider_accounting,
+        "v4 variant provider accounting",
+    )
 
     if len(users_document.rows) != contract.counts.sample_users:
         raise ReleaseValidationError("v4 users document must contain exactly 1,000 users")
@@ -1232,12 +1293,17 @@ def _validate_v4(
     try:
         normalized_coverage = {int(key): int(value) for key, value in coverage.items()}
     except (TypeError, ValueError) as exc:
-        raise ReleaseValidationError(f"v4 campaign_exposure_coverage must contain integer keys and values: {exc}") from exc
+        raise ReleaseValidationError(
+            f"v4 campaign_exposure_coverage must contain integer keys and values: {exc}"
+        ) from exc
     if set(normalized_coverage) != {0, 1, 2, 3}:
         raise ReleaseValidationError("v4 campaign_exposure_coverage must record 0/1/2/3-message coverage exactly")
     if sum(normalized_coverage.values()) != contract.counts.sample_users:
         raise ReleaseValidationError("v4 campaign_exposure_coverage must sum to sample_users")
-    if normalized_coverage[1] + normalized_coverage[2] + normalized_coverage[3] != contract.counts.distinct_exposed_users:
+    if (
+        normalized_coverage[1] + normalized_coverage[2] + normalized_coverage[3]
+        != contract.counts.distinct_exposed_users
+    ):
         raise ReleaseValidationError("v4 distinct_exposed_users must equal 1/2/3-message coverage total")
 
     if len(pair_rows) != contract.counts.actual_exposures:
@@ -1345,7 +1411,11 @@ def _validate_v4(
             raise ReleaseValidationError("v4 Formal terminal rows must represent exactly one successful Decision")
         if observed_model_missing or observed_model_malformed:
             raise ReleaseValidationError("v4 Formal terminal rows cannot contain missing or malformed observed models")
-        if usage_complete_response_count != provider_responses or usage_missing_response_count or usage_malformed_response_count:
+        if (
+            usage_complete_response_count != provider_responses
+            or usage_missing_response_count
+            or usage_malformed_response_count
+        ):
             raise ReleaseValidationError("v4 Formal terminal rows require complete usage for every response")
         usage_complete = str(row.get("usage_complete", "")).lower() == "true"
         if not usage_complete:
@@ -1356,11 +1426,18 @@ def _validate_v4(
         except json.JSONDecodeError as exc:
             raise ReleaseValidationError(f"v4 terminal row JSON payload is invalid: {exc}") from exc
         if observed_model_counts != {contract.observed_model: provider_responses}:
-            raise ReleaseValidationError("v4 terminal rows must report only the exact observed_model for every response")
+            raise ReleaseValidationError(
+                "v4 terminal rows must report only the exact observed_model for every response"
+            )
         if not isinstance(provider_metadata, dict):
             raise ReleaseValidationError("v4 terminal row provider_metadata must decode to an object")
-        if provider_metadata.get("adapter") != contract.provider or provider_metadata.get("provider") != contract.provider:
-            raise ReleaseValidationError("v4 Formal provider metadata must stay on the bare registered live provider path")
+        if (
+            provider_metadata.get("adapter") != contract.provider
+            or provider_metadata.get("provider") != contract.provider
+        ):
+            raise ReleaseValidationError(
+                "v4 Formal provider metadata must stay on the bare registered live provider path"
+            )
         if provider_metadata.get("enabled") is not True or provider_metadata.get("require_live_env") is not True:
             raise ReleaseValidationError("v4 Formal provider metadata requires enabled=true and require_live_env=true")
         if provider_metadata.get("model") != contract.requested_model:
@@ -1375,14 +1452,20 @@ def _validate_v4(
             raise ReleaseValidationError("v4 fail_closed_action does not match persisted Provider metadata")
         if provider_metadata.get("prompt_version") != expected_prompt:
             raise ReleaseValidationError("v4 terminal row provider metadata crossed the prompt token contract")
-        if row.get("input_usage") in (None, "") or row.get("output_usage") in (None, "") or row.get("total_usage") in (None, ""):
+        if (
+            row.get("input_usage") in (None, "")
+            or row.get("output_usage") in (None, "")
+            or row.get("total_usage") in (None, "")
+        ):
             raise ReleaseValidationError("v4 Formal terminal rows require complete token usage aggregates")
         try:
             input_usage = int(str(row.get("input_usage", "0") or "0"))
             output_usage = int(str(row.get("output_usage", "0") or "0"))
             total_usage = int(str(row.get("total_usage", "0") or "0"))
             cached_input_usage = (
-                None if row.get("cached_input_usage") in (None, "") else int(str(row.get("cached_input_usage", "0") or "0"))
+                None
+                if row.get("cached_input_usage") in (None, "")
+                else int(str(row.get("cached_input_usage", "0") or "0"))
             )
         except ValueError as exc:
             raise ReleaseValidationError(f"v4 terminal row token counters must be integers: {exc}") from exc
@@ -1391,13 +1474,25 @@ def _validate_v4(
             bucket["invocations"] = int(bucket["invocations"]) + request_invocations
             bucket["responses"] = int(bucket["responses"]) + provider_responses
             bucket["successful_decisions"] = int(bucket["successful_decisions"]) + successful_decisions
-            bucket["observed_model_missing_response_count"] = int(bucket["observed_model_missing_response_count"]) + observed_model_missing
-            bucket["observed_model_malformed_response_count"] = int(bucket["observed_model_malformed_response_count"]) + observed_model_malformed
+            bucket["observed_model_missing_response_count"] = (
+                int(bucket["observed_model_missing_response_count"]) + observed_model_missing
+            )
+            bucket["observed_model_malformed_response_count"] = (
+                int(bucket["observed_model_malformed_response_count"]) + observed_model_malformed
+            )
             bucket["usage_complete_attempts"] = int(bucket["usage_complete_attempts"]) + (1 if usage_complete else 0)
-            bucket["usage_incomplete_attempts"] = int(bucket["usage_incomplete_attempts"]) + (0 if usage_complete or request_invocations == 0 else 1)
-            bucket["usage_complete_response_count"] = int(bucket["usage_complete_response_count"]) + usage_complete_response_count
-            bucket["usage_missing_response_count"] = int(bucket["usage_missing_response_count"]) + usage_missing_response_count
-            bucket["usage_malformed_response_count"] = int(bucket["usage_malformed_response_count"]) + usage_malformed_response_count
+            bucket["usage_incomplete_attempts"] = int(bucket["usage_incomplete_attempts"]) + (
+                0 if usage_complete or request_invocations == 0 else 1
+            )
+            bucket["usage_complete_response_count"] = (
+                int(bucket["usage_complete_response_count"]) + usage_complete_response_count
+            )
+            bucket["usage_missing_response_count"] = (
+                int(bucket["usage_missing_response_count"]) + usage_missing_response_count
+            )
+            bucket["usage_malformed_response_count"] = (
+                int(bucket["usage_malformed_response_count"]) + usage_malformed_response_count
+            )
             bucket["input_usage_total"] = int(bucket["input_usage_total"]) + input_usage
             bucket["output_usage_total"] = int(bucket["output_usage_total"]) + output_usage
             bucket["total_usage_total"] = int(bucket["total_usage_total"]) + total_usage
@@ -1411,7 +1506,9 @@ def _validate_v4(
                 observed_counts[model_name] = int(observed_counts.get(model_name, 0)) + int(count)
     for pair_id in pair_ids:
         if (pair_id, "primary") not in terminal_by_pair_variant or (pair_id, "shadow") not in terminal_by_pair_variant:
-            raise ReleaseValidationError(f"v4 terminal rows must contain both primary and shadow entries for pair_id={pair_id}")
+            raise ReleaseValidationError(
+                f"v4 terminal rows must contain both primary and shadow entries for pair_id={pair_id}"
+            )
     for variant_name in ("primary", "shadow", "total"):
         bucket = terminal_accounting[variant_name]
         observed_counts = bucket["observed_model_counts"]
@@ -1432,7 +1529,9 @@ def _validate_v4(
             "input_usage": int(bucket["input_usage_total"]),
             "output_usage": int(bucket["output_usage_total"]),
             "total_usage": int(bucket["total_usage_total"]),
-            "cached_input_usage": int(bucket["cached_input_usage_total"]) if bool(bucket["has_cached_input_usage"]) else None,
+            "cached_input_usage": int(bucket["cached_input_usage_total"])
+            if bool(bucket["has_cached_input_usage"])
+            else None,
         }
         _expect_equal(
             terminal_provider_accounting,
@@ -1492,13 +1591,31 @@ def _validate_v6(
         raise ReleaseValidationError(f"invalid v6 Concurrent Robustness release: {exc}") from exc
 
 
-def validate_release(
+def _validate_v7(
+    *,
+    repo_root: Path,
+    contract_document: dict[str, object],
+    source_dir: Path,
+    snapshot_dir: Path | None = None,
+) -> dict[str, object]:
+    try:
+        return validate_concurrent_robustness_production_release(
+            repo_root=repo_root,
+            contract_document=contract_document,
+            source_dir=source_dir,
+            snapshot_dir=snapshot_dir,
+        )
+    except (ConcurrentRobustnessReleaseError, OSError, ValidationError) as exc:
+        raise ReleaseValidationError(f"invalid v7 Concurrent Robustness release: {exc}") from exc
+
+
+def _load_and_validate_release(
     *,
     repo_root: Path,
     contract_path: Path,
     source_dir: Path,
     snapshot_dir: Path | None = None,
-) -> dict[str, object]:
+) -> tuple[dict[str, object], Path, dict[str, object]]:
     repo_root = repo_root.resolve()
     contract_file = _regular_contract_file(repo_root, contract_path)
     contract = _load_json(contract_file)
@@ -1506,48 +1623,217 @@ def validate_release(
         raise ReleaseValidationError("release contract must be a JSON object")
     schema_version = contract.get("schema_version")
     if schema_version == "abm-report-release-contract-v1":
-        return _validate_v1(repo_root=repo_root, contract=contract, source_dir=source_dir)
-    if schema_version == "abm-report-release-contract-v2":
+        result = _validate_v1(repo_root=repo_root, contract=contract, source_dir=source_dir)
+    elif schema_version == "abm-report-release-contract-v2":
         _safe_contract_file(repo_root, contract_path)
-        return _validate_v2(
+        result = _validate_v2(
             repo_root=repo_root,
             contract_document=contract,
             source_dir=source_dir,
             snapshot_dir=snapshot_dir,
         )
-    if schema_version == "abm-report-release-contract-v3":
+    elif schema_version == "abm-report-release-contract-v3":
         _safe_contract_file(repo_root, contract_path)
-        return _validate_v3(
+        result = _validate_v3(
             repo_root=repo_root,
             contract_document=contract,
             source_dir=source_dir,
             snapshot_dir=snapshot_dir,
         )
-    if schema_version == "abm-report-release-contract-v4":
+    elif schema_version == "abm-report-release-contract-v4":
         _safe_contract_file(repo_root, contract_path)
-        return _validate_v4(
+        result = _validate_v4(
             repo_root=repo_root,
             contract_document=contract,
             source_dir=source_dir,
             snapshot_dir=snapshot_dir,
         )
-    if schema_version == "abm-report-release-contract-v5":
+    elif schema_version == "abm-report-release-contract-v5":
         _safe_contract_file(repo_root, contract_path)
-        return _validate_v5(
+        result = _validate_v5(
             repo_root=repo_root,
             contract_document=contract,
             source_dir=source_dir,
             snapshot_dir=snapshot_dir,
         )
-    if schema_version == "abm-report-release-contract-v6":
+    elif schema_version == "abm-report-release-contract-v6":
         _safe_contract_file(repo_root, contract_path)
-        return _validate_v6(
+        result = _validate_v6(
             repo_root=repo_root,
             contract_document=contract,
             source_dir=source_dir,
             snapshot_dir=snapshot_dir,
         )
-    raise ReleaseValidationError(f"unsupported release contract schema_version: {schema_version!r}")
+    elif schema_version == "abm-report-release-contract-v7":
+        _safe_contract_file(repo_root, contract_path)
+        result = _validate_v7(
+            repo_root=repo_root,
+            contract_document=contract,
+            source_dir=source_dir,
+            snapshot_dir=snapshot_dir,
+        )
+    else:
+        raise ReleaseValidationError(f"unsupported release contract schema_version: {schema_version!r}")
+    return result, contract_file, contract
+
+
+def validate_release(
+    *,
+    repo_root: Path,
+    contract_path: Path,
+    source_dir: Path,
+    snapshot_dir: Path | None = None,
+) -> dict[str, object]:
+    result, _contract_file, _contract = _load_and_validate_release(
+        repo_root=repo_root,
+        contract_path=contract_path,
+        source_dir=source_dir,
+        snapshot_dir=snapshot_dir,
+    )
+    return result
+
+
+_DEPLOYMENT_REPORT_KINDS = {
+    "abm-report-release-contract-v2": "final-research",
+    "abm-report-release-contract-v3": "final-research",
+    "abm-report-release-contract-v4": "concurrent-message",
+    "abm-report-release-contract-v5": "concurrent-robustness",
+    "abm-report-release-contract-v6": "concurrent-robustness",
+    "abm-report-release-contract-v7": "concurrent-robustness",
+}
+_DEPLOYMENT_RELEASE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,159}$")
+_DEPLOYMENT_DOMAIN = re.compile(r"^[A-Za-z0-9.-]+$")
+_DEPLOYMENT_ARTIFACT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]*$")
+_DEPLOYMENT_SHA256 = re.compile(r"^[0-9a-f]{64}$")
+
+
+def _build_deployment_facts(
+    *,
+    contract_path: Path,
+    contract: dict[str, object],
+    result: dict[str, object],
+    evidence_dir: Path,
+    deployment_release_id: str,
+    deployment_domain: str,
+) -> dict[str, object]:
+    """Project a validated release into the only facts the Deployment Module may consume."""
+    schema_version = contract.get("schema_version")
+    report_kind = _DEPLOYMENT_REPORT_KINDS.get(schema_version) if isinstance(schema_version, str) else None
+    if report_kind is None or result.get("schema_version") != schema_version:
+        raise ReleaseValidationError("deployment facts require a supported validated release schema")
+    if not _DEPLOYMENT_RELEASE_ID.fullmatch(deployment_release_id):
+        raise ReleaseValidationError("deployment release id is invalid")
+    if not _DEPLOYMENT_DOMAIN.fullmatch(deployment_domain):
+        raise ReleaseValidationError("deployment domain is invalid")
+    frozen_release_id = contract.get("release_id")
+    if frozen_release_id is not None and frozen_release_id != deployment_release_id:
+        raise ReleaseValidationError("deployment release id differs from the frozen contract")
+    if result.get("release_id") is not None and result.get("release_id") != deployment_release_id:
+        raise ReleaseValidationError("deployment release id differs from validated release facts")
+
+    endpoint = contract.get("canonical_endpoint")
+    if endpoint is None:
+        endpoint = f"https://{deployment_domain}/"
+    parsed = urlparse(endpoint) if isinstance(endpoint, str) else None
+    if (
+        parsed is None
+        or parsed.scheme != "https"
+        or parsed.hostname != deployment_domain
+        or parsed.port is not None
+        or parsed.path != "/"
+        or parsed.params
+        or parsed.query
+        or parsed.fragment
+    ):
+        raise ReleaseValidationError("deployment domain differs from the frozen canonical endpoint")
+
+    raw_hashes = contract.get("artifact_sha256")
+    if not isinstance(raw_hashes, dict) or not raw_hashes:
+        raise ReleaseValidationError("deployment contract artifact_sha256 must be a non-empty object")
+    artifact_hashes: dict[str, str] = {}
+    for raw_path, raw_digest in raw_hashes.items():
+        if not isinstance(raw_path, str) or not _DEPLOYMENT_ARTIFACT.fullmatch(raw_path):
+            raise ReleaseValidationError("deployment artifact path is not canonical and shell-safe")
+        path = PurePosixPath(raw_path)
+        if path.is_absolute() or "." in path.parts or ".." in path.parts or path.as_posix() != raw_path:
+            raise ReleaseValidationError("deployment artifact path escapes the release inventory")
+        if not isinstance(raw_digest, str) or not _DEPLOYMENT_SHA256.fullmatch(raw_digest):
+            raise ReleaseValidationError(f"deployment artifact SHA-256 is invalid: {raw_path}")
+        artifact_hashes[raw_path] = raw_digest
+    for required in ("report.html", "artifact_manifest.json"):
+        if required not in artifact_hashes:
+            raise ReleaseValidationError(f"deployment contract is missing {required}")
+        target = evidence_dir / required
+        if target.is_symlink() or not target.is_file() or _sha256(target) != artifact_hashes[required]:
+            raise ReleaseValidationError(f"validated deployment snapshot changed at {required}")
+    if result.get("report_sha256") != artifact_hashes["report.html"]:
+        raise ReleaseValidationError("validated report hash differs from the deployment contract")
+
+    manifest = _load_json(evidence_dir / "artifact_manifest.json")
+    if not isinstance(manifest, dict):
+        raise ReleaseValidationError("deployment artifact manifest must be a JSON object")
+    approved_value = manifest.get("approved_downloads", {})
+    if isinstance(approved_value, dict):
+        approved_downloads = list(approved_value.values())
+    elif isinstance(approved_value, list):
+        approved_downloads = approved_value
+    else:
+        raise ReleaseValidationError("deployment approved downloads must be a mapping or list")
+    if any(not isinstance(path, str) or path not in artifact_hashes for path in approved_downloads):
+        raise ReleaseValidationError("deployment approved download is absent from the contract inventory")
+    if len(set(approved_downloads)) != len(approved_downloads):
+        raise ReleaseValidationError("deployment approved downloads are not one-to-one")
+
+    release_identity = manifest.get("release_identity_sha256", "")
+    if schema_version in {
+        "abm-report-release-contract-v5",
+        "abm-report-release-contract-v6",
+        "abm-report-release-contract-v7",
+    }:
+        if manifest.get("release_id") != deployment_release_id:
+            raise ReleaseValidationError("deployment manifest release id is crossed")
+        if not isinstance(release_identity, str) or not _DEPLOYMENT_SHA256.fullmatch(release_identity):
+            raise ReleaseValidationError("deployment manifest release identity is invalid")
+    elif not isinstance(release_identity, str):
+        release_identity = ""
+
+    return {
+        "schema_version": "abm-report-deployment-facts-v1",
+        "release_contract_schema_version": schema_version,
+        "report_kind": report_kind,
+        "release_id": deployment_release_id,
+        "canonical_endpoint": endpoint,
+        "canonical_domain": deployment_domain,
+        "contract_sha256": _sha256(contract_path),
+        "release_identity_sha256": release_identity,
+        "report_sha256": artifact_hashes["report.html"],
+        "manifest_sha256": artifact_hashes["artifact_manifest.json"],
+        "artifact_sha256": dict(sorted(artifact_hashes.items())),
+        "approved_downloads": sorted(approved_downloads),
+        "public_acceptance_artifacts": sorted(artifact_hashes),
+    }
+
+
+def _require_formal_production(result: dict[str, object]) -> None:
+    if (
+        result.get("schema_version")
+        not in {
+            "abm-report-release-contract-v2",
+            "abm-report-release-contract-v3",
+            "abm-report-release-contract-v4",
+            "abm-report-release-contract-v5",
+            "abm-report-release-contract-v6",
+            "abm-report-release-contract-v7",
+        }
+        or result.get("release_purpose") not in {"formal_research", "concurrent_robustness_formal_research"}
+        or result.get("sampling_status") != "persisted_seed_first_formal_run"
+        or result.get("decision_execution_mode") != "live_provider"
+        or result.get("production_deploy_eligible") is not True
+    ):
+        raise ReleaseValidationError(
+            "formal production deployment requires abm-report-release-contract-v2, v3, v4, v5, v6, or v7 "
+            "deploy-eligible persisted live-provider Formal research evidence"
+        )
 
 
 def _parse_args() -> argparse.Namespace:
@@ -1563,36 +1849,52 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--require-formal-production",
         action="store_true",
-        help="Reject validated evidence unless it is a deploy-eligible v2-v6 Formal research release",
+        help="Reject validated evidence unless it is a deploy-eligible v2-v7 Formal research release",
     )
+    parser.add_argument(
+        "--deployment-facts-output",
+        type=Path,
+        help="Write validated, deployment-only facts for deploy_abm_report.sh",
+    )
+    parser.add_argument("--deployment-release-id")
+    parser.add_argument("--deployment-domain")
     return parser.parse_args()
 
 
 def main() -> int:
     args = _parse_args()
     try:
-        result = validate_release(
+        result, contract_file, contract = _load_and_validate_release(
             repo_root=args.repo_root,
             contract_path=args.contract,
             source_dir=args.source_dir,
             snapshot_dir=args.snapshot_dir,
         )
-        if args.require_formal_production and (
-            result.get("schema_version")
-            not in {
-                "abm-report-release-contract-v2",
-                "abm-report-release-contract-v3",
-                "abm-report-release-contract-v4",
-                "abm-report-release-contract-v5",
-                "abm-report-release-contract-v6",
-            }
-            or result.get("release_purpose")
-            not in {"formal_research", "concurrent_robustness_formal_research"}
-            or result.get("production_deploy_eligible") is not True
-        ):
-            raise ReleaseValidationError(
-                "formal production deployment requires abm-report-release-contract-v2, v3, v4, v5, or v6 "
-                "deploy-eligible Formal research evidence"
+        if args.require_formal_production:
+            _require_formal_production(result)
+        if args.deployment_facts_output is not None:
+            if (
+                not args.require_formal_production
+                or args.deployment_release_id is None
+                or args.deployment_domain is None
+            ):
+                raise ReleaseValidationError(
+                    "deployment facts require --require-formal-production, --deployment-release-id, and --deployment-domain"
+                )
+            facts = _build_deployment_facts(
+                contract_path=contract_file,
+                contract=contract,
+                result=result,
+                evidence_dir=args.snapshot_dir or args.source_dir,
+                deployment_release_id=args.deployment_release_id,
+                deployment_domain=args.deployment_domain,
+            )
+            output = args.deployment_facts_output
+            if output.is_symlink() or (output.exists() and not output.is_file()):
+                raise ReleaseValidationError("deployment facts output must be a regular non-symlink file")
+            output.write_text(
+                json.dumps(facts, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n",
+                encoding="utf-8",
             )
     except ReleaseValidationError as exc:
         print(f"release validation error: {exc}", file=sys.stderr)

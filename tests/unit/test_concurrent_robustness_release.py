@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import importlib.util
 import json
+import shutil
 from collections.abc import Callable
 from pathlib import Path
 from types import SimpleNamespace
@@ -571,6 +572,45 @@ def test_formal_candidate_promotes_without_mutating_validation_evidence(
     )
     assert validated["production_deploy_eligible"] is True
     assert validated["logical_judgments"] == 28_800
+
+
+def test_standalone_v7_validator_accepts_an_exact_snapshot_and_rejects_mutation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fixture = _promote_fixture(
+        tmp_path,
+        monkeypatch,
+        payload_version=2,
+        closure_version=2,
+    )
+    validator_path = Path(__file__).resolve().parents[2] / "scripts" / "validate_abm_report_release.py"
+    spec = importlib.util.spec_from_file_location("validate_abm_report_release_v7_snapshot_test", validator_path)
+    assert spec is not None and spec.loader is not None
+    validator = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(validator)
+    snapshot = tmp_path / "physical-snapshot"
+    shutil.copytree(fixture.promoted.source_dir, snapshot)
+
+    validated = validator.validate_release(
+        repo_root=tmp_path,
+        contract_path=fixture.promoted.contract_path,
+        source_dir=fixture.promoted.source_dir,
+        snapshot_dir=snapshot,
+    )
+    validator._require_formal_production(validated)
+    assert validated["schema_version"] == "abm-report-release-contract-v7"
+    assert validated["artifact_count"] == len(list(snapshot.iterdir()))
+
+    with (snapshot / "mechanism-sample-first.mmd").open("a", encoding="utf-8") as stream:
+        stream.write("mutated\n")
+    with pytest.raises(validator.ReleaseValidationError, match="invalid v7.*hash"):
+        validator.validate_release(
+            repo_root=tmp_path,
+            contract_path=fixture.promoted.contract_path,
+            source_dir=fixture.promoted.source_dir,
+            snapshot_dir=snapshot,
+        )
 
 
 def test_payload_v1_closure_v1_preserves_exact_v6_release_contract(

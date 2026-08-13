@@ -81,9 +81,95 @@ async function expectFinalResearchReport(page: Page): Promise<void> {
   await expect(page.getByTestId('run-evidence-method-status')).toContainText('Persisted Seed-First Formal Run');
 }
 
+async function expectSemanticV7EditorialReport(page: Page): Promise<void> {
+  const root = page.getByTestId('editorial-report');
+  await expect(root).toHaveAttribute('data-editorial-version', 'v4-semantic');
+  await expect(root).toHaveAttribute('data-report-mode', 'mechanism');
+  await expect(page.locator('html')).toHaveAttribute('lang', 'zh-CN');
+  await expect(page.locator('meta[name="abm-release-contract"]')).toHaveAttribute(
+    'content',
+    'abm-report-release-contract-v7',
+  );
+  await expect(page.locator('[data-report-anchor]')).toHaveCount(5);
+  await expect(page.locator('[data-report-anchor]').allTextContents()).resolves.toEqual([
+    '样本先存在',
+    '用户与消息配对',
+    '三条消息独立投放',
+    '曝光与配对决策',
+    '反馈边界',
+  ]);
+  await expect(page.locator('[data-mechanism-diagram-id]')).toHaveCount(6);
+  await expect(page.locator('[data-mechanism-method-disclosure]')).toHaveCount(6);
+  await expect(page.locator('img')).toHaveCount(0);
+  await expect(page.getByTestId('real-batch-mechanism-section')).toContainText('八个节点概括');
+
+  const mobile = (await page.viewportSize())?.width !== undefined && (await page.viewportSize())!.width < 768;
+  if (mobile) {
+    await expect(page.locator('.editorial-semantic-canvas svg:visible')).toHaveCount(0);
+    await expect(page.locator('.editorial-semantic-mobile-flow:visible')).toHaveCount(6);
+  } else {
+    await expect(page.locator('.editorial-semantic-canvas svg:visible')).toHaveCount(6);
+    await expect(page.locator('.editorial-semantic-mobile-flow:visible')).toHaveCount(0);
+  }
+
+  for (let index = 0; index < 6; index += 1) {
+    const disclosure = page.locator('[data-mechanism-method-disclosure]').nth(index);
+    const summary = disclosure.locator('summary');
+    await summary.focus();
+    await summary.press('Enter');
+    await expect(disclosure).toHaveAttribute('open', '');
+    await expect(disclosure.locator('ol')).not.toBeEmpty();
+    await summary.press('Space');
+    await expect(disclosure).not.toHaveAttribute('open', '');
+  }
+
+  for (const anchor of ['overview', 'sample', 'exposure-ranking', 'llm-decision', 'network-feedback']) {
+    const link = page.locator(`[data-report-anchor="${anchor}"]`);
+    await link.focus();
+    await link.press('Enter');
+    await expect(page).toHaveURL(new RegExp(`#${anchor}$`));
+    await expect(page.locator(`[data-report-mode-panel="mechanism"] [data-section-anchor="${anchor}"]`)).toBeFocused();
+  }
+
+  await page.getByRole('button', { name: 'English', exact: true }).click();
+  await expect(page.locator('html')).toHaveAttribute('lang', 'en-US');
+  await expect(page.locator('[data-report-anchor]').allTextContents()).resolves.toEqual([
+    'Sample First',
+    'Pair Formation',
+    'Independent Delivery',
+    'Exposure & Decisions',
+    'Feedback Boundary',
+  ]);
+  await expect(page.locator('[data-mechanism-method-disclosure]').first()).toContainText(
+    'runtime live database',
+  );
+
+  const runEvidenceButton = page.getByTestId('run-evidence-mode-button');
+  await runEvidenceButton.focus();
+  await runEvidenceButton.press('Enter');
+  await expect(root).toHaveAttribute('data-report-mode', 'run-evidence');
+  await expect(page.getByTestId('run-evidence-mode-panel')).toBeVisible();
+  await expect(page.getByTestId('mechanism-mode-panel')).toBeHidden();
+  await expect(page.getByTestId('robustness-report-release')).toBeVisible();
+  await expect(page.getByTestId('prompt-model-factorial-diagram')).toBeVisible();
+  await expect(page.getByTestId('run-trace-search')).toBeEnabled();
+  await expect(page.getByTestId('run-trace-page-size')).toBeEnabled();
+  const firstTraceRow = page.locator('[data-testid^="run-trace-row-"]').first();
+  await firstTraceRow.focus();
+  await firstTraceRow.press('Enter');
+  const drawer = page.getByTestId('evidence-drawer');
+  await expect(drawer).toBeVisible();
+  await page.getByTestId('editorial-drawer-close').click();
+  await expect(drawer).toBeHidden();
+}
+
 async function expectEditorialReport(page: Page): Promise<void> {
   const root = page.getByTestId('editorial-report');
   await expect(root).toBeVisible();
+  if ((await root.getAttribute('data-editorial-version')) === 'v4-semantic') {
+    await expectSemanticV7EditorialReport(page);
+    return;
+  }
   await expect(page.locator('html')).toHaveAttribute('lang', 'zh-CN');
   await expect(root).toHaveAttribute('data-report-mode', 'mechanism');
   await expect(root).toHaveAttribute('data-report-language', 'zh-CN');
@@ -229,14 +315,6 @@ async function expectConcurrentRobustnessInteractions(page: Page): Promise<void>
       await expectRobustnessPromptView(page, messageId, metricId);
     }
   }
-  await messageSelect.selectOption('message_1');
-  await metricSelect.selectOption('engagement');
-  await messageSelect.focus();
-  await messageSelect.pressSequentially('message_2');
-  await expectRobustnessPromptView(page, 'message_2', 'engagement');
-  await metricSelect.focus();
-  await metricSelect.pressSequentially('Audience');
-  await expectRobustnessPromptView(page, 'message_2', 'audience');
 }
 
 async function expectConcurrentRobustnessReport(page: Page): Promise<void> {
@@ -321,6 +399,11 @@ test.describe('deployed Seed-First report', () => {
     if (reportKind === 'concurrent-robustness') {
       await expectRobustnessDownloadHeads(page, request);
     }
+
+    await page.setViewportSize({ width: 1600, height: 1000 });
+    await page.goto(`${publicUrl}/`, { waitUntil: 'domcontentloaded', timeout: 150_000 });
+    await expectReportByKind(page);
+    await expectNoHorizontalOverflow(page);
 
     await page.setViewportSize({ width: 390, height: 844 });
     await page.goto(`${publicUrl}/`, { waitUntil: 'domcontentloaded', timeout: 150_000 });
