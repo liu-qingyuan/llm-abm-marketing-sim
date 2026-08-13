@@ -1,0 +1,218 @@
+{
+  "schema_version": "mechanism-image-generation-audit-v1",
+  "semantic_approval": {
+    "approver": "liu-qingyuan",
+    "approved_at": "2026-08-13T05:23:38Z",
+    "comment_url": "https://github.com/liu-qingyuan/llm-abm-marketing-sim/issues/185#issuecomment-5276313349",
+    "set_identity_sha256": "c93dccf1a502e94484ad0db7a2abd9a8d5b2c16dd47c918825401da55ef170bf",
+    "implementation_commit": "34ed1d3a7f85bc93acfbf5f7572fb03c0e3a3dbb",
+    "masters": [
+      {
+        "filename": "mechanism-sample-first.mmd",
+        "sha256": "30786e0b98a576ab299b51e0aebceedb6b6d8fc03a7955ba56bc782bde594b81"
+      },
+      {
+        "filename": "mechanism-pair-formation.mmd",
+        "sha256": "567859f204eed780ec8196aa1b23d6ed120e29a45161a442efa53fcf6431fb2e"
+      },
+      {
+        "filename": "mechanism-independent-delivery.mmd",
+        "sha256": "a4c933e87ff25132434e8c890449d3c38326bf17b5da93309ab4f199513d3f87"
+      },
+      {
+        "filename": "mechanism-exposure-decisions.mmd",
+        "sha256": "02ef23e190bb5fe5bbb313c3ac902201da8e44239f026189c529d75a0687bed8"
+      },
+      {
+        "filename": "mechanism-feedback-boundary.mmd",
+        "sha256": "536a4de2b120e19a19b930c458ae481580541a8bc301a47cd7413a14b9e15675"
+      },
+      {
+        "filename": "real-batch-mechanism.mmd",
+        "sha256": "73ea8c840faa315b0a5ee70b2958723fcf0fe140bfc000964a3d04c8f65bd907"
+      }
+    ]
+  },
+  "calls": [
+    {
+      "diagram_id": "sample_first",
+      "attempt": 1,
+      "model": "gpt-image-2",
+      "size": "1536x1024",
+      "quality": "high",
+      "called_at": "2026-08-13T06:53:30Z",
+      "prompt_sha256": "eb10f123b77e552df802270f301c567ee5c3fc74baf5ae28c283e0ec419c1a08",
+      "output_sha256": "a3f74f6b393ef6aa505ee968d3303c92aadc37a899de9c077556f2f402fdc61e",
+      "accepted": true,
+      "rejection_reason": null
+    },
+    {
+      "diagram_id": "pair_formation",
+      "attempt": 1,
+      "model": "gpt-image-2",
+      "size": "1536x1024",
+      "quality": "high",
+      "called_at": "2026-08-13T06:55:14Z",
+      "prompt_sha256": "0e4908896e7d7ef87d0811f9baaeb12b46a97fb1f33d81ca0a4b30d59f6a06cd",
+      "output_sha256": "fa251e8af0e7205e0072c1b545f77430db7e5834b6528959dfbaf393ad5a5d04",
+      "accepted": true,
+      "rejection_reason": null
+    },
+    {
+      "diagram_id": "independent_delivery",
+      "attempt": 1,
+      "model": "gpt-image-2",
+      "size": "1536x1024",
+      "quality": "high",
+      "called_at": "2026-08-13T06:56:53Z",
+      "prompt_sha256": "df485d8fcf381c32effebeb1e26dc0abc761206fbefa207478574bf9a4c33c27",
+      "output_sha256": "f59a388495dfe35bb335a502737d1c88670a36ddbcafdb9f46f9424033da44a9",
+      "accepted": false,
+      "rejection_reason": "Rendered human/group pictograms, violating the approved no-people constraint."
+    },
+    {
+      "diagram_id": "independent_delivery",
+      "attempt": 2,
+      "model": "gpt-image-2",
+      "size": "1536x1024",
+      "quality": "high",
+      "called_at": "2026-08-13T06:58:24Z",
+      "prompt_sha256": "6d83fef760de5b7bbc77565e13baf001e41fbb2a3b6a08f74dabbbb4cb0d1ff3",
+      "output_sha256": "a2d973a30855b54d03d23bfb6b6bb3e6ad174cb7d1e2fc733ca8441b48c55330",
+      "accepted": true,
+      "rejection_reason": null
+    },
+    {
+      "diagram_id": "exposure_decisions",
+      "attempt": 1,
+      "model": "gpt-image-2",
+      "size": "1536x1024",
+      "quality": "high",
+      "called_at": "2026-08-13T07:00:29Z",
+      "prompt_sha256": "57400c6f4bf8b8ea919a680630d8dbee879ce64aea2500528fd132ec450c20f1",
+      "output_sha256": "0d721fbeae68e939f1946d0349042112adc7e22b989a00d99e5b4e23ed45e620",
+      "accepted": true,
+      "rejection_reason": null
+    },
+    {
+      "diagram_id": "feedback_boundary",
+      "attempt": 1,
+      "model": "gpt-image-2",
+      "size": "1536x1024",
+      "quality": "high",
+      "called_at": "2026-08-13T07:02:10Z",
+      "prompt_sha256": "2a4ff29bfebb7a93516a0cc2c30322f12e420250c5eed8c71f7c8670709f4875",
+      "output_sha256": "299311aef8d5042e34d1ab0b0966348d215411cd967a2937c738848e03e8fccd",
+      "accepted": true,
+      "rejection_reason": null
+    }
+  ],
+  "visual_approval": null,
+  "derivatives": [
+    {
+      "diagram_id": "sample_first",
+      "source_filename": "mechanism-sample-first-v4.png",
+      "source_sha256": "a3f74f6b393ef6aa505ee968d3303c92aadc37a899de9c077556f2f402fdc61e",
+      "filename": "mechanism-sample-first-v4.webp",
+      "sha256": "124c926833ca21827d0b71858142570e3489a607f00a184185f9d4704c090377",
+      "encoder": "cwebp",
+      "encoder_version": "1.6.0",
+      "arguments": [
+        "-quiet",
+        "-q",
+        "84",
+        "-m",
+        "6",
+        "-pass",
+        "10",
+        "-metadata",
+        "none",
+        "-sharp_yuv"
+      ]
+    },
+    {
+      "diagram_id": "pair_formation",
+      "source_filename": "mechanism-pair-formation-v4.png",
+      "source_sha256": "fa251e8af0e7205e0072c1b545f77430db7e5834b6528959dfbaf393ad5a5d04",
+      "filename": "mechanism-pair-formation-v4.webp",
+      "sha256": "13328a619b119c8a997ce276cbbbb1593d0fb48e048ae0b80a0c0c7591c9bd4f",
+      "encoder": "cwebp",
+      "encoder_version": "1.6.0",
+      "arguments": [
+        "-quiet",
+        "-q",
+        "84",
+        "-m",
+        "6",
+        "-pass",
+        "10",
+        "-metadata",
+        "none",
+        "-sharp_yuv"
+      ]
+    },
+    {
+      "diagram_id": "independent_delivery",
+      "source_filename": "mechanism-independent-delivery-v4.png",
+      "source_sha256": "a2d973a30855b54d03d23bfb6b6bb3e6ad174cb7d1e2fc733ca8441b48c55330",
+      "filename": "mechanism-independent-delivery-v4.webp",
+      "sha256": "b729ca8503a1d471d8d4fef402229617a1fbbebed4f92e73e5e991ee1b3b18ba",
+      "encoder": "cwebp",
+      "encoder_version": "1.6.0",
+      "arguments": [
+        "-quiet",
+        "-q",
+        "84",
+        "-m",
+        "6",
+        "-pass",
+        "10",
+        "-metadata",
+        "none",
+        "-sharp_yuv"
+      ]
+    },
+    {
+      "diagram_id": "exposure_decisions",
+      "source_filename": "mechanism-exposure-decisions-v4.png",
+      "source_sha256": "0d721fbeae68e939f1946d0349042112adc7e22b989a00d99e5b4e23ed45e620",
+      "filename": "mechanism-exposure-decisions-v4.webp",
+      "sha256": "5f09565ca64847d771c8acb3494cc358503010853bac1dda6b469eaaf634375a",
+      "encoder": "cwebp",
+      "encoder_version": "1.6.0",
+      "arguments": [
+        "-quiet",
+        "-q",
+        "84",
+        "-m",
+        "6",
+        "-pass",
+        "10",
+        "-metadata",
+        "none",
+        "-sharp_yuv"
+      ]
+    },
+    {
+      "diagram_id": "feedback_boundary",
+      "source_filename": "mechanism-feedback-boundary-v4.png",
+      "source_sha256": "299311aef8d5042e34d1ab0b0966348d215411cd967a2937c738848e03e8fccd",
+      "filename": "mechanism-feedback-boundary-v4.webp",
+      "sha256": "0eb19a5b41c2ba1eb42b630e470b557670df1cbd22ad688a8fc7e622fc886bec",
+      "encoder": "cwebp",
+      "encoder_version": "1.6.0",
+      "arguments": [
+        "-quiet",
+        "-q",
+        "84",
+        "-m",
+        "6",
+        "-pass",
+        "10",
+        "-metadata",
+        "none",
+        "-sharp_yuv"
+      ]
+    }
+  ]
+}
