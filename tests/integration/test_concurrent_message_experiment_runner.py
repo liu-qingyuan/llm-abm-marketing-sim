@@ -3485,6 +3485,64 @@ def test_concurrent_robustness_composes_two_closed_sources_into_an_immutable_rep
     assert "Demographic Shadow evidence remains bound to the historical Formal source" in report_html
     assert "production_deploy_eligible=false" in report_html
 
+    compatibility_before = {
+        path.relative_to(destination).as_posix(): path.read_bytes()
+        for path in destination.rglob("*")
+        if path.is_file()
+    }
+    semantic_candidate = concurrent_robustness_report_module._REPORT_PRESENTATION.compose_semantic_candidate(
+        formal_root=source_dir,
+        study_root=complete.study_root,
+        candidate_dir=destination,
+    )
+    assert semantic_candidate.production_deploy_eligible is False
+    assert semantic_candidate.provider_calls_during_composition == 0
+    assert semantic_candidate.image_generation_triggered is False
+    assert semantic_candidate.companion_artifacts
+    assert "report.html" not in semantic_candidate.companion_artifacts
+    assert "project-evidence-chain.mmd" not in semantic_candidate.companion_artifacts
+    assert set(semantic_candidate.companion_artifacts).isdisjoint(
+        semantic_candidate.mermaid_artifacts
+    )
+    assert tuple(semantic_candidate.mermaid_artifacts) == (
+        "mechanism-sample-first.mmd",
+        "mechanism-pair-formation.mmd",
+        "mechanism-independent-delivery.mmd",
+        "mechanism-exposure-decisions.mmd",
+        "mechanism-feedback-boundary.mmd",
+        "real-batch-mechanism.mmd",
+        "prompt-model-factorial.mmd",
+    )
+    assert semantic_candidate.mermaid_artifacts["prompt-model-factorial.mmd"] == (
+        destination / "prompt-model-factorial.mmd"
+    ).read_bytes()
+    semantic_html = semantic_candidate.report_html.decode("utf-8")
+    semantic_catalog_match = re.search(
+        r"const promptCatalog = (\{.*?\});\n\n  const applyPromptLanguage",
+        semantic_html,
+        re.DOTALL,
+    )
+    assert semantic_catalog_match is not None
+    semantic_catalog = json.loads(semantic_catalog_match.group(1))
+    assert set(semantic_catalog["zh-CN"]) == set(semantic_catalog["en-US"])
+    assert all(
+        semantic_catalog["zh-CN"][key] != semantic_catalog["en-US"][key]
+        for key in semantic_catalog["zh-CN"]
+    )
+    assert 'data-editorial-version="v4-semantic"' in semantic_html
+    assert 'data-testid="real-batch-mechanism-section"' in semantic_html
+    assert 'data-testid="prompt-model-factorial-diagram"' in semantic_html
+    assert "project-evidence-chain" not in semantic_html
+    assert "mechanism-image-generation-audit.json" not in semantic_html
+    assert "mechanism-sample-first-v4.png" not in semantic_html
+    assert source_before == {path.name: path.read_bytes() for path in source_dir.iterdir() if path.is_file()}
+    assert study_before == {path.name: path.read_bytes() for path in complete.study_root.iterdir() if path.is_file()}
+    assert compatibility_before == {
+        path.relative_to(destination).as_posix(): path.read_bytes()
+        for path in destination.rglob("*")
+        if path.is_file()
+    }
+
 
 @pytest.mark.parametrize(
     ("release_contract_schema", "report_sized"),

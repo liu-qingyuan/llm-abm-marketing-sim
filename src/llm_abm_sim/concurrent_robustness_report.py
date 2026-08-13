@@ -20,6 +20,8 @@ from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING, Any
 
+from .concurrent_message_editorial_candidate import _render_editorial_v4
+from .concurrent_message_mechanism_presentation import _MECHANISM_PRESENTATION
 from .concurrent_message_renderer import render_report
 from .concurrent_message_report import (
     CONCURRENT_MESSAGE_ARTIFACT_MANIFEST_JSON,
@@ -91,6 +93,15 @@ _PROMPT_MODEL_FACTORIAL_MMD = "prompt-model-factorial.mmd"
 _READER_MERMAID_DOWNLOADS = {
     "project_evidence_chain_mermaid": _PROJECT_EVIDENCE_MMD,
     "batch_mechanism_mermaid": _BATCH_MECHANISM_MMD,
+    "prompt_model_factorial_mermaid": _PROMPT_MODEL_FACTORIAL_MMD,
+}
+_SEMANTIC_MERMAID_DOWNLOADS = {
+    "mechanism_sample_first_mermaid": "mechanism-sample-first.mmd",
+    "mechanism_pair_formation_mermaid": "mechanism-pair-formation.mmd",
+    "mechanism_independent_delivery_mermaid": "mechanism-independent-delivery.mmd",
+    "mechanism_exposure_decisions_mermaid": "mechanism-exposure-decisions.mmd",
+    "mechanism_feedback_boundary_mermaid": "mechanism-feedback-boundary.mmd",
+    "real_batch_mechanism_mermaid": _BATCH_MECHANISM_MMD,
     "prompt_model_factorial_mermaid": _PROMPT_MODEL_FACTORIAL_MMD,
 }
 
@@ -493,6 +504,184 @@ _READER_DIAGRAM_COPY = {
 }
 
 
+_SEMANTIC_ROBUSTNESS_COPY = {
+    "zh-CN": {
+        "semantic.hero.kicker": "增量稳健性证据",
+        "semantic.hero.title": "在不改写历史运行的前提下检验排序政策与 Prompt-Model 稳健性",
+        "semantic.hero.lead": "固定同一份样本、互动图与每个 cell 的单条已实现路径。这些描述性比较不使用 ground truth，也不作因果、Calibration 或统计等价声明。",
+        "semantic.lineage.formal.label": "Historical Concurrent Formal 来源",
+        "semantic.lineage.formal.body": "机制、本次运行、字段 lineage、Demographic Shadow 比较与 Primary + Shadow barrier 继续由这份历史证据提供。",
+        "semantic.lineage.study.label": "不可变完整 study root",
+        "semantic.lineage.study.body": "排序权重与 Primary-only 4 Prompt × 4 model 证据来自此处，没有重新运行 Shadow 条件。",
+        "semantic.lineage.shadow_warning": "Demographic Shadow 证据仍绑定历史 Formal 来源，不属于 factorial Prompt-Model 结果。",
+        "semantic.weight.title": "排序权重敏感性",
+        "semantic.weight.lead": "19 个预声明 simplex points 按六条转移曲线分组展示，candidate sets 与 feedback 保持冻结。",
+        "semantic.weight.family.label": "可见权重转移组",
+        "semantic.weight.family.network_feedback": "网络相关性与活动反馈",
+        "semantic.weight.family.network_fit": "网络相关性与消息用户匹配",
+        "semantic.weight.family.feedback_fit": "活动反馈与消息用户匹配",
+        "semantic.weight.chart.title": "Top K Jaccard 距离",
+        "semantic.weight.panel.note": "按冻结批次展示 Top K Jaccard 距离；精确表保留排名移动。",
+        "semantic.weight.message_rows": "message-level Jaccard 精确摘要",
+        "semantic.weight.batch_rows": "逐批进入、退出与排名移动精确诊断",
+        "semantic.prompt.message.label": "消息",
+        "semantic.prompt.metric.label": "动态指标",
+        "semantic.prompt.denominator_aria": "Prompt-Model 分母",
+        "semantic.prompt.metric.engagement": "累计曝光互动率",
+        "semantic.prompt.metric.audience": "累计受众 Jaccard 距离",
+        "semantic.prompt.shared.title": "共享 seed 的直接决策",
+        "semantic.prompt.shared.lead": "二元 engage 是主要比较；probability 与 confidence 为辅助指标。表格跟随所选消息。",
+        "semantic.prompt.growth.title": "活动层正向用户增长",
+        "semantic.prompt.growth.lead": "增长按跨消息用户去重，因此单独展示，不误写成某条消息的结果。",
+        "semantic.prompt.growth.panel": "跨消息去重的成功 Primary 正向用户。",
+        "semantic.prompt.message_rows": "逐消息动态精确摘要",
+        "semantic.prompt.threshold_rows": "practical-threshold 精确分类",
+        "semantic.threshold.meaningful": "达到 practical threshold",
+        "semantic.threshold.small": "小幅观测差异",
+        "semantic.threshold.note": "低于 threshold 仅表示观测差异较小，不能建立统计等价。",
+        "semantic.downloads.title": "已批准的稳健性下载",
+        "semantic.downloads.lead": "配套 JSON、CSV 与 Mermaid 文件绑定本 candidate 的 schema、行数、hash 和精确值；不包含 raw Prompt、Provider payload、response 或 credential。",
+        "semantic.chart.batch_axis": "批次序号",
+        "semantic.chart.series_aria": "当前可见序列",
+        "semantic.trace.loading": "正在加载持久化 trace 数据。",
+        "semantic.trace.ready": "Trace 已就绪",
+        "semantic.trace.rows": "条持久化记录",
+        "semantic.trace.error": "Trace 数据不可用，筛选器与 drawer 保持禁用。",
+        "semantic.common.rows": "行",
+    },
+    "en-US": {
+        "semantic.hero.kicker": "Additive robustness evidence",
+        "semantic.hero.title": "Ranking policy and Prompt-Model robustness without relabelling the historical run",
+        "semantic.hero.lead": "One fixed sample, one fixed interaction graph, and one realized path per cell. These descriptive comparisons use no ground truth and make no causal, Calibration, or statistical-equivalence claim.",
+        "semantic.lineage.formal.label": "Historical Concurrent Formal source",
+        "semantic.lineage.formal.body": "Mechanism, Run Evidence, field lineage, Demographic Shadow comparison, and the Primary + Shadow barrier remain sourced here.",
+        "semantic.lineage.study.label": "Immutable complete study root",
+        "semantic.lineage.study.body": "Ranking Weight and Primary-only 4 Prompt × 4 model evidence come from this root. No Shadow condition was rerun.",
+        "semantic.lineage.shadow_warning": "Demographic Shadow evidence remains bound to the historical Formal source; it is not a factorial Prompt-Model result.",
+        "semantic.weight.title": "Ranking Weight Sensitivity",
+        "semantic.weight.lead": "Nineteen predeclared simplex points are grouped into six transfer curves while candidate sets and feedback stay frozen.",
+        "semantic.weight.family.label": "Visible weight-transfer family",
+        "semantic.weight.family.network_feedback": "Network relevance and campaign feedback",
+        "semantic.weight.family.network_fit": "Network relevance and message-user fit",
+        "semantic.weight.family.feedback_fit": "Campaign feedback and message-user fit",
+        "semantic.weight.chart.title": "Top K Jaccard distance",
+        "semantic.weight.panel.note": "Top K Jaccard distance by frozen batch; rank movement remains in the exact-value table.",
+        "semantic.weight.message_rows": "Exact message-level Jaccard summaries",
+        "semantic.weight.batch_rows": "Exact per-batch entered, exited, and rank-movement diagnostics",
+        "semantic.prompt.message.label": "Message",
+        "semantic.prompt.metric.label": "Dynamic metric",
+        "semantic.prompt.denominator_aria": "Prompt-Model denominators",
+        "semantic.prompt.metric.engagement": "Cumulative exposure engagement rate",
+        "semantic.prompt.metric.audience": "Cumulative audience Jaccard distance",
+        "semantic.prompt.shared.title": "Shared-seed direct Decisions",
+        "semantic.prompt.shared.lead": "Binary engage is primary; probability and confidence are secondary. Rows follow the selected message.",
+        "semantic.prompt.growth.title": "Campaign-level positive-user growth",
+        "semantic.prompt.growth.lead": "Growth is deduplicated across messages, so it stays outside message panels rather than being mislabelled as a message-specific outcome.",
+        "semantic.prompt.growth.panel": "Campaign-deduplicated successful Primary-positive users.",
+        "semantic.prompt.message_rows": "Exact per-message dynamic summaries",
+        "semantic.prompt.threshold_rows": "Exact practical-threshold classifications",
+        "semantic.threshold.meaningful": "practically meaningful",
+        "semantic.threshold.small": "small observed difference",
+        "semantic.threshold.note": "Below-threshold values are small observed differences only; they do not establish equivalence.",
+        "semantic.downloads.title": "Approved robustness downloads",
+        "semantic.downloads.lead": "Companion JSON, CSV, and Mermaid files bind to this candidate's schemas, row counts, hashes, and exact values. No raw Prompt, Provider payload, response, or credential is included.",
+        "semantic.chart.batch_axis": "Batch index",
+        "semantic.chart.series_aria": "Visible series",
+        "semantic.trace.loading": "Loading persisted trace data.",
+        "semantic.trace.ready": "Trace ready",
+        "semantic.trace.rows": "persisted rows",
+        "semantic.trace.error": "Trace data is unavailable. Filters and the drawer remain disabled.",
+        "semantic.common.rows": "rows",
+    },
+}
+
+
+_SEMANTIC_ZH_COPY = {
+    "prompt.title": "提示词—模型稳健性",
+    "prompt.lead": "每个模型面板只显示 P0–P3 四条曲线。后续路径属于描述性结果；只有共享种子的第 0 批次决策构成预声明直接配对面板。",
+    "prompt.panel_note": "四条曲线对应相同声明信息集与输出合同的受控提示词变体。",
+    "contract.title": "提示词—模型实验合同",
+    "contract.lead": "P0–P3 是相同声明信息集与输出合同的受控变体，不代表结果相同或统计等价。",
+    "contract.cells": "独立实验单元",
+    "contract.slices": "逐消息报告切片",
+    "contract.dimension_note": "消息是每个实验单元内的报告维度，不是额外独立运行。",
+    "contract.token": "稳定版本标识",
+    "contract.hash_summary": "展开规范哈希",
+    "contract.details": "实现身份",
+    "contract.models": "该提示词与 4 个合格模型各形成一个实验单元。",
+    "variant.baseline.label": "基线",
+    "variant.baseline.body": "基线提示词复用当前主决策提示词合同。",
+    "variant.wording_only.label": "仅措辞变化",
+    "variant.wording_only.body": "只改变措辞，不改变字段顺序、任务、行为语义或输出模式。",
+    "variant.information_order_only.label": "仅信息顺序变化",
+    "variant.information_order_only.body": "只重排同一信息，不增加、删除或替换声明可见字段。",
+    "variant.structured_rubric_only.label": "仅结构化量表变化",
+    "variant.structured_rubric_only.body": "只增加结构化核对量表；不请求、不输出也不持久化思维链。",
+    "common.summary": "共同声明信息集与输出合同",
+    "common.note": "以下内容直接投影自提示词合同注册表。页面不展示逐用户渲染提示词、原始 Provider 载荷或原始响应。",
+    "common.fields": "LLM 可见字段允许列表",
+    "common.task": "任务语义",
+    "common.actions": "行为语义",
+    "common.output": "结构化输出合同",
+    "common.output_fields": "必需字段",
+    "common.output_actions": "行为取值",
+    "common.engage_rules": "互动判断—行为规则",
+    "scope.direct.title": "第 0 批次直接比较",
+    "scope.direct.body": "共享种子的同一用户—消息面板用于预声明直接配对比较。",
+    "scope.paths.title": "后续已实现路径",
+    "scope.paths.body": "从第 1 批次起，每个实验单元只有一条已实现路径；该路径不是重复运行或随机性估计。",
+    "scope.shadow.title": "仅主决策析因实验",
+    "scope.shadow.body": "16 个实验单元只运行主决策。历史人口属性影子决策保留在历史正式运行来源中，不属于该析因实验。",
+    "diagram.heading": "从受控提示词到报告切片",
+    "diagram.lead": "提示词与模型定义实验单元；消息只展开同一实验单元的报告视图。",
+    "diagram.title": "提示词—模型析因设计",
+    "diagram.description": "4 个受控提示词与 4 个合格模型形成 16 个独立实验单元。每个实验单元共享样本、互动图、消息、随机种子和排序政策，形成一条已实现路径，并按 3 条消息展开 48 个报告切片。",
+    "diagram.node.Contract": "相同声明字段、任务、行为语义与输出模式",
+    "diagram.node.P0": "P0 基线",
+    "diagram.node.P1": "P1 仅措辞变化",
+    "diagram.node.P2": "P2 仅信息顺序变化",
+    "diagram.node.P3": "P3 仅结构化量表变化",
+    "diagram.node.Models": "4 个合格模型",
+    "diagram.node.Cross": "笛卡尔积",
+    "diagram.node.Cells": "16 个独立提示词—模型实验单元",
+    "diagram.node.Runtime": "相同样本、互动图、消息、随机种子与排序政策",
+    "diagram.node.Count": "每个实验单元 1,800 个主决策判断",
+    "diagram.node.Total": "28,800 个逻辑判断",
+    "diagram.node.Direct": "第 0 批次共享种子直接比较面板",
+    "diagram.node.Paths": "每个实验单元一条 30 批已实现路径",
+    "diagram.node.Views": "48 个逐消息报告切片",
+    "diagram.source.summary": "查看 Mermaid 语义母版",
+    "diagram.source.note": "页面不运行 Mermaid。两种语言使用相同节点 ID；源代码只用于审核和设计交接。",
+    "diagram.fallback.title": "文本路径",
+    "diagram.fallback.contract": "共同合同只分出 P0 基线、P1 仅措辞变化、P2 仅信息顺序变化与 P3 仅结构化量表变化。",
+    "diagram.fallback.cells": "4 个提示词与 4 个合格模型做笛卡尔积，形成 16 个独立实验单元。",
+    "diagram.fallback.runtime": "每个实验单元使用相同样本、互动图、三条消息、随机种子与排序政策，完成一条已实现路径。",
+    "diagram.fallback.reporting": "第 0 批次是直接配对面板；16 个实验单元再按 3 条消息展开 48 个报告切片，消息不是额外运行。",
+    "semantic.hero.title": "在不改写历史运行的前提下检验排序政策与提示词—模型稳健性",
+    "semantic.hero.lead": "固定同一份样本、互动图与每个实验单元的一条已实现路径。这些描述性比较不使用真实标签，也不作因果、校准或统计等价声明。",
+    "semantic.lineage.formal.label": "历史并行消息正式运行来源",
+    "semantic.lineage.formal.body": "机制、本次运行、字段来源链、人口属性影子比较与主决策—影子决策屏障继续由这份历史证据提供。",
+    "semantic.lineage.study.label": "不可变完整研究根目录",
+    "semantic.lineage.study.body": "排序权重与仅主决策的 4 提示词 × 4 模型证据来自此处，没有重新运行影子条件。",
+    "semantic.lineage.shadow_warning": "人口属性影子证据仍绑定历史正式运行来源，不属于提示词—模型析因结果。",
+    "semantic.weight.lead": "19 个预声明单纯形点按六条转移曲线分组展示，候选集与反馈保持冻结。",
+    "semantic.weight.chart.title": "Top K Jaccard 距离",
+    "semantic.weight.panel.note": "按冻结批次展示 Top K Jaccard 距离；精确表保留排名移动。",
+    "semantic.weight.message_rows": "逐消息 Jaccard 精确摘要",
+    "semantic.prompt.denominator_aria": "提示词—模型分母",
+    "semantic.prompt.shared.title": "共享种子的直接决策",
+    "semantic.prompt.shared.lead": "二元互动判断是主要比较；概率与置信度为辅助指标。表格跟随所选消息。",
+    "semantic.prompt.growth.panel": "跨消息去重的成功主决策正向用户。",
+    "semantic.prompt.threshold_rows": "实用阈值精确分类",
+    "semantic.threshold.meaningful": "达到实用阈值",
+    "semantic.threshold.note": "低于阈值仅表示观测差异较小，不能建立统计等价。",
+    "semantic.downloads.lead": "配套 JSON、CSV 与 Mermaid 文件绑定本候选的模式、行数、哈希和精确值；不包含原始提示词、Provider 载荷、响应或凭证。",
+    "semantic.trace.loading": "正在加载持久化决策轨迹数据。",
+    "semantic.trace.ready": "决策轨迹已就绪",
+    "semantic.trace.error": "决策轨迹数据不可用，筛选器与详情抽屉保持禁用。",
+}
+
+
 class _RobustnessReportPathError(ValueError):
     pass
 
@@ -623,6 +812,18 @@ class _PresentationBundle:
 
 
 @dataclass(frozen=True)
+class _SemanticPresentationCandidate:
+    """Non-persisted v4 projection awaiting the additive payload contract."""
+
+    report_html: bytes
+    mermaid_artifacts: Mapping[str, bytes]
+    companion_artifacts: Mapping[str, bytes]
+    production_deploy_eligible: bool
+    provider_calls_during_composition: int
+    image_generation_triggered: bool
+
+
+@dataclass(frozen=True)
 class _CandidateProjection:
     formal: ConcurrentMessageArtifactClosure
     study: _ClosedStudy
@@ -670,6 +871,70 @@ class _ReportPresentationInterface:
             manifest_sha256=manifest_sha256,
             destination_dir=destination_dir,
         )
+
+    def compose_semantic_candidate(
+        self,
+        *,
+        formal_root: str | Path,
+        study_root: str | Path,
+        candidate_dir: str | Path,
+    ) -> _SemanticPresentationCandidate:
+        """Project validated v1 evidence into a non-promotable semantic candidate.
+
+        This Interface intentionally returns HTML and seven Mermaid artifacts in
+        memory. The additive payload and closure remain owned by the next release
+        stage; this projection cannot authorize production deployment.
+        """
+        formal_path = Path(formal_root)
+        study_path = Path(study_root)
+        workspace_path = _workspace_root_for_study(study_path)
+        manifest, manifest_payload, manifest_sha256 = _load_study_manifest(study_path)
+        candidate, projection = self._validate_candidate_from_inputs(
+            formal_root=formal_path,
+            study_root=study_path,
+            workspace_root=workspace_path,
+            manifest=manifest,
+            manifest_payload=manifest_payload,
+            manifest_sha256=manifest_sha256,
+            candidate_dir=candidate_dir,
+        )
+        candidate_before = {path.name: _sha256_file(path) for path in candidate.iterdir()}
+        semantic_payload = dict(projection.report_payload)
+        downloads = _string_mapping(semantic_payload.get("downloads"), "candidate downloads")
+        for compatibility_key in _READER_MERMAID_DOWNLOADS:
+            downloads.pop(compatibility_key, None)
+        downloads.update(_SEMANTIC_MERMAID_DOWNLOADS)
+        semantic_payload["downloads"] = downloads
+        rendered = _render_semantic_additive_report(
+            _render_editorial_v4(projection.formal.report_payload),
+            payload=semantic_payload,
+            prompt_model_presentation=projection.prompt_model_presentation,
+        )
+        mermaid_artifacts = _semantic_reader_mermaid_artifacts(
+            projection.prompt_model_presentation
+        )
+        semantic_candidate = _SemanticPresentationCandidate(
+            report_html=rendered.encode("utf-8"),
+            mermaid_artifacts=mermaid_artifacts,
+            companion_artifacts={
+                path: payload
+                for path, payload in projection.payloads.items()
+                if path not in {
+                    CONCURRENT_MESSAGE_REPORT_HTML,
+                    *_READER_MERMAID_DOWNLOADS.values(),
+                    *mermaid_artifacts,
+                }
+            },
+            production_deploy_eligible=False,
+            provider_calls_during_composition=0,
+            image_generation_triggered=False,
+        )
+        _validate_semantic_candidate(semantic_candidate)
+        if candidate_before != {path.name: _sha256_file(path) for path in candidate.iterdir()}:
+            raise _RobustnessReportClosureError("semantic projection mutated the validation candidate")
+        _assert_formal_unchanged(projection.formal, dict(projection.formal.artifact_hashes))
+        _assert_study_unchanged(projection.study, dict(projection.study.file_hashes))
+        return semantic_candidate
 
     def materialize_production(
         self,
@@ -1369,6 +1634,33 @@ def _presentation_catalog(
     }
 
 
+def _semantic_presentation_catalog(
+    presentation: _PromptModelPresentation,
+) -> dict[str, dict[str, str]]:
+    prompt_catalog = _prompt_presentation_catalog(presentation)
+    expected = set(_SEMANTIC_ROBUSTNESS_COPY["zh-CN"])
+    if set(_SEMANTIC_ROBUSTNESS_COPY) != {"zh-CN", "en-US"} or any(
+        set(copy) != expected for copy in _SEMANTIC_ROBUSTNESS_COPY.values()
+    ):
+        raise _RobustnessReportClosureError("semantic robustness language catalog is asymmetric")
+    catalog = {
+        language: {
+            **prompt_catalog[language],
+            **_SEMANTIC_ROBUSTNESS_COPY[language],
+        }
+        for language in ("zh-CN", "en-US")
+    }
+    unknown_overrides = set(_SEMANTIC_ZH_COPY) - set(catalog["zh-CN"])
+    if unknown_overrides:
+        raise _RobustnessReportClosureError(
+            f"semantic Chinese overrides contain unknown keys: {sorted(unknown_overrides)}"
+        )
+    catalog["zh-CN"].update(_SEMANTIC_ZH_COPY)
+    if set(catalog["zh-CN"]) != set(catalog["en-US"]):
+        raise _RobustnessReportClosureError("semantic presentation language catalog is asymmetric")
+    return catalog
+
+
 def _robustness_i18n(
     catalog: Mapping[str, Mapping[str, str]],
     key: str,
@@ -1401,14 +1693,18 @@ def _robustness_i18n_attribute(
     )
 
 
-def _contract_token_list(values: Sequence[str]) -> str:
-    return "".join(f"<li><code>{_escape(value)}</code></li>" for value in values)
+def _contract_token_list(values: Sequence[str], *, stable_tokens: bool = False) -> str:
+    marker = ' data-stable-token="contract-value"' if stable_tokens else ""
+    return "".join(f"<li><code{marker}>{_escape(value)}</code></li>" for value in values)
 
 
 def _prompt_contract_disclosure(
     presentation: _PromptModelPresentation,
     catalog: Mapping[str, Mapping[str, str]],
+    *,
+    stable_tokens: bool = False,
 ) -> str:
+    stable_marker = ' data-stable-token="contract-value"' if stable_tokens else ""
     rows: list[str] = []
     for contract in presentation.contracts:
         row_id = f"prompt-contract-row-{contract.variant_id.lower()}"
@@ -1423,7 +1719,7 @@ def _prompt_contract_disclosure(
             f'data-model-count="{contract.model_count}">'
             '<header><div class="robustness-prompt-identity">'
             f'{_legend_sample(_PROMPT_STYLES[contract.variant_id])}'
-            f'<strong>{contract.variant_id}</strong>'
+            f'<strong{stable_marker}>{contract.variant_id}</strong>'
             f'{_robustness_i18n(catalog, label_key, class_name="robustness-prompt-change")}'
             "</div>"
             f'{_robustness_i18n(catalog, body_key, tag="p")}</header>'
@@ -1431,10 +1727,10 @@ def _prompt_contract_disclosure(
             f'<summary>{_robustness_i18n(catalog, "contract.details")}</summary>'
             '<dl class="robustness-prompt-token"><div>'
             f'<dt>{_robustness_i18n(catalog, "contract.token")}</dt>'
-            f'<dd><code>{_escape(contract.prompt_version)}</code></dd></div></dl>'
+            f'<dd><code{stable_marker}>{_escape(contract.prompt_version)}</code></dd></div></dl>'
             '<div class="robustness-prompt-hash">'
             f'<strong>{_robustness_i18n(catalog, "contract.hash_summary")}</strong>'
-            f'<code>{_escape(contract.canonical_hash)}</code></div>'
+            f'<code{stable_marker}>{_escape(contract.canonical_hash)}</code></div>'
             f'{_robustness_i18n(catalog, "contract.models", tag="p", class_name="robustness-prompt-model-note")}'
             "</details></article>"
         )
@@ -1454,23 +1750,23 @@ def _prompt_contract_disclosure(
         '<div class="robustness-shared-contract-grid">'
         '<section><h4>'
         f'{_robustness_i18n(catalog, "common.fields")}</h4><ul>'
-        f'{_contract_token_list(presentation.visible_field_allowlist)}</ul></section>'
+        f'{_contract_token_list(presentation.visible_field_allowlist, stable_tokens=stable_tokens)}</ul></section>'
         '<section><h4>'
         f'{_robustness_i18n(catalog, "common.task")}</h4><ul>'
-        f'{_contract_token_list(presentation.task_semantics)}</ul>'
+        f'{_contract_token_list(presentation.task_semantics, stable_tokens=stable_tokens)}</ul>'
         '<h4>'
         f'{_robustness_i18n(catalog, "common.actions")}</h4><ul>'
-        f'{_contract_token_list(presentation.action_semantics)}</ul></section>'
+        f'{_contract_token_list(presentation.action_semantics, stable_tokens=stable_tokens)}</ul></section>'
         '<section><h4>'
         f'{_robustness_i18n(catalog, "common.output")}</h4>'
-        f'<p><code>{_escape(presentation.output_schema_version)}</code></p>'
+        f'<p><code{stable_marker}>{_escape(presentation.output_schema_version)}</code></p>'
         '<dl class="robustness-output-contract">'
         f'<div><dt>{_robustness_i18n(catalog, "common.output_fields")}</dt>'
-        f'<dd><code>{_escape(" / ".join(presentation.output_fields))}</code></dd></div>'
+        f'<dd><code{stable_marker}>{_escape(" / ".join(presentation.output_fields))}</code></dd></div>'
         f'<div><dt>{_robustness_i18n(catalog, "common.output_actions")}</dt>'
-        f'<dd><code>{_escape(" / ".join(presentation.output_action_values))}</code></dd></div>'
+        f'<dd><code{stable_marker}>{_escape(" / ".join(presentation.output_action_values))}</code></dd></div>'
         f'<div><dt>{_robustness_i18n(catalog, "common.engage_rules")}</dt>'
-        f'<dd><code>{_escape("; ".join(presentation.engage_action_rules))}</code></dd></div>'
+        f'<dd><code{stable_marker}>{_escape("; ".join(presentation.engage_action_rules))}</code></dd></div>'
         "</dl></section></div></details>"
     )
     scope_rows = "".join(
@@ -1485,15 +1781,24 @@ def _prompt_contract_disclosure(
         tag="h3",
         attrs=' id="prompt-model-contract-title"',
     )
+    denominator_aria = (
+        _robustness_i18n_attribute(
+            catalog,
+            "semantic.prompt.denominator_aria",
+            "aria-label",
+        )
+        if stable_tokens
+        else 'aria-label="Prompt-Model denominators"'
+    )
     return (
         '<section class="robustness-prompt-contract" data-testid="prompt-model-contract-disclosure" '
         'aria-labelledby="prompt-model-contract-title">'
         '<div class="robustness-contract-heading">'
         f'{contract_title}{_robustness_i18n(catalog, "contract.lead", tag="p")}</div>'
-        '<div class="robustness-denominator-grid" aria-label="Prompt-Model denominators">'
-        f'<article data-testid="prompt-model-cell-denominator"><strong>{_escape(cells_formula)}</strong>'
+        f'<div class="robustness-denominator-grid" {denominator_aria}>'
+        f'<article data-testid="prompt-model-cell-denominator"><strong{stable_marker}>{_escape(cells_formula)}</strong>'
         f'{_robustness_i18n(catalog, "contract.cells")}</article>'
-        f'<article data-testid="prompt-model-slice-denominator"><strong>{_escape(slices_formula)}</strong>'
+        f'<article data-testid="prompt-model-slice-denominator"><strong{stable_marker}>{_escape(slices_formula)}</strong>'
         f'{_robustness_i18n(catalog, "contract.slices")}</article></div>'
         f'{_robustness_i18n(catalog, "contract.dimension_note", tag="p", class_name="robustness-dimension-note")}'
         f'<div class="robustness-prompt-contract-grid" role="list">{"".join(rows)}</div>'
@@ -1916,6 +2221,93 @@ def _reader_mermaid_artifacts(
         _PROMPT_MODEL_FACTORIAL_MMD: _prompt_model_mermaid_source(catalog, "en-US"),
     }
     return {path: f"{source}\n".encode() for path, source in sources.items()}
+
+
+def _semantic_reader_mermaid_artifacts(
+    presentation: _PromptModelPresentation,
+) -> dict[str, bytes]:
+    mechanism = _MECHANISM_PRESENTATION.build()
+    prompt_catalog = _prompt_presentation_catalog(presentation)
+    artifacts = {
+        artifact.filename: artifact.payload
+        for artifact in mechanism.mermaid_artifacts
+    }
+    artifacts[_PROMPT_MODEL_FACTORIAL_MMD] = (
+        f'{_prompt_model_mermaid_source(prompt_catalog, "en-US")}\n'.encode()
+    )
+    if tuple(artifacts) != tuple(_SEMANTIC_MERMAID_DOWNLOADS.values()):
+        raise _RobustnessReportClosureError("semantic Mermaid artifact order is crossed")
+    return artifacts
+
+
+def _validate_semantic_candidate(candidate: _SemanticPresentationCandidate) -> None:
+    try:
+        html_document = candidate.report_html.decode("utf-8")
+        if len(candidate.report_html) > _MAX_REPORT_HTML_BYTES:
+            raise ValueError("semantic candidate exceeds the 3 MiB presentation limit")
+        if candidate.production_deploy_eligible is not False:
+            raise ValueError("semantic candidate cannot be production deploy eligible")
+        if candidate.provider_calls_during_composition != 0 or candidate.image_generation_triggered is not False:
+            raise ValueError("semantic candidate composition must remain zero-call")
+        if tuple(candidate.mermaid_artifacts) != tuple(_SEMANTIC_MERMAID_DOWNLOADS.values()):
+            raise ValueError("semantic candidate Mermaid inventory is incomplete")
+        if any(
+            PurePosixPath(path).is_absolute()
+            or ".." in PurePosixPath(path).parts
+            or not payload
+            for path, payload in candidate.companion_artifacts.items()
+        ):
+            raise ValueError("semantic companion artifact inventory is unsafe")
+        if set(candidate.companion_artifacts) & set(candidate.mermaid_artifacts):
+            raise ValueError("semantic artifact inventories overlap")
+        mechanism = _MECHANISM_PRESENTATION.build()
+        expected_mechanism = {
+            artifact.filename: artifact.payload
+            for artifact in mechanism.mermaid_artifacts
+        }
+        if any(
+            candidate.mermaid_artifacts.get(filename) != payload
+            for filename, payload in expected_mechanism.items()
+        ):
+            raise ValueError("semantic candidate mechanism master bytes are crossed")
+        if not candidate.mermaid_artifacts[_PROMPT_MODEL_FACTORIAL_MMD].startswith(b"flowchart TB\n"):
+            raise ValueError("Prompt-Model factorial Mermaid bytes are malformed")
+        required_html = (
+            'data-editorial-version="v4-semantic"',
+            'data-production-deploy-eligible="false"',
+            'data-testid="robustness-source-lineage"',
+            'data-testid="real-batch-mechanism-section"',
+            'data-testid="prompt-model-factorial-diagram"',
+            'data-testid="run-trace-tool"',
+        )
+        if any(token not in html_document for token in required_html):
+            raise ValueError("semantic candidate is missing required presentation evidence")
+        forbidden_html = (
+            "project-evidence-chain",
+            "mechanism-image-generation-audit.json",
+            "mechanism-sample-first-v4.png",
+            "mechanism-pair-formation-v4.png",
+            "mechanism-independent-delivery-v4.png",
+            "mechanism-exposure-decisions-v4.png",
+            "mechanism-feedback-boundary-v4.png",
+            "data:image/webp",
+            '<script src=',
+        )
+        if any(token in html_document for token in forbidden_html):
+            raise ValueError("semantic candidate contains a rejected or external presentation input")
+        if html_document.count('data-mechanism-diagram-id="') != 6:
+            raise ValueError("semantic candidate must render six semantic views")
+        for diagram in mechanism.diagrams:
+            if f'data-mechanism-diagram-id="{diagram.diagram_id}"' not in html_document:
+                raise ValueError("semantic candidate diagram projection is incomplete")
+            for node in diagram.nodes:
+                if f'data-semantic-node-id="{node.semantic_id}"' not in html_document:
+                    raise ValueError("semantic candidate node projection is incomplete")
+            for edge in diagram.edges:
+                if f'data-semantic-edge-id="{edge.semantic_id}"' not in html_document:
+                    raise ValueError("semantic candidate edge projection is incomplete")
+    except (KeyError, TypeError, UnicodeDecodeError, ValueError) as exc:
+        raise _RobustnessReportClosureError("semantic report candidate failed validation") from exc
 
 
 def _prompt_model_factorial_diagram(
@@ -3040,6 +3432,108 @@ def _compatibility_raster_tag(match: re.Match[str]) -> str:
     return re.sub(r' alt="[^"]*"', ' aria-hidden="true" alt=""', tag, count=1)
 
 
+def _localize_semantic_trace_runtime(rendered: str) -> str:
+    replacements = (
+        (
+            "setStatus('loading', 'Loading persisted trace data.');",
+            "setStatus('loading', document.documentElement.lang === 'en-US' ? 'Loading persisted trace data.' : '正在加载持久化决策轨迹数据。');",
+        ),
+        (
+            "setStatus('error', 'Trace data unavailable. Filters and drawer remain disabled.');",
+            "setStatus('error', document.documentElement.lang === 'en-US' ? 'Trace data is unavailable. Filters and the drawer remain disabled.' : '决策轨迹数据不可用，筛选器与详情抽屉保持禁用。');",
+        ),
+        (
+            "setStatus('ready', `Trace ready: ${rows.length.toLocaleString()} persisted rows.`);",
+            "status.dataset.traceRowCount = String(rows.length);\n      setStatus('ready', document.documentElement.lang === 'en-US' ? `Trace ready: ${rows.length.toLocaleString('en-US')} persisted rows.` : `决策轨迹已就绪：${rows.length.toLocaleString('zh-CN')} 条持久化记录。`);",
+        ),
+    )
+    for old, new in replacements:
+        if rendered.count(old) != 1:
+            raise _RobustnessReportClosureError("semantic trace status copy marker is missing or duplicated")
+        rendered = rendered.replace(old, new, 1)
+    return rendered
+
+
+def _render_semantic_additive_report(
+    formal_html: str,
+    *,
+    payload: Mapping[str, Any],
+    prompt_model_presentation: _PromptModelPresentation,
+) -> str:
+    if formal_html.count("</head>") != 1 or formal_html.count("</body>") != 1:
+        raise _RobustnessReportClosureError("semantic Editorial renderer did not return one closed HTML document")
+    insertion_marker = '<aside id="trace-drawer"'
+    run_panel_marker = '<section id="editorial-run-panel"'
+    if formal_html.count(insertion_marker) != 1 or formal_html.count(run_panel_marker) != 1:
+        raise _RobustnessReportClosureError("semantic Editorial shell does not expose the composition markers")
+    presentation_catalog = _semantic_presentation_catalog(prompt_model_presentation)
+    section_html = _robustness_sections(
+        payload,
+        prompt_model_presentation=prompt_model_presentation,
+        semantic_catalog=presentation_catalog,
+    )
+    prompt_catalog_json = json.dumps(
+        presentation_catalog,
+        ensure_ascii=False,
+        separators=(",", ":"),
+    ).replace("</", "<\\/")
+    script = (
+        _ROBUSTNESS_SCRIPT.replace("__REPORT_STAGE_TEST_ID__", "robustness-report-candidate")
+        .replace("__PROMPT_PRESENTATION_CATALOG__", prompt_catalog_json)
+    )
+    expected_trace_rows = _strict_positive_int(
+        payload.get("trace_row_count"),
+        "report trace row count",
+    )
+    rendered = _replace_trace_script(
+        formal_html,
+        expected_row_count=expected_trace_rows,
+    )
+    rendered = _defer_editorial_runtime(rendered).replace(
+        "__TRACE_ROW_COUNT__",
+        str(expected_trace_rows),
+    )
+    rendered = _localize_semantic_trace_runtime(rendered)
+    trace_section_marker = 'data-section-anchor="llm-decision" data-testid="run-llm-decision-section" tabindex="-1"'
+    if rendered.count(trace_section_marker) != 1:
+        raise _RobustnessReportClosureError("semantic report must contain one trace section")
+    rendered = rendered.replace(
+        trace_section_marker,
+        f'{trace_section_marker} data-trace-state="loading"',
+        1,
+    )
+    trace_tool_marker = '<div class="editorial-trace-tool" data-testid="run-trace-tool">'
+    if rendered.count(trace_tool_marker) != 1:
+        raise _RobustnessReportClosureError("semantic report must contain one trace tool")
+    rendered = rendered.replace(
+        trace_tool_marker,
+        trace_tool_marker
+        + '<p data-testid="run-trace-state" data-trace-state="loading" role="status" aria-live="polite" aria-atomic="true" data-robustness-i18n="semantic.trace.loading">正在加载持久化决策轨迹数据。</p>',
+        1,
+    )
+    if rendered.count(_TRACE_SCRIPT_OPEN) != 1:
+        raise _RobustnessReportClosureError("semantic report must contain exactly one trace envelope")
+    rendered = rendered.replace(
+        "</head>",
+        f"<style>{_ROBUSTNESS_CSS}{_SEMANTIC_ROBUSTNESS_CSS}</style>\n</head>",
+        1,
+    )
+    run_panel_start = rendered.find(run_panel_marker)
+    drawer_start = rendered.find(insertion_marker, run_panel_start)
+    run_panel_close = rendered.rfind("</section>", run_panel_start, drawer_start)
+    if run_panel_start < 0 or drawer_start < 0 or run_panel_close < 0:
+        raise _RobustnessReportClosureError(
+            "semantic robustness evidence could not enter Run Evidence"
+        )
+    rendered = (
+        rendered[:run_panel_close]
+        + f"{section_html}\n        "
+        + rendered[run_panel_close:]
+    )
+    rendered = rendered.replace("</body>", f"<script>{script}</script>\n</body>", 1)
+    return rendered
+
+
 def _render_additive_report(
     formal_html: str,
     *,
@@ -3155,6 +3649,7 @@ def _robustness_sections(
     *,
     prompt_model_presentation: _PromptModelPresentation,
     stage_facts: _ProductionPresentationFacts | None = None,
+    semantic_catalog: Mapping[str, Mapping[str, str]] | None = None,
 ) -> str:
     if stage_facts is None:
         stage_test_id = "robustness-report-candidate"
@@ -3181,8 +3676,34 @@ def _robustness_sections(
     thresholds = _object_sequence(prompt_model["practical_threshold_rows"], "threshold rows")
     message_ids = list(dict.fromkeys(str(row["message_id"]) for row in weight_messages))
     models = list(dict.fromkeys(str(row["requested_model"]) for row in prompt_messages))
-    prompt_catalog = _presentation_catalog(prompt_model_presentation)
-    prompt_contract_html = _prompt_contract_disclosure(prompt_model_presentation, prompt_catalog)
+    semantic = semantic_catalog is not None
+    prompt_catalog = semantic_catalog or _presentation_catalog(prompt_model_presentation)
+
+    def localized(key: str, fallback: str) -> str:
+        return _robustness_i18n(prompt_catalog, key) if semantic else fallback
+
+    def stable(value: object, *, tag: str = "span") -> str:
+        escaped = _escape(value)
+        return f'<{tag} data-stable-token="true">{escaped}</{tag}>' if semantic else escaped
+
+    def stable_element(value: object, tag: str, token: str) -> str:
+        marker = f' data-stable-token="{_escape(token, quote=True)}"' if semantic else ""
+        return f"<{tag}{marker}>{_escape(value)}</{tag}>"
+
+    def row_summary(key: str, fallback: str, count: int) -> str:
+        if not semantic:
+            return f"{fallback} · {count} rows"
+        return (
+            f'{_robustness_i18n(prompt_catalog, key)}: '
+            f'<span data-stable-token="row-count">{count}</span> '
+            f'{_robustness_i18n(prompt_catalog, "semantic.common.rows")}'
+        )
+
+    prompt_contract_html = _prompt_contract_disclosure(
+        prompt_model_presentation,
+        prompt_catalog,
+        stable_tokens=semantic,
+    )
     prompt_factorial_html = _prompt_model_factorial_diagram(prompt_model_presentation, prompt_catalog)
     prompt_title_html = _robustness_i18n(
         prompt_catalog,
@@ -3196,10 +3717,21 @@ def _robustness_sections(
         ("network-fit", "base_network_relevance", "normalized_message_user_fit"),
         ("feedback-fit", "campaign_engaged_neighbor_signal", "normalized_message_user_fit"),
     ]
-    family_options = "".join(
-        f'<option value="{_escape(family_id, quote=True)}">{_escape(_COMPONENT_LABELS[left])} ↔ {_escape(_COMPONENT_LABELS[right])}</option>'
-        for family_id, left, right in family_pairs
-    )
+    if semantic:
+        semantic_family_options: list[str] = []
+        for family_id, _left, _right in family_pairs:
+            family_key = f'semantic.weight.family.{family_id.replace("-", "_")}'
+            semantic_family_options.append(
+                f'<option value="{_escape(family_id, quote=True)}" '
+                f'data-robustness-i18n="{family_key}">'
+                f'{_escape(prompt_catalog["zh-CN"][family_key])}</option>'
+            )
+        family_options = "".join(semantic_family_options)
+    else:
+        family_options = "".join(
+            f'<option value="{_escape(family_id, quote=True)}">{_escape(_COMPONENT_LABELS[left])} ↔ {_escape(_COMPONENT_LABELS[right])}</option>'
+            for family_id, left, right in family_pairs
+        )
     weight_cards: list[str] = []
     for message_id in message_ids:
         family_views: list[str] = []
@@ -3221,11 +3753,16 @@ def _robustness_sections(
                     ),
                     key=lambda row: int(row["time_step"]),
                 )
-                direction = f"{_COMPONENT_LABELS[str(summary['transfer_from'])]} → {_COMPONENT_LABELS[str(summary['transfer_to'])]}"
+                if semantic:
+                    direction = f"{summary['transfer_from']} -> {summary['transfer_to']}"
+                    series_label = f"{direction}: {_display(summary['transfer_mass'])}"
+                else:
+                    direction = f"{_COMPONENT_LABELS[str(summary['transfer_from'])]} → {_COMPONENT_LABELS[str(summary['transfer_to'])]}"
+                    series_label = f"{direction} · {_display(summary['transfer_mass'])}"
                 series.append(
                     {
                         "series_id": scenario_id,
-                        "label": f"{direction} · {_display(summary['transfer_mass'])}",
+                        "label": series_label,
                         "values": [float(row["jaccard_distance"]) for row in batches],
                         "style": _SERIES_STYLES[scenario_index],
                     }
@@ -3233,16 +3770,21 @@ def _robustness_sections(
             chart_id = f"weight-{message_id}-{family_id}"
             family_views.append(
                 f'<div class="robustness-weight-family" data-weight-family="{family_id}"{"" if family_index == 0 else " hidden"}>'
-                f'{_line_chart(chart_id=chart_id, title=f"{message_id} · Top K Jaccard distance", series=series, y_max=1.0)}'
+                f'{_line_chart(chart_id=chart_id, title=f"{message_id} · Top K Jaccard distance", series=series, y_max=1.0, semantic_catalog=prompt_catalog if semantic else None, title_key="semantic.weight.chart.title" if semantic else None, stable_labels=semantic)}'
                 "</div>"
             )
         weight_cards.append(
             f'<article class="robustness-message-panel" data-testid="ranking-weight-panel-{_escape(message_id, quote=True)}">'
-            f'<header><h3>{_escape(message_id)}</h3><p>Top K Jaccard distance by frozen batch. Rank movement remains available in the exact-value table.</p></header>'
+            f'<header><h3>{stable(message_id)}</h3><p>{localized("semantic.weight.panel.note", "Top K Jaccard distance by frozen batch. Rank movement remains available in the exact-value table.")}</p></header>'
             f'{"".join(family_views)}</article>'
         )
 
-    message_options = "".join(f'<option value="{_escape(message, quote=True)}">{_escape(message)}</option>' for message in message_ids)
+    message_options = "".join(
+        f'<option value="{_escape(message, quote=True)}" data-stable-token="true">{_escape(message)}</option>'
+        if semantic
+        else f'<option value="{_escape(message, quote=True)}">{_escape(message)}</option>'
+        for message in message_ids
+    )
     prompt_views: list[str] = []
     metric_specs = (
         ("engagement", "cumulative_exposure_engagement_rate", "Cumulative exposure engagement rate", 1.0),
@@ -3276,8 +3818,8 @@ def _robustness_sections(
                 chart_id = f"prompt-{message_id}-{metric_id}-{_safe_id(model)}"
                 model_cards.append(
                     f'<article class="robustness-model-panel" data-testid="prompt-model-panel-{_safe_id(message_id)}-{_safe_id(model)}-{metric_id}">'
-                    f'<header><h4>{_escape(model)}</h4>{_robustness_i18n(prompt_catalog, "prompt.panel_note", tag="p")}</header>'
-                    f'{_line_chart(chart_id=chart_id, title=f"{model} · {label}", series=model_series, y_max=y_max)}'
+                    f'<header><h4>{stable(model)}</h4>{_robustness_i18n(prompt_catalog, "prompt.panel_note", tag="p")}</header>'
+                    f'{_line_chart(chart_id=chart_id, title=f"{model} · {label}", series=model_series, y_max=y_max, semantic_catalog=prompt_catalog if semantic else None, title_key=f"semantic.prompt.metric.{metric_id}" if semantic else None, stable_labels=semantic)}'
                     "</article>"
                 )
             hidden = "" if message_index == 0 and metric_index == 0 else " hidden"
@@ -3310,8 +3852,8 @@ def _robustness_sections(
             )
         growth_cards.append(
             f'<article class="robustness-model-panel" data-testid="prompt-model-growth-panel-{_safe_id(model)}">'
-            f'<header><h4>{_escape(model)}</h4><p>Campaign-deduplicated successful Primary-positive users.</p></header>'
-            f'{_line_chart(chart_id=f"growth-{_safe_id(model)}", title=f"{model} · campaign growth", series=series, y_max=float(max(1, growth_max)))}'
+            f'<header><h4>{stable(model)}</h4><p>{localized("semantic.prompt.growth.panel", "Campaign-deduplicated successful Primary-positive users.")}</p></header>'
+            f'{_line_chart(chart_id=f"growth-{_safe_id(model)}", title=f"{model} · campaign growth", series=series, y_max=float(max(1, growth_max)), semantic_catalog=prompt_catalog if semantic else None, title_key="semantic.prompt.growth.title" if semantic else None, stable_labels=semantic)}'
             "</article>"
         )
 
@@ -3320,49 +3862,65 @@ def _robustness_sections(
         threshold_counts[str(row["classification"])] += 1
     meaningful = threshold_counts["practically_meaningful"]
     small = threshold_counts["small_observed_difference"]
-    download_links = "".join(
-        f'<a class="robustness-download" data-testid="robustness-download-{_safe_id(key)}" href="{_escape(path, quote=True)}"><span>{_escape(key.replace("_", " ").title())}</span><code>{_escape(path)}</code></a>'
-        for key, path in downloads.items()
+    if semantic:
+        download_links = "".join(
+            f'<a class="robustness-download" data-testid="robustness-download-{_safe_id(key)}" href="{_escape(path, quote=True)}">'
+            f'<span data-stable-token="download-key">{_escape(key)}</span>'
+            f'<code data-stable-token="artifact-filename">{_escape(path)}</code></a>'
+            for key, path in downloads.items()
+        )
+    else:
+        download_links = "".join(
+            f'<a class="robustness-download" data-testid="robustness-download-{_safe_id(key)}" href="{_escape(path, quote=True)}"><span>{_escape(key.replace("_", " ").title())}</span><code>{_escape(path)}</code></a>'
+            for key, path in downloads.items()
+        )
+
+    eligibility_marker = ' data-stable-token="schema-value"' if semantic else ""
+    metric_options = (
+        f'<option value="engagement" data-robustness-i18n="semantic.prompt.metric.engagement">{_escape(prompt_catalog["zh-CN"]["semantic.prompt.metric.engagement"])}</option>'
+        f'<option value="audience" data-robustness-i18n="semantic.prompt.metric.audience">{_escape(prompt_catalog["zh-CN"]["semantic.prompt.metric.audience"])}</option>'
+        if semantic
+        else '<option value="engagement">Engagement rate</option><option value="audience">Audience distance</option>'
     )
 
     return f"""
         <section id="robustness-evidence" class="robustness-report" data-testid="{stage_test_id}"{stage_attribute} aria-labelledby="robustness-title">
           <div class="robustness-hero">
-            <p class="robustness-kicker">Additive evidence · 增量证据</p>
-            <h2 id="robustness-title">Ranking policy and Prompt–Model robustness, without relabelling the historical run</h2>
-            <p>One fixed sample, one fixed graph, and one realized path per cell. These descriptive comparisons use no ground truth and make no causal, Calibration, or statistical-equivalence claim.</p>
-            <code data-testid="robustness-production-eligibility">production_deploy_eligible={eligibility}</code>
+            <p class="robustness-kicker">{localized("semantic.hero.kicker", "Additive evidence · 增量证据")}</p>
+            <h2 id="robustness-title">{localized("semantic.hero.title", "Ranking policy and Prompt–Model robustness, without relabelling the historical run")}</h2>
+            <p>{localized("semantic.hero.lead", "One fixed sample, one fixed graph, and one realized path per cell. These descriptive comparisons use no ground truth and make no causal, Calibration, or statistical-equivalence claim.")}</p>
+            <code data-testid="robustness-production-eligibility"{eligibility_marker}>production_deploy_eligible={eligibility}</code>
           </div>
           <div class="robustness-lineage" data-testid="robustness-source-lineage">
             <article data-source-kind="formal">
-              <span>Historical Concurrent Formal source</span>
-              <strong>{_escape(formal['source_id'])}</strong>
-              <code>{_escape(formal['manifest_sha256'])}</code>
-              <p>Mechanism, Run Evidence, field lineage, Demographic Shadow comparison, and the Primary + Shadow barrier remain sourced here.</p>
+              <span>{localized("semantic.lineage.formal.label", "Historical Concurrent Formal source")}</span>
+              {stable_element(formal['source_id'], "strong", "source-id")}
+              {stable_element(formal['manifest_sha256'], "code", "sha256")}
+              <p>{localized("semantic.lineage.formal.body", "Mechanism, Run Evidence, field lineage, Demographic Shadow comparison, and the Primary + Shadow barrier remain sourced here.")}</p>
             </article>
             <div class="robustness-lineage-arrow" aria-hidden="true">＋</div>
             <article data-source-kind="study">
-              <span>Immutable complete study root</span>
-              <strong>{_escape(study['output_identity'])}</strong>
-              <code>{_escape(study['root_identity_sha256'])}</code>
-              <p>Ranking Weight and Primary-only 4 Prompt × 4 model evidence. No Shadow condition was rerun.</p>
+              <span>{localized("semantic.lineage.study.label", "Immutable complete study root")}</span>
+              {stable_element(study['output_identity'], "strong", "source-id")}
+              {stable_element(study['root_identity_sha256'], "code", "sha256")}
+              <p>{localized("semantic.lineage.study.body", "Ranking Weight and Primary-only 4 Prompt × 4 model evidence. No Shadow condition was rerun.")}</p>
             </article>
           </div>
-          <p class="robustness-source-warning" data-testid="robustness-shadow-source-label">Demographic Shadow evidence remains bound to the historical Formal source; it is not a factorial Prompt–Model result.</p>
+          <p class="robustness-source-warning" data-testid="robustness-shadow-source-label">{localized("semantic.lineage.shadow_warning", "Demographic Shadow evidence remains bound to the historical Formal source; it is not a factorial Prompt–Model result.")}</p>
 
           <section class="robustness-section" data-testid="ranking-weight-sensitivity-section" aria-labelledby="ranking-weight-title">
             <div class="robustness-section-heading">
-              <div><h2 id="ranking-weight-title">Ranking Weight Sensitivity</h2><p>19 predeclared simplex points, shown as six-series transfer families rather than one 19-line panel. Candidate sets and feedback stay frozen.</p></div>
-              <label>Visible transfer family<select data-testid="ranking-weight-family-select" data-weight-family-select>{family_options}</select></label>
+              <div><h2 id="ranking-weight-title">{localized("semantic.weight.title", "Ranking Weight Sensitivity")}</h2><p>{localized("semantic.weight.lead", "19 predeclared simplex points, shown as six-series transfer families rather than one 19-line panel. Candidate sets and feedback stay frozen.")}</p></div>
+              <label>{localized("semantic.weight.family.label", "Visible transfer family")}<select data-testid="ranking-weight-family-select" data-weight-family-select>{family_options}</select></label>
             </div>
             <div class="robustness-message-grid">{"".join(weight_cards)}</div>
             <details class="robustness-table-disclosure" data-testid="ranking-weight-exact-table">
-              <summary>Exact message-level Jaccard summaries · {len(weight_messages)} rows</summary>
-              {_table(_WEIGHT_MESSAGE_FIELDS, weight_messages, test_id="ranking-weight-message-table")}
+              <summary>{row_summary("semantic.weight.message_rows", "Exact message-level Jaccard summaries", len(weight_messages))}</summary>
+              {_table(_WEIGHT_MESSAGE_FIELDS, weight_messages, test_id="ranking-weight-message-table", stable_tokens=semantic)}
             </details>
             <details class="robustness-table-disclosure" data-testid="ranking-weight-rank-exact-table">
-              <summary>Exact per-batch entered/exited and rank movement diagnostics · {len(weight_batches)} rows</summary>
-              {_table(_WEIGHT_BATCH_FIELDS, weight_batches, test_id="ranking-weight-batch-table")}
+              <summary>{row_summary("semantic.weight.batch_rows", "Exact per-batch entered/exited and rank movement diagnostics", len(weight_batches))}</summary>
+              {_table(_WEIGHT_BATCH_FIELDS, weight_batches, test_id="ranking-weight-batch-table", stable_tokens=semantic)}
             </details>
           </section>
 
@@ -3370,34 +3928,34 @@ def _robustness_sections(
             <div class="robustness-section-heading">
               <div>{prompt_title_html}{_robustness_i18n(prompt_catalog, "prompt.lead", tag="p")}</div>
               <div class="robustness-controls">
-                <label>Message<select data-testid="prompt-model-message-select" data-prompt-message-select>{message_options}</select></label>
-                <label>Dynamic metric<select data-testid="prompt-model-metric-select" data-prompt-metric-select><option value="engagement">Engagement rate</option><option value="audience">Audience distance</option></select></label>
+                <label>{localized("semantic.prompt.message.label", "Message")}<select data-testid="prompt-model-message-select" data-prompt-message-select>{message_options}</select></label>
+                <label>{localized("semantic.prompt.metric.label", "Dynamic metric")}<select data-testid="prompt-model-metric-select" data-prompt-metric-select>{metric_options}</select></label>
               </div>
             </div>
             {prompt_contract_html}
             {prompt_factorial_html}
             <div data-testid="prompt-model-dynamic-panels">{"".join(prompt_views)}</div>
-            <div class="robustness-subsection-heading"><h3>Shared-seed direct Decisions</h3><p>Binary engage is primary; probability and confidence are secondary. Rows follow the selected message.</p></div>
-            <div data-testid="prompt-model-shared-seed-table">{_table(_SHARED_SEED_FIELDS, shared_seed, test_id="shared-seed-exact-table", row_attribute="message_id")}</div>
-            <div class="robustness-subsection-heading"><h3>Campaign-level positive-user growth</h3><p>Growth is campaign-deduplicated across messages, so it is kept outside message panels rather than mislabelled as a message-specific outcome.</p></div>
+            <div class="robustness-subsection-heading"><h3>{localized("semantic.prompt.shared.title", "Shared-seed direct Decisions")}</h3><p>{localized("semantic.prompt.shared.lead", "Binary engage is primary; probability and confidence are secondary. Rows follow the selected message.")}</p></div>
+            <div data-testid="prompt-model-shared-seed-table">{_table(_SHARED_SEED_FIELDS, shared_seed, test_id="shared-seed-exact-table", row_attribute="message_id", stable_tokens=semantic)}</div>
+            <div class="robustness-subsection-heading"><h3>{localized("semantic.prompt.growth.title", "Campaign-level positive-user growth")}</h3><p>{localized("semantic.prompt.growth.lead", "Growth is campaign-deduplicated across messages, so it is kept outside message panels rather than mislabelled as a message-specific outcome.")}</p></div>
             <div class="robustness-model-grid" data-testid="prompt-model-growth-panels">{"".join(growth_cards)}</div>
             <div class="robustness-threshold-summary" data-testid="practical-threshold-summary">
-              <article><strong>{meaningful}</strong><span>practically meaningful</span></article>
-              <article><strong>{small}</strong><span>small_observed_difference</span></article>
-              <p>Below-threshold values are small observed differences only; they do not establish equivalence.</p>
+              <article>{stable_element(meaningful, "strong", "count")}<span>{localized("semantic.threshold.meaningful", "practically meaningful")}</span></article>
+              <article>{stable_element(small, "strong", "count")}<span>{localized("semantic.threshold.small", "small_observed_difference")}</span></article>
+              <p>{localized("semantic.threshold.note", "Below-threshold values are small observed differences only; they do not establish equivalence.")}</p>
             </div>
             <details class="robustness-table-disclosure" data-testid="prompt-model-message-exact-table">
-              <summary>Exact per-message dynamic summaries · {len(prompt_messages)} rows</summary>
-              {_table(_PROMPT_MESSAGE_FIELDS, prompt_messages, test_id="prompt-model-message-table")}
+              <summary>{row_summary("semantic.prompt.message_rows", "Exact per-message dynamic summaries", len(prompt_messages))}</summary>
+              {_table(_PROMPT_MESSAGE_FIELDS, prompt_messages, test_id="prompt-model-message-table", stable_tokens=semantic)}
             </details>
             <details class="robustness-table-disclosure" data-testid="practical-threshold-exact-table">
-              <summary>Exact practical-threshold classifications · {len(thresholds)} rows</summary>
-              {_table(_THRESHOLD_FIELDS, thresholds, test_id="threshold-table")}
+              <summary>{row_summary("semantic.prompt.threshold_rows", "Exact practical-threshold classifications", len(thresholds))}</summary>
+              {_table(_THRESHOLD_FIELDS, thresholds, test_id="threshold-table", stable_tokens=semantic)}
             </details>
           </section>
 
           <section class="robustness-section robustness-downloads" data-testid="robustness-downloads-section" aria-labelledby="robustness-downloads-title">
-            <div class="robustness-section-heading"><div><h2 id="robustness-downloads-title">Approved robustness downloads</h2><p>Companion JSON and CSV files close to the schemas, row counts, hashes, and exact values in this {download_scope}. No raw Prompt, Provider payload, response, or credential is included.</p></div></div>
+            <div class="robustness-section-heading"><div><h2 id="robustness-downloads-title">{localized("semantic.downloads.title", "Approved robustness downloads")}</h2><p>{localized("semantic.downloads.lead", f"Companion JSON and CSV files close to the schemas, row counts, hashes, and exact values in this {download_scope}. No raw Prompt, Provider payload, response, or credential is included.")}</p></div></div>
             <div class="robustness-download-grid">{download_links}</div>
           </section>
         </section>
@@ -3410,6 +3968,9 @@ def _line_chart(
     title: str,
     series: Sequence[Mapping[str, Any]],
     y_max: float,
+    semantic_catalog: Mapping[str, Mapping[str, str]] | None = None,
+    title_key: str | None = None,
+    stable_labels: bool = False,
 ) -> str:
     width, height = 760.0, 238.0
     left, right, top, bottom = 54.0, 18.0, 22.0, 38.0
@@ -3423,9 +3984,10 @@ def _line_chart(
         fraction = index / 4
         y = top + plot_height * (1.0 - fraction)
         label = _display(safe_y_max * fraction)
+        stable_marker = ' data-stable-token="axis-value"' if stable_labels else ""
         grid.append(
             f'<line x1="{left:.2f}" y1="{y:.2f}" x2="{width - right:.2f}" y2="{y:.2f}" />'
-            f'<text x="{left - 9:.2f}" y="{y + 4:.2f}" text-anchor="end">{_escape(label)}</text>'
+            f'<text{stable_marker} x="{left - 9:.2f}" y="{y + 4:.2f}" text-anchor="end">{_escape(label)}</text>'
         )
     marks: list[str] = []
     legends: list[str] = []
@@ -3458,18 +4020,46 @@ def _line_chart(
         marks.append(
             f'<g data-series-id="{_escape(series_id, quote=True)}"{disclosure_attribute}><polyline points="{point_text}" fill="none" stroke="{_escape(style["color"], quote=True)}" stroke-width="2.6" vector-effect="non-scaling-stroke"{dash_attr}/>{marker_markup}</g>'
         )
+        label_marker = ' data-stable-token="series-label"' if stable_labels else ""
         legends.append(
             f'<li class="robustness-legend-item" data-legend-series-id="{_escape(series_id, quote=True)}"{disclosure_attribute}>'
-            f'{_legend_sample(style)}<span>{_escape(row["label"])}</span></li>'
+            f'{_legend_sample(style)}<span{label_marker}>{_escape(row["label"])}</span></li>'
         )
+    if semantic_catalog is not None:
+        if title_key is None:
+            raise _RobustnessReportClosureError("semantic chart requires a localized title key")
+        title_markup = _robustness_i18n(
+            semantic_catalog,
+            title_key,
+            tag="title",
+            attrs=f' id="{_escape(chart_id, quote=True)}-title"',
+        )
+        axis_markup = _robustness_i18n(
+            semantic_catalog,
+            "semantic.chart.batch_axis",
+            tag="text",
+            class_name="robustness-axis-label",
+            attrs=f' x="{width / 2:.2f}" y="{height - 7:.2f}" text-anchor="middle"',
+        )
+        legend_aria = (
+            f'aria-label="{_escape(semantic_catalog["zh-CN"]["semantic.chart.series_aria"], quote=True)}" '
+            'data-robustness-i18n-aria-label="semantic.chart.series_aria"'
+        )
+    else:
+        title_markup = f'<title id="{_escape(chart_id, quote=True)}-title">{_escape(title)}</title>'
+        axis_markup = (
+            f'<text class="robustness-axis-label" x="{width / 2:.2f}" '
+            f'y="{height - 7:.2f}" text-anchor="middle">Batch index</text>'
+        )
+        legend_aria = f'aria-label="Visible series for {_escape(title, quote=True)}"'
     return (
         f'<div class="robustness-chart-shell" data-chart-id="{_escape(chart_id, quote=True)}">'
         f'<div class="robustness-chart"><svg viewBox="0 0 {int(width)} {int(height)}" role="img" aria-labelledby="{_escape(chart_id, quote=True)}-title">'
-        f'<title id="{_escape(chart_id, quote=True)}-title">{_escape(title)}</title>'
+        f'{title_markup}'
         f'<g class="robustness-grid">{"".join(grid)}</g><g class="robustness-series">{"".join(marks)}</g>'
-        f'<text class="robustness-axis-label" x="{width / 2:.2f}" y="{height - 7:.2f}" text-anchor="middle">Batch index</text>'
+        f'{axis_markup}'
         "</svg></div>"
-        f'<ul class="robustness-legend" aria-label="Visible series for {_escape(title, quote=True)}">{"".join(legends)}</ul>'
+        f'<ul class="robustness-legend" {legend_aria}>{"".join(legends)}</ul>'
         "</div>"
     )
 
@@ -3506,14 +4096,22 @@ def _table(
     *,
     test_id: str,
     row_attribute: str | None = None,
+    stable_tokens: bool = False,
 ) -> str:
-    headings = "".join(f"<th scope=\"col\">{_escape(field.replace('_', ' '))}</th>" for field in fields)
+    heading_marker = ' data-stable-token="field-name"' if stable_tokens else ""
+    headings = "".join(
+        f'<th scope="col"{heading_marker}>{_escape(field.replace("_", " "))}</th>'
+        for field in fields
+    )
     body: list[str] = []
     for row in rows:
         attribute = ""
         if row_attribute is not None:
             attribute = f' data-row-{row_attribute.replace("_", "-")}="{_escape(row.get(row_attribute), quote=True)}"'
-        cells = "".join(f"<td>{_escape(_display(row.get(field)))}</td>" for field in fields)
+        cell_marker = ' data-stable-token="persisted-value"' if stable_tokens else ""
+        cells = "".join(
+            f"<td{cell_marker}>{_escape(_display(row.get(field)))}</td>" for field in fields
+        )
         body.append(f"<tr{attribute}>{cells}</tr>")
     return (
         '<div class="robustness-table-wrap">'
@@ -3664,6 +4262,19 @@ def _is_sha256(value: object) -> bool:
     return isinstance(value, str) and bool(re.fullmatch(r"[0-9a-f]{64}", value))
 
 
+_SEMANTIC_ROBUSTNESS_CSS = r"""
+.robustness-report .robustness-message-panel,
+.robustness-report .robustness-model-panel,
+.robustness-report .robustness-chart-shell,
+.robustness-report .robustness-legend-item { overflow: hidden; }
+.robustness-report [data-stable-token="series-label"] { min-width: 0; overflow-wrap: anywhere; word-break: break-word; }
+@media (max-width: 767px) {
+  .robustness-report .robustness-factorial-scroll { overflow: hidden; }
+  .robustness-report .robustness-factorial-scroll > svg { min-width: 0; }
+}
+"""
+
+
 _ROBUSTNESS_CSS = r"""
 .robustness-report{--rob-ink:#172033;--rob-muted:#5b6473;--rob-line:#d9dee7;--rob-surface:#f6f8fb;--rob-accent:#155e75;color:var(--rob-ink);background:#fbfcfe;border-top:1px solid var(--rob-line);padding:clamp(4rem,8vw,8rem) max(1rem,calc((100vw - 1320px)/2));font-family:inherit}
 .robustness-report *{box-sizing:border-box}.robustness-report [hidden]{display:none!important}.robustness-hero{max-width:980px}.robustness-kicker{font-size:.78rem;font-weight:700;letter-spacing:.13em;text-transform:uppercase;color:var(--rob-accent);margin:0 0 1rem}.robustness-hero h2{font-size:clamp(2rem,4.4vw,4.6rem);line-height:1.02;letter-spacing:-.045em;max-width:16ch;margin:0}.robustness-hero>p:not(.robustness-kicker){max-width:72ch;color:var(--rob-muted);font-size:1.05rem;line-height:1.65;margin:1.5rem 0}.robustness-hero>code{display:inline-block;border:1px solid var(--rob-line);background:white;padding:.55rem .75rem;border-radius:.35rem;color:#8a341f}
@@ -3703,6 +4314,17 @@ _ROBUSTNESS_SCRIPT = r"""
     document.querySelectorAll('[data-robustness-language-variant]').forEach((element) => {
       element.hidden = element.dataset.robustnessLanguageVariant !== language;
     });
+    const traceStatus = document.querySelector('[data-testid="run-trace-state"]');
+    if (copy['semantic.trace.loading']) {
+      if (traceStatus?.dataset.traceState === 'ready') {
+        const rowCount = Number(traceStatus.dataset.traceRowCount || 0).toLocaleString(language);
+        traceStatus.textContent = `${copy['semantic.trace.ready']}: ${rowCount} ${copy['semantic.trace.rows']}.`;
+      } else if (traceStatus?.dataset.traceState === 'error') {
+        traceStatus.textContent = copy['semantic.trace.error'];
+      } else if (traceStatus) {
+        traceStatus.textContent = copy['semantic.trace.loading'];
+      }
+    }
   };
 
   const applyWeightFamily = () => {

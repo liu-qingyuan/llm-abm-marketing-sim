@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from llm_abm_sim import concurrent_message_editorial_candidate as candidate
+from llm_abm_sim.concurrent_message_mechanism_presentation import _MECHANISM_PRESENTATION
 from llm_abm_sim.concurrent_message_renderer import _FIXED_RENDERERS, render_report
 from llm_abm_sim.concurrent_message_report import ConcurrentMessageReportPayload
 
@@ -364,6 +365,63 @@ def test_editorial_v3_closes_three_channel_overlap_and_campaign_feedback_semanti
     assert "does not inject those users into any queue" in html
     assert "Shadow、ignore、provider_failed" in html
     assert "Shadow, ignore, and provider_failed" in html
+
+
+def test_editorial_v4_projects_the_single_owner_semantics_without_legacy_visuals(
+    formal_payload: ConcurrentMessageReportPayload,
+) -> None:
+    presentation = _MECHANISM_PRESENTATION.build()
+    html = candidate._render_editorial_v4(formal_payload)
+
+    assert 'data-editorial-version="v4-semantic"' in html
+    assert 'data-production-deploy-eligible="false"' in html
+    assert tuple(
+        re.findall(r'<section id="([^"]+)"[^>]+data-section-anchor="[^"]+"', html)
+    )[:5] == candidate._EDITORIAL_ANCHORS
+    assert tuple(
+        re.findall(r'data-mechanism-diagram-id="([^"]+)"', html)
+    ) == tuple(diagram.diagram_id for diagram in presentation.diagrams)
+    assert html.count('data-mechanism-method-disclosure="') == 6
+    assert '<button class="editorial-hotspot' not in html
+    assert 'data-mechanism-key="' not in html
+    assert 'data-legend-item="' not in html
+    assert "data:image/webp" not in html
+    assert "mechanism-image-generation-audit.json" not in html
+    assert "mechanism-sample-first-v4.png" not in html
+    assert "mermaid.min.js" not in html
+    assert "cdn.jsdelivr" not in html
+    assert {
+        key
+        for key, value in candidate._EDITORIAL_V4_CATALOG["zh-CN"].items()
+        if value == candidate._EDITORIAL_V4_CATALOG["en-US"][key]
+    } == {"language.zh", "language.en"}
+
+    for diagram in presentation.diagrams:
+        for node in diagram.nodes:
+            assert f'data-semantic-node-id="{node.semantic_id}"' in html
+        for edge in diagram.edges:
+            assert f'data-semantic-edge-id="{edge.semantic_id}"' in html
+
+
+def test_editorial_v4_never_reads_legacy_raster_assets(
+    formal_payload: ConcurrentMessageReportPayload,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def reject_legacy_asset(*_args: object, **_kwargs: object) -> str:
+        raise AssertionError("semantic candidate attempted to read a legacy raster")
+
+    for name in (
+        "_mechanism_html",
+        "_embedded_asset",
+        "_v2_embedded_asset",
+        "_v3_embedded_asset",
+    ):
+        monkeypatch.setattr(candidate, name, reject_legacy_asset)
+
+    html = candidate._render_editorial_v4(formal_payload)
+
+    assert 'data-editorial-version="v4-semantic"' in html
+    assert "data:image/webp" not in html
 
 
 def test_editorial_v3_is_default_while_v1_and_v2_stay_exact(

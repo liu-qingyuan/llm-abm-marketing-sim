@@ -2,12 +2,15 @@ from __future__ import annotations
 
 import html
 import json
+import re
 from base64 import b64encode
 from collections import Counter
 from collections.abc import Mapping, Sequence
 from importlib.resources import files
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
+
+from .concurrent_message_mechanism_presentation import _MECHANISM_PRESENTATION
 
 if TYPE_CHECKING:
     from .concurrent_message_report import ConcurrentMessageReportPayload
@@ -1489,6 +1492,285 @@ for _detail_key, _localized_detail in _EDITORIAL_V3_DETAILS.items():
     for _language in _EDITORIAL_LANGUAGES:
         for _field, _value_text in _localized_detail[_language].items():
             _EDITORIAL_V3_CATALOG[_language][f"drawer.{_detail_key}.{_field}"] = _value_text
+
+
+_EDITORIAL_V4_COPY = {
+    "zh-CN": {
+        "v4.method.summary": "方法与边界",
+        "v4.method.master": "审阅母版",
+        "v4.figure.mobile_aria": "按机制顺序排列的语义节点",
+        "v4.figure.edge_aria": "机制关系",
+        "v4.figure.fallback_title": "完整文本说明",
+        "v4.real_batch.lead": "这张精简图把一次批次压缩为一条主流程；Historical Formal 与 Primary-only 稳健性研究的差异只保留在方法说明中。",
+    },
+    "en-US": {
+        "v4.method.summary": "Method and boundaries",
+        "v4.method.master": "Reviewed master",
+        "v4.figure.mobile_aria": "Semantic nodes ordered by mechanism stage",
+        "v4.figure.edge_aria": "Mechanism relationships",
+        "v4.figure.fallback_title": "Complete text explanation",
+        "v4.real_batch.lead": "This compact view reduces one batch to a single main flow. The Historical Formal and Primary-only robustness distinction remains in the method note only.",
+    },
+}
+
+
+_EDITORIAL_V4_ZH_COPY = {
+    "shell.brand": "多消息研究报告",
+    "drawer.tab.decision": "主决策与影子决策",
+    "drawer.tab.context": "上下文",
+    "drawer.tab.lineage": "来源链",
+    "drawer.identity": "身份信息",
+    "drawer.provider_terminal": "Provider 终止状态",
+    "drawer.paired_outcome": "配对结果与差异",
+    "drawer.disagreement": "互动判断差异",
+    "drawer.ranking_summary": "排序摘要",
+    "drawer.prompt_boundary": "提示词可见边界",
+    "drawer.message": "消息",
+    "drawer.user": "用户",
+    "drawer.batch": "批次",
+    "drawer.class": "类别",
+    "drawer.seed": "随机种子",
+    "drawer.primary": "主决策",
+    "drawer.shadow": "影子决策",
+    "drawer.status": "状态",
+    "drawer.action": "行为",
+    "drawer.probability": "概率",
+    "drawer.confidence": "置信度",
+    "drawer.source": "决策来源",
+    "drawer.prompt_token": "提示词版本标识",
+    "drawer.authoritative": "权威消息",
+    "drawer.primary_reason": "持久化的主决策理由",
+    "drawer.shadow_reason": "持久化的影子决策理由",
+    "drawer.primary_context": "主决策上下文",
+    "drawer.shadow_context": "影子决策上下文",
+    "drawer.peer_context": "同伴上下文",
+    "drawer.field_differences": "字段差异",
+    "drawer.field_provenance": "字段来源",
+    "drawer.field_usage_stage": "字段使用阶段",
+    "drawer.aggregate_source": "聚合来源",
+    "drawer.aggregate_evidence": "聚合证据",
+    "drawer.not_in_prompt": "排序证据、类别、其他消息和同伴行为均不进入提示词。",
+    "drawer.feedback_batch": "反馈批次证据",
+    "drawer.feedback_summary": "批次摘要",
+    "drawer.feedback_full_ranking": "完整排序的 Top 20 用户 ID",
+    "drawer.feedback_no_feedback_ranking": "配对无反馈条件的 Top 20 用户 ID",
+    "drawer.feedback_overlap_ids": "Top 20 重合用户 ID",
+    "drawer.feedback_added_ids": "反馈条件新增用户 ID",
+    "drawer.feedback_removed_ids": "反馈条件移除用户 ID",
+    "drawer.feedback_source": "聚合来源",
+    "drawer.feedback_no_ids": "该批次没有用户 ID。",
+    "drawer.no_differences": "没有持久化字段差异。",
+    "run.kicker": "本次运行 · 编辑候选",
+    "run.title": "沿同一研究链路展开本次运行证据",
+    "run.lead": "本次运行证据直接从类型化持久数据中展开概览、样本、曝光排序、LLM 决策轨迹、网络反馈和已批准下载；不会调用或生成其他渲染器。",
+    "run.status.title": "类型化载荷来源",
+    "run.status.body": "这些来源值保持原值，不属于翻译目录。",
+    "run.contract.title": "持久化合同",
+    "run.contract.body": "模式、提示词版本标识、模型、消息 ID、产物名称和决策理由均保持各自的来源语言或原值。",
+    "run.placeholder.title": "后续证据界面",
+    "run.placeholder.body": "其余运行证据锚点已经保留；后续实现将从同一份类型化载荷增加对应证据界面。",
+    "run.source.schema": "载荷模式",
+    "run.source.profile": "配置档案",
+    "run.source.model": "观测模型",
+    "run.source.primary_token": "主决策提示词版本标识",
+    "run.source.shadow_token": "影子决策提示词版本标识",
+    "run.source.artifact": "已批准产物",
+    "run.source.approved_artifacts": "已批准产物",
+    "run.source.message": "来源消息保持原文",
+    "run.source.reason": "持久化决策理由保持原文",
+    "run.overview.title": "正式运行证据从同一份持久化载荷展开",
+    "run.overview.lead": "这里展示本次运行的实际覆盖、曝光和配对核算。所有计数都来自持久化载荷；这些是描述性证据，不表示优胜者或因果效果。",
+    "run.status.label": "运行状态",
+    "run.status.formal": "正式运行",
+    "run.status.not_formal": "非正式运行",
+    "run.status.profile": "配置档案",
+    "run.status.schema": "载荷模式",
+    "run.status.model": "观测模型",
+    "run.status.tokens": "提示词版本标识",
+    "run.metric.sample": "研究样本用户",
+    "run.metric.eligible": "合格用户—消息配对",
+    "run.metric.exposures": "实际曝光配对",
+    "run.metric.distinct": "去重曝光用户",
+    "run.accounting.title": "主决策与影子决策核算",
+    "run.accounting.attempted": "已尝试",
+    "run.accounting.succeeded": "已成功",
+    "run.accounting.failures": "Provider 失败",
+    "run.accounting.primary": "主决策",
+    "run.accounting.shadow": "影子决策 · 仅报告",
+    "run.funnel.title": "活动漏斗",
+    "run.funnel.sample": "样本用户",
+    "run.funnel.eligible": "合格用户—消息配对",
+    "run.funnel.exposures": "实际曝光",
+    "run.funnel.distinct": "去重曝光用户",
+    "run.coverage.title": "曝光覆盖",
+    "run.coverage.subtitle": "按曝光消息数量分组；每项明确显示分子与分母。",
+    "run.coverage.messages": "已曝光消息数",
+    "run.sample.title": "种子优先样本的角色与类别构成",
+    "run.sample.lead": "样本角色、潜在类别和曝光覆盖均从本次持久化用户记录聚合。设计受众仅作为消息设计描述，不进入合格性判断或提示词字段。",
+    "run.sample.roles": "样本角色",
+    "run.sample.seed": "种子用户",
+    "run.sample.network": "网络邻居用户",
+    "run.sample.ordinary": "普通用户",
+    "run.sample.classes": "潜在类别构成",
+    "run.sample.class": "类别",
+    "run.sample.coverage": "按样本用户统计的曝光覆盖",
+    "run.sample.authoritative": "权威消息",
+    "run.sample.authoritative.body": "下方正文保持权威来源语言原文。",
+    "run.sample.design_descriptor": "设计受众描述",
+    "run.sample.source_body": "权威来源正文",
+    "run.message.audience": "设计受众描述",
+    "run.message.id": "消息 ID",
+    "run.message.body": "权威来源正文",
+    "run.exposure.title": "三条消息各 600 次曝光与 30 批持久化排序",
+    "run.trace.batch": "批次",
+    "run.trace.class": "类别",
+    "run.trace.kicker": "本次运行 · LLM 决策轨迹",
+    "run.trace.title": "每次曝光都保留主决策与影子决策的配对证据",
+    "run.trace.lead": "决策轨迹表先在全部 1,800 条持久化记录上应用筛选，再进行分页。首屏只呈现身份、终止状态、配对结果、排序摘要和提示词可见边界；完整消息、上下文与来源链位于共享详情抽屉的对应标签页。",
+    "run.trace.summary": "消息行为摘要",
+    "run.trace.message": "消息",
+    "run.trace.actions": "主决策行为计数",
+    "run.trace.positive_rate": "正向率",
+    "run.trace.sensitivity": "配对敏感度",
+    "run.trace.paired_coverage": "配对覆盖率",
+    "run.trace.disagreement_rate": "差异率",
+    "run.trace.mean_delta": "平均绝对概率差",
+    "run.trace.flagged_reasons": "已标记的影子决策理由",
+    "run.trace.filters": "轨迹筛选",
+    "run.trace.search": "搜索",
+    "run.trace.search_placeholder": "轨迹 ID、用户 ID、消息或类别",
+    "run.trace.message_filter": "消息",
+    "run.trace.class_filter": "类别",
+    "run.trace.batch_filter": "批次",
+    "run.trace.action_filter": "主决策行为",
+    "run.trace.provider_filter": "Provider 状态",
+    "run.trace.disagreement_filter": "主决策与影子决策差异",
+    "run.trace.all_messages": "全部消息",
+    "run.trace.all_classes": "全部类别",
+    "run.trace.all_batches": "全部批次",
+    "run.trace.all_actions": "全部行为",
+    "run.trace.all_provider_status": "全部 Provider 状态",
+    "run.trace.all_disagreement": "全部配对结果",
+    "run.trace.only_disagreement": "仅有差异",
+    "run.trace.no_disagreement": "无差异",
+    "run.trace.table_aria": "持久化 LLM 决策轨迹",
+    "run.trace.user": "用户",
+    "run.trace.primary_action": "主决策",
+    "run.trace.provider": "服务方",
+    "run.trace.disagreement": "差异",
+    "run.trace.ranking": "排名",
+    "run.trace.page_size": "每页行数",
+    "run.trace.rows": "行",
+    "run.trace.empty": "没有符合当前筛选条件的持久化轨迹记录。",
+    "run.trace.previous": "上一页",
+    "run.trace.next": "下一页",
+    "run.trace.first_page": "第一页",
+    "run.trace.last_page": "最后一页",
+    "run.trace.open_row": "打开轨迹详情",
+    "run.trace.action.like": "点赞",
+    "run.trace.action.comment": "评论",
+    "run.trace.action.share": "分享",
+    "run.trace.action.ignore": "忽略",
+    "run.trace.action.provider_failed": "Provider 失败",
+    "run.exposure.lead": "先看每条消息的曝光、并集、重合、类别 × 消息矩阵和消息—用户适配范围；批次表默认分页，选择器可访问全部 30 批、90 行。这里不判断优胜者，也不作因果声明。",
+    "run.exposure.summary": "曝光摘要",
+    "run.exposure.per_message": "逐消息曝光",
+    "run.exposure.union": "曝光用户并集",
+    "run.exposure.three_way": "三方交集",
+    "run.exposure.pairwise": "两两重合",
+    "run.exposure.matrix": "类别 × 消息矩阵",
+    "run.exposure.fit": "消息—用户适配 · 归一化代理指标",
+    "run.exposure.fit_metric": "最小值 / 均值 / 最大值",
+    "run.exposure.message": "消息",
+    "run.exposure.min": "最小值",
+    "run.exposure.mean": "均值",
+    "run.exposure.max": "最大值",
+    "run.exposure.batch_table": "持久化批次记录",
+    "run.exposure.selector": "按消息筛选批次",
+    "run.exposure.all_messages": "全部消息",
+    "run.exposure.batch": "批次",
+    "run.exposure.selected": "已选配对",
+    "run.exposure.eligible_users": "合格用户",
+    "run.exposure.capacity": "容量",
+    "run.exposure.below": "低于容量",
+    "run.exposure.cumulative": "累计配对",
+    "run.exposure.page": "页",
+    "run.exposure.rows": "行",
+    "run.exposure.previous": "上一页",
+    "run.exposure.next": "下一页",
+    "run.exposure.table_aria": "持久化曝光批次表",
+    "run.exposure.pagination_aria": "曝光批次分页",
+    "run.exposure.empty": "没有符合当前筛选条件的持久化批次记录。",
+    "run.evidence.descriptive": "这是描述性持久化证据，不据此推断优胜者、归因或因果效果。",
+    "run.feedback.title": "主决策反馈只在下一批改变三条排序",
+    "run.feedback.lead": "默认先看发生变化的消息—批次、Top 20 重合和精确批次证据；完整的新增、移除用户 ID 仅在共享详情抽屉或已批准下载中展开。",
+    "run.feedback.changed": "发生变化的消息—批次",
+    "run.feedback.batch_total": "全部消息—批次",
+    "run.feedback.message": "消息",
+    "run.feedback.batch": "批次",
+    "run.feedback.eligible": "合格用户",
+    "run.feedback.top_count": "Top 20",
+    "run.feedback.overlap": "Top 20 重合",
+    "run.feedback.added": "新增",
+    "run.feedback.removed": "移除",
+    "run.feedback.range": "Top 20 重合范围",
+    "run.feedback.scope": "批次证据范围",
+    "run.feedback.changed_only": "仅变化批次",
+    "run.feedback.all_batches": "全部批次",
+    "run.feedback.all_messages": "全部消息",
+    "run.feedback.details": "打开批次详情",
+    "run.feedback.table_aria": "持久化网络反馈批次证据",
+    "run.feedback.rows": "批次",
+    "run.feedback.descriptive": "配对无反馈诊断属于描述性仿真证据；它不声称每个批次都发生变化，也不声称反馈导致平台效果。",
+    "run.downloads.kicker": "本次运行 · 已批准下载",
+    "run.downloads.title": "17 个已批准产物，按研究职责分组",
+    "run.downloads.lead": "所有链接都来自载荷中的规范视图；产物名称保持权威原值，缺失、改名、交叉或越界目标会在闭包阶段失败并关闭。",
+    "run.downloads.group.report": "报告",
+    "run.downloads.group.sample-users": "样本与用户",
+    "run.downloads.group.decision": "决策",
+    "run.downloads.group.runtime-diagnostics": "运行时与诊断",
+    "run.downloads.link": "已批准产物",
+    "run.downloads.table_aria": "已批准的并行消息下载",
+}
+
+
+def _build_editorial_v4_catalog() -> dict[str, dict[str, str]]:
+    presentation = _MECHANISM_PRESENTATION.build()
+    legacy_detail_keys = {
+        f"drawer.{detail_key}.{field}"
+        for detail_key, localized in _EDITORIAL_V3_DETAILS.items()
+        for field in localized["zh-CN"]
+    }
+    navigation_titles = {
+        diagram.navigation_anchor: diagram.title_key
+        for diagram in presentation.diagrams[:5]
+    }
+    catalog: dict[str, dict[str, str]] = {}
+    for language in _EDITORIAL_LANGUAGES:
+        values = {
+            key: value
+            for key, value in _EDITORIAL_V3_CATALOG[language].items()
+            if key.startswith(("shell.", "nav.", "mode.", "language.", "run.", "drawer."))
+            and key not in legacy_detail_keys
+        }
+        for diagram in presentation.diagrams:
+            projection = next(item for item in diagram.projections if item.language == language)
+            values.update(zip(projection.keys, projection.values, strict=True))
+        values.update(_EDITORIAL_V4_COPY[language])
+        if language == "zh-CN":
+            unknown_overrides = set(_EDITORIAL_V4_ZH_COPY) - set(values)
+            if unknown_overrides:
+                raise ValueError(f"Editorial v4 Chinese overrides contain unknown keys: {sorted(unknown_overrides)}")
+            values.update(_EDITORIAL_V4_ZH_COPY)
+        for anchor, title_key in navigation_titles.items():
+            values[f"nav.{anchor}"] = values[title_key]
+        catalog[language] = values
+    if set(catalog["zh-CN"]) != set(catalog["en-US"]):
+        raise ValueError("Editorial v4 catalog key mismatch")
+    return catalog
+
+
+_EDITORIAL_V4_CATALOG = _build_editorial_v4_catalog()
 
 
 _EDITORIAL_V1_LEGEND_ITEMS: dict[str, tuple[tuple[str, str], ...]] = {
@@ -4640,9 +4922,13 @@ _EDITORIAL_SCRIPT = r"""
 """
 
 
-def _render_editorial_candidate(payload: ConcurrentMessageReportPayload) -> str:
+def _render_editorial_candidate(
+    payload: ConcurrentMessageReportPayload,
+    *,
+    _mechanism_override: str | None = None,
+) -> str:
     """Render the private bilingual Editorial candidate directly from typed payload data."""
-    mechanism = _mechanism_html(payload)
+    mechanism = _mechanism_html(payload) if _mechanism_override is None else _mechanism_override
     run_scaffold = _run_scaffold(payload)
     title = _escaped(_value(payload, "title", "Multi-Message Research Report"), quote=True)
     catalog_json = json.dumps(_EDITORIAL_CATALOG, ensure_ascii=False, separators=(",", ":")).replace("</", "<\\/")
@@ -4721,9 +5007,13 @@ def _replace_v2_fragment(value: str, old: str, new: str, *, expected: int, label
     return value.replace(old, new)
 
 
-def _render_editorial_v2(payload: ConcurrentMessageReportPayload) -> str:
+def _render_editorial_v2(
+    payload: ConcurrentMessageReportPayload,
+    *,
+    _mechanism_override: str | None = None,
+) -> str:
     """Render the private Editorial v2 presentation from the frozen v1 shell."""
-    rendered = _render_editorial_candidate(payload)
+    rendered = _render_editorial_candidate(payload, _mechanism_override=_mechanism_override)
     rendered = _replace_v2_fragment(
         rendered,
         'class="editorial-report" data-testid="editorial-report"',
@@ -4753,7 +5043,9 @@ def _render_editorial_v2(payload: ConcurrentMessageReportPayload) -> str:
         label="language catalog",
     )
 
-    for asset_key, v2_asset in _EDITORIAL_V2_ASSET_CATALOG.items():
+    for asset_key, v2_asset in (
+        _EDITORIAL_V2_ASSET_CATALOG.items() if _mechanism_override is None else ()
+    ):
         v1_asset = _EDITORIAL_ASSET_CATALOG[asset_key]
         rendered = _replace_v2_fragment(
             rendered,
@@ -4793,9 +5085,13 @@ def _replace_v3_fragment(value: str, old: str, new: str, *, expected: int, label
     return value.replace(old, new)
 
 
-def _render_editorial_v3(payload: ConcurrentMessageReportPayload) -> str:
+def _render_editorial_v3(
+    payload: ConcurrentMessageReportPayload,
+    *,
+    _mechanism_override: str | None = None,
+) -> str:
     """Render the private Editorial v3 presentation from the frozen v2 successor."""
-    rendered = _render_editorial_v2(payload)
+    rendered = _render_editorial_v2(payload, _mechanism_override=_mechanism_override)
     rendered = _replace_v3_fragment(
         rendered,
         'class="editorial-report" data-testid="editorial-report" data-editorial-version="v2"',
@@ -4839,7 +5135,9 @@ def _render_editorial_v3(payload: ConcurrentMessageReportPayload) -> str:
         label="mechanism details",
     )
 
-    for asset_key, v3_asset in _EDITORIAL_V3_ASSET_CATALOG.items():
+    for asset_key, v3_asset in (
+        _EDITORIAL_V3_ASSET_CATALOG.items() if _mechanism_override is None else ()
+    ):
         v2_asset = _EDITORIAL_V2_ASSET_CATALOG[asset_key]
         rendered = _replace_v3_fragment(
             rendered,
@@ -4874,7 +5172,9 @@ def _render_editorial_v3(payload: ConcurrentMessageReportPayload) -> str:
             label=f"{asset_key} legend",
         )
 
-    for copy_key, replacement in _EDITORIAL_V3_COPY["zh-CN"].items():
+    for copy_key, replacement in (
+        _EDITORIAL_V3_COPY["zh-CN"].items() if _mechanism_override is None else ()
+    ):
         if copy_key.startswith("v3.legend."):
             continue
         rendered = _replace_v3_fragment(
@@ -4885,6 +5185,535 @@ def _render_editorial_v3(payload: ConcurrentMessageReportPayload) -> str:
             label=f"{copy_key} static copy",
         )
     return rendered
+
+
+_EDITORIAL_V4_CSS = r"""
+.editorial-report[data-editorial-version="v4-semantic"] { --mechanism-lane: #f5f7fa; --mechanism-line: #31527a; }
+.editorial-semantic-section { padding-top: clamp(4.5rem, 8vw, 7.5rem); }
+.editorial-semantic-section:first-child { padding-top: clamp(3.25rem, 6vw, 5.5rem); }
+.editorial-semantic-section .editorial-section-header { align-items: start; }
+.editorial-semantic-figure { margin: 2rem 0 0; }
+.editorial-semantic-canvas { overflow: hidden; border: 1px solid var(--editorial-rule); background: #fbfcfe; }
+.editorial-semantic-canvas svg { display: block; width: 100%; height: auto; }
+.editorial-semantic-lane > rect { fill: #f6f8fb; stroke: #d8e0ea; stroke-width: 1; }
+.editorial-semantic-lane-platform_recommendation > rect { fill: #eef3fb; }
+.editorial-semantic-lane-simulated_user_decision > rect { fill: #f8fafc; }
+.editorial-semantic-lane-label { color: var(--editorial-muted); font-size: 12px; font-weight: 750; letter-spacing: .02em; }
+.editorial-semantic-edge { fill: none; stroke: var(--mechanism-line); stroke-width: 2; }
+.editorial-semantic-edge-style-dashed { stroke-dasharray: 8 6; }
+.editorial-semantic-edge-style-thick { stroke-width: 4; }
+.editorial-semantic-edge-label { display: flex; align-items: center; justify-content: center; width: 100%; height: 100%; padding: 3px 6px; border: 1px solid #cbd6e3; background: #fff; color: var(--editorial-muted); font-size: 10px; font-weight: 700; line-height: 1.2; text-align: center; }
+.editorial-semantic-node-shape { fill: #fff; stroke: #17365f; stroke-width: 2; }
+.editorial-semantic-node[data-visual-role="message_m2"] .editorial-semantic-node-shape { stroke-dasharray: 7 5; }
+.editorial-semantic-node[data-visual-role="message_m3"] .editorial-semantic-node-shape { stroke-width: 4; }
+.editorial-semantic-node-label { display: flex; align-items: center; justify-content: center; width: 100%; height: 100%; padding: 3px; color: var(--editorial-ink); font-size: 12px; font-weight: 700; line-height: 1.22; text-align: center; overflow-wrap: anywhere; }
+.editorial-semantic-mobile-flow { display: none; margin: 0; padding: 0; list-style: none; }
+.editorial-semantic-mobile-node { min-width: 0; padding: 1rem; border: 2px solid #17365f; background: #fff; color: var(--editorial-ink); font-weight: 700; overflow-wrap: anywhere; }
+.editorial-semantic-mobile-node[data-shape="rounded"], .editorial-semantic-mobile-node[data-shape="stadium"] { border-radius: 28px; }
+.editorial-semantic-mobile-node[data-shape="diamond"] { border-radius: 2px; }
+.editorial-semantic-mobile-node[data-visual-role="message_m2"] { border-style: dashed; }
+.editorial-semantic-mobile-node[data-visual-role="message_m3"] { border-style: double; border-width: 4px; }
+.editorial-semantic-mobile-lane { display: block; margin-bottom: .35rem; color: var(--editorial-muted); font-size: 11px; font-weight: 650; }
+.editorial-semantic-mobile-relations { display: grid; gap: .35rem; margin-top: .75rem; padding-top: .65rem; border-top: 1px solid var(--editorial-rule); color: var(--editorial-muted); font-size: 11px; font-weight: 600; }
+.editorial-semantic-mobile-relations > span { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: .4rem; align-items: start; }
+.editorial-semantic-mobile-relations b { color: var(--editorial-cobalt); }
+.editorial-semantic-mobile-relations em { grid-column: 2; font-style: normal; font-weight: 500; }
+.editorial-semantic-fallback { padding: 1rem 0 0; color: var(--editorial-muted); }
+.editorial-semantic-fallback > p { margin: 0; line-height: 1.6; }
+.editorial-semantic-method { margin-top: 1rem; border-top: 1px solid var(--editorial-rule); }
+.editorial-semantic-method > summary { min-height: 46px; padding: .8rem 0; color: var(--editorial-cobalt); font-weight: 750; cursor: pointer; }
+.editorial-semantic-method > summary:focus-visible { outline: 3px solid rgba(31, 93, 170, .28); outline-offset: 3px; }
+.editorial-semantic-method ol { display: grid; gap: .55rem; margin: 0; padding: 0 0 1rem 1.2rem; line-height: 1.55; }
+.editorial-semantic-master { margin: 0 0 1rem; color: var(--editorial-muted); font-size: 12px; }
+.editorial-semantic-master code { overflow-wrap: anywhere; }
+.editorial-semantic-edge-list, .editorial-semantic-visually-hidden { position: absolute !important; width: 1px !important; height: 1px !important; padding: 0 !important; margin: -1px !important; overflow: hidden !important; clip: rect(0, 0, 0, 0) !important; white-space: nowrap !important; border: 0 !important; }
+@media (min-width: 821px) and (max-width: 1500px) {
+  .editorial-header { grid-template-columns: auto minmax(0, 1fr) auto; gap: 18px; }
+  .editorial-language-tabs { grid-column: 3; grid-row: 1; }
+  .editorial-mode-tabs { grid-column: 1 / -1; grid-row: 2; justify-self: center; }
+  .editorial-nav { grid-column: 2; grid-row: 1; justify-content: flex-start; }
+}
+@media (max-width: 767px) {
+  .editorial-semantic-section { padding-top: 4rem; }
+  .editorial-semantic-canvas { padding: 1rem; overflow: visible; }
+  .editorial-semantic-canvas svg { display: none; }
+  .editorial-semantic-mobile-flow { display: grid; gap: .75rem; }
+  .editorial-semantic-mobile-node { width: 100%; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .editorial-semantic-method > summary { scroll-behavior: auto; }
+}
+"""
+
+
+def _v4_i18n(
+    key: str,
+    *,
+    tag: str = "span",
+    class_name: str = "",
+    attrs: str = "",
+) -> str:
+    classes = f' class="{_escaped(class_name, quote=True)}"' if class_name else ""
+    return (
+        f'<{tag}{classes} data-i18n="{_escaped(key, quote=True)}"{attrs}>'
+        f'{_escaped(_EDITORIAL_V4_CATALOG["zh-CN"][key])}</{tag}>'
+    )
+
+
+def _semantic_node_shape(node: Any, *, x: float, y: float, width: float, height: float) -> str:
+    classes = 'class="editorial-semantic-node-shape"'
+    if node.shape == "diamond":
+        points = " ".join(
+            f"{px:.1f},{py:.1f}"
+            for px, py in (
+                (x + width / 2, y),
+                (x + width, y + height / 2),
+                (x + width / 2, y + height),
+                (x, y + height / 2),
+            )
+        )
+        return f"<polygon {classes} points=\"{points}\"/>"
+    if node.shape == "hexagon":
+        inset = width * .16
+        points = " ".join(
+            f"{px:.1f},{py:.1f}"
+            for px, py in (
+                (x + inset, y),
+                (x + width - inset, y),
+                (x + width, y + height / 2),
+                (x + width - inset, y + height),
+                (x + inset, y + height),
+                (x, y + height / 2),
+            )
+        )
+        return f"<polygon {classes} points=\"{points}\"/>"
+    radius = height / 2 if node.shape in {"rounded", "stadium"} else 7
+    return (
+        f'<rect {classes} x="{x:.1f}" y="{y:.1f}" width="{width:.1f}" '
+        f'height="{height:.1f}" rx="{radius:.1f}" ry="{radius:.1f}"/>'
+    )
+
+
+def _semantic_figure(diagram: Any, *, heading_level: str) -> str:
+    projection = next(item for item in diagram.projections if item.language == "zh-CN")
+    xhtml_attrs = ' xmlns="http://www.w3.org/1999/xhtml"'
+    width = 1240
+    stage_gap = (width - 320) / max(1, diagram.stage_count - 1)
+    node_width = max(112.0, min(190.0, stage_gap * .8))
+    node_height = 68.0
+    lane_layout: dict[str, tuple[float, float]] = {}
+    lane_cursor = 0.0
+    for lane in diagram.lane_order:
+        lane_nodes = [node for node in diagram.nodes if node.lane == lane]
+        max_parallel = max(
+            (sum(node.stage == stage for node in lane_nodes) for stage in range(1, diagram.stage_count + 1)),
+            default=0,
+        )
+        lane_size = max(170.0, 72.0 + max_parallel * 72.0) if lane_nodes else 46.0
+        lane_layout[lane] = (lane_cursor, lane_size)
+        lane_cursor += lane_size
+    height = lane_cursor
+    positions: dict[str, tuple[float, float]] = {}
+    node_markup: list[str] = []
+    lane_markup: list[str] = []
+    lane_keys = {
+        "historical_data": "lane.historical_data",
+        "platform_recommendation": "lane.platform_recommendation",
+        "simulated_user_decision": "lane.simulated_user_decision",
+    }
+    for lane in diagram.lane_order:
+        lane_top, lane_size = lane_layout[lane]
+        lane_markup.append(
+            f'<g class="editorial-semantic-lane editorial-semantic-lane-{lane}" data-semantic-lane="{lane}">'
+            f'<rect x="10" y="{lane_top + 6:.1f}" width="1220" height="{lane_size - 12:.1f}" rx="4"/>'
+            f'<foreignObject x="24" y="{lane_top + 12:.1f}" width="250" height="26">'
+            f'{_v4_i18n(lane_keys[lane], tag="div", class_name="editorial-semantic-lane-label", attrs=xhtml_attrs)}'
+            "</foreignObject></g>"
+        )
+        for stage in range(1, diagram.stage_count + 1):
+            stage_nodes = [node for node in diagram.nodes if node.lane == lane and node.stage == stage]
+            for node_index, node in enumerate(stage_nodes):
+                center_x = 160 + (stage - 1) * stage_gap
+                center_y = lane_top + lane_size / 2 + 13 + (node_index - (len(stage_nodes) - 1) / 2) * 68
+                x = center_x - node_width / 2
+                y = center_y - node_height / 2
+                positions[node.semantic_id] = (center_x, center_y)
+                visual_role = node.visual_role or "neutral"
+                node_markup.append(
+                    f'<g class="editorial-semantic-node" data-semantic-node-id="{node.semantic_id}" '
+                    f'data-lane="{node.lane}" data-stage="{node.stage}" data-shape="{node.shape}" '
+                    f'data-visual-role="{visual_role}">'
+                    f'{_semantic_node_shape(node, x=x, y=y, width=node_width, height=node_height)}'
+                    f'<foreignObject x="{x + 7:.1f}" y="{y + 5:.1f}" width="{node_width - 14:.1f}" height="{node_height - 10:.1f}">'
+                    f'{_v4_i18n(node.label_key, tag="div", class_name="editorial-semantic-node-label", attrs=xhtml_attrs)}'
+                    "</foreignObject></g>"
+                )
+
+    marker_id = f"mechanism-arrow-{diagram.diagram_id}"
+    edge_markup: list[str] = []
+    edge_list: list[str] = []
+    nodes_by_id = {node.semantic_id: node for node in diagram.nodes}
+    for edge in diagram.edges:
+        source_x, source_y = positions[edge.source]
+        target_x, target_y = positions[edge.target]
+        if target_x > source_x:
+            start_x = source_x + node_width / 2
+            end_x = target_x - node_width / 2
+        else:
+            start_x = source_x
+            end_x = target_x
+        midpoint_x = (start_x + end_x) / 2
+        path = (
+            f"M {start_x:.1f} {source_y:.1f} "
+            f"C {midpoint_x:.1f} {source_y:.1f}, {midpoint_x:.1f} {target_y:.1f}, {end_x:.1f} {target_y:.1f}"
+        )
+        edge_markup.append(
+            f'<path class="editorial-semantic-edge editorial-semantic-edge-style-{edge.style}" '
+            f'data-semantic-edge-id="{edge.semantic_id}" data-source="{edge.source}" '
+            f'data-target="{edge.target}" d="{path}" marker-end="url(#{marker_id})"/>'
+        )
+        if edge.label is not None:
+            edge_markup.append(
+                f'<foreignObject x="{midpoint_x - 70:.1f}" y="{(source_y + target_y) / 2 - 18:.1f}" width="140" height="36">'
+                f'{_v4_i18n(edge.label.key, tag="div", class_name="editorial-semantic-edge-label", attrs=xhtml_attrs)}'
+                "</foreignObject>"
+            )
+        source_node = nodes_by_id[edge.source]
+        target_node = nodes_by_id[edge.target]
+        label = f' {_v4_i18n(edge.label.key)}' if edge.label is not None else ""
+        edge_list.append(
+            f'<li data-semantic-edge-id="{edge.semantic_id}" data-source="{edge.source}" data-target="{edge.target}">'
+            f'{_v4_i18n(source_node.label_key)} <span aria-hidden="true">→</span> '
+            f'{_v4_i18n(target_node.label_key)}{label}</li>'
+        )
+
+    mobile_node_rows: list[str] = []
+    for node in sorted(
+        diagram.nodes,
+        key=lambda item: (item.stage, diagram.lane_order.index(item.lane), item.semantic_id),
+    ):
+        outgoing = [edge for edge in diagram.edges if edge.source == node.semantic_id]
+        relations = "".join(
+            f'<span data-semantic-edge-id="{edge.semantic_id}" data-target="{edge.target}">'
+            f'<b aria-hidden="true">→</b>{_v4_i18n(nodes_by_id[edge.target].label_key)}'
+            f'{_v4_i18n(edge.label.key, tag="em") if edge.label is not None else ""}</span>'
+            for edge in outgoing
+        )
+        relation_block = (
+            f'<span class="editorial-semantic-mobile-relations">{relations}</span>'
+            if relations
+            else ""
+        )
+        mobile_node_rows.append(
+            f'<li class="editorial-semantic-mobile-node" data-semantic-node-id="{node.semantic_id}" '
+            f'data-stage="{node.stage}" data-lane="{node.lane}" data-shape="{node.shape}" '
+            f'data-visual-role="{node.visual_role or "neutral"}">'
+            f'{_v4_i18n(lane_keys[node.lane], tag="span", class_name="editorial-semantic-mobile-lane")}'
+            f'{_v4_i18n(node.label_key)}{relation_block}</li>'
+        )
+    mobile_nodes = "".join(mobile_node_rows)
+    fallback = "".join(
+        f"<li>{_v4_i18n(key)}</li>" for key in projection.fallback_keys
+    )
+    section_id = diagram.navigation_anchor if diagram.navigation_anchor != "real-batch" else "real-batch-mechanism"
+    anchor = (
+        f' data-section-anchor="{diagram.navigation_anchor}"'
+        if diagram.navigation_anchor in _EDITORIAL_ANCHORS
+        else ""
+    )
+    test_id = (
+        f"mechanism-{diagram.navigation_anchor}-section"
+        if diagram.navigation_anchor in _EDITORIAL_ANCHORS
+        else "real-batch-mechanism-section"
+    )
+    title_id = f"mechanism-{diagram.diagram_id}-title"
+    title_attrs = f' id="{title_id}"'
+    description_id = f"mechanism-{diagram.diagram_id}-description"
+    real_batch_lead = (
+        _v4_i18n("v4.real_batch.lead", tag="p", class_name="editorial-lead")
+        if diagram.diagram_id == "real_batch"
+        else _v4_i18n(diagram.description_key, tag="p", class_name="editorial-lead")
+    )
+    return (
+        f'<section id="{section_id}" class="editorial-section editorial-semantic-section"{anchor} '
+        f'data-testid="{test_id}" tabindex="-1">'
+        '<div class="editorial-section-header"><div>'
+        f'{_v4_i18n(diagram.title_key, tag=heading_level, attrs=title_attrs)}'
+        f'</div>{real_batch_lead}</div>'
+        f'<figure class="editorial-semantic-figure" data-mechanism-diagram-id="{diagram.diagram_id}" '
+        f'data-semantic-master="{diagram.filename}" aria-labelledby="{title_id}" aria-describedby="{description_id}">'
+        f'<figcaption id="{description_id}" class="editorial-semantic-visually-hidden">'
+        f'{_v4_i18n(diagram.description_key, tag="p")}</figcaption>'
+        '<div class="editorial-semantic-canvas">'
+        f'<svg viewBox="0 0 {width} {height}" aria-hidden="true" focusable="false" '
+        f'data-testid="mechanism-{diagram.diagram_id}-inline-svg">'
+        f'<defs><marker id="{marker_id}" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M 0 0 L 10 5 L 0 10 z"/></marker></defs>'
+        f'{"".join(lane_markup)}{"".join(edge_markup)}{"".join(node_markup)}</svg>'
+        f'<ol class="editorial-semantic-mobile-flow" aria-label="{_escaped(_EDITORIAL_V4_CATALOG["zh-CN"]["v4.figure.mobile_aria"], quote=True)}" data-i18n-aria-label="v4.figure.mobile_aria">{mobile_nodes}</ol>'
+        "</div>"
+        f'<ol class="editorial-semantic-edge-list" aria-label="{_escaped(_EDITORIAL_V4_CATALOG["zh-CN"]["v4.figure.edge_aria"], quote=True)}" data-i18n-aria-label="v4.figure.edge_aria">{"".join(edge_list)}</ol>'
+        f'<details class="editorial-semantic-method" data-mechanism-method-disclosure="{diagram.diagram_id}">'
+        f'<summary>{_v4_i18n("v4.method.summary")}</summary>'
+        f'<p class="editorial-semantic-master">{_v4_i18n("v4.method.master")}: '
+        f'<code data-stable-token="artifact-filename">{diagram.filename}</code></p>'
+        f'{_v4_i18n("v4.figure.fallback_title", tag="strong")}<ol>{fallback}</ol>'
+        "</details></figure></section>"
+    )
+
+
+def _semantic_mechanism_html() -> str:
+    presentation = _MECHANISM_PRESENTATION.build()
+    return "".join(
+        _semantic_figure(diagram, heading_level="h1" if index == 0 else "h2")
+        for index, diagram in enumerate(presentation.diagrams)
+    )
+
+
+def _replace_v4_fragment(value: str, old: str, new: str, *, expected: int, label: str) -> str:
+    actual = value.count(old)
+    if actual != expected:
+        raise ValueError(f"Editorial v4 could not replace frozen {label}: expected {expected}, found {actual}")
+    return value.replace(old, new)
+
+
+def _replace_v4_mechanism_panel(value: str, mechanism_html: str) -> str:
+    opening = (
+        '    <section id="editorial-mechanism-panel" role="tabpanel" '
+        'aria-labelledby="editorial-mechanism-tab" data-report-mode-panel="mechanism" '
+        'data-testid="mechanism-mode-panel">\n'
+    )
+    next_panel = '    <section id="editorial-run-panel"'
+    start = value.find(opening)
+    end = value.find(next_panel, start + len(opening))
+    if start < 0 or end < 0:
+        raise ValueError("Editorial v4 could not isolate the frozen mechanism panel")
+    panel_body = value[start + len(opening) : end]
+    if not panel_body.rstrip().endswith("</section>"):
+        raise ValueError("Editorial v4 mechanism panel is malformed")
+    replacement = f"      {mechanism_html}\n    </section>\n"
+    return value[: start + len(opening)] + replacement + value[end:]
+
+
+def _mark_v4_source_values(rendered: str) -> str:
+    run_start = rendered.find('<section id="editorial-run-panel"')
+    drawer_start = rendered.find('<aside id="trace-drawer"', run_start)
+    if run_start < 0 or drawer_start < 0:
+        raise ValueError("Editorial v4 could not isolate Run Evidence source values")
+    run_panel = rendered[run_start:drawer_start]
+    run_panel = run_panel.replace(
+        '<article class="editorial-authoritative-message"',
+        '<article class="editorial-authoritative-message" data-source-language="zh-CN"',
+    )
+    run_panel = run_panel.replace("<tbody", '<tbody data-stable-token="persisted-values"')
+    run_panel = run_panel.replace("<dd>", '<dd data-stable-token="persisted-value">')
+    run_panel = run_panel.replace("<code>", '<code data-stable-token="stable-value">')
+    for test_id, key in (
+        ("run-trace-page-size", "run.trace.page_size"),
+    ):
+        old = f'data-testid="{test_id}" aria-label="{_escaped(_EDITORIAL_V3_CATALOG["zh-CN"][key], quote=True)}"'
+        new = f'data-testid="{test_id}" data-i18n-aria-label="{key}" aria-label="{_escaped(_EDITORIAL_V3_CATALOG["zh-CN"][key], quote=True)}"'
+        run_panel = _replace_v4_fragment(
+            run_panel,
+            old,
+            new,
+            expected=1,
+            label=f"{test_id} accessible name",
+        )
+    for direction, key in (("previous", "run.trace.previous"), ("next", "run.trace.next")):
+        old = f'data-trace-page="{direction}" aria-label="{_escaped(_EDITORIAL_V3_CATALOG["zh-CN"][key], quote=True)}"'
+        new = f'data-trace-page="{direction}" data-i18n-aria-label="{key}" aria-label="{_escaped(_EDITORIAL_V3_CATALOG["zh-CN"][key], quote=True)}"'
+        run_panel = _replace_v4_fragment(
+            run_panel,
+            old,
+            new,
+            expected=1,
+            label=f"trace {direction} accessible name",
+        )
+
+    def mark_message_options(match: re.Match[str]) -> str:
+        return re.sub(
+            r'<option(?![^>]*data-i18n)([^>]*)>',
+            r'<option data-source-language="authoritative"\1>',
+            match.group(0),
+        )
+
+    run_panel, message_select_count = re.subn(
+        r'<select data-testid="run-(?:exposure|trace|feedback)-message-select"[^>]*>.*?</select>',
+        mark_message_options,
+        run_panel,
+    )
+    if message_select_count != 3:
+        raise ValueError("Editorial v4 could not mark the three authoritative message selectors")
+    run_panel = re.sub(
+        r'<option(?![^>]*(?:data-i18n|data-source-language|data-stable-token))([^>]*)>',
+        r'<option data-stable-token="option-value"\1>',
+        run_panel,
+    )
+    run_panel = re.sub(
+        r'<strong(?![^>]*data-stable-token)([^>]*)>([^<]*)</strong>',
+        r'<strong data-stable-token="persisted-value"\1>\2</strong>',
+        run_panel,
+    )
+    run_panel = re.sub(
+        r'<output(?![^>]*data-stable-token)([^>]*)>',
+        r'<output data-stable-token="computed-value"\1>',
+        run_panel,
+    )
+    run_panel, trace_title_count = re.subn(
+        r'(<article class="editorial-trace-summary-card"[^>]*>\s*<header><code[^>]*>.*?</code>)<h3>',
+        r'\1<h3 data-source-language="authoritative">',
+        run_panel,
+    )
+    if trace_title_count != 3:
+        raise ValueError("Editorial v4 could not mark three authoritative trace titles")
+    run_panel, fit_title_count = re.subn(
+        r'(<tr data-testid="run-fit-range-[^"]+"><th><code[^>]*>.*?</code>)<span>',
+        r'\1<span data-source-language="authoritative">',
+        run_panel,
+    )
+    if fit_title_count != 3:
+        raise ValueError("Editorial v4 could not mark three authoritative fit titles")
+    rendered = rendered[:run_start] + run_panel + rendered[drawer_start:]
+
+    definition_list = """      appendText(item, 'dt', copy(label));
+      appendText(item, 'dd', value);
+      list.append(item);"""
+    marked_definition_list = """      appendText(item, 'dt', copy(label));
+      const valueNode = appendText(item, 'dd', value);
+      if (label === 'drawer.primary_reason' || label === 'drawer.shadow_reason') {
+        valueNode.dataset.sourceLanguage = 'persisted';
+      } else {
+        valueNode.dataset.stableToken = 'persisted-value';
+      }
+      list.append(item);"""
+    rendered = _replace_v4_fragment(
+        rendered,
+        definition_list,
+        marked_definition_list,
+        expected=1,
+        label="drawer value provenance markers",
+    )
+    rendered = _replace_v4_fragment(
+        rendered,
+        "String(text || '').split(/\\n\\n+/).filter(Boolean).forEach((paragraph) => appendText(parent, 'p', paragraph));",
+        "String(text || '').split(/\\n\\n+/).filter(Boolean).forEach((paragraph) => { const node = appendText(parent, 'p', paragraph); node.dataset.sourceLanguage = 'authoritative'; });",
+        expected=1,
+        label="drawer source-language paragraphs",
+    )
+    rendered = _replace_v4_fragment(
+        rendered,
+        "appendText(message, 'h3', trace.message_title);",
+        "appendText(message, 'h3', trace.message_title).dataset.sourceLanguage = 'authoritative';",
+        expected=1,
+        label="drawer authoritative title",
+    )
+    rendered = _replace_v4_fragment(
+        rendered,
+        "tr.setAttribute('aria-label', `${copy('run.feedback.details')}: ${feedbackKey}`);",
+        "tr.dataset.stableToken = 'feedback-key';\n        tr.setAttribute('aria-label', `${copy('run.feedback.details')}: ${feedbackKey}`);",
+        expected=1,
+        label="feedback accessible stable key",
+    )
+    rendered = _replace_v4_fragment(
+        rendered,
+        "tr.setAttribute('aria-label', `${copy('run.trace.open_row')}: ${row.trace_id}`);",
+        "tr.dataset.stableToken = 'trace-id';\n       tr.setAttribute('aria-label', `${copy('run.trace.open_row')}: ${row.trace_id}`);",
+        expected=1,
+        label="trace accessible stable ID",
+    )
+    rendered = _replace_v4_fragment(
+        rendered,
+        "button.textContent = String(token + 1);\n        button.dataset.tracePage = String(token);",
+        "button.textContent = String(token + 1);\n        button.dataset.stableToken = 'page-number';\n        button.dataset.tracePage = String(token);",
+        expected=1,
+        label="trace page stable number",
+    )
+    return rendered
+
+
+def _upgrade_editorial_v3_to_v4(rendered: str) -> str:
+    """Project the frozen v3 shell through the approved semantic presentation."""
+    rendered = _replace_v4_fragment(
+        rendered,
+        'class="editorial-report" data-testid="editorial-report" data-editorial-version="v3"',
+        'class="editorial-report" data-testid="editorial-report" data-editorial-version="v4-semantic" data-production-deploy-eligible="false"',
+        expected=1,
+        label="root",
+    )
+    rendered = _replace_v4_fragment(
+        rendered,
+        f"<style>{_EDITORIAL_CSS}{_EDITORIAL_V2_CSS}{_EDITORIAL_V3_CSS}</style>",
+        f"<style>{_EDITORIAL_CSS}{_EDITORIAL_V2_CSS}{_EDITORIAL_V3_CSS}{_EDITORIAL_V4_CSS}</style>",
+        expected=1,
+        label="stylesheet",
+    )
+    rendered = _replace_v4_mechanism_panel(rendered, _semantic_mechanism_html())
+    rendered = _mark_v4_source_values(rendered)
+
+    v3_catalog_json = json.dumps(
+        _EDITORIAL_V3_CATALOG,
+        ensure_ascii=False,
+        separators=(",", ":"),
+    ).replace("</", "<\\/")
+    v4_catalog_json = json.dumps(
+        _EDITORIAL_V4_CATALOG,
+        ensure_ascii=False,
+        separators=(",", ":"),
+    ).replace("</", "<\\/")
+    rendered = _replace_v4_fragment(
+        rendered,
+        v3_catalog_json,
+        v4_catalog_json,
+        expected=1,
+        label="language catalog",
+    )
+    v3_details_json = json.dumps(
+        _EDITORIAL_V3_DETAILS,
+        ensure_ascii=False,
+        separators=(",", ":"),
+    ).replace("</", "<\\/")
+    rendered = _replace_v4_fragment(
+        rendered,
+        v3_details_json,
+        "{}",
+        expected=1,
+        label="legacy mechanism details",
+    )
+    for anchor in _EDITORIAL_ANCHORS:
+        old = (
+            f'<a data-report-anchor="{anchor}" href="#{anchor}">'
+            f'{_escaped(_EDITORIAL_V3_CATALOG["zh-CN"][f"nav.{anchor}"])}</a>'
+        )
+        new = (
+            f'<a data-report-anchor="{anchor}" href="#{anchor}" data-i18n="nav.{anchor}">'
+            f'{_escaped(_EDITORIAL_V4_CATALOG["zh-CN"][f"nav.{anchor}"])}</a>'
+        )
+        rendered = _replace_v4_fragment(
+            rendered,
+            old,
+            new,
+            expected=1,
+            label=f"{anchor} navigation label",
+        )
+    for mode, test_id in (("mechanism", "mechanism-mode-button"), ("run", "run-evidence-mode-button")):
+        old = f'data-testid="{test_id}">{_escaped(_EDITORIAL_V3_CATALOG["zh-CN"][f"mode.{mode}"])}</button>'
+        new = f'data-testid="{test_id}" data-i18n="mode.{mode}">{_escaped(_EDITORIAL_V4_CATALOG["zh-CN"][f"mode.{mode}"])}</button>'
+        rendered = _replace_v4_fragment(
+            rendered,
+            old,
+            new,
+            expected=1,
+            label=f"{mode} mode label",
+        )
+    return rendered
+
+
+def _render_editorial_v4(payload: ConcurrentMessageReportPayload) -> str:
+    """Render the non-promotable Mermaid-master-backed semantic candidate."""
+    mechanism = _semantic_mechanism_html()
+    return _upgrade_editorial_v3_to_v4(
+        _render_editorial_v3(payload, _mechanism_override=mechanism)
+    )
 
 
 # Alias stays private so tests and design validation can call the default Editorial
