@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any
 
+from .concurrent_message_mechanism_presentation import _MECHANISM_PRESENTATION
 from .concurrent_message_report import CONCURRENT_MESSAGE_ARTIFACT_MANIFEST_JSON
 from .concurrent_robustness_study import (
     ConcurrentRobustnessManifest,
@@ -24,6 +25,36 @@ from .providers.pi_subscription import PI_SUBSCRIPTION_MODEL_ALIASES
 FORMAL_LOGICAL_JUDGMENTS = 28_800
 FORMAL_PHYSICAL_ATTEMPT_CAP = 86_400
 PRESENTATION_CLOSURE_SCHEMA = "concurrent-robustness-presentation-closure-contract-v1"
+PRESENTATION_CLOSURE_V2_SCHEMA = "concurrent-robustness-presentation-closure-contract-v2"
+_REPORT_PAYLOAD_V1_SCHEMA = "concurrent-robustness-report-payload-v1"
+_REPORT_PAYLOAD_V2_SCHEMA = "concurrent-robustness-report-payload-v2"
+_REPORT_PAYLOAD_V1_FIELDS = frozenset(
+    {
+        "schema_version",
+        "title",
+        "source_lineage",
+        "ranking_weight",
+        "prompt_model",
+        "row_counts",
+        "trace_row_count",
+        "downloads",
+        "claim_boundary",
+        "production_deploy_eligible",
+    }
+)
+_REPORT_PAYLOAD_V2_FIELDS = _REPORT_PAYLOAD_V1_FIELDS | {"mechanism_presentation"}
+_MECHANISM_PRESENTATION_FIELDS = frozenset(
+    {"schema_version", "semantic_set_identity_sha256", "masters"}
+)
+_SEMANTIC_MERMAID_DOWNLOADS = {
+    "mechanism_sample_first_mermaid": "mechanism-sample-first.mmd",
+    "mechanism_pair_formation_mermaid": "mechanism-pair-formation.mmd",
+    "mechanism_independent_delivery_mermaid": "mechanism-independent-delivery.mmd",
+    "mechanism_exposure_decisions_mermaid": "mechanism-exposure-decisions.mmd",
+    "mechanism_feedback_boundary_mermaid": "mechanism-feedback-boundary.mmd",
+    "real_batch_mechanism_mermaid": "real-batch-mechanism.mmd",
+    "prompt_model_factorial_mermaid": "prompt-model-factorial.mmd",
+}
 _CANDIDATE_EVIDENCE = "release_evidence.json"
 _CANDIDATE_REPORT = "report.html"
 _CANDIDATE_PAYLOAD = "concurrent_robustness_report_payload.json"
@@ -83,6 +114,8 @@ class PresentationClosureFacts:
     subscription_nominal_reference_cost_usd: float
     provider_calls_during_closure: int
     image_generation_triggered: bool
+    report_payload_schema_version: str
+    semantic_set_identity_sha256: str | None
 
 
 def close_formal_cell_evidence(
@@ -472,6 +505,56 @@ def _validate_execution_contract(
     return document
 
 
+def _validate_report_payload_contract(
+    payload: Mapping[str, Any],
+    *,
+    candidate: Path,
+) -> tuple[str, str | None]:
+    schema = payload.get("schema_version")
+    if schema == _REPORT_PAYLOAD_V1_SCHEMA:
+        if set(payload) != _REPORT_PAYLOAD_V1_FIELDS:
+            raise ConcurrentRobustnessEvidenceError("payload v1 fields are missing or unexpected")
+        return _REPORT_PAYLOAD_V1_SCHEMA, None
+    if schema != _REPORT_PAYLOAD_V2_SCHEMA or set(payload) != _REPORT_PAYLOAD_V2_FIELDS:
+        raise ConcurrentRobustnessEvidenceError("report payload schema or fields are unsupported")
+    facts = payload.get("mechanism_presentation")
+    if not isinstance(facts, Mapping) or set(facts) != _MECHANISM_PRESENTATION_FIELDS:
+        raise ConcurrentRobustnessEvidenceError("mechanism presentation fields are missing or unexpected")
+    mechanism = _MECHANISM_PRESENTATION.build()
+    expected_masters = {
+        artifact.filename: artifact.sha256
+        for artifact in mechanism.mermaid_artifacts
+    }
+    masters = _string_mapping(facts.get("masters"), "mechanism presentation masters")
+    semantic_identity = _string(
+        facts.get("semantic_set_identity_sha256"),
+        "mechanism semantic set identity",
+    )
+    if (
+        facts.get("schema_version") != mechanism.schema_version
+        or semantic_identity != mechanism.semantic_set_identity_sha256
+        or masters != expected_masters
+    ):
+        raise ConcurrentRobustnessEvidenceError("mechanism presentation identity is crossed")
+    downloads = _string_mapping(payload.get("downloads"), "candidate report downloads")
+    if any(downloads.get(key) != value for key, value in _SEMANTIC_MERMAID_DOWNLOADS.items()):
+        raise ConcurrentRobustnessEvidenceError("payload v2 Mermaid downloads are incomplete or crossed")
+    if "project_evidence_chain_mermaid" in downloads or "batch_mechanism_mermaid" in downloads:
+        raise ConcurrentRobustnessEvidenceError("payload v2 retained a compatibility Mermaid mapping")
+    if any(
+        value == "mechanism-image-generation-audit.json"
+        or value.endswith("-v4.png")
+        or value.endswith("-v4.webp")
+        for value in downloads.values()
+    ):
+        raise ConcurrentRobustnessEvidenceError("payload v2 contains a rejected presentation download")
+    for filename, expected_sha256 in expected_masters.items():
+        target = candidate / filename
+        if target.is_symlink() or not target.is_file() or _sha256_file(target) != expected_sha256:
+            raise ConcurrentRobustnessEvidenceError("mechanism presentation master bytes are crossed")
+    return _REPORT_PAYLOAD_V2_SCHEMA, semantic_identity
+
+
 def _validate_candidate_release_contract(
     *,
     candidate: Path,
@@ -486,13 +569,24 @@ def _validate_candidate_release_contract(
     candidate_hashes = _flat_file_hashes(candidate)
     artifacts = _string_mapping(candidate_manifest.get("artifacts"), "candidate artifacts")
     declared_hashes = _string_mapping(candidate_manifest.get("sha256"), "candidate artifact hashes")
+    report_schema, _ = _validate_report_payload_contract(
+        candidate_report_payload,
+        candidate=candidate,
+    )
     if (
         candidate_manifest.get("schema_version") != "concurrent-robustness-report-candidate-manifest-v1"
         or candidate_manifest.get("candidate_type") != "immutable_combined_robustness_report"
         or candidate_manifest.get("production_deploy_eligible") is not False
         or candidate_evidence.get("schema_version") != "concurrent-robustness-report-release-evidence-v1"
         or candidate_evidence.get("production_deploy_eligible") is not False
-        or candidate_report_payload.get("schema_version") != "concurrent-robustness-report-payload-v1"
+        or (
+            report_schema == _REPORT_PAYLOAD_V2_SCHEMA
+            and candidate_manifest.get("report_schema") != report_schema
+        )
+        or (
+            report_schema == _REPORT_PAYLOAD_V1_SCHEMA
+            and candidate_manifest.get("report_schema") not in {None, report_schema}
+        )
         or candidate_report_payload.get("production_deploy_eligible") is not False
     ):
         raise ConcurrentRobustnessEvidenceError("validation candidate did not preserve its non-production contract")
@@ -614,8 +708,14 @@ def close_presentation(
         Path(_string(execution.get("closure_replay_artifact"), "immutable replay")),
         "immutable replay",
     )
+    if new_facts.report_payload_schema_version == _REPORT_PAYLOAD_V2_SCHEMA:
+        if new_facts.semantic_set_identity_sha256 is None:
+            raise ConcurrentRobustnessEvidenceError("payload v2 semantic identity is missing")
+        closure_schema = PRESENTATION_CLOSURE_V2_SCHEMA
+    else:
+        closure_schema = PRESENTATION_CLOSURE_SCHEMA
     closure_document = {
-        "schema_version": PRESENTATION_CLOSURE_SCHEMA,
+        "schema_version": closure_schema,
         "status": "complete",
         "implementation_commit": implementation_commit,
         "formal_execution_contract": execution_path.relative_to(root).as_posix(),
@@ -635,6 +735,13 @@ def close_presentation(
         "provider_calls_during_closure": 0,
         "image_generation_triggered": False,
     }
+    if closure_schema == PRESENTATION_CLOSURE_V2_SCHEMA:
+        closure_document.update(
+            {
+                "report_payload_schema_version": new_facts.report_payload_schema_version,
+                "semantic_set_identity_sha256": new_facts.semantic_set_identity_sha256,
+            }
+        )
 
     destination.parent.mkdir(parents=True, exist_ok=True)
     staging: Path | None = None
@@ -682,12 +789,19 @@ class _CandidateFacts:
     payload_sha256: str
     evidence_sha256: str
     content_identity_sha256: str
+    report_payload_schema_version: str
+    semantic_set_identity_sha256: str | None
 
 
 def _candidate_facts(candidate: Path) -> _CandidateFacts:
     hashes = _flat_file_hashes(candidate)
     manifest = _json_object(candidate / CONCURRENT_MESSAGE_ARTIFACT_MANIFEST_JSON)
     evidence = _json_object(candidate / _CANDIDATE_EVIDENCE)
+    payload = _json_object(candidate / _CANDIDATE_PAYLOAD)
+    report_schema, semantic_identity = _validate_report_payload_contract(
+        payload,
+        candidate=candidate,
+    )
     identity = _string(manifest.get("candidate_identity_sha256"), "candidate identity")
     content = _string(evidence.get("candidate_content_identity_sha256"), "candidate content identity")
     if not _SHA256.fullmatch(identity) or not _SHA256.fullmatch(content):
@@ -702,6 +816,8 @@ def _candidate_facts(candidate: Path) -> _CandidateFacts:
         payload_sha256=hashes[_CANDIDATE_PAYLOAD],
         evidence_sha256=hashes[_CANDIDATE_EVIDENCE],
         content_identity_sha256=content,
+        report_payload_schema_version=report_schema,
+        semantic_set_identity_sha256=semantic_identity,
     )
 
 
@@ -798,7 +914,7 @@ def validate_presentation_closure(
     candidate = _repo_directory(root, Path(candidate_dir), "new presentation candidate")
     execution_path = _repo_file(root, Path(execution_contract_path), "Formal execution contract")
     document = _json_object(closure)
-    required = {
+    common_required = {
         "schema_version",
         "status",
         "implementation_commit",
@@ -819,11 +935,20 @@ def validate_presentation_closure(
         "provider_calls_during_closure",
         "image_generation_triggered",
     }
+    closure_schema = document.get("schema_version")
+    if closure_schema == PRESENTATION_CLOSURE_SCHEMA:
+        required = common_required
+    elif closure_schema == PRESENTATION_CLOSURE_V2_SCHEMA:
+        required = common_required | {
+            "report_payload_schema_version",
+            "semantic_set_identity_sha256",
+        }
+    else:
+        raise ConcurrentRobustnessEvidenceError("presentation closure schema is unsupported")
     if set(document) != required:
         raise ConcurrentRobustnessEvidenceError("presentation closure fields are missing or unexpected")
     if (
-        document.get("schema_version") != PRESENTATION_CLOSURE_SCHEMA
-        or document.get("status") != "complete"
+        document.get("status") != "complete"
         or type(document.get("provider_calls_during_closure")) is not int
         or document.get("provider_calls_during_closure") != 0
         or document.get("image_generation_triggered") is not False
@@ -899,6 +1024,16 @@ def validate_presentation_closure(
 
     old_facts = _candidate_facts(old_candidate)
     new_facts = _candidate_facts(new_candidate)
+    if closure_schema == PRESENTATION_CLOSURE_SCHEMA:
+        if new_facts.report_payload_schema_version != _REPORT_PAYLOAD_V1_SCHEMA:
+            raise ConcurrentRobustnessEvidenceError("closure v1 is crossed with the report payload schema")
+    elif (
+        new_facts.report_payload_schema_version != _REPORT_PAYLOAD_V2_SCHEMA
+        or new_facts.semantic_set_identity_sha256 is None
+        or document.get("report_payload_schema_version") != new_facts.report_payload_schema_version
+        or document.get("semantic_set_identity_sha256") != new_facts.semantic_set_identity_sha256
+    ):
+        raise ConcurrentRobustnessEvidenceError("closure v2 semantic identity is crossed")
     expected_hashes = {
         "formal_execution_contract_sha256": _sha256_file(execution_path),
         "immutable_replay_sha256": _sha256_file(replay),
@@ -945,6 +1080,8 @@ def validate_presentation_closure(
         subscription_nominal_reference_cost_usd=float(nominal_cost),
         provider_calls_during_closure=0,
         image_generation_triggered=False,
+        report_payload_schema_version=new_facts.report_payload_schema_version,
+        semantic_set_identity_sha256=new_facts.semantic_set_identity_sha256,
     )
 
 

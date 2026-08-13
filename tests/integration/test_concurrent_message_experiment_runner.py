@@ -3544,6 +3544,180 @@ def test_concurrent_robustness_composes_two_closed_sources_into_an_immutable_rep
     }
 
 
+def test_report_interface_atomically_materializes_exact_semantic_payload_v2(
+    tmp_path: Path,
+) -> None:
+    source_dir = _make_validation_report_source(tmp_path, "semantic-payload-v2-source")
+    manifest = _robustness_manifest_for_source(source_dir, output_identity="semantic-payload-v2")
+    workspace = tmp_path / "semantic-payload-v2-workspace"
+    v1_candidate = tmp_path / "semantic-payload-v1-candidate"
+    v2_candidate = tmp_path / "semantic-payload-v2-candidate"
+    study = ConcurrentRobustnessStudy()
+
+    study.run(manifest, None, workspace)
+    _install_deterministic_robustness_cell_fixture(workspace, manifest)
+    result = study.run(manifest, None, workspace, report_destination=v1_candidate)
+    assert result.study_root is not None
+    immutable_roots = (source_dir, workspace, result.study_root, v1_candidate)
+    before = {
+        root: {
+            path.relative_to(root).as_posix(): path.read_bytes()
+            for path in root.rglob("*")
+            if path.is_file()
+        }
+        for root in immutable_roots
+    }
+    v1_payload = _read_json(v1_candidate / "concurrent_robustness_report_payload.json")
+    v1_manifest = _read_json(v1_candidate / "artifact_manifest.json")
+    v1_evidence = _read_json(v1_candidate / "release_evidence.json")
+
+    created = concurrent_robustness_report_module._REPORT_PRESENTATION.compose_presentation_candidate(
+        formal_root=source_dir,
+        study_root=result.study_root,
+        candidate_dir=v1_candidate,
+        destination_dir=v2_candidate,
+    )
+
+    assert created == v2_candidate.resolve()
+    assert all(
+        snapshot
+        == {
+            path.relative_to(root).as_posix(): path.read_bytes()
+            for path in root.rglob("*")
+            if path.is_file()
+        }
+        for root, snapshot in before.items()
+    )
+    payload = _read_json(v2_candidate / "concurrent_robustness_report_payload.json")
+    candidate_manifest = _read_json(v2_candidate / "artifact_manifest.json")
+    release_evidence = _read_json(v2_candidate / "release_evidence.json")
+    mechanism = concurrent_robustness_report_module._MECHANISM_PRESENTATION.build()
+    expected_masters = {
+        artifact.filename: artifact.sha256
+        for artifact in mechanism.mermaid_artifacts
+    }
+    expected_downloads = dict(v1_payload["downloads"])
+    expected_downloads.pop("project_evidence_chain_mermaid")
+    expected_downloads.pop("batch_mechanism_mermaid")
+    expected_downloads.update(concurrent_robustness_report_module._SEMANTIC_MERMAID_DOWNLOADS)
+
+    assert payload["schema_version"] == "concurrent-robustness-report-payload-v2"
+    assert set(payload) == set(v1_payload) | {"mechanism_presentation"}
+    assert {
+        key: value
+        for key, value in payload.items()
+        if key not in {"schema_version", "downloads", "mechanism_presentation"}
+    } == {
+        key: value
+        for key, value in v1_payload.items()
+        if key not in {"schema_version", "downloads"}
+    }
+    assert payload["downloads"] == expected_downloads
+    assert payload["mechanism_presentation"] == {
+        "schema_version": mechanism.schema_version,
+        "semantic_set_identity_sha256": mechanism.semantic_set_identity_sha256,
+        "masters": expected_masters,
+    }
+    assert set(candidate_manifest) == set(v1_manifest)
+    assert set(release_evidence) == set(v1_evidence)
+    assert candidate_manifest["report_schema"] == payload["schema_version"]
+    assert candidate_manifest["production_deploy_eligible"] is False
+    assert release_evidence["provider_calls_during_composition"] == 0
+    assert release_evidence["image_generation_triggered"] is False
+    assert set(candidate_manifest["approved_downloads"]) == set(expected_downloads.values())
+    assert set(candidate_manifest["artifacts"]) == set(candidate_manifest["sha256"])
+    assert set(candidate_manifest["artifacts"].values()) == {
+        path.name for path in v2_candidate.iterdir() if path.name != "artifact_manifest.json"
+    }
+    for artifact_name, relative_path in candidate_manifest["artifacts"].items():
+        assert _sha256(v2_candidate / relative_path) == candidate_manifest["sha256"][artifact_name]
+    for filename, expected_sha256 in expected_masters.items():
+        master = v2_candidate / filename
+        assert master.is_file() and not master.is_symlink()
+        assert _sha256(master) == expected_sha256
+    assert (v2_candidate / "prompt-model-factorial.mmd").read_bytes() == (
+        v1_candidate / "prompt-model-factorial.mmd"
+    ).read_bytes()
+    assert not (v2_candidate / "project-evidence-chain.mmd").exists()
+    assert not (v2_candidate / "mechanism-image-generation-audit.json").exists()
+    assert not list(v2_candidate.glob("*-v4.png"))
+    assert not list(v2_candidate.glob("*-v4.webp"))
+
+    bundle = concurrent_robustness_report_module._PresentationBundle(
+        report_payload=(v2_candidate / "concurrent_robustness_report_payload.json").read_bytes(),
+        report_html=(v2_candidate / "report.html").read_bytes(),
+    )
+    concurrent_robustness_report_module._REPORT_PRESENTATION.validate_bundle(bundle)
+    for mutation in ("missing", "extra", "crossed", "master-hash", "download"):
+        invalid = json.loads(json.dumps(payload))
+        if mutation == "missing":
+            invalid.pop("mechanism_presentation")
+        elif mutation == "extra":
+            invalid["unexpected"] = True
+        elif mutation == "crossed":
+            invalid["schema_version"] = "concurrent-robustness-report-payload-v1"
+        elif mutation == "master-hash":
+            invalid["mechanism_presentation"]["masters"]["mechanism-sample-first.mmd"] = "0" * 64
+        else:
+            invalid["downloads"]["mechanism_sample_first_mermaid"] = "prompt-model-factorial.mmd"
+        with pytest.raises(concurrent_robustness_report_module._RobustnessReportClosureError):
+            concurrent_robustness_report_module._REPORT_PRESENTATION.validate_bundle(
+                concurrent_robustness_report_module._PresentationBundle(
+                    report_payload=(
+                        json.dumps(invalid, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n"
+                    ).encode(),
+                    report_html=bundle.report_html,
+                )
+            )
+
+    approved_downloads = dict(payload["downloads"])
+    approved_downloads["release_evidence"] = "robustness_production_release_evidence.json"
+    production_facts = concurrent_robustness_report_module._ProductionPresentationFacts(
+        release_id="semantic-payload-v2-release",
+        release_contract_schema="abm-report-release-contract-v7",
+        canonical_endpoint="https://abm.q1ngyuan.top/",
+        production_evidence_schema="concurrent-robustness-production-release-evidence-v2",
+        formal_logical_judgments=960,
+        formal_physical_attempts=962,
+        provider_transport="deterministic-test",
+        subscription_billed_cost_usd=0.0,
+        approved_downloads=approved_downloads,
+    )
+    production_bundle = concurrent_robustness_report_module._REPORT_PRESENTATION.materialize_production(
+        formal_root=source_dir,
+        study_root=result.study_root,
+        candidate_dir=v2_candidate,
+        stage_facts=production_facts,
+    )
+    concurrent_robustness_report_module._REPORT_PRESENTATION.validate_bundle(
+        production_bundle,
+        stage_facts=production_facts,
+    )
+    production_payload = json.loads(production_bundle.report_payload)
+    production_html = production_bundle.report_html.decode("utf-8")
+    assert production_payload["schema_version"] == "concurrent-robustness-report-payload-v2"
+    assert production_payload["production_deploy_eligible"] is True
+    assert 'data-editorial-version="v4-semantic"' in production_html
+    assert 'data-production-deploy-eligible="true"' in production_html
+    assert 'data-testid="robustness-report-release"' in production_html
+    assert 'data-testid="robustness-report-candidate"' not in production_html
+    assert candidate_manifest == _read_json(v2_candidate / "artifact_manifest.json")
+    assert release_evidence == _read_json(v2_candidate / "release_evidence.json")
+
+    existing = tmp_path / "semantic-payload-v2-existing"
+    existing.mkdir()
+    sentinel = existing / "sentinel.txt"
+    sentinel.write_text("keep", encoding="utf-8")
+    with pytest.raises(concurrent_robustness_report_module._RobustnessReportConflictError):
+        concurrent_robustness_report_module._REPORT_PRESENTATION.compose_presentation_candidate(
+            formal_root=source_dir,
+            study_root=result.study_root,
+            candidate_dir=v1_candidate,
+            destination_dir=existing,
+        )
+    assert sentinel.read_text(encoding="utf-8") == "keep"
+
+
 @pytest.mark.parametrize(
     ("release_contract_schema", "report_sized"),
     [

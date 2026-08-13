@@ -4,12 +4,14 @@ import hashlib
 import importlib.util
 import json
 import os
+import shutil
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
 from llm_abm_sim import concurrent_robustness_evidence as evidence
+from llm_abm_sim.concurrent_message_mechanism_presentation import _MECHANISM_PRESENTATION
 
 
 def _write_json(path: Path, value: object) -> None:
@@ -30,31 +32,58 @@ def _candidate(
     formal_manifest_sha256: str,
     study_manifest_sha256: str,
     study_artifact_manifest_sha256: str,
+    payload_version: int = 1,
 ) -> None:
     path.mkdir()
     (path / "report.html").write_text(f"report {marker}\n", encoding="utf-8")
-    (path / "concurrent_robustness_report_payload.json").write_text(
-        json.dumps(
+    mechanism = _MECHANISM_PRESENTATION.build()
+    downloads = {"sample": "sample.json"}
+    payload: dict[str, object] = {
+        "schema_version": f"concurrent-robustness-report-payload-v{payload_version}",
+        "title": "fixture",
+        "source_lineage": {},
+        "ranking_weight": {},
+        "prompt_model": {},
+        "row_counts": {},
+        "trace_row_count": 1,
+        "downloads": downloads,
+        "claim_boundary": {},
+        "production_deploy_eligible": False,
+    }
+    if payload_version == 2:
+        masters = {artifact.filename: artifact.sha256 for artifact in mechanism.mermaid_artifacts}
+        downloads.update(
             {
-                "schema_version": "concurrent-robustness-report-payload-v1",
-                "downloads": {"sample": "sample.json"},
-                "production_deploy_eligible": False,
-            },
-            sort_keys=True,
+                "mechanism_sample_first_mermaid": "mechanism-sample-first.mmd",
+                "mechanism_pair_formation_mermaid": "mechanism-pair-formation.mmd",
+                "mechanism_independent_delivery_mermaid": "mechanism-independent-delivery.mmd",
+                "mechanism_exposure_decisions_mermaid": "mechanism-exposure-decisions.mmd",
+                "mechanism_feedback_boundary_mermaid": "mechanism-feedback-boundary.mmd",
+                "real_batch_mechanism_mermaid": "real-batch-mechanism.mmd",
+                "prompt_model_factorial_mermaid": "prompt-model-factorial.mmd",
+            }
         )
-        + "\n",
-        encoding="utf-8",
-    )
+        (path / "prompt-model-factorial.mmd").write_text("flowchart TB\n", encoding="utf-8")
+        payload["mechanism_presentation"] = {
+            "schema_version": mechanism.schema_version,
+            "semantic_set_identity_sha256": mechanism.semantic_set_identity_sha256,
+            "masters": masters,
+        }
+        for artifact in mechanism.mermaid_artifacts:
+            (path / artifact.filename).write_bytes(artifact.payload)
+    _write_json(path / "concurrent_robustness_report_payload.json", payload)
     _write_json(
         path / "release_evidence.json",
         {
             "schema_version": "concurrent-robustness-report-release-evidence-v1",
+            "candidate_type": "complete_fixture_report_candidate",
             "candidate_content_identity_sha256": "e" * 64,
             "formal_source_manifest_sha256": formal_manifest_sha256,
             "study_manifest_sha256": study_manifest_sha256,
             "study_root_identity_sha256": "d" * 64,
             "provider_calls_during_composition": 0,
             "image_generation_triggered": False,
+            "canonical_deployment_triggered": False,
             "production_deploy_eligible": False,
         },
     )
@@ -64,6 +93,12 @@ def _candidate(
         "report_payload_json": "concurrent_robustness_report_payload.json",
         "release_evidence_json": "release_evidence.json",
         "sample_json": "sample.json",
+        **{
+            artifact.filename.removesuffix(".mmd").replace("-", "_"): artifact.filename
+            for artifact in mechanism.mermaid_artifacts
+            if payload_version == 2
+        },
+        **({"prompt_model_factorial": "prompt-model-factorial.mmd"} if payload_version == 2 else {}),
     }
     content_hashes = {
         relative: _sha256(path / relative)
@@ -93,9 +128,11 @@ def _candidate(
                 "artifact_manifest_sha256": study_artifact_manifest_sha256,
                 "root_identity_sha256": "d" * 64,
             },
+            "report_schema": payload["schema_version"],
             "artifacts": artifacts,
             "sha256": hashes,
-            "approved_downloads": ["sample.json"],
+            "row_counts": {},
+            "approved_downloads": list(downloads.values()),
             "production_deploy_eligible": False,
         },
     )
@@ -131,6 +168,7 @@ def closure_fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str
         formal_manifest_sha256=formal_manifest_sha256,
         study_manifest_sha256=study_manifest_sha256,
         study_artifact_manifest_sha256=study_artifact_manifest_sha256,
+        payload_version=2,
     )
     replay = contracts / "replay.json"
     replay.write_text("replay\n", encoding="utf-8")
@@ -174,6 +212,32 @@ def closure_fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str
     }
 
 
+def _clone_candidate(source: Path, destination: Path, marker: str) -> None:
+    shutil.copytree(source, destination)
+    (destination / "report.html").write_text(f"report {marker}\n", encoding="utf-8")
+    release_path = destination / "release_evidence.json"
+    manifest_path = destination / "artifact_manifest.json"
+    release = json.loads(release_path.read_text(encoding="utf-8"))
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    artifacts = manifest["artifacts"]
+    content_hashes = {
+        relative: _sha256(destination / relative)
+        for relative in artifacts.values()
+        if relative != "release_evidence.json"
+    }
+    release["candidate_content_identity_sha256"] = hashlib.sha256(
+        (json.dumps(content_hashes, sort_keys=True, separators=(",", ":")) + "\n").encode()
+    ).hexdigest()
+    _write_json(release_path, release)
+    hashes = {name: _sha256(destination / relative) for name, relative in artifacts.items()}
+    manifest["sha256"] = hashes
+    identity_rows = {relative: hashes[name] for name, relative in sorted(artifacts.items())}
+    manifest["candidate_identity_sha256"] = hashlib.sha256(
+        (json.dumps(identity_rows, sort_keys=True, separators=(",", ":")) + "\n").encode()
+    ).hexdigest()
+    _write_json(manifest_path, manifest)
+
+
 def _close(fixture: dict[str, Path]) -> evidence.PresentationClosureFacts:
     return evidence.close_presentation(
         repo_root=fixture["root"],
@@ -210,8 +274,14 @@ def test_close_writes_exact_contract_and_typed_facts(closure_fixture: dict[str, 
         "new_candidate_content_identity_sha256",
         "provider_calls_during_closure",
         "image_generation_triggered",
+        "report_payload_schema_version",
+        "semantic_set_identity_sha256",
     }
-    assert document["schema_version"] == evidence.PRESENTATION_CLOSURE_SCHEMA
+    assert document["schema_version"] == evidence.PRESENTATION_CLOSURE_V2_SCHEMA
+    assert document["report_payload_schema_version"] == "concurrent-robustness-report-payload-v2"
+    assert document["semantic_set_identity_sha256"] == (
+        _MECHANISM_PRESENTATION.build().semantic_set_identity_sha256
+    )
     assert document["provider_calls_during_closure"] == 0
     assert document["image_generation_triggered"] is False
     assert facts.new_candidate_path == closure_fixture["new"]
@@ -259,6 +329,81 @@ def test_validator_rejects_extra_fields_and_noncanonical_paths(
     document["new_candidate_directory"] = "../new-candidate"
     _write_json(closure_fixture["closure"], document)
     with pytest.raises(evidence.ConcurrentRobustnessEvidenceError, match="canonical"):
+        evidence.validate_presentation_closure(
+            repo_root=closure_fixture["root"],
+            closure_path=closure_fixture["closure"],
+            formal_root=closure_fixture["formal"],
+            study_root=closure_fixture["study"],
+            workspace_root=closure_fixture["workspace"],
+            candidate_dir=closure_fixture["new"],
+            execution_contract_path=closure_fixture["execution"],
+        )
+
+
+def test_closure_dispatch_preserves_v1_and_rejects_crossed_schema_facts(
+    closure_fixture: dict[str, Path],
+) -> None:
+    v1_candidate = closure_fixture["root"] / "second-v1-candidate"
+    _clone_candidate(closure_fixture["old"], v1_candidate, "second-v1")
+    v1_closure = closure_fixture["root"] / "contracts" / "presentation-closure-v1.json"
+    v1_facts = evidence.close_presentation(
+        repo_root=closure_fixture["root"],
+        formal_root=closure_fixture["formal"],
+        study_root=closure_fixture["study"],
+        workspace_root=closure_fixture["workspace"],
+        candidate_dir=v1_candidate,
+        execution_contract_path=closure_fixture["execution"],
+        destination_path=v1_closure,
+        implementation_commit="abcdef0",
+    )
+    document = json.loads(v1_closure.read_text(encoding="utf-8"))
+    assert document["schema_version"] == evidence.PRESENTATION_CLOSURE_SCHEMA
+    assert "report_payload_schema_version" not in document
+    assert "semantic_set_identity_sha256" not in document
+    assert v1_facts.report_payload_schema_version == "concurrent-robustness-report-payload-v1"
+
+    document["report_payload_schema_version"] = "concurrent-robustness-report-payload-v1"
+    _write_json(v1_closure, document)
+    with pytest.raises(evidence.ConcurrentRobustnessEvidenceError, match="missing or unexpected"):
+        evidence.validate_presentation_closure(
+            repo_root=closure_fixture["root"],
+            closure_path=v1_closure,
+            formal_root=closure_fixture["formal"],
+            study_root=closure_fixture["study"],
+            workspace_root=closure_fixture["workspace"],
+            candidate_dir=v1_candidate,
+            execution_contract_path=closure_fixture["execution"],
+        )
+
+
+def test_closure_v2_rereads_master_bytes_and_fails_atomically(
+    closure_fixture: dict[str, Path],
+) -> None:
+    mechanism = _MECHANISM_PRESENTATION.build()
+    target = closure_fixture["new"] / mechanism.mermaid_artifacts[0].filename
+    target.write_bytes(target.read_bytes() + b"mutated")
+    with pytest.raises(evidence.ConcurrentRobustnessEvidenceError, match="master|artifact hash"):
+        _close(closure_fixture)
+    assert not closure_fixture["closure"].exists()
+
+
+@pytest.mark.parametrize("mutation", ["missing", "extra", "crossed-identity", "crossed-schema"])
+def test_closure_v2_rejects_missing_extra_or_crossed_semantic_facts(
+    closure_fixture: dict[str, Path],
+    mutation: str,
+) -> None:
+    _close(closure_fixture)
+    document = json.loads(closure_fixture["closure"].read_text(encoding="utf-8"))
+    if mutation == "missing":
+        document.pop("semantic_set_identity_sha256")
+    elif mutation == "extra":
+        document["unexpected"] = True
+    elif mutation == "crossed-identity":
+        document["semantic_set_identity_sha256"] = "0" * 64
+    else:
+        document["report_payload_schema_version"] = "concurrent-robustness-report-payload-v1"
+    _write_json(closure_fixture["closure"], document)
+    with pytest.raises(evidence.ConcurrentRobustnessEvidenceError):
         evidence.validate_presentation_closure(
             repo_root=closure_fixture["root"],
             closure_path=closure_fixture["closure"],

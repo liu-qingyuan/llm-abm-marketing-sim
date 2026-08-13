@@ -35,6 +35,25 @@ if TYPE_CHECKING:
     from .concurrent_robustness_study import ConcurrentRobustnessManifest
 
 _REPORT_PAYLOAD_SCHEMA = "concurrent-robustness-report-payload-v1"
+_REPORT_PAYLOAD_V2_SCHEMA = "concurrent-robustness-report-payload-v2"
+_REPORT_PAYLOAD_V1_FIELDS = frozenset(
+    {
+        "schema_version",
+        "title",
+        "source_lineage",
+        "ranking_weight",
+        "prompt_model",
+        "row_counts",
+        "trace_row_count",
+        "downloads",
+        "claim_boundary",
+        "production_deploy_eligible",
+    }
+)
+_REPORT_PAYLOAD_V2_FIELDS = _REPORT_PAYLOAD_V1_FIELDS | {"mechanism_presentation"}
+_MECHANISM_PRESENTATION_FIELDS = frozenset(
+    {"schema_version", "semantic_set_identity_sha256", "masters"}
+)
 _REPORT_MANIFEST_SCHEMA = "concurrent-robustness-report-candidate-manifest-v1"
 _RELEASE_EVIDENCE_SCHEMA = "concurrent-robustness-report-release-evidence-v1"
 _STUDY_MANIFEST_SCHEMA = "concurrent-robustness-study-artifact-manifest-v1"
@@ -898,43 +917,58 @@ class _ReportPresentationInterface:
             manifest_sha256=manifest_sha256,
             candidate_dir=candidate_dir,
         )
-        candidate_before = {path.name: _sha256_file(path) for path in candidate.iterdir()}
-        semantic_payload = dict(projection.report_payload)
-        downloads = _string_mapping(semantic_payload.get("downloads"), "candidate downloads")
-        for compatibility_key in _READER_MERMAID_DOWNLOADS:
-            downloads.pop(compatibility_key, None)
-        downloads.update(_SEMANTIC_MERMAID_DOWNLOADS)
-        semantic_payload["downloads"] = downloads
-        rendered = _render_semantic_additive_report(
-            _render_editorial_v4(projection.formal.report_payload),
-            payload=semantic_payload,
-            prompt_model_presentation=projection.prompt_model_presentation,
-        )
-        mermaid_artifacts = _semantic_reader_mermaid_artifacts(
-            projection.prompt_model_presentation
-        )
-        semantic_candidate = _SemanticPresentationCandidate(
-            report_html=rendered.encode("utf-8"),
-            mermaid_artifacts=mermaid_artifacts,
-            companion_artifacts={
-                path: payload
-                for path, payload in projection.payloads.items()
-                if path not in {
-                    CONCURRENT_MESSAGE_REPORT_HTML,
-                    *_READER_MERMAID_DOWNLOADS.values(),
-                    *mermaid_artifacts,
-                }
-            },
-            production_deploy_eligible=False,
-            provider_calls_during_composition=0,
-            image_generation_triggered=False,
-        )
-        _validate_semantic_candidate(semantic_candidate)
-        if candidate_before != {path.name: _sha256_file(path) for path in candidate.iterdir()}:
+        candidate_before = _directory_file_hashes(candidate)
+        semantic_candidate = _build_semantic_presentation_candidate(projection)
+        if candidate_before != _directory_file_hashes(candidate):
             raise _RobustnessReportClosureError("semantic projection mutated the validation candidate")
         _assert_formal_unchanged(projection.formal, dict(projection.formal.artifact_hashes))
         _assert_study_unchanged(projection.study, dict(projection.study.file_hashes))
         return semantic_candidate
+
+    def compose_presentation_candidate(
+        self,
+        *,
+        formal_root: str | Path,
+        study_root: str | Path,
+        candidate_dir: str | Path,
+        destination_dir: str | Path,
+    ) -> Path:
+        """Atomically materialize the approved semantic projection as payload v2."""
+        formal_path = Path(formal_root)
+        study_path = Path(study_root)
+        workspace_path = _workspace_root_for_study(study_path)
+        manifest, manifest_payload, manifest_sha256 = _load_study_manifest(study_path)
+        candidate, projection = self._validate_candidate_from_inputs(
+            formal_root=formal_path,
+            study_root=study_path,
+            workspace_root=workspace_path,
+            manifest=manifest,
+            manifest_payload=manifest_payload,
+            manifest_sha256=manifest_sha256,
+            candidate_dir=candidate_dir,
+        )
+        candidate_before = _directory_file_hashes(candidate)
+        formal_before = dict(projection.formal.artifact_hashes)
+        study_before = dict(projection.study.file_hashes)
+        semantic_candidate = _build_semantic_presentation_candidate(projection)
+        report_payload = _build_semantic_report_payload(projection.report_payload)
+        payloads = _semantic_candidate_payloads(
+            projection=projection,
+            semantic_candidate=semantic_candidate,
+            report_payload=report_payload,
+        )
+        destination = _publish_candidate_payloads(
+            destination_dir=destination_dir,
+            protected_roots=(formal_path, study_path, workspace_path, candidate),
+            output_identity=manifest.output_identity,
+            payloads=payloads,
+            row_counts=projection.rows.counts(),
+        )
+        if candidate_before != _directory_file_hashes(candidate):
+            raise _RobustnessReportClosureError("payload v2 composition mutated the payload v1 candidate")
+        _assert_formal_unchanged(projection.formal, formal_before)
+        _assert_study_unchanged(projection.study, study_before)
+        return destination
 
     def materialize_production(
         self,
@@ -966,17 +1000,28 @@ class _ReportPresentationInterface:
         candidate_downloads = _string_mapping(report_payload.get("downloads"), "candidate downloads")
         if set(candidate_downloads) != set(approved_downloads):
             raise _RobustnessReportClosureError("production presentation changed the approved download keys")
+        if report_payload.get("schema_version") == _REPORT_PAYLOAD_V2_SCHEMA:
+            _validate_semantic_downloads(approved_downloads)
         report_payload["downloads"] = approved_downloads
         report_payload["production_deploy_eligible"] = True
         report_payload["production_release"] = _production_release_payload(stage_facts)
-        bundle = _PresentationBundle(
-            report_payload=_json_bytes(report_payload),
-            report_html=_render_additive_report(
+        if report_payload.get("schema_version") == _REPORT_PAYLOAD_V2_SCHEMA:
+            report_html = _render_semantic_additive_report(
+                _render_editorial_v4(projection.formal.report_payload),
+                payload=report_payload,
+                prompt_model_presentation=projection.prompt_model_presentation,
+                stage_facts=stage_facts,
+            )
+        else:
+            report_html = _render_additive_report(
                 render_report(projection.formal.report_payload),
                 payload=report_payload,
                 prompt_model_presentation=projection.prompt_model_presentation,
                 stage_facts=stage_facts,
-            ).encode("utf-8"),
+            )
+        bundle = _PresentationBundle(
+            report_payload=_json_bytes(report_payload),
+            report_html=report_html.encode("utf-8"),
         )
         self.validate_bundle(bundle, stage_facts=stage_facts)
         if candidate_before != {path.name: _sha256_file(path) for path in candidate.iterdir()}:
@@ -1010,10 +1055,6 @@ class _ReportPresentationInterface:
         manifest_sha256: str,
         destination_dir: str | Path,
     ) -> Path:
-        destination = _validate_destination(
-            Path(destination_dir),
-            protected_roots=(formal_root, study_root, workspace_root),
-        )
         projection = _build_candidate_projection(
             formal_root=formal_root,
             study_root=study_root,
@@ -1023,41 +1064,12 @@ class _ReportPresentationInterface:
         )
         formal_before = dict(projection.formal.artifact_hashes)
         study_before = dict(projection.study.file_hashes)
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        if destination.parent.is_symlink():
-            raise _RobustnessReportPathError("robustness report destination parent must not be a symlink")
-        staging = Path(
-            tempfile.mkdtemp(
-                prefix=f".{destination.name}.{manifest.output_identity}.",
-                suffix=".staging",
-                dir=destination.parent,
-            )
-        )
-        try:
-            if os.stat(staging).st_dev != os.stat(destination.parent).st_dev:
-                raise _RobustnessReportPathError("robustness report staging must share the destination filesystem")
-            for relative_path, payload in projection.payloads.items():
-                target = staging / relative_path
-                target.parent.mkdir(parents=True, exist_ok=True)
-                target.write_bytes(payload)
-            _validate_candidate(
-                staging,
-                expected_payloads=projection.payloads,
-                expected_row_counts=projection.rows.counts(),
-            )
-            _assert_formal_unchanged(projection.formal, formal_before)
-            _assert_study_unchanged(projection.study, study_before)
-            if os.path.lexists(destination):
-                raise _RobustnessReportConflictError("robustness report destination appeared during publication")
-            os.replace(staging, destination)
-        except Exception:
-            if os.path.lexists(staging):
-                shutil.rmtree(staging, ignore_errors=True)
-            raise
-        _validate_candidate(
-            destination,
-            expected_payloads=projection.payloads,
-            expected_row_counts=projection.rows.counts(),
+        destination = _publish_candidate_payloads(
+            destination_dir=destination_dir,
+            protected_roots=(formal_root, study_root, workspace_root),
+            output_identity=manifest.output_identity,
+            payloads=projection.payloads,
+            row_counts=projection.rows.counts(),
         )
         _assert_formal_unchanged(projection.formal, formal_before)
         _assert_study_unchanged(projection.study, study_before)
@@ -1097,9 +1109,19 @@ class _ReportPresentationInterface:
             )
             formal_before = dict(projection.formal.artifact_hashes)
             study_before = dict(projection.study.file_hashes)
+            expected_payloads = projection.payloads
+            persisted_payload = _read_json(resolved / _REPORT_PAYLOAD)
+            if persisted_payload.get("schema_version") == _REPORT_PAYLOAD_V2_SCHEMA:
+                semantic_candidate = _build_semantic_presentation_candidate(projection)
+                semantic_payload = _build_semantic_report_payload(projection.report_payload)
+                expected_payloads = _semantic_candidate_payloads(
+                    projection=projection,
+                    semantic_candidate=semantic_candidate,
+                    report_payload=semantic_payload,
+                )
             _validate_candidate(
                 resolved,
-                expected_payloads=projection.payloads,
+                expected_payloads=expected_payloads,
                 expected_row_counts=projection.rows.counts(),
             )
             _assert_formal_unchanged(projection.formal, formal_before)
@@ -1182,6 +1204,71 @@ def _validate_destination(destination: Path, *, protected_roots: Sequence[Path])
     if any(os.stat(root).st_dev != os.stat(existing_parent).st_dev for root in roots):
         raise _RobustnessReportPathError("robustness report sources and destination must share a filesystem")
     return resolved
+
+
+def _directory_file_hashes(root: Path) -> dict[str, str]:
+    hashes: dict[str, str] = {}
+    for path in sorted(root.rglob("*")):
+        if path.is_symlink() or not path.is_file():
+            if path.is_dir() and not path.is_symlink():
+                continue
+            raise _RobustnessReportClosureError("candidate contains a symlink or non-regular artifact")
+        hashes[path.relative_to(root).as_posix()] = _sha256_file(path)
+    return hashes
+
+
+def _publish_candidate_payloads(
+    *,
+    destination_dir: str | Path,
+    protected_roots: Sequence[Path],
+    output_identity: str,
+    payloads: Mapping[str, bytes],
+    row_counts: Mapping[str, int],
+) -> Path:
+    destination = _validate_destination(
+        Path(destination_dir),
+        protected_roots=protected_roots,
+    )
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    if destination.parent.is_symlink():
+        raise _RobustnessReportPathError("robustness report destination parent must not be a symlink")
+    staging = Path(
+        tempfile.mkdtemp(
+            prefix=f".{destination.name}.{output_identity}.",
+            suffix=".staging",
+            dir=destination.parent,
+        )
+    )
+    installed = False
+    try:
+        if os.stat(staging).st_dev != os.stat(destination.parent).st_dev:
+            raise _RobustnessReportPathError("robustness report staging must share the destination filesystem")
+        for relative_path, payload in payloads.items():
+            target = staging / relative_path
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(payload)
+        _validate_candidate(
+            staging,
+            expected_payloads=payloads,
+            expected_row_counts=row_counts,
+        )
+        if os.path.lexists(destination):
+            raise _RobustnessReportConflictError("robustness report destination appeared during publication")
+        os.replace(staging, destination)
+        installed = True
+        _validate_candidate(
+            destination,
+            expected_payloads=payloads,
+            expected_row_counts=row_counts,
+        )
+        installed = False
+        return destination
+    except Exception:
+        if os.path.lexists(staging):
+            shutil.rmtree(staging, ignore_errors=True)
+        if installed and os.path.lexists(destination):
+            shutil.rmtree(destination, ignore_errors=True)
+        raise
 
 
 def _build_candidate_projection(
@@ -2240,6 +2327,38 @@ def _semantic_reader_mermaid_artifacts(
     return artifacts
 
 
+def _build_semantic_presentation_candidate(
+    projection: _CandidateProjection,
+) -> _SemanticPresentationCandidate:
+    semantic_payload = _build_semantic_report_payload(projection.report_payload)
+    rendered = _render_semantic_additive_report(
+        _render_editorial_v4(projection.formal.report_payload),
+        payload=semantic_payload,
+        prompt_model_presentation=projection.prompt_model_presentation,
+    )
+    mermaid_artifacts = _semantic_reader_mermaid_artifacts(
+        projection.prompt_model_presentation
+    )
+    candidate = _SemanticPresentationCandidate(
+        report_html=rendered.encode("utf-8"),
+        mermaid_artifacts=mermaid_artifacts,
+        companion_artifacts={
+            path: payload
+            for path, payload in projection.payloads.items()
+            if path not in {
+                CONCURRENT_MESSAGE_REPORT_HTML,
+                *_READER_MERMAID_DOWNLOADS.values(),
+                *mermaid_artifacts,
+            }
+        },
+        production_deploy_eligible=False,
+        provider_calls_during_composition=0,
+        image_generation_triggered=False,
+    )
+    _validate_semantic_candidate(candidate)
+    return candidate
+
+
 def _validate_semantic_candidate(candidate: _SemanticPresentationCandidate) -> None:
     try:
         html_document = candidate.report_html.decode("utf-8")
@@ -2272,42 +2391,58 @@ def _validate_semantic_candidate(candidate: _SemanticPresentationCandidate) -> N
             raise ValueError("semantic candidate mechanism master bytes are crossed")
         if not candidate.mermaid_artifacts[_PROMPT_MODEL_FACTORIAL_MMD].startswith(b"flowchart TB\n"):
             raise ValueError("Prompt-Model factorial Mermaid bytes are malformed")
-        required_html = (
-            'data-editorial-version="v4-semantic"',
-            'data-production-deploy-eligible="false"',
-            'data-testid="robustness-source-lineage"',
-            'data-testid="real-batch-mechanism-section"',
-            'data-testid="prompt-model-factorial-diagram"',
-            'data-testid="run-trace-tool"',
-        )
-        if any(token not in html_document for token in required_html):
-            raise ValueError("semantic candidate is missing required presentation evidence")
-        forbidden_html = (
-            "project-evidence-chain",
-            "mechanism-image-generation-audit.json",
-            "mechanism-sample-first-v4.png",
-            "mechanism-pair-formation-v4.png",
-            "mechanism-independent-delivery-v4.png",
-            "mechanism-exposure-decisions-v4.png",
-            "mechanism-feedback-boundary-v4.png",
-            "data:image/webp",
-            '<script src=',
-        )
-        if any(token in html_document for token in forbidden_html):
-            raise ValueError("semantic candidate contains a rejected or external presentation input")
-        if html_document.count('data-mechanism-diagram-id="') != 6:
-            raise ValueError("semantic candidate must render six semantic views")
-        for diagram in mechanism.diagrams:
-            if f'data-mechanism-diagram-id="{diagram.diagram_id}"' not in html_document:
-                raise ValueError("semantic candidate diagram projection is incomplete")
-            for node in diagram.nodes:
-                if f'data-semantic-node-id="{node.semantic_id}"' not in html_document:
-                    raise ValueError("semantic candidate node projection is incomplete")
-            for edge in diagram.edges:
-                if f'data-semantic-edge-id="{edge.semantic_id}"' not in html_document:
-                    raise ValueError("semantic candidate edge projection is incomplete")
+        _validate_semantic_html(html_document)
     except (KeyError, TypeError, UnicodeDecodeError, ValueError) as exc:
         raise _RobustnessReportClosureError("semantic report candidate failed validation") from exc
+
+
+def _validate_semantic_html(
+    html_document: str,
+    *,
+    stage_facts: _ProductionPresentationFacts | None = None,
+) -> None:
+    stage_test_id = "robustness-report-candidate"
+    other_test_id = "robustness-report-release"
+    eligibility = "false"
+    if stage_facts is not None:
+        stage_test_id, other_test_id = other_test_id, stage_test_id
+        eligibility = "true"
+    required_html = (
+        'data-editorial-version="v4-semantic"',
+        f'data-production-deploy-eligible="{eligibility}"',
+        f'data-testid="{stage_test_id}"',
+        'data-testid="robustness-source-lineage"',
+        'data-testid="real-batch-mechanism-section"',
+        'data-testid="prompt-model-factorial-diagram"',
+        'data-testid="run-trace-tool"',
+    )
+    if any(token not in html_document for token in required_html):
+        raise ValueError("semantic candidate is missing required presentation evidence")
+    forbidden_html = (
+        "project-evidence-chain",
+        "mechanism-image-generation-audit.json",
+        "mechanism-sample-first-v4.png",
+        "mechanism-pair-formation-v4.png",
+        "mechanism-independent-delivery-v4.png",
+        "mechanism-exposure-decisions-v4.png",
+        "mechanism-feedback-boundary-v4.png",
+        "data:image/webp",
+        '<script src=',
+    )
+    if any(token in html_document for token in forbidden_html):
+        raise ValueError("semantic candidate contains a rejected or external presentation input")
+    if html_document.count('data-mechanism-diagram-id="') != 6:
+        raise ValueError("semantic candidate must render six semantic views")
+    mechanism = _MECHANISM_PRESENTATION.build()
+    for diagram in mechanism.diagrams:
+        if f'data-mechanism-diagram-id="{diagram.diagram_id}"' not in html_document:
+            raise ValueError("semantic candidate diagram projection is incomplete")
+        for node in diagram.nodes:
+            if f'data-semantic-node-id="{node.semantic_id}"' not in html_document:
+                raise ValueError("semantic candidate node projection is incomplete")
+        for edge in diagram.edges:
+            if f'data-semantic-edge-id="{edge.semantic_id}"' not in html_document:
+                raise ValueError("semantic candidate edge projection is incomplete")
 
 
 def _prompt_model_factorial_diagram(
@@ -2454,6 +2589,38 @@ def _build_report_payload(
     }
 
 
+def _build_semantic_report_payload(
+    payload_v1: Mapping[str, Any],
+) -> dict[str, Any]:
+    if set(payload_v1) != _REPORT_PAYLOAD_V1_FIELDS:
+        raise _RobustnessReportClosureError("payload v1 fields are missing or unexpected")
+    mechanism = _MECHANISM_PRESENTATION.build()
+    masters = {
+        artifact.filename: artifact.sha256
+        for artifact in mechanism.mermaid_artifacts
+    }
+    if tuple(masters) != tuple(_SEMANTIC_MERMAID_DOWNLOADS.values())[:-1]:
+        raise _RobustnessReportClosureError("approved mechanism master order is crossed")
+    downloads = _string_mapping(payload_v1.get("downloads"), "candidate downloads")
+    downloads.pop("project_evidence_chain_mermaid", None)
+    downloads.pop("batch_mechanism_mermaid", None)
+    downloads.update(_SEMANTIC_MERMAID_DOWNLOADS)
+    payload = dict(payload_v1)
+    payload.update(
+        {
+            "schema_version": _REPORT_PAYLOAD_V2_SCHEMA,
+            "downloads": downloads,
+            "mechanism_presentation": {
+                "schema_version": mechanism.schema_version,
+                "semantic_set_identity_sha256": mechanism.semantic_set_identity_sha256,
+                "masters": masters,
+            },
+        }
+    )
+    _validate_report_payload_contract(payload, production=False)
+    return payload
+
+
 def _candidate_payloads(
     *,
     formal: ConcurrentMessageArtifactClosure,
@@ -2491,6 +2658,60 @@ def _candidate_payloads(
         payload=report_payload,
         prompt_model_presentation=prompt_model_presentation,
     ).encode("utf-8")
+    return _close_candidate_payloads(
+        formal=formal,
+        study=study,
+        manifest=manifest,
+        manifest_sha256=manifest_sha256,
+        rows=rows,
+        report_payload=report_payload,
+        payloads=payloads,
+    )
+
+
+def _semantic_candidate_payloads(
+    *,
+    projection: _CandidateProjection,
+    semantic_candidate: _SemanticPresentationCandidate,
+    report_payload: Mapping[str, Any],
+) -> dict[str, bytes]:
+    replaced = {
+        CONCURRENT_MESSAGE_ARTIFACT_MANIFEST_JSON,
+        CONCURRENT_MESSAGE_REPORT_HTML,
+        _REPORT_PAYLOAD,
+        _RELEASE_EVIDENCE_JSON,
+        *_READER_MERMAID_DOWNLOADS.values(),
+    }
+    payloads = {
+        path: payload
+        for path, payload in projection.payloads.items()
+        if path not in replaced
+    }
+    payloads[_REPORT_PAYLOAD] = _json_bytes(report_payload)
+    payloads[CONCURRENT_MESSAGE_REPORT_HTML] = semantic_candidate.report_html
+    payloads.update(semantic_candidate.mermaid_artifacts)
+    return _close_candidate_payloads(
+        formal=projection.formal,
+        study=projection.study,
+        manifest=projection.manifest,
+        manifest_sha256=projection.manifest_sha256,
+        rows=projection.rows,
+        report_payload=report_payload,
+        payloads=payloads,
+    )
+
+
+def _close_candidate_payloads(
+    *,
+    formal: ConcurrentMessageArtifactClosure,
+    study: _ClosedStudy,
+    manifest: ConcurrentRobustnessManifest,
+    manifest_sha256: str,
+    rows: _ReportRows,
+    report_payload: Mapping[str, Any],
+    payloads: dict[str, bytes],
+) -> dict[str, bytes]:
+    report_schema = _validate_report_payload_contract(report_payload, production=False)
     content_hashes = {path: _sha256_bytes(payload) for path, payload in payloads.items()}
     content_identity = _sha256_bytes(_json_bytes(dict(sorted(content_hashes.items()))))
     release_evidence = {
@@ -2523,7 +2744,7 @@ def _candidate_payloads(
             "artifact_manifest_sha256": study.file_hashes["artifact_manifest.json"],
             "root_identity_sha256": study.root_manifest["root_identity_sha256"],
         },
-        "report_schema": _REPORT_PAYLOAD_SCHEMA,
+        "report_schema": report_schema,
         "artifacts": artifact_mapping,
         "sha256": {name: artifact_hashes[path] for name, path in artifact_mapping.items()},
         "candidate_identity_sha256": _sha256_bytes(
@@ -2558,6 +2779,83 @@ def _artifact_mapping(
             raise _RobustnessReportClosureError("candidate artifact logical names are not unique")
         mapping[logical_name] = relative_path
     return dict(sorted(mapping.items()))
+
+
+def _validate_report_payload_contract(
+    payload: Mapping[str, Any],
+    *,
+    production: bool,
+    candidate: Path | None = None,
+) -> str:
+    schema = payload.get("schema_version")
+    base_fields: frozenset[str]
+    if schema == _REPORT_PAYLOAD_SCHEMA:
+        base_fields = _REPORT_PAYLOAD_V1_FIELDS
+    elif schema == _REPORT_PAYLOAD_V2_SCHEMA:
+        base_fields = _REPORT_PAYLOAD_V2_FIELDS
+    else:
+        raise ValueError("report payload schema is unsupported")
+    expected_fields = base_fields | ({"production_release"} if production else set())
+    if set(payload) != expected_fields:
+        raise ValueError("report payload fields are missing or unexpected")
+    if schema == _REPORT_PAYLOAD_V2_SCHEMA:
+        _validate_mechanism_presentation_contract(
+            payload.get("mechanism_presentation"),
+            candidate=candidate,
+        )
+        downloads = _string_mapping(payload.get("downloads"), "semantic report downloads")
+        _validate_semantic_downloads(downloads)
+    return str(schema)
+
+
+def _validate_semantic_downloads(downloads: Mapping[str, str]) -> None:
+    if any(downloads.get(key) != path for key, path in _SEMANTIC_MERMAID_DOWNLOADS.items()):
+        raise ValueError("semantic report Mermaid downloads are incomplete or crossed")
+    if "project_evidence_chain_mermaid" in downloads or "batch_mechanism_mermaid" in downloads:
+        raise ValueError("semantic report retained a compatibility Mermaid mapping")
+    if any(
+        path == "mechanism-image-generation-audit.json"
+        or path.endswith("-v4.png")
+        or path.endswith("-v4.webp")
+        for path in downloads.values()
+    ):
+        raise ValueError("semantic report contains a rejected presentation download")
+
+
+def _validate_mechanism_presentation_contract(
+    value: object,
+    *,
+    candidate: Path | None,
+) -> None:
+    facts = _mapping(value, "mechanism presentation facts")
+    if set(facts) != _MECHANISM_PRESENTATION_FIELDS:
+        raise ValueError("mechanism presentation fields are missing or unexpected")
+    mechanism = _MECHANISM_PRESENTATION.build()
+    expected_masters = {
+        artifact.filename: artifact.sha256
+        for artifact in mechanism.mermaid_artifacts
+    }
+    masters = _string_mapping(facts.get("masters"), "mechanism presentation masters")
+    if (
+        facts.get("schema_version") != mechanism.schema_version
+        or facts.get("semantic_set_identity_sha256") != mechanism.semantic_set_identity_sha256
+        or masters != expected_masters
+    ):
+        raise ValueError("mechanism presentation identity is crossed")
+    if candidate is None:
+        return
+    for filename, expected_sha256 in expected_masters.items():
+        relative = PurePosixPath(filename)
+        target = candidate / filename
+        if (
+            relative.is_absolute()
+            or relative.as_posix() != filename
+            or ".." in relative.parts
+            or target.is_symlink()
+            or not target.is_file()
+            or _sha256_file(target) != expected_sha256
+        ):
+            raise ValueError("mechanism presentation master bytes are crossed")
 
 
 def _validate_production_facts(facts: _ProductionPresentationFacts) -> dict[str, str]:
@@ -3006,6 +3304,39 @@ def _defer_editorial_runtime(formal_html: str) -> str:
     return deferred[:runtime_end] + bridge + deferred[runtime_end:]
 
 
+def _validate_semantic_presentation_bundle(
+    payload: Mapping[str, Any],
+    html_document: str,
+    *,
+    stage_facts: _ProductionPresentationFacts | None,
+) -> None:
+    _validate_semantic_html(
+        html_document,
+        stage_facts=stage_facts,
+    )
+    downloads = _string_mapping(payload.get("downloads"), "semantic report downloads")
+    if stage_facts is None:
+        if payload.get("production_deploy_eligible") is not False or "production_release" in payload:
+            raise ValueError("semantic candidate presentation stage is crossed")
+    else:
+        approved_downloads = _validate_production_facts(stage_facts)
+        if downloads != approved_downloads:
+            raise ValueError("semantic production downloads differ from approved presentation facts")
+        if _mapping(payload.get("production_release"), "production release metadata") != (
+            _production_release_payload(stage_facts)
+        ) or payload.get("production_deploy_eligible") is not True:
+            raise ValueError("semantic production release metadata is crossed")
+    _validate_semantic_downloads(downloads)
+    if _presentation_downloads_from_html(html_document) != downloads:
+        raise ValueError("semantic report hrefs differ from its payload downloads")
+    if re.search(
+        r"<(?:script|link|img)\b[^>]*(?:src|href)=[\"']https?://",
+        html_document,
+        re.IGNORECASE,
+    ):
+        raise ValueError("semantic report requests an external resource")
+
+
 def _validate_presentation_bundle(
     bundle: _PresentationBundle,
     *,
@@ -3030,9 +3361,18 @@ def _validate_presentation_bundle(
         html_document,
         expected_row_count=expected_trace_rows,
     )
-    if payload.get("schema_version") != _REPORT_PAYLOAD_SCHEMA:
-        raise ValueError("report presentation payload schema is unsupported")
+    report_schema = _validate_report_payload_contract(
+        payload,
+        production=stage_facts is not None,
+    )
     downloads = _string_mapping(payload.get("downloads"), "report presentation downloads")
+    if report_schema == _REPORT_PAYLOAD_V2_SCHEMA:
+        _validate_semantic_presentation_bundle(
+            payload,
+            html_document,
+            stage_facts=stage_facts,
+        )
+        return
 
     if stage_facts is None:
         stage_test_id = "robustness-report-candidate"
@@ -3346,8 +3686,13 @@ def _validate_candidate(
         if _mapping(manifest.get("row_counts"), "candidate row counts") != dict(expected_row_counts):
             raise ValueError("candidate row counts do not close")
         payload = _read_json(candidate / _REPORT_PAYLOAD)
-        if payload.get("schema_version") != _REPORT_PAYLOAD_SCHEMA:
-            raise ValueError("candidate report payload schema is unsupported")
+        report_schema = _validate_report_payload_contract(
+            payload,
+            production=False,
+            candidate=candidate,
+        )
+        if manifest.get("report_schema") != report_schema:
+            raise ValueError("candidate manifest report schema is crossed")
         if _mapping(payload.get("row_counts"), "report payload row counts") != dict(expected_row_counts):
             raise ValueError("report payload row counts do not close")
         payload_downloads = _string_mapping(payload.get("downloads"), "report payload downloads")
@@ -3459,6 +3804,7 @@ def _render_semantic_additive_report(
     *,
     payload: Mapping[str, Any],
     prompt_model_presentation: _PromptModelPresentation,
+    stage_facts: _ProductionPresentationFacts | None = None,
 ) -> str:
     if formal_html.count("</head>") != 1 or formal_html.count("</body>") != 1:
         raise _RobustnessReportClosureError("semantic Editorial renderer did not return one closed HTML document")
@@ -3470,6 +3816,7 @@ def _render_semantic_additive_report(
     section_html = _robustness_sections(
         payload,
         prompt_model_presentation=prompt_model_presentation,
+        stage_facts=stage_facts,
         semantic_catalog=presentation_catalog,
     )
     prompt_catalog_json = json.dumps(
@@ -3477,8 +3824,11 @@ def _render_semantic_additive_report(
         ensure_ascii=False,
         separators=(",", ":"),
     ).replace("</", "<\\/")
+    stage_test_id = (
+        "robustness-report-release" if stage_facts is not None else "robustness-report-candidate"
+    )
     script = (
-        _ROBUSTNESS_SCRIPT.replace("__REPORT_STAGE_TEST_ID__", "robustness-report-candidate")
+        _ROBUSTNESS_SCRIPT.replace("__REPORT_STAGE_TEST_ID__", stage_test_id)
         .replace("__PROMPT_PRESENTATION_CATALOG__", prompt_catalog_json)
     )
     expected_trace_rows = _strict_positive_int(
@@ -3531,6 +3881,27 @@ def _render_semantic_additive_report(
         + rendered[run_panel_close:]
     )
     rendered = rendered.replace("</body>", f"<script>{script}</script>\n</body>", 1)
+    if stage_facts is not None:
+        release_id = _escape(stage_facts.release_id, quote=True)
+        release_schema = _escape(stage_facts.release_contract_schema, quote=True)
+        root_marker = (
+            'data-editorial-version="v4-semantic" '
+            'data-production-deploy-eligible="false"'
+        )
+        if rendered.count(root_marker) != 1:
+            raise _RobustnessReportClosureError("semantic production root marker is crossed")
+        rendered = rendered.replace(
+            root_marker,
+            'data-editorial-version="v4-semantic" '
+            'data-production-deploy-eligible="true"',
+            1,
+        )
+        rendered = rendered.replace(
+            "</head>",
+            f'<meta name="abm-release-id" content="{release_id}">'
+            f'<meta name="abm-release-contract" content="{release_schema}">\n</head>',
+            1,
+        )
     return rendered
 
 

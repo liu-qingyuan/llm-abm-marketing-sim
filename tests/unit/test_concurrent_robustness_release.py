@@ -86,10 +86,17 @@ def _candidate(
         candidate / "concurrent_robustness_report_payload.json",
         {
             "schema_version": "concurrent-robustness-report-payload-v1",
+            "title": "fixture",
+            "source_lineage": {},
+            "ranking_weight": {},
+            "prompt_model": {},
+            "row_counts": {},
+            "trace_row_count": 1,
             "downloads": {
                 "weight": "ranking_weight_sensitivity.json",
                 "release_evidence": "release_evidence.json",
             },
+            "claim_boundary": {},
             "production_deploy_eligible": False,
         },
     )
@@ -144,6 +151,7 @@ def _candidate(
                 "artifact_manifest_sha256": study_artifact_manifest_sha256,
                 "root_identity_sha256": "c" * 64,
             },
+            "report_schema": "concurrent-robustness-report-payload-v1",
             "artifacts": artifact_paths,
             "sha256": artifact_hashes,
             "approved_downloads": [
