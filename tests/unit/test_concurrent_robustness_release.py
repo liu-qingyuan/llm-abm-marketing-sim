@@ -13,12 +13,64 @@ from llm_abm_sim import concurrent_robustness_release as release
 from llm_abm_sim import concurrent_robustness_report as report
 from llm_abm_sim.providers.pi_subscription import PI_SUBSCRIPTION_MODEL_ALIASES
 
+_V5_CONTRACT_FIELDS = {
+    "schema_version",
+    "release_purpose",
+    "release_id",
+    "canonical_endpoint",
+    "source_directory",
+    "artifact_manifest_schema_version",
+    "report_payload_schema_version",
+    "production_evidence_schema_version",
+    "historical_formal_directory",
+    "historical_formal_manifest_sha256",
+    "study_root_directory",
+    "study_manifest_sha256",
+    "study_artifact_manifest_sha256",
+    "workspace_directory",
+    "validation_candidate_directory",
+    "validation_candidate_manifest_sha256",
+    "validation_candidate_evidence_sha256",
+    "formal_execution_contract",
+    "formal_execution_contract_sha256",
+    "formal_judgment_implementation_commit",
+    "formal_closure_implementation_commit",
+    "formal_closure_replay_sha256",
+    "adapter_identity",
+    "provider_transport",
+    "requested_observed_model_aliases",
+    "logical_judgments",
+    "physical_attempts",
+    "physical_attempt_cap",
+    "subscription_billed_cost_usd",
+    "production_deploy_eligible",
+    "artifact_sha256",
+}
+_V6_CONTRACT_FIELDS = _V5_CONTRACT_FIELDS | {
+    "presentation_closure_contract",
+    "presentation_closure_contract_sha256",
+}
+_V7_CONTRACT_FIELDS = _V6_CONTRACT_FIELDS | {
+    "presentation_closure_schema_version",
+    "semantic_set_identity_sha256",
+}
+
 
 def _write_json(path: Path, payload: object) -> None:
     path.write_text(
         json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n",
         encoding="utf-8",
     )
+
+
+def _snapshot(path: Path) -> dict[str, bytes]:
+    if path.is_file():
+        return {path.name: path.read_bytes()}
+    return {
+        item.relative_to(path).as_posix(): item.read_bytes()
+        for item in path.rglob("*")
+        if item.is_file()
+    }
 
 
 def _fake_manifest(formal: Path) -> SimpleNamespace:
@@ -67,6 +119,7 @@ def _candidate(
     formal_manifest_sha256: str,
     study_manifest_sha256: str,
     study_artifact_manifest_sha256: str,
+    payload_version: int = 1,
 ) -> None:
     candidate.mkdir()
     _write_json(
@@ -82,24 +135,40 @@ def _candidate(
             "production_deploy_eligible": False,
         },
     )
-    _write_json(
-        candidate / "concurrent_robustness_report_payload.json",
-        {
-            "schema_version": "concurrent-robustness-report-payload-v1",
-            "title": "fixture",
-            "source_lineage": {},
-            "ranking_weight": {},
-            "prompt_model": {},
-            "row_counts": {},
-            "trace_row_count": 1,
-            "downloads": {
-                "weight": "ranking_weight_sensitivity.json",
-                "release_evidence": "release_evidence.json",
+    downloads = {
+        "weight": "ranking_weight_sensitivity.json",
+        "release_evidence": "release_evidence.json",
+    }
+    payload: dict[str, object] = {
+        "schema_version": f"concurrent-robustness-report-payload-v{payload_version}",
+        "title": "fixture",
+        "source_lineage": {},
+        "ranking_weight": {},
+        "prompt_model": {},
+        "row_counts": {},
+        "trace_row_count": 1,
+        "downloads": downloads,
+        "claim_boundary": {},
+        "production_deploy_eligible": False,
+    }
+    semantic_artifacts: dict[str, bytes] = {}
+    if payload_version == 2:
+        mechanism = report._MECHANISM_PRESENTATION.build()
+        semantic_artifacts = {
+            artifact.filename: artifact.payload
+            for artifact in mechanism.mermaid_artifacts
+        }
+        semantic_artifacts["prompt-model-factorial.mmd"] = b"flowchart TB\n"
+        downloads.update(report._SEMANTIC_MERMAID_DOWNLOADS)
+        payload["mechanism_presentation"] = {
+            "schema_version": mechanism.schema_version,
+            "semantic_set_identity_sha256": mechanism.semantic_set_identity_sha256,
+            "masters": {
+                artifact.filename: artifact.sha256
+                for artifact in mechanism.mermaid_artifacts
             },
-            "claim_boundary": {},
-            "production_deploy_eligible": False,
-        },
-    )
+        }
+    _write_json(candidate / "concurrent_robustness_report_payload.json", payload)
     (candidate / "ranking_weight_sensitivity.json").write_text("{}\n", encoding="utf-8")
     (candidate / "sample_manifest.json").write_text("{}\n", encoding="utf-8")
     (candidate / "sample_manifest.csv").write_text("user_id\nu1\n", encoding="utf-8")
@@ -107,6 +176,8 @@ def _candidate(
         "opaque candidate presentation owned by the Report Module\n",
         encoding="utf-8",
     )
+    for filename, artifact_payload in semantic_artifacts.items():
+        (candidate / filename).write_bytes(artifact_payload)
     artifact_paths = {
         "release_evidence_json": "release_evidence.json",
         "report_html": "report.html",
@@ -114,6 +185,10 @@ def _candidate(
         "sample_manifest_csv": "sample_manifest.csv",
         "sample_manifest_json": "sample_manifest.json",
         "weight_json": "ranking_weight_sensitivity.json",
+        **{
+            f"semantic_{filename.removesuffix('.mmd').replace('-', '_')}_mmd": filename
+            for filename in semantic_artifacts
+        },
     }
     content_hashes = {
         relative_path: _sha256(candidate / relative_path)
@@ -151,13 +226,10 @@ def _candidate(
                 "artifact_manifest_sha256": study_artifact_manifest_sha256,
                 "root_identity_sha256": "c" * 64,
             },
-            "report_schema": "concurrent-robustness-report-payload-v1",
+            "report_schema": payload["schema_version"],
             "artifacts": artifact_paths,
             "sha256": artifact_hashes,
-            "approved_downloads": [
-                "ranking_weight_sensitivity.json",
-                "release_evidence.json",
-            ],
+            "approved_downloads": list(downloads.values()),
             "production_deploy_eligible": False,
         },
     )
@@ -216,6 +288,10 @@ def _promote_fixture(
     *,
     mutate_candidate: Callable[[Path], None] | None = None,
     presentation: _FakeReportPresentation | None = None,
+    payload_version: int = 1,
+    closure_version: int | None = None,
+    fail_contract_publish: bool = False,
+    contract_inside_candidate: bool = False,
 ) -> SimpleNamespace:
     formal = tmp_path / "formal"
     study = tmp_path / "study"
@@ -231,6 +307,7 @@ def _promote_fixture(
         formal_manifest_sha256=_sha256(formal / "artifact_manifest.json"),
         study_manifest_sha256=_sha256(study / "study_manifest.json"),
         study_artifact_manifest_sha256=_sha256(study / "artifact_manifest.json"),
+        payload_version=payload_version,
     )
     if mutate_candidate is not None:
         mutate_candidate(candidate)
@@ -278,12 +355,64 @@ def _promote_fixture(
     monkeypatch.setattr(release, "_validate_execution_contract", lambda **_kwargs: execution_document)
     report_presentation = presentation or _FakeReportPresentation()
     monkeypatch.setattr(release, "_REPORT_PRESENTATION", report_presentation)
+    presentation_closure: Path | None = None
+    if closure_version is not None:
+        old_candidate = tmp_path / "old-candidate"
+        old_candidate.mkdir()
+        presentation_closure = contracts / "presentation-closure.json"
+        closure_schema = f"concurrent-robustness-presentation-closure-contract-v{closure_version}"
+        _write_json(presentation_closure, {"schema_version": closure_schema})
+        closure_facts = SimpleNamespace(
+            closure_path=presentation_closure,
+            closure_sha256=_sha256(presentation_closure),
+            closure_schema_version=closure_schema,
+            old_candidate_path=old_candidate,
+            report_payload_schema_version=(
+                f"concurrent-robustness-report-payload-v{payload_version}"
+            ),
+            semantic_set_identity_sha256=(
+                report._MECHANISM_PRESENTATION.build().semantic_set_identity_sha256
+                if payload_version == 2
+                else None
+            ),
+        )
+        monkeypatch.setattr(
+            release._evidence,
+            "validate_presentation_closure",
+            lambda **_kwargs: closure_facts,
+        )
     candidate_before = {
         path.relative_to(candidate): path.read_bytes()
         for path in candidate.rglob("*")
         if path.is_file()
     }
+    immutable_inputs = (
+        formal,
+        study,
+        workspace,
+        candidate,
+        execution_contract,
+        *((presentation_closure,) if presentation_closure is not None else ()),
+    )
+    inputs_before = {path: _snapshot(path) for path in immutable_inputs}
+    if fail_contract_publish:
+        real_replace = release.os.replace
+        replace_count = 0
 
+        def fail_second_replace(source: Path, destination: Path) -> None:
+            nonlocal replace_count
+            replace_count += 1
+            if replace_count == 2:
+                raise OSError("fixture contract publish failure")
+            real_replace(source, destination)
+
+        monkeypatch.setattr(release.os, "replace", fail_second_replace)
+
+    release_contract_path = (
+        candidate / "release-contract.json"
+        if contract_inside_candidate
+        else tmp_path / "release-contract.json"
+    )
     promoted = release.promote_concurrent_robustness_release(
         repo_root=tmp_path,
         formal_root=formal,
@@ -292,8 +421,9 @@ def _promote_fixture(
         candidate_dir=candidate,
         execution_contract_path=execution_contract,
         destination_dir=tmp_path / "production-release",
-        release_contract_path=tmp_path / "release-contract.json",
+        release_contract_path=release_contract_path,
         release_id="robustness-release-test",
+        presentation_closure_path=presentation_closure,
     )
     return SimpleNamespace(
         promoted=promoted,
@@ -304,6 +434,8 @@ def _promote_fixture(
         execution_contract=execution_contract,
         report_presentation=report_presentation,
         candidate_before=candidate_before,
+        presentation_closure=presentation_closure,
+        inputs_before=inputs_before,
     )
 
 
@@ -336,6 +468,36 @@ def _reclose_tampered_release(source: Path, contract_path: Path) -> dict[str, ob
     }
     _write_json(contract_path, contract)
     return contract
+
+
+def _install_candidate_extra(candidate: Path, relative_path: str, payload: bytes) -> None:
+    target = candidate / relative_path
+    target.write_bytes(payload)
+    manifest_path = candidate / "artifact_manifest.json"
+    evidence_path = candidate / "release_evidence.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+    logical_name = f"extra_{Path(relative_path).stem.replace('-', '_')}"
+    manifest["artifacts"][logical_name] = relative_path
+    manifest["sha256"][logical_name] = _sha256(target)
+    content_hashes = {
+        path: manifest["sha256"][name]
+        for name, path in manifest["artifacts"].items()
+        if path != "release_evidence.json"
+    }
+    evidence["candidate_content_identity_sha256"] = hashlib.sha256(
+        (json.dumps(dict(sorted(content_hashes.items())), sort_keys=True, separators=(",", ":")) + "\n").encode()
+    ).hexdigest()
+    _write_json(evidence_path, evidence)
+    manifest["sha256"]["release_evidence_json"] = _sha256(evidence_path)
+    identity_rows = {
+        path: manifest["sha256"][name]
+        for name, path in manifest["artifacts"].items()
+    }
+    manifest["candidate_identity_sha256"] = hashlib.sha256(
+        (json.dumps(dict(sorted(identity_rows.items())), sort_keys=True, separators=(",", ":")) + "\n").encode()
+    ).hexdigest()
+    _write_json(manifest_path, manifest)
 
 
 def test_promotion_delegates_opaque_presentation_to_report_module(
@@ -399,6 +561,9 @@ def test_formal_candidate_promotes_without_mutating_validation_evidence(
     assert "validation_candidate_release_evidence.json" not in production_manifest["approved_downloads"].values()
 
     contract = json.loads(promoted.contract_path.read_text(encoding="utf-8"))
+    assert set(contract) == _V5_CONTRACT_FIELDS
+    assert contract["schema_version"] == "abm-report-release-contract-v5"
+    assert contract["report_payload_schema_version"] == "concurrent-robustness-report-payload-v1"
     validated = release.validate_concurrent_robustness_production_release(
         repo_root=tmp_path,
         contract_document=contract,
@@ -406,6 +571,288 @@ def test_formal_candidate_promotes_without_mutating_validation_evidence(
     )
     assert validated["production_deploy_eligible"] is True
     assert validated["logical_judgments"] == 28_800
+
+
+def test_payload_v1_closure_v1_preserves_exact_v6_release_contract(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fixture = _promote_fixture(tmp_path, monkeypatch, closure_version=1)
+    contract = json.loads(fixture.promoted.contract_path.read_text(encoding="utf-8"))
+
+    assert set(contract) == _V6_CONTRACT_FIELDS
+    assert contract["schema_version"] == "abm-report-release-contract-v6"
+    assert contract["report_payload_schema_version"] == "concurrent-robustness-report-payload-v1"
+    assert "presentation_closure_schema_version" not in contract
+    assert "semantic_set_identity_sha256" not in contract
+    validated = release.validate_concurrent_robustness_production_release(
+        repo_root=tmp_path,
+        contract_document=contract,
+        source_dir=fixture.promoted.source_dir,
+    )
+    assert validated["schema_version"] == "abm-report-release-contract-v6"
+
+
+def test_payload_v2_closure_v2_promotes_exact_immutable_v7_release(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fixture = _promote_fixture(
+        tmp_path,
+        monkeypatch,
+        payload_version=2,
+        closure_version=2,
+    )
+    source = fixture.promoted.source_dir
+    contract = json.loads(fixture.promoted.contract_path.read_text(encoding="utf-8"))
+    manifest = json.loads((source / "artifact_manifest.json").read_text(encoding="utf-8"))
+    payload = json.loads(
+        (source / "concurrent_robustness_report_payload.json").read_text(encoding="utf-8")
+    )
+    evidence_document = json.loads(
+        (source / "robustness_production_release_evidence.json").read_text(encoding="utf-8")
+    )
+    semantic_identity = report._MECHANISM_PRESENTATION.build().semantic_set_identity_sha256
+
+    assert set(contract) == _V7_CONTRACT_FIELDS
+    assert contract["schema_version"] == "abm-report-release-contract-v7"
+    assert contract["report_payload_schema_version"] == "concurrent-robustness-report-payload-v2"
+    assert contract["presentation_closure_schema_version"] == (
+        "concurrent-robustness-presentation-closure-contract-v2"
+    )
+    assert contract["semantic_set_identity_sha256"] == semantic_identity
+    assert manifest["report_schema"] == "concurrent-robustness-report-payload-v2"
+    assert payload["schema_version"] == "concurrent-robustness-report-payload-v2"
+    assert payload["mechanism_presentation"]["semantic_set_identity_sha256"] == semantic_identity
+    assert evidence_document["provider_calls_during_promotion"] == 0
+    assert (source / "report.html").stat().st_size < 3 * 1024 * 1024
+
+    mermaid_downloads = {
+        relative_path
+        for relative_path in manifest["approved_downloads"].values()
+        if relative_path.endswith(".mmd")
+    }
+    assert mermaid_downloads == {
+        "mechanism-sample-first.mmd",
+        "mechanism-pair-formation.mmd",
+        "mechanism-independent-delivery.mmd",
+        "mechanism-exposure-decisions.mmd",
+        "mechanism-feedback-boundary.mmd",
+        "real-batch-mechanism.mmd",
+        "prompt-model-factorial.mmd",
+    }
+    assert "project-evidence-chain.mmd" not in manifest["artifacts"].values()
+    assert "mechanism-image-generation-audit.json" not in manifest["artifacts"].values()
+    assert not any(path.endswith(("-v4.png", "-v4.webp")) for path in manifest["artifacts"].values())
+    assert all(before == _snapshot(path) for path, before in fixture.inputs_before.items())
+
+    validated = release.validate_concurrent_robustness_production_release(
+        repo_root=tmp_path,
+        contract_document=contract,
+        source_dir=source,
+    )
+    assert validated["schema_version"] == "abm-report-release-contract-v7"
+    assert validated["artifact_count"] == len(contract["artifact_sha256"])
+    assert validated["production_deploy_eligible"] is True
+
+
+@pytest.mark.parametrize(
+    ("payload_version", "closure_version"),
+    [
+        (2, None),
+        (2, 1),
+        (1, 2),
+    ],
+)
+def test_promotion_rejects_payload_and_closure_schema_crosses_before_materialization(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    payload_version: int,
+    closure_version: int | None,
+) -> None:
+    presentation = _FakeReportPresentation()
+    with pytest.raises(release.ConcurrentRobustnessReleaseError, match="closure|crossed"):
+        _promote_fixture(
+            tmp_path,
+            monkeypatch,
+            payload_version=payload_version,
+            closure_version=closure_version,
+            presentation=presentation,
+        )
+
+    assert presentation.calls == []
+    assert not (tmp_path / "production-release").exists()
+    assert not (tmp_path / "release-contract.json").exists()
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "missing",
+        "extra",
+        "crossed-report-schema",
+        "crossed-closure-schema",
+        "crossed-semantic-identity",
+    ],
+)
+def test_v7_validator_rejects_missing_extra_or_crossed_contract_facts(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    mutation: str,
+) -> None:
+    fixture = _promote_fixture(
+        tmp_path,
+        monkeypatch,
+        payload_version=2,
+        closure_version=2,
+    )
+    contract = json.loads(fixture.promoted.contract_path.read_text(encoding="utf-8"))
+    if mutation == "missing":
+        contract.pop("semantic_set_identity_sha256")
+    elif mutation == "extra":
+        contract["unexpected"] = True
+    elif mutation == "crossed-report-schema":
+        contract["report_payload_schema_version"] = "concurrent-robustness-report-payload-v1"
+    elif mutation == "crossed-closure-schema":
+        contract["presentation_closure_schema_version"] = (
+            "concurrent-robustness-presentation-closure-contract-v1"
+        )
+    else:
+        contract["semantic_set_identity_sha256"] = "0" * 64
+
+    with pytest.raises(release.ConcurrentRobustnessReleaseError):
+        release.validate_concurrent_robustness_production_release(
+            repo_root=tmp_path,
+            contract_document=contract,
+            source_dir=fixture.promoted.source_dir,
+        )
+
+
+@pytest.mark.parametrize(
+    "relative_path",
+    [
+        "project-evidence-chain.mmd",
+        "mechanism-image-generation-audit.json",
+        "mechanism-sample-first-v4.png",
+        "mechanism-sample-first-v4.webp",
+        "unexpected-eighth-view.mmd",
+    ],
+)
+def test_v7_promotion_rejects_excluded_presentation_inventory(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    relative_path: str,
+) -> None:
+    presentation = _FakeReportPresentation()
+
+    def mutate(candidate: Path) -> None:
+        _install_candidate_extra(candidate, relative_path, b"rejected presentation bytes\n")
+
+    with pytest.raises(release.ConcurrentRobustnessReleaseError, match="excluded|seven"):
+        _promote_fixture(
+            tmp_path,
+            monkeypatch,
+            payload_version=2,
+            closure_version=2,
+            mutate_candidate=mutate,
+            presentation=presentation,
+        )
+
+    assert presentation.calls == []
+    assert not (tmp_path / "production-release").exists()
+    assert not (tmp_path / "release-contract.json").exists()
+
+
+@pytest.mark.parametrize(
+    "relative_path",
+    [
+        "project-evidence-chain.mmd",
+        "mechanism-image-generation-audit.json",
+        "mechanism-sample-first-v4.png",
+        "mechanism-sample-first-v4.webp",
+        "unexpected-eighth-view.mmd",
+    ],
+)
+def test_v7_validator_rejects_excluded_or_extra_presentation_inventory(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    relative_path: str,
+) -> None:
+    fixture = _promote_fixture(
+        tmp_path,
+        monkeypatch,
+        payload_version=2,
+        closure_version=2,
+    )
+    source = fixture.promoted.source_dir
+    (source / relative_path).write_bytes(b"rejected presentation bytes\n")
+    contract = _reclose_tampered_release(source, fixture.promoted.contract_path)
+
+    with pytest.raises(release.ConcurrentRobustnessReleaseError, match="excluded|seven"):
+        release.validate_concurrent_robustness_production_release(
+            repo_root=tmp_path,
+            contract_document=contract,
+            source_dir=source,
+        )
+
+
+def test_v7_promotion_rejects_release_contract_inside_immutable_candidate(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    with pytest.raises(release.ConcurrentRobustnessReleaseError, match="overlap"):
+        _promote_fixture(
+            tmp_path,
+            monkeypatch,
+            payload_version=2,
+            closure_version=2,
+            contract_inside_candidate=True,
+        )
+
+    assert not (tmp_path / "production-release").exists()
+    assert not (tmp_path / "candidate" / "release-contract.json").exists()
+
+
+def test_v7_promotion_removes_partial_destination_when_contract_publish_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    with pytest.raises(OSError, match="fixture contract publish failure"):
+        _promote_fixture(
+            tmp_path,
+            monkeypatch,
+            payload_version=2,
+            closure_version=2,
+            fail_contract_publish=True,
+        )
+
+    assert not (tmp_path / "production-release").exists()
+    assert not (tmp_path / "release-contract.json").exists()
+    assert not list(tmp_path.glob(".production-release.*.staging"))
+    assert not list(tmp_path.glob(".release-contract.json.*.staging"))
+
+
+def test_v7_validator_rereads_production_mechanism_master_bytes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fixture = _promote_fixture(
+        tmp_path,
+        monkeypatch,
+        payload_version=2,
+        closure_version=2,
+    )
+    source = fixture.promoted.source_dir
+    master = source / "mechanism-sample-first.mmd"
+    master.write_bytes(master.read_bytes() + b"mutated\n")
+    contract = _reclose_tampered_release(source, fixture.promoted.contract_path)
+
+    with pytest.raises(release.ConcurrentRobustnessReleaseError, match="master|semantic"):
+        release.validate_concurrent_robustness_production_release(
+            repo_root=tmp_path,
+            contract_document=contract,
+            source_dir=source,
+        )
 
 
 @pytest.mark.parametrize(
@@ -549,13 +996,24 @@ def test_production_validator_delegates_presentation_bundle_validation(
         ("missing-file", "missing|inventory"),
     ],
 )
+@pytest.mark.parametrize(
+    ("payload_version", "closure_version"),
+    [(1, None), (2, 2)],
+)
 def test_production_validator_rejects_crossed_or_unsafe_download_closure(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     mutation: str,
     error: str,
+    payload_version: int,
+    closure_version: int | None,
 ) -> None:
-    fixture = _promote_fixture(tmp_path, monkeypatch)
+    fixture = _promote_fixture(
+        tmp_path,
+        monkeypatch,
+        payload_version=payload_version,
+        closure_version=closure_version,
+    )
     source = fixture.promoted.source_dir
     payload_path = source / "concurrent_robustness_report_payload.json"
     manifest_path = source / "artifact_manifest.json"

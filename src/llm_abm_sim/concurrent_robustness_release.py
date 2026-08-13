@@ -35,6 +35,7 @@ ROBUSTNESS_PRODUCTION_MANIFEST_SCHEMA = "concurrent-robustness-production-releas
 ROBUSTNESS_PRODUCTION_EVIDENCE_SCHEMA = "concurrent-robustness-production-release-evidence-v1"
 ROBUSTNESS_RELEASE_CONTRACT_SCHEMA_V5 = "abm-report-release-contract-v5"
 ROBUSTNESS_RELEASE_CONTRACT_SCHEMA_V6 = "abm-report-release-contract-v6"
+ROBUSTNESS_RELEASE_CONTRACT_SCHEMA_V7 = "abm-report-release-contract-v7"
 ROBUSTNESS_RELEASE_CONTRACT_SCHEMA = ROBUSTNESS_RELEASE_CONTRACT_SCHEMA_V5
 ROBUSTNESS_PRESENTATION_CLOSURE_CONTRACT = "presentation_closure_contract.json"
 ROBUSTNESS_CANONICAL_ENDPOINT = "https://abm.q1ngyuan.top/"
@@ -49,6 +50,63 @@ ROBUSTNESS_FORMAL_PHYSICAL_ATTEMPT_CAP = _evidence.FORMAL_PHYSICAL_ATTEMPT_CAP
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _RELEASE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,159}$")
 _COMMIT = re.compile(r"^[0-9a-f]{7,40}$")
+_REPORT_PAYLOAD_SCHEMA_V1 = "concurrent-robustness-report-payload-v1"
+_REPORT_PAYLOAD_SCHEMA_V2 = "concurrent-robustness-report-payload-v2"
+_RELEASE_CONTRACT_V5_FIELDS = frozenset(
+    {
+        "schema_version",
+        "release_purpose",
+        "release_id",
+        "canonical_endpoint",
+        "source_directory",
+        "artifact_manifest_schema_version",
+        "report_payload_schema_version",
+        "production_evidence_schema_version",
+        "historical_formal_directory",
+        "historical_formal_manifest_sha256",
+        "study_root_directory",
+        "study_manifest_sha256",
+        "study_artifact_manifest_sha256",
+        "workspace_directory",
+        "validation_candidate_directory",
+        "validation_candidate_manifest_sha256",
+        "validation_candidate_evidence_sha256",
+        "formal_execution_contract",
+        "formal_execution_contract_sha256",
+        "formal_judgment_implementation_commit",
+        "formal_closure_implementation_commit",
+        "formal_closure_replay_sha256",
+        "adapter_identity",
+        "provider_transport",
+        "requested_observed_model_aliases",
+        "logical_judgments",
+        "physical_attempts",
+        "physical_attempt_cap",
+        "subscription_billed_cost_usd",
+        "production_deploy_eligible",
+        "artifact_sha256",
+    }
+)
+_RELEASE_CONTRACT_V6_FIELDS = _RELEASE_CONTRACT_V5_FIELDS | {
+    "presentation_closure_contract",
+    "presentation_closure_contract_sha256",
+}
+_RELEASE_CONTRACT_V7_FIELDS = _RELEASE_CONTRACT_V6_FIELDS | {
+    "presentation_closure_schema_version",
+    "semantic_set_identity_sha256",
+}
+_RELEASE_CONTRACT_FIELDS = {
+    ROBUSTNESS_RELEASE_CONTRACT_SCHEMA_V5: _RELEASE_CONTRACT_V5_FIELDS,
+    ROBUSTNESS_RELEASE_CONTRACT_SCHEMA_V6: _RELEASE_CONTRACT_V6_FIELDS,
+    ROBUSTNESS_RELEASE_CONTRACT_SCHEMA_V7: _RELEASE_CONTRACT_V7_FIELDS,
+}
+_V7_MERMAID_INVENTORY = frozenset(_evidence._SEMANTIC_MERMAID_DOWNLOADS.values())
+_V7_EXCLUDED_PRESENTATION_ARTIFACTS = frozenset(
+    {
+        "project-evidence-chain.mmd",
+        "mechanism-image-generation-audit.json",
+    }
+)
 
 
 class ConcurrentRobustnessReleaseError(ValueError):
@@ -137,6 +195,22 @@ def _validate_candidate_release_contract(
         raise ConcurrentRobustnessReleaseError(str(exc)) from exc
 
 
+def _validate_production_report_payload_contract(
+    *,
+    source: Path,
+    payload: Mapping[str, Any],
+) -> str:
+    try:
+        schema, _semantic_identity = _evidence._validate_report_payload_contract(
+            payload,
+            candidate=source,
+            production=True,
+        )
+        return schema
+    except ConcurrentRobustnessEvidenceError as exc:
+        raise ConcurrentRobustnessReleaseError(str(exc)) from exc
+
+
 @dataclass(frozen=True)
 class ConcurrentRobustnessProductionRelease:
     source_dir: Path
@@ -177,11 +251,15 @@ def promote_concurrent_robustness_release(
     if not _RELEASE_ID.fullmatch(release_id):
         raise ConcurrentRobustnessReleaseError("release id is not a bounded stable token")
     protected = (formal, study, workspace, candidate, execution_contract_file.parent)
+    contract_protected = (formal, study, workspace, candidate, execution_contract_file)
     if presentation_closure_file is not None:
         protected = (*protected, presentation_closure_file)
+        contract_protected = (*contract_protected, presentation_closure_file)
     if any(_paths_overlap(destination, path) for path in protected):
         raise ConcurrentRobustnessReleaseError("production release destination overlaps immutable input evidence")
-    if contract_path == destination or contract_path.is_relative_to(destination):
+    if any(_paths_overlap(contract_path, path) for path in contract_protected):
+        raise ConcurrentRobustnessReleaseError("release contract overlaps immutable input evidence")
+    if _paths_overlap(contract_path, destination):
         raise ConcurrentRobustnessReleaseError("release contract must be outside the production source directory")
 
     manifest_path = study / "study_manifest.json"
@@ -277,9 +355,34 @@ def promote_concurrent_robustness_release(
     candidate_evidence_sha256 = candidate_hashes[ROBUSTNESS_CANDIDATE_RELEASE_EVIDENCE]
     execution_contract_sha256 = _sha256_file(execution_contract_file)
     approved_downloads = _production_approved_downloads(candidate_report_payload)
-    selected_release_schema = (
-        ROBUSTNESS_RELEASE_CONTRACT_SCHEMA_V6 if closure_facts is not None else ROBUSTNESS_RELEASE_CONTRACT_SCHEMA_V5
+    candidate_report_schema = _string(
+        candidate_report_payload.get("schema_version"),
+        "candidate report payload schema",
     )
+    if closure_facts is None:
+        if candidate_report_schema != _REPORT_PAYLOAD_SCHEMA_V1:
+            raise ConcurrentRobustnessReleaseError("payload v2 requires an exact closure v2 contract")
+        selected_release_schema = ROBUSTNESS_RELEASE_CONTRACT_SCHEMA_V5
+    elif (
+        closure_facts.closure_schema_version == _evidence.PRESENTATION_CLOSURE_SCHEMA
+        and closure_facts.report_payload_schema_version == _REPORT_PAYLOAD_SCHEMA_V1
+        and candidate_report_schema == _REPORT_PAYLOAD_SCHEMA_V1
+        and closure_facts.semantic_set_identity_sha256 is None
+    ):
+        selected_release_schema = ROBUSTNESS_RELEASE_CONTRACT_SCHEMA_V6
+    elif (
+        closure_facts.closure_schema_version == _evidence.PRESENTATION_CLOSURE_V2_SCHEMA
+        and closure_facts.report_payload_schema_version == _REPORT_PAYLOAD_SCHEMA_V2
+        and candidate_report_schema == _REPORT_PAYLOAD_SCHEMA_V2
+        and isinstance(candidate_report_payload.get("mechanism_presentation"), Mapping)
+        and closure_facts.semantic_set_identity_sha256
+        == candidate_report_payload["mechanism_presentation"].get("semantic_set_identity_sha256")
+    ):
+        selected_release_schema = ROBUSTNESS_RELEASE_CONTRACT_SCHEMA_V7
+    else:
+        raise ConcurrentRobustnessReleaseError("presentation closure facts are crossed with the report payload")
+    if selected_release_schema == ROBUSTNESS_RELEASE_CONTRACT_SCHEMA_V7:
+        _validate_v7_presentation_inventory(candidate_hashes)
     presentation_closure_bytes = None
     if presentation_closure_file is not None and closure_facts is not None:
         presentation_closure_bytes = presentation_closure_file.read_bytes()
@@ -313,12 +416,15 @@ def promote_concurrent_robustness_release(
         physical_attempts=physical_attempts,
         presentation=presentation,
         approved_downloads=approved_downloads,
+        report_payload_schema_version=candidate_report_schema,
         presentation_closure=presentation_closure_bytes,
     )
     destination.parent.mkdir(parents=True, exist_ok=True)
     contract_path.parent.mkdir(parents=True, exist_ok=True)
     staging = Path(tempfile.mkdtemp(prefix=f".{destination.name}.", suffix=".staging", dir=destination.parent))
     contract_staging = contract_path.with_name(f".{contract_path.name}.{os.getpid()}.staging")
+    destination_installed = False
+    contract_installed = False
     try:
         for relative_path, payload in payloads.items():
             target = staging / relative_path
@@ -333,7 +439,7 @@ def promote_concurrent_robustness_release(
             "canonical_endpoint": ROBUSTNESS_CANONICAL_ENDPOINT,
             "source_directory": destination.relative_to(root).as_posix(),
             "artifact_manifest_schema_version": ROBUSTNESS_PRODUCTION_MANIFEST_SCHEMA,
-            "report_payload_schema_version": "concurrent-robustness-report-payload-v1",
+            "report_payload_schema_version": candidate_report_schema,
             "production_evidence_schema_version": ROBUSTNESS_PRODUCTION_EVIDENCE_SCHEMA,
             "historical_formal_directory": formal.relative_to(root).as_posix(),
             "historical_formal_manifest_sha256": manifest.source.manifest_sha256,
@@ -362,23 +468,32 @@ def promote_concurrent_robustness_release(
         if closure_facts is not None and presentation_closure_file is not None:
             contract_document["presentation_closure_contract"] = presentation_closure_file.relative_to(root).as_posix()
             contract_document["presentation_closure_contract_sha256"] = closure_facts.closure_sha256
+        if selected_release_schema == ROBUSTNESS_RELEASE_CONTRACT_SCHEMA_V7 and closure_facts is not None:
+            contract_document["presentation_closure_schema_version"] = closure_facts.closure_schema_version
+            contract_document["semantic_set_identity_sha256"] = closure_facts.semantic_set_identity_sha256
         contract_staging.write_bytes(_json_bytes(contract_document))
         if destination.exists() or contract_path.exists():
             raise ConcurrentRobustnessReleaseError("production release destination or contract appeared during staging")
         os.replace(staging, destination)
+        destination_installed = True
         os.replace(contract_staging, contract_path)
+        contract_installed = True
+        _validate_production_release_dir(destination, stage_facts=stage_facts)
+        final_hashes = _flat_file_hashes(destination)
+        if final_hashes != contract_document["artifact_sha256"]:
+            raise ConcurrentRobustnessReleaseError("published production release drifted after atomic close")
+        release_manifest = _json_object(destination / CONCURRENT_MESSAGE_ARTIFACT_MANIFEST_JSON)
     except Exception:
         if staging.exists():
             shutil.rmtree(staging, ignore_errors=True)
         if contract_staging.exists():
             contract_staging.unlink(missing_ok=True)
+        if contract_installed:
+            contract_path.unlink(missing_ok=True)
+        if destination_installed:
+            shutil.rmtree(destination, ignore_errors=True)
         raise
 
-    _validate_production_release_dir(destination, stage_facts=stage_facts)
-    final_hashes = _flat_file_hashes(destination)
-    if final_hashes != contract_document["artifact_sha256"]:
-        raise ConcurrentRobustnessReleaseError("published production release drifted after atomic close")
-    release_manifest = _json_object(destination / CONCURRENT_MESSAGE_ARTIFACT_MANIFEST_JSON)
     return ConcurrentRobustnessProductionRelease(
         source_dir=destination,
         contract_path=contract_path,
@@ -399,83 +514,13 @@ def validate_concurrent_robustness_production_release(
     """Fail-closed validator used by the production deployment gate."""
     root = _real_directory(Path(repo_root), "repository root")
     schema_version = contract_document.get("schema_version")
-    if schema_version not in {
-        ROBUSTNESS_RELEASE_CONTRACT_SCHEMA_V5,
-        ROBUSTNESS_RELEASE_CONTRACT_SCHEMA_V6,
-    }:
+    if not isinstance(schema_version, str) or schema_version not in _RELEASE_CONTRACT_FIELDS:
         raise ConcurrentRobustnessReleaseError("unsupported Concurrent Robustness release contract")
-    if schema_version == ROBUSTNESS_RELEASE_CONTRACT_SCHEMA_V5 and set(contract_document) != {
-        "schema_version",
-        "release_purpose",
-        "release_id",
-        "canonical_endpoint",
-        "source_directory",
-        "artifact_manifest_schema_version",
-        "report_payload_schema_version",
-        "production_evidence_schema_version",
-        "historical_formal_directory",
-        "historical_formal_manifest_sha256",
-        "study_root_directory",
-        "study_manifest_sha256",
-        "study_artifact_manifest_sha256",
-        "workspace_directory",
-        "validation_candidate_directory",
-        "validation_candidate_manifest_sha256",
-        "validation_candidate_evidence_sha256",
-        "formal_execution_contract",
-        "formal_execution_contract_sha256",
-        "formal_judgment_implementation_commit",
-        "formal_closure_implementation_commit",
-        "formal_closure_replay_sha256",
-        "adapter_identity",
-        "provider_transport",
-        "requested_observed_model_aliases",
-        "logical_judgments",
-        "physical_attempts",
-        "physical_attempt_cap",
-        "subscription_billed_cost_usd",
-        "production_deploy_eligible",
-        "artifact_sha256",
-    }:
-        raise ConcurrentRobustnessReleaseError("v5 release contract fields are missing or unexpected")
-    if schema_version == ROBUSTNESS_RELEASE_CONTRACT_SCHEMA_V6:
-        v6_fields = {
-            "schema_version",
-            "release_purpose",
-            "release_id",
-            "canonical_endpoint",
-            "source_directory",
-            "artifact_manifest_schema_version",
-            "report_payload_schema_version",
-            "production_evidence_schema_version",
-            "historical_formal_directory",
-            "historical_formal_manifest_sha256",
-            "study_root_directory",
-            "study_manifest_sha256",
-            "study_artifact_manifest_sha256",
-            "workspace_directory",
-            "validation_candidate_directory",
-            "validation_candidate_manifest_sha256",
-            "validation_candidate_evidence_sha256",
-            "formal_execution_contract",
-            "formal_execution_contract_sha256",
-            "formal_judgment_implementation_commit",
-            "formal_closure_implementation_commit",
-            "formal_closure_replay_sha256",
-            "adapter_identity",
-            "provider_transport",
-            "requested_observed_model_aliases",
-            "logical_judgments",
-            "physical_attempts",
-            "physical_attempt_cap",
-            "subscription_billed_cost_usd",
-            "production_deploy_eligible",
-            "artifact_sha256",
-            "presentation_closure_contract",
-            "presentation_closure_contract_sha256",
-        }
-        if set(contract_document) != v6_fields:
-            raise ConcurrentRobustnessReleaseError("v6 release contract fields are missing or unexpected")
+    if set(contract_document) != _RELEASE_CONTRACT_FIELDS[schema_version]:
+        version = schema_version.rsplit("-", 1)[-1]
+        raise ConcurrentRobustnessReleaseError(
+            f"{version} release contract fields are missing or unexpected"
+        )
     release_id = _string(contract_document.get("release_id"), "release id")
     if not _RELEASE_ID.fullmatch(release_id):
         raise ConcurrentRobustnessReleaseError("v5 release id is invalid")
@@ -490,11 +535,16 @@ def validate_concurrent_robustness_production_release(
     evidence_dir = expected_source
     if snapshot_dir is not None:
         evidence_dir = _real_directory(Path(snapshot_dir), "release snapshot")
+    expected_report_schema = (
+        _REPORT_PAYLOAD_SCHEMA_V2
+        if schema_version == ROBUSTNESS_RELEASE_CONTRACT_SCHEMA_V7
+        else _REPORT_PAYLOAD_SCHEMA_V1
+    )
     if (
         contract_document.get("release_purpose") != "concurrent_robustness_formal_research"
         or contract_document.get("canonical_endpoint") != ROBUSTNESS_CANONICAL_ENDPOINT
         or contract_document.get("artifact_manifest_schema_version") != ROBUSTNESS_PRODUCTION_MANIFEST_SCHEMA
-        or contract_document.get("report_payload_schema_version") != "concurrent-robustness-report-payload-v1"
+        or contract_document.get("report_payload_schema_version") != expected_report_schema
         or contract_document.get("production_evidence_schema_version") != ROBUSTNESS_PRODUCTION_EVIDENCE_SCHEMA
         or not _COMMIT.fullmatch(
             _string(
@@ -527,11 +577,14 @@ def validate_concurrent_robustness_production_release(
     actual_hashes = _flat_file_hashes(evidence_dir)
     if actual_hashes != expected_hashes:
         raise ConcurrentRobustnessReleaseError("v5 source inventory or artifact hashes differ from the contract")
-    if schema_version == ROBUSTNESS_RELEASE_CONTRACT_SCHEMA_V6:
+    if schema_version in {
+        ROBUSTNESS_RELEASE_CONTRACT_SCHEMA_V6,
+        ROBUSTNESS_RELEASE_CONTRACT_SCHEMA_V7,
+    }:
         if actual_hashes.get(ROBUSTNESS_PRESENTATION_CLOSURE_CONTRACT) != contract_document.get(
             "presentation_closure_contract_sha256"
         ):
-            raise ConcurrentRobustnessReleaseError("v6 release closure artifact hash is crossed")
+            raise ConcurrentRobustnessReleaseError("release closure artifact hash is crossed")
     production_manifest = _json_object(evidence_dir / CONCURRENT_MESSAGE_ARTIFACT_MANIFEST_JSON)
     stage_facts = _production_presentation_facts(
         release_id=release_id,
@@ -570,7 +623,10 @@ def validate_concurrent_robustness_production_release(
         "Formal execution contract",
     )
     closure_file: Path | None = None
-    if schema_version == ROBUSTNESS_RELEASE_CONTRACT_SCHEMA_V6:
+    if schema_version in {
+        ROBUSTNESS_RELEASE_CONTRACT_SCHEMA_V6,
+        ROBUSTNESS_RELEASE_CONTRACT_SCHEMA_V7,
+    }:
         closure_file = _repo_file(
             root,
             Path(
@@ -582,7 +638,7 @@ def validate_concurrent_robustness_production_release(
             "presentation closure contract",
         )
         if _sha256_file(closure_file) != contract_document.get("presentation_closure_contract_sha256"):
-            raise ConcurrentRobustnessReleaseError("v6 presentation closure contract hash is crossed")
+            raise ConcurrentRobustnessReleaseError("presentation closure contract hash is crossed")
     for path, key in (
         (study / "study_manifest.json", "study_manifest_sha256"),
         (study / "artifact_manifest.json", "study_artifact_manifest_sha256"),
@@ -622,21 +678,39 @@ def validate_concurrent_robustness_production_release(
                 execution_contract_path=execution_contract_file,
             )
             formal_candidate = closure_facts.old_candidate_path
+            if schema_version == ROBUSTNESS_RELEASE_CONTRACT_SCHEMA_V6 and (
+                closure_facts.closure_schema_version != _evidence.PRESENTATION_CLOSURE_SCHEMA
+                or closure_facts.report_payload_schema_version != _REPORT_PAYLOAD_SCHEMA_V1
+                or closure_facts.semantic_set_identity_sha256 is not None
+            ):
+                raise ConcurrentRobustnessReleaseError("v6 closure facts are crossed")
+            if schema_version == ROBUSTNESS_RELEASE_CONTRACT_SCHEMA_V7 and (
+                closure_facts.closure_schema_version != _evidence.PRESENTATION_CLOSURE_V2_SCHEMA
+                or closure_facts.report_payload_schema_version != _REPORT_PAYLOAD_SCHEMA_V2
+                or contract_document.get("presentation_closure_schema_version")
+                != closure_facts.closure_schema_version
+                or contract_document.get("semantic_set_identity_sha256")
+                != closure_facts.semantic_set_identity_sha256
+            ):
+                raise ConcurrentRobustnessReleaseError("v7 closure semantic identity is crossed")
         except ConcurrentRobustnessEvidenceError as exc:
             raise ConcurrentRobustnessReleaseError(str(exc)) from exc
-    expected_presentation = _materialize_production_presentation(
-        formal=formal,
-        study=study,
-        candidate=candidate,
-        stage_facts=stage_facts,
-    )
-    if (
-        expected_presentation.report_payload != (evidence_dir / ROBUSTNESS_REPORT_PAYLOAD).read_bytes()
-        or expected_presentation.report_html != (evidence_dir / CONCURRENT_MESSAGE_REPORT_HTML).read_bytes()
-    ):
-        raise ConcurrentRobustnessReleaseError(
-            "production presentation differs from the Report materialization contract"
+    if schema_version == ROBUSTNESS_RELEASE_CONTRACT_SCHEMA_V7:
+        expected_presentation = _materialize_production_presentation(
+            formal=formal,
+            study=study,
+            candidate=candidate,
+            stage_facts=stage_facts,
         )
+        if (
+            expected_presentation.report_payload
+            != (evidence_dir / ROBUSTNESS_REPORT_PAYLOAD).read_bytes()
+            or expected_presentation.report_html
+            != (evidence_dir / CONCURRENT_MESSAGE_REPORT_HTML).read_bytes()
+        ):
+            raise ConcurrentRobustnessReleaseError(
+                "production presentation differs from the Report materialization contract"
+            )
     execution_contract = _validate_execution_contract(
         root=root,
         path=execution_contract_file,
@@ -680,6 +754,24 @@ def validate_concurrent_robustness_production_release(
         "artifact_count": len(actual_hashes),
         "production_deploy_eligible": True,
     }
+
+
+def _validate_v7_presentation_inventory(inventory: Mapping[str, object]) -> None:
+    paths = set(inventory)
+    mermaid_paths = {path for path in paths if path.endswith(".mmd")}
+    if mermaid_paths != _V7_MERMAID_INVENTORY:
+        raise ConcurrentRobustnessReleaseError(
+            "v7 production inventory must contain exactly seven Mermaid artifacts"
+        )
+    if any(
+        path in _V7_EXCLUDED_PRESENTATION_ARTIFACTS
+        or path.endswith("-v4.png")
+        or path.endswith("-v4.webp")
+        for path in paths
+    ):
+        raise ConcurrentRobustnessReleaseError(
+            "v7 production inventory contains an excluded presentation artifact"
+        )
 
 
 def _production_approved_downloads(candidate_report_payload: Mapping[str, Any]) -> dict[str, str]:
@@ -762,6 +854,7 @@ def _build_production_release_payloads(
     physical_attempts: int,
     presentation: _PresentationBundle,
     approved_downloads: Mapping[str, str],
+    report_payload_schema_version: str,
     presentation_closure: bytes | None = None,
 ) -> dict[str, bytes]:
     payloads: dict[str, bytes] = {}
@@ -827,7 +920,7 @@ def _build_production_release_payloads(
         "release_type": "concurrent_robustness_formal_research",
         "release_id": release_id,
         "canonical_endpoint": ROBUSTNESS_CANONICAL_ENDPOINT,
-        "report_schema": "concurrent-robustness-report-payload-v1",
+        "report_schema": report_payload_schema_version,
         "production_evidence_schema": ROBUSTNESS_PRODUCTION_EVIDENCE_SCHEMA,
         "formal_source": candidate_manifest["formal_source"],
         "study_source": candidate_manifest["study_source"],
@@ -868,11 +961,17 @@ def _validate_production_release_dir(
     manifest = _json_object(source / CONCURRENT_MESSAGE_ARTIFACT_MANIFEST_JSON)
     evidence = _json_object(source / ROBUSTNESS_PRODUCTION_EVIDENCE)
     payload = _json_object(source / ROBUSTNESS_REPORT_PAYLOAD)
+    expected_report_schema = (
+        _REPORT_PAYLOAD_SCHEMA_V2
+        if stage_facts.release_contract_schema == ROBUSTNESS_RELEASE_CONTRACT_SCHEMA_V7
+        else _REPORT_PAYLOAD_SCHEMA_V1
+    )
     if (
         manifest.get("schema_version") != ROBUSTNESS_PRODUCTION_MANIFEST_SCHEMA
         or manifest.get("release_type") != "concurrent_robustness_formal_research"
         or manifest.get("release_id") != release_id
         or manifest.get("canonical_endpoint") != ROBUSTNESS_CANONICAL_ENDPOINT
+        or manifest.get("report_schema") != expected_report_schema
         or manifest.get("production_deploy_eligible") is not True
         or evidence.get("schema_version") != ROBUSTNESS_PRODUCTION_EVIDENCE_SCHEMA
         or evidence.get("release_id") != release_id
@@ -880,10 +979,14 @@ def _validate_production_release_dir(
         or type(evidence.get("provider_calls_during_promotion")) is not int
         or evidence.get("provider_calls_during_promotion") != 0
         or evidence.get("subscription_billed_cost_usd") != 0.0
-        or payload.get("schema_version") != "concurrent-robustness-report-payload-v1"
+        or payload.get("schema_version") != expected_report_schema
         or payload.get("production_deploy_eligible") is not True
     ):
         raise ConcurrentRobustnessReleaseError("production release schema or eligibility contract is invalid")
+    if _validate_production_report_payload_contract(source=source, payload=payload) != expected_report_schema:
+        raise ConcurrentRobustnessReleaseError("production report payload schema is crossed")
+    if stage_facts.release_contract_schema == ROBUSTNESS_RELEASE_CONTRACT_SCHEMA_V7:
+        _validate_v7_presentation_inventory(hashes)
     artifacts = _string_mapping(manifest.get("artifacts"), "production artifacts")
     declared_hashes = _string_mapping(manifest.get("sha256"), "production artifact hashes")
     if set(artifacts) != set(declared_hashes) or len(set(artifacts.values())) != len(artifacts):

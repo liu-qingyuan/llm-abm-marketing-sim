@@ -4,54 +4,156 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import path from 'node:path';
 import { expect, test, type Page } from '@playwright/test';
 
-function generateSemanticCandidate(outputDir: string): string {
-  const root = path.join(outputDir, 'semantic-candidate-fixture');
+function generateSemanticV7Release(outputDir: string): string {
+  const root = path.join(outputDir, 'semantic-v7-release-fixture');
   const command = `
 set -euo pipefail
 . .venv/bin/activate
 export PYTHONPATH="$PWD/src:$PWD"
 python - <<'PY'
+import hashlib
+import json
 from pathlib import Path
+from unittest.mock import patch
 
 from llm_abm_sim import ConcurrentRobustnessStudy
+from llm_abm_sim import concurrent_robustness_evidence as evidence
+from llm_abm_sim import concurrent_robustness_release as release
 from llm_abm_sim import concurrent_robustness_report as report
 from tests.integration.test_concurrent_message_experiment_runner import (
     _install_deterministic_robustness_cell_fixture,
     _make_validation_report_source,
     _robustness_manifest_for_source,
 )
+from tests.unit.test_concurrent_robustness_release import (
+    _FakeCellEvidenceModel,
+    _V7_CONTRACT_FIELDS,
+    _fake_manifest,
+    _snapshot,
+    _write_json,
+)
 
 root = Path(${JSON.stringify(root)}).resolve()
 root.mkdir(parents=True, exist_ok=True)
 formal = _make_validation_report_source(root, 'formal-source', report_sized=True)
-manifest = _robustness_manifest_for_source(formal, output_identity='semantic-browser-fixture-v1')
+manifest = _robustness_manifest_for_source(formal, output_identity='semantic-v7-browser-fixture')
 workspace = root / 'workspace'
-candidate = root / 'compatibility-candidate'
+v1_candidate = root / 'payload-v1-candidate'
+v2_candidate = root / 'payload-v2-candidate'
 study = ConcurrentRobustnessStudy()
 study.run(manifest, None, workspace)
 _install_deterministic_robustness_cell_fixture(workspace, manifest)
 complete = study.run(manifest, None, workspace)
 assert complete.study_root is not None
-published = study.run(manifest, None, workspace, report_destination=candidate)
-assert published.report_candidate == candidate
-semantic = report._REPORT_PRESENTATION.compose_semantic_candidate(
+published = study.run(manifest, None, workspace, report_destination=v1_candidate)
+assert published.report_candidate == v1_candidate
+report._REPORT_PRESENTATION.compose_presentation_candidate(
     formal_root=formal,
     study_root=complete.study_root,
-    candidate_dir=candidate,
+    candidate_dir=v1_candidate,
+    destination_dir=v2_candidate,
 )
-output = root / 'semantic-candidate'
-output.mkdir()
-(output / 'report.html').write_bytes(semantic.report_html)
-for filename, payload in {
-    **semantic.companion_artifacts,
-    **semantic.mermaid_artifacts,
-}.items():
-    target = output / filename
-    target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_bytes(payload)
+
+contracts = root / 'contracts'
+contracts.mkdir()
+replay = contracts / 'immutable-replay.json'
+replay.write_text('fixture replay\\n', encoding='utf-8')
+execution_contract = contracts / 'formal-run-contract.json'
+execution_document = {
+    'report_candidate': str(v1_candidate),
+    'closure_replay_artifact': str(replay),
+    'closure_replay_sha256': hashlib.sha256(replay.read_bytes()).hexdigest(),
+    'implementation_commit': '1234567',
+    'closure_implementation_commit': '7654321',
+    'physical_provider_attempts': 28_800,
+    'subscription_nominal_reference_cost_usd': 1.25,
+    'subscription_billed_cost_usd': 0.0,
+}
+_write_json(execution_contract, execution_document)
+closure = contracts / 'presentation-closure-v2.json'
+immutable_inputs = (formal, complete.study_root, workspace, v1_candidate, v2_candidate, execution_contract, replay)
+before_closure = {path: _snapshot(path) for path in immutable_inputs}
+with (
+    patch.object(evidence, '_validate_execution_contract', lambda **_kwargs: execution_document),
+    patch.object(evidence, '_close_formal_cell_evidence', lambda **_kwargs: None),
+):
+    closure_facts = evidence.close_presentation(
+        repo_root=root,
+        formal_root=formal,
+        study_root=complete.study_root,
+        workspace_root=workspace,
+        candidate_dir=v2_candidate,
+        execution_contract_path=execution_contract,
+        destination_path=closure,
+        implementation_commit='abcdef0',
+    )
+assert closure_facts.closure_schema_version == evidence.PRESENTATION_CLOSURE_V2_SCHEMA
+assert all(before == _snapshot(path) for path, before in before_closure.items())
+
+fake_manifest = _fake_manifest(formal)
+fake_manifest.source.manifest_sha256 = manifest.source.manifest_sha256
+
+class FakeManifestModel:
+    @staticmethod
+    def model_validate(_payload):
+        return fake_manifest
+
+    @staticmethod
+    def model_validate_json(_payload):
+        return fake_manifest
+
+promotion_inputs = (*immutable_inputs, closure)
+before_promotion = {path: _snapshot(path) for path in promotion_inputs}
+with (
+    patch.object(release, 'ConcurrentRobustnessManifest', FakeManifestModel),
+    patch.object(release, '_CellEvidenceDocument', _FakeCellEvidenceModel),
+    patch.object(release, '_validate_cell_evidence_contract', lambda *_args, **_kwargs: None),
+    patch.object(release, '_validate_completed_dynamic_root', lambda **_kwargs: None),
+    patch.object(release, '_validate_execution_contract', lambda **_kwargs: execution_document),
+    patch.object(evidence, '_validate_execution_contract', lambda **_kwargs: execution_document),
+    patch.object(evidence, '_close_formal_cell_evidence', lambda **_kwargs: None),
+):
+    promoted = release.promote_concurrent_robustness_release(
+        repo_root=root,
+        formal_root=formal,
+        study_root=complete.study_root,
+        workspace_root=workspace,
+        candidate_dir=v2_candidate,
+        execution_contract_path=execution_contract,
+        destination_dir=root / 'production-v7',
+        release_contract_path=contracts / 'production-v7-release-contract.json',
+        release_id='semantic-v7-browser-release',
+        presentation_closure_path=closure,
+    )
+    contract = json.loads(promoted.contract_path.read_text(encoding='utf-8'))
+    validated = release.validate_concurrent_robustness_production_release(
+        repo_root=root,
+        contract_document=contract,
+        source_dir=promoted.source_dir,
+    )
+assert set(contract) == _V7_CONTRACT_FIELDS
+assert contract['schema_version'] == 'abm-report-release-contract-v7'
+assert contract['report_payload_schema_version'] == 'concurrent-robustness-report-payload-v2'
+production_manifest = json.loads((promoted.source_dir / 'artifact_manifest.json').read_text(encoding='utf-8'))
+assert {
+    path for path in production_manifest['approved_downloads'].values() if path.endswith('.mmd')
+} == {
+    'mechanism-sample-first.mmd',
+    'mechanism-pair-formation.mmd',
+    'mechanism-independent-delivery.mmd',
+    'mechanism-exposure-decisions.mmd',
+    'mechanism-feedback-boundary.mmd',
+    'real-batch-mechanism.mmd',
+    'prompt-model-factorial.mmd',
+}
+assert 'project-evidence-chain.mmd' not in production_manifest['artifacts'].values()
+assert 'mechanism-image-generation-audit.json' not in production_manifest['artifacts'].values()
+assert validated['production_deploy_eligible'] is True
+assert (promoted.source_dir / 'report.html').stat().st_size < 3 * 1024 * 1024
+assert all(before == _snapshot(path) for path, before in before_promotion.items())
 PY`;
   execFileSync('bash', ['-lc', command], { stdio: 'inherit' });
-  return path.join(root, 'semantic-candidate', 'report.html');
+  return path.join(root, 'production-v7', 'report.html');
 }
 
 async function expectNoHorizontalOverflow(page: Page): Promise<void> {
@@ -72,8 +174,9 @@ async function expectNoHorizontalOverflow(page: Page): Promise<void> {
   expect(geometry.internalScrollers).toEqual([]);
 }
 
-test('semantic candidate keeps the bilingual mechanism and run evidence contracts accessible', async ({ page }, testInfo) => {
-  const reportPath = generateSemanticCandidate(testInfo.outputDir);
+test('immutable v7 production keeps the bilingual mechanism and run evidence contracts accessible', async ({ page }, testInfo) => {
+  test.setTimeout(420_000);
+  const reportPath = generateSemanticV7Release(testInfo.outputDir);
   const externalRequests: string[] = [];
   const consoleErrors: string[] = [];
   const pageErrors: string[] = [];
@@ -97,7 +200,8 @@ test('semantic candidate keeps the bilingual mechanism and run evidence contract
 
     await expect(page.locator('html')).toHaveAttribute('lang', 'zh-CN');
     await expect(page.getByTestId('editorial-report')).toHaveAttribute('data-editorial-version', 'v4-semantic');
-    await expect(page.getByTestId('editorial-report')).toHaveAttribute('data-production-deploy-eligible', 'false');
+    await expect(page.getByTestId('editorial-report')).toHaveAttribute('data-production-deploy-eligible', 'true');
+    await expect(page.locator('meta[name="abm-release-contract"]')).toHaveAttribute('content', 'abm-report-release-contract-v7');
     await expect(page.locator('[data-report-anchor]')).toHaveCount(5);
     await expect(page.locator('[data-report-anchor]').allTextContents()).resolves.toEqual([
       '样本先存在',
@@ -112,7 +216,8 @@ test('semantic candidate keeps the bilingual mechanism and run evidence contract
     await expect(page.locator('[data-legend-item]')).toHaveCount(0);
     await expect(page.locator('img')).toHaveCount(0);
     await expect(page.getByTestId('real-batch-mechanism-section')).toContainText('八个节点概括');
-    await expect(page.getByTestId('robustness-report-candidate')).toBeHidden();
+    await expect(page.getByTestId('robustness-report-release')).toBeHidden();
+    await expect(page.getByTestId('robustness-report-candidate')).toHaveCount(0);
     await expect(page.getByTestId('prompt-model-factorial-diagram')).toBeHidden();
     await expect(page.getByTestId('project-evidence-chain-diagram')).toHaveCount(0);
     const downloadTargets = await page.locator('a[href]').evaluateAll((links) => links.map(
@@ -158,7 +263,7 @@ test('semantic candidate keeps the bilingual mechanism and run evidence contract
       'Exposure & Decisions',
       'Feedback Boundary',
     ]);
-    await expect(page.getByTestId('robustness-report-candidate')).toBeHidden();
+    await expect(page.getByTestId('robustness-report-release')).toBeHidden();
     const feedbackSvg = page.getByTestId('mechanism-feedback_boundary-inline-svg');
     if (viewport.width >= 768) await expect(feedbackSvg).toBeVisible();
     else await expect(feedbackSvg).toBeHidden();
@@ -166,7 +271,7 @@ test('semantic candidate keeps the bilingual mechanism and run evidence contract
     await page.getByTestId('run-evidence-mode-button').click();
     await expect(page.getByTestId('run-evidence-mode-panel')).toBeVisible();
     await expect(page.getByTestId('mechanism-mode-panel')).toBeHidden();
-    await expect(page.getByTestId('robustness-report-candidate')).toBeVisible();
+    await expect(page.getByTestId('robustness-report-release')).toBeVisible();
     await expect(page.getByTestId('prompt-model-factorial-diagram')).toBeVisible();
     await expect(page.getByTestId('robustness-source-lineage')).toContainText('Immutable complete study root');
     await expect(page.getByTestId('ranking-weight-family-select').locator('option').first()).toHaveText('Network relevance and campaign feedback');

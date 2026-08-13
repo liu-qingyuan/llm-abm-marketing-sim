@@ -42,6 +42,7 @@ _REPORT_PAYLOAD_V1_FIELDS = frozenset(
         "production_deploy_eligible",
     }
 )
+_REPORT_PAYLOAD_V1_LEGACY_FIELDS = _REPORT_PAYLOAD_V1_FIELDS - {"trace_row_count"}
 _REPORT_PAYLOAD_V2_FIELDS = _REPORT_PAYLOAD_V1_FIELDS | {"mechanism_presentation"}
 _MECHANISM_PRESENTATION_FIELDS = frozenset(
     {"schema_version", "semantic_set_identity_sha256", "masters"}
@@ -92,6 +93,7 @@ class CandidateLineageFacts:
 class PresentationClosureFacts:
     closure_path: Path
     closure_sha256: str
+    closure_schema_version: str
     implementation_commit: str
     formal_execution_contract_path: Path
     formal_execution_contract_sha256: str
@@ -509,13 +511,22 @@ def _validate_report_payload_contract(
     payload: Mapping[str, Any],
     *,
     candidate: Path,
+    production: bool = False,
 ) -> tuple[str, str | None]:
     schema = payload.get("schema_version")
+    production_fields = {"production_release"} if production else set()
     if schema == _REPORT_PAYLOAD_V1_SCHEMA:
-        if set(payload) != _REPORT_PAYLOAD_V1_FIELDS:
+        payload_fields = set(payload)
+        if payload_fields not in {
+            _REPORT_PAYLOAD_V1_FIELDS | production_fields,
+            _REPORT_PAYLOAD_V1_LEGACY_FIELDS | production_fields,
+        }:
             raise ConcurrentRobustnessEvidenceError("payload v1 fields are missing or unexpected")
         return _REPORT_PAYLOAD_V1_SCHEMA, None
-    if schema != _REPORT_PAYLOAD_V2_SCHEMA or set(payload) != _REPORT_PAYLOAD_V2_FIELDS:
+    if (
+        schema != _REPORT_PAYLOAD_V2_SCHEMA
+        or set(payload) != _REPORT_PAYLOAD_V2_FIELDS | production_fields
+    ):
         raise ConcurrentRobustnessEvidenceError("report payload schema or fields are unsupported")
     facts = payload.get("mechanism_presentation")
     if not isinstance(facts, Mapping) or set(facts) != _MECHANISM_PRESENTATION_FIELDS:
@@ -1056,6 +1067,7 @@ def validate_presentation_closure(
     return PresentationClosureFacts(
         closure_path=closure,
         closure_sha256=_sha256_file(closure),
+        closure_schema_version=str(closure_schema),
         implementation_commit=implementation,
         formal_execution_contract_path=execution_path,
         formal_execution_contract_sha256=expected_hashes["formal_execution_contract_sha256"],

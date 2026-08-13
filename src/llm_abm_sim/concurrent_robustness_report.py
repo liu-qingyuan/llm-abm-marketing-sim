@@ -3353,10 +3353,11 @@ def _validate_presentation_bundle(
     )
     if (
         stage_facts is not None
-        and stage_facts.release_contract_schema == "abm-report-release-contract-v6"
+        and stage_facts.release_contract_schema
+        in {"abm-report-release-contract-v6", "abm-report-release-contract-v7"}
         and expected_trace_rows != _TRACE_ROW_COUNT
     ):
-        raise ValueError("v6 production presentation requires exactly 1,800 trace rows")
+        raise ValueError("v6/v7 production presentation requires exactly 1,800 trace rows")
     _validate_trace_envelope_html(
         html_document,
         expected_row_count=expected_trace_rows,
@@ -3365,6 +3366,18 @@ def _validate_presentation_bundle(
         payload,
         production=stage_facts is not None,
     )
+    if stage_facts is not None and (
+        (
+            stage_facts.release_contract_schema == "abm-report-release-contract-v7"
+            and report_schema != _REPORT_PAYLOAD_V2_SCHEMA
+        )
+        or (
+            stage_facts.release_contract_schema
+            in {"abm-report-release-contract-v5", "abm-report-release-contract-v6"}
+            and report_schema != _REPORT_PAYLOAD_SCHEMA
+        )
+    ):
+        raise ValueError("production report payload schema is crossed with its release contract")
     downloads = _string_mapping(payload.get("downloads"), "report presentation downloads")
     if report_schema == _REPORT_PAYLOAD_V2_SCHEMA:
         _validate_semantic_presentation_bundle(
@@ -3955,10 +3968,13 @@ def _render_additive_report(
     )
     if (
         stage_facts is not None
-        and stage_facts.release_contract_schema == "abm-report-release-contract-v6"
+        and stage_facts.release_contract_schema
+        in {"abm-report-release-contract-v6", "abm-report-release-contract-v7"}
         and expected_trace_rows != _TRACE_ROW_COUNT
     ):
-        raise _RobustnessReportClosureError("v6 production presentation requires exactly 1,800 trace rows")
+        raise _RobustnessReportClosureError(
+            "v6/v7 production presentation requires exactly 1,800 trace rows"
+        )
     rendered = _replace_trace_script(
         formal_html,
         expected_row_count=expected_trace_rows,

@@ -340,6 +340,31 @@ def test_validator_rejects_extra_fields_and_noncanonical_paths(
         )
 
 
+def test_payload_v1_validator_preserves_exact_pre_trace_legacy_shape(tmp_path: Path) -> None:
+    payload = {
+        "schema_version": "concurrent-robustness-report-payload-v1",
+        "title": "legacy fixture",
+        "source_lineage": {},
+        "ranking_weight": {},
+        "prompt_model": {},
+        "row_counts": {},
+        "downloads": {"sample": "sample.json"},
+        "claim_boundary": {},
+        "production_deploy_eligible": False,
+    }
+
+    schema, semantic_identity = evidence._validate_report_payload_contract(
+        payload,
+        candidate=tmp_path,
+    )
+    assert schema == "concurrent-robustness-report-payload-v1"
+    assert semantic_identity is None
+
+    payload.pop("row_counts")
+    with pytest.raises(evidence.ConcurrentRobustnessEvidenceError, match="fields"):
+        evidence._validate_report_payload_contract(payload, candidate=tmp_path)
+
+
 def test_closure_dispatch_preserves_v1_and_rejects_crossed_schema_facts(
     closure_fixture: dict[str, Path],
 ) -> None:

@@ -1,8 +1,8 @@
 # Concurrent Message v4 机制图整组视觉审批集
 
-Status: Awaiting whole-set human visual approval
+Status: Rejected for v7; retained as historical pre-release audit
 
-本文件是 canonical Final Research 网页之外的视觉审阅包。五张 PNG 均消费 #185 已批准且 byte-frozen 的 Mermaid semantic set；当前 v1/v6 presentation、旧 v1–v3 assets、Formal evidence 与 persisted research evidence 均未接入或改写。
+本文件是 canonical Final Research 网页之外的历史视觉审阅包。五张 PNG 均消费 #185 已批准且 byte-frozen 的 Mermaid semantic set，但该整组图像未获视觉批准；依据 [Spec #183 的 Mermaid-first amendment](https://github.com/liu-qingyuan/llm-abm-marketing-sim/issues/183#issuecomment-5278560487)，它们及 generation audit 均不是 payload v2、closure v2、release v7、approved downloads 或 canonical deployment 的输入。当前 v1/v6 presentation、旧 v1–v3 assets、Formal evidence 与 persisted research evidence 也未被这组图像改写。
 
 - Canonical visual set identity: `6e3f6db6290e8f01c1f9763e9c297db426d1ed54a95014e1940fd43db7079c8b`
 - Identity schema: `mechanism-visual-set-v1`
@@ -13,9 +13,9 @@ Status: Awaiting whole-set human visual approval
 - Research LLM Provider / TikHub / Douyin / profile API calls: `0`
 - Secrets read, printed, or written: `0`
 
-## 整组审批合同
+## 已终止的整组审批合同
 
-批准必须来自一个 GitHub issue comment，并在同一 comment 中绑定批准人、批准时间、comment URL、上述 canonical visual set identity，以及下表五个完整 PNG filename/SHA-256。缺图、部分 hash、跨 comment 拼接或任一 accepted PNG 后续 byte mutation 均不构成 approved set。
+下列内容只记录当时计划的审批合同：批准原本必须来自一个 GitHub issue comment，并在同一 comment 中绑定批准人、批准时间、comment URL、上述 canonical visual set identity，以及下表五个完整 PNG filename/SHA-256。该审批没有发生，`visual_approval` 保持 `null`；这些 hashes 只能用于历史核验，不能拼装为 v7 approved set。
 
 | 顺序 | Accepted PNG | SHA-256 | Deterministic WebP | SHA-256 |
 |---:|---|---|---|---|
@@ -67,4 +67,4 @@ python scripts/validate_mechanism_image_generation_audit.py \
   --verify-derivatives
 ```
 
-获得合法整组批准后，audit 才可绑定 approval comment 并通过默认 validator。本审阅包不授权 renderer integration、candidate composition、research Provider 调用或 canonical deployment。
+该 visual set 已退出 v7 路径，不再通过补写 approval comment 进入本次 release。未来外部设计师 artwork 由 follow-up #192 以新的 immutable release 处理；本审阅包不授权 renderer integration、candidate composition、research Provider 调用或 canonical deployment。

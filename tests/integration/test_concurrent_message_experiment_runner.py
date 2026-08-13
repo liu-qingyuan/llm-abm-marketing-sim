@@ -3547,7 +3547,11 @@ def test_concurrent_robustness_composes_two_closed_sources_into_an_immutable_rep
 def test_report_interface_atomically_materializes_exact_semantic_payload_v2(
     tmp_path: Path,
 ) -> None:
-    source_dir = _make_validation_report_source(tmp_path, "semantic-payload-v2-source")
+    source_dir = _make_validation_report_source(
+        tmp_path,
+        "semantic-payload-v2-source",
+        report_sized=True,
+    )
     manifest = _robustness_manifest_for_source(source_dir, output_identity="semantic-payload-v2")
     workspace = tmp_path / "semantic-payload-v2-workspace"
     v1_candidate = tmp_path / "semantic-payload-v1-candidate"
@@ -3698,6 +3702,7 @@ def test_report_interface_atomically_materializes_exact_semantic_payload_v2(
     assert production_payload["schema_version"] == "concurrent-robustness-report-payload-v2"
     assert production_payload["production_deploy_eligible"] is True
     assert 'data-editorial-version="v4-semantic"' in production_html
+    assert "copy['semantic.trace.loading']" in production_html
     assert 'data-production-deploy-eligible="true"' in production_html
     assert 'data-testid="robustness-report-release"' in production_html
     assert 'data-testid="robustness-report-candidate"' not in production_html
@@ -3716,6 +3721,54 @@ def test_report_interface_atomically_materializes_exact_semantic_payload_v2(
             destination_dir=existing,
         )
     assert sentinel.read_text(encoding="utf-8") == "keep"
+
+
+def test_report_interface_rejects_nonformal_trace_denominator_for_v7(
+    tmp_path: Path,
+) -> None:
+    source_dir = _make_validation_report_source(tmp_path, "semantic-v7-small-source")
+    manifest = _robustness_manifest_for_source(source_dir, output_identity="semantic-v7-small")
+    workspace = tmp_path / "semantic-v7-small-workspace"
+    v1_candidate = tmp_path / "semantic-v7-small-v1-candidate"
+    v2_candidate = tmp_path / "semantic-v7-small-v2-candidate"
+    study = ConcurrentRobustnessStudy()
+    study.run(manifest, None, workspace)
+    _install_deterministic_robustness_cell_fixture(workspace, manifest)
+    complete = study.run(manifest, None, workspace, report_destination=v1_candidate)
+    assert complete.study_root is not None
+    concurrent_robustness_report_module._REPORT_PRESENTATION.compose_presentation_candidate(
+        formal_root=source_dir,
+        study_root=complete.study_root,
+        candidate_dir=v1_candidate,
+        destination_dir=v2_candidate,
+    )
+    payload = _read_json(v2_candidate / "concurrent_robustness_report_payload.json")
+    approved_downloads = dict(payload["downloads"])
+    approved_downloads["release_evidence"] = "robustness_production_release_evidence.json"
+    facts = concurrent_robustness_report_module._ProductionPresentationFacts(
+        release_id="semantic-v7-small-release",
+        release_contract_schema="abm-report-release-contract-v7",
+        canonical_endpoint="https://abm.q1ngyuan.top/",
+        production_evidence_schema="concurrent-robustness-production-release-evidence-v1",
+        formal_logical_judgments=60,
+        formal_physical_attempts=60,
+        provider_transport="deterministic-test",
+        subscription_billed_cost_usd=0.0,
+        approved_downloads=approved_downloads,
+    )
+
+    with pytest.raises(
+        concurrent_robustness_report_module._RobustnessReportClosureError,
+        match="failed validation",
+    ) as exc_info:
+        concurrent_robustness_report_module._REPORT_PRESENTATION.materialize_production(
+            formal_root=source_dir,
+            study_root=complete.study_root,
+            candidate_dir=v2_candidate,
+            stage_facts=facts,
+        )
+    assert exc_info.value.__cause__ is not None
+    assert "1,800" in str(exc_info.value.__cause__)
 
 
 @pytest.mark.parametrize(
