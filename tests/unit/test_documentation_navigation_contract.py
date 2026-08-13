@@ -36,6 +36,7 @@ EXPECTED_REFERENCE_FILES = {
     "docs/references/jinjiang-concurrent-robustness-formal-release-20260810.md",
     "docs/references/jinjiang-concurrent-robustness-semantic-release-handoff-20260812.md",
     "docs/references/jinjiang-concurrent-robustness-v6-local-release-20260813.md",
+    "docs/references/concurrent-message-mechanism-semantic-masters-v4-review.md",
     "docs/references/concurrent-message-legend-visual-semantics-audit-20260803.md",
     "docs/references/concurrent-message-sensitivity-curve-visual-reference-20260803.md",
     "docs/references/concurrent-message-sensitivity-curve-visual-reference-20260803.jpg",

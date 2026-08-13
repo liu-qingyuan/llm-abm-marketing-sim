@@ -1,0 +1,78 @@
+---
+title: 真实批次机制 / Real-Batch Mechanism
+---
+flowchart LR
+  %% diagram-id: real_batch
+  %% dom-title-key: real_batch.title
+  %% dom-description-key: real_batch.description
+  %% dom-node-key: fixed_research_inputs=real_batch.node.fixed_research_inputs
+  %% dom-node-key: remaining_eligible_pairs=real_batch.node.remaining_eligible_pairs
+  %% dom-node-key: batch_start_snapshot=real_batch.node.batch_start_snapshot
+  %% dom-node-key: per_message_top20_selection=real_batch.node.per_message_top20_selection
+  %% dom-node-key: exposure_gate=real_batch.node.exposure_gate
+  %% dom-node-key: same_exposure_decision_pair=real_batch.node.same_exposure_decision_pair
+  %% dom-node-key: barrier_deduplicated_commit=real_batch.node.barrier_deduplicated_commit
+  %% dom-node-key: next_batch_ranking_contexts=real_batch.node.next_batch_ranking_contexts
+  %% dom-edge-key: positive_primary_to_barrier_commit=real_batch.edge.positive_primary_only
+  %% dom-edge-key: barrier_commit_to_next_contexts=real_batch.edge.next_batch_only
+  %% fallback-key: real_batch.fallback.batch_zero
+  %% fallback-key: real_batch.fallback.stop_paths
+  %% fallback-key: real_batch.fallback.robustness
+  %% fallback-key: real_batch.fallback.next_batch
+  %% image-raster-generation-required: false
+  %% image-visual-system: Horizontal flat 2D scientific-editorial composition on light paper, with dark ink lines and one restrained cobalt-blue accent.
+  %% image-purpose: Provide the deterministic eight-node real-batch reader path without creating another raster asset.
+  %% image-composition: One compact three-lane semantic flow from fixed inputs to next-batch contexts.
+  %% image-required-mark: exactly eight semantic nodes
+  %% image-required-mark: one grouped three-message Top20 node
+  %% image-required-mark: same-exposure Primary plus report-only Shadow
+  %% image-required-mark: post-barrier user_id-deduplicated commit
+  %% image-forbidden-mark: people or character illustrations
+  %% image-forbidden-mark: 3D, glow, photorealistic devices, or decorative nodes
+  %% image-forbidden-mark: any text, letters, numerals, or labels rendered inside the image
+  %% image-forbidden-mark: color-only encoding
+  classDef historical_data fill:#f4f1e8,stroke:#1f2933,color:#1f2933,stroke-width:1px;
+  classDef platform_recommendation fill:#eef3fb,stroke:#2459a9,color:#1f2933,stroke-width:1.5px;
+  classDef simulated_user_decision fill:#ffffff,stroke:#1f2933,color:#1f2933,stroke-width:1.5px;
+  classDef message_m1 fill:#eef3fb,stroke:#2459a9,stroke-width:2px;
+  classDef message_m2 fill:#ffffff,stroke:#2459a9,stroke-width:2px,stroke-dasharray:6 4;
+  classDef message_m3 fill:#f4f1e8,stroke:#2459a9,stroke-width:3px;
+  subgraph historical_data_lane["历史数据层<br/>Historical Data Layer"]
+    direction TB
+    fixed_research_inputs["固定研究输入<br/>Fixed Research Inputs"]
+  end
+  subgraph platform_recommendation_lane["平台推荐层<br/>Platform Recommendation Layer"]
+    direction TB
+    remaining_eligible_pairs["剩余合格配对<br/>Remaining Eligible Pairs"]
+    batch_start_snapshot["批次开始快照<br/>Batch-Start Snapshot"]
+    per_message_top20_selection(["M1 / M2 / M3 各自 Top20<br/>Independent M1 / M2 / M3 Top20"])
+    exposure_gate{"曝光门<br/>Exposure Gate"}
+    barrier_deduplicated_commit(["整批屏障后按 user_id 去重提交<br/>Post-Barrier user_id-Deduplicated Commit"])
+    next_batch_ranking_contexts["下一批排序上下文<br/>Next-Batch Ranking Contexts"]
+  end
+  subgraph simulated_user_decision_lane["模拟用户决策层<br/>Simulated User Decision Layer"]
+    direction TB
+    same_exposure_decision_pair["同次曝光：主要决策 + 仅报告影子决策<br/>Same Exposure: Primary + Report-Only Shadow"]
+  end
+  %% semantic-edge: fixed_inputs_to_remaining_pairs
+  fixed_research_inputs --> remaining_eligible_pairs
+  %% semantic-edge: remaining_pairs_to_snapshot
+  remaining_eligible_pairs --> batch_start_snapshot
+  %% semantic-edge: snapshot_to_top20
+  batch_start_snapshot --> per_message_top20_selection
+  %% semantic-edge: top20_to_exposure_gate
+  per_message_top20_selection --> exposure_gate
+  %% semantic-edge: exposure_gate_to_decisions
+  exposure_gate --> same_exposure_decision_pair
+  %% semantic-edge: positive_primary_to_barrier_commit
+  same_exposure_decision_pair -->|"仅成功 Primary 正向行为<br/>Succeeded Positive Primary Only"| barrier_deduplicated_commit
+  %% semantic-edge: barrier_commit_to_next_contexts
+  barrier_deduplicated_commit -->|"仅下一批<br/>Next Batch Only"| next_batch_ranking_contexts
+  class fixed_research_inputs historical_data;
+  class remaining_eligible_pairs platform_recommendation;
+  class batch_start_snapshot platform_recommendation;
+  class per_message_top20_selection platform_recommendation;
+  class exposure_gate platform_recommendation;
+  class same_exposure_decision_pair simulated_user_decision;
+  class barrier_deduplicated_commit platform_recommendation;
+  class next_batch_ranking_contexts platform_recommendation;

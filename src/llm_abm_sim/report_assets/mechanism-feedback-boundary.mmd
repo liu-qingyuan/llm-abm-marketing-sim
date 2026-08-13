@@ -1,0 +1,73 @@
+---
+title: 反馈边界 / Feedback Boundary
+---
+flowchart LR
+  %% diagram-id: feedback_boundary
+  %% dom-title-key: feedback_boundary.title
+  %% dom-description-key: feedback_boundary.description
+  %% dom-node-key: primary_succeeded_positive=feedback_boundary.node.primary_succeeded_positive
+  %% dom-node-key: shadow_terminal_no_feedback=feedback_boundary.node.shadow_terminal_no_feedback
+  %% dom-node-key: ignore_terminal_no_feedback=feedback_boundary.node.ignore_terminal_no_feedback
+  %% dom-node-key: provider_failed_terminal_no_feedback=feedback_boundary.node.provider_failed_terminal_no_feedback
+  %% dom-node-key: pending_positive_user_ids=feedback_boundary.node.pending_positive_user_ids
+  %% dom-node-key: full_batch_barrier=feedback_boundary.node.full_batch_barrier
+  %% dom-node-key: campaign_user_id_commit=feedback_boundary.node.campaign_user_id_commit
+  %% dom-node-key: next_batch_ranking_contexts=feedback_boundary.node.next_batch_ranking_contexts
+  %% dom-edge-key: positive_primary_to_pending=feedback_boundary.edge.positive_only
+  %% dom-edge-key: commit_to_next_batch_contexts=feedback_boundary.edge.next_batch_only
+  %% fallback-key: feedback_boundary.fallback.eligible_feedback
+  %% fallback-key: feedback_boundary.fallback.stop_paths
+  %% fallback-key: feedback_boundary.fallback.barrier
+  %% fallback-key: feedback_boundary.fallback.commit
+  %% image-raster-generation-required: true
+  %% image-visual-system: Horizontal flat 2D scientific-editorial composition on light paper, with dark ink lines and one restrained cobalt-blue accent.
+  %% image-purpose: Show the exact positive-Primary feedback boundary and make all non-propagating terminals visibly stop.
+  %% image-composition: A split terminal row has one positive path and three capped stop paths; the positive path joins a full-batch barrier before one deduplicated next-batch arrow.
+  %% image-required-mark: succeeded positive Primary path
+  %% image-required-mark: capped Shadow, ignore, and provider_failed stop marks
+  %% image-required-mark: full-batch barrier
+  %% image-required-mark: cross-message user_id deduplication
+  %% image-required-mark: next-batch-only ranking context
+  %% image-forbidden-mark: people or character illustrations
+  %% image-forbidden-mark: 3D, glow, photorealistic devices, or decorative nodes
+  %% image-forbidden-mark: any text, letters, numerals, or labels rendered inside the image
+  %% image-forbidden-mark: color-only encoding
+  classDef historical_data fill:#f4f1e8,stroke:#1f2933,color:#1f2933,stroke-width:1px;
+  classDef platform_recommendation fill:#eef3fb,stroke:#2459a9,color:#1f2933,stroke-width:1.5px;
+  classDef simulated_user_decision fill:#ffffff,stroke:#1f2933,color:#1f2933,stroke-width:1.5px;
+  classDef message_m1 fill:#eef3fb,stroke:#2459a9,stroke-width:2px;
+  classDef message_m2 fill:#ffffff,stroke:#2459a9,stroke-width:2px,stroke-dasharray:6 4;
+  classDef message_m3 fill:#f4f1e8,stroke:#2459a9,stroke-width:3px;
+  subgraph historical_data_lane["历史数据层<br/>Historical Data Layer"]
+    direction TB
+  end
+  subgraph platform_recommendation_lane["平台推荐层<br/>Platform Recommendation Layer"]
+    direction TB
+    pending_positive_user_ids["待提交的正向 user_id 集合<br/>Pending Positive user_id Set"]
+    full_batch_barrier{"全部已选配对到达必需终态<br/>All Selected Pairs Reach Required Terminals"}
+    campaign_user_id_commit(["关闭整批屏障后，跨消息按 user_id 去重提交<br/>After Full-Batch Barrier: Deduplicate by user_id Across Messages and Commit"])
+    next_batch_ranking_contexts["仅成为下一批的三条排序上下文<br/>Next Batch's Three Ranking Contexts Only"]
+  end
+  subgraph simulated_user_decision_lane["模拟用户决策层<br/>Simulated User Decision Layer"]
+    direction TB
+    primary_succeeded_positive(["成功的主要决策：like / comment / share<br/>Succeeded Primary: Like / Comment / Share"])
+    shadow_terminal_no_feedback(["影子决策：无反馈出口<br/>Shadow: No Feedback Exit"])
+    ignore_terminal_no_feedback(["ignore：无反馈出口<br/>Ignore: No Feedback Exit"])
+    provider_failed_terminal_no_feedback(["provider_failed：无反馈出口<br/>provider_failed: No Feedback Exit"])
+  end
+  %% semantic-edge: positive_primary_to_pending
+  primary_succeeded_positive -->|"仅成功 Primary 正向行为<br/>Succeeded Positive Primary Only"| pending_positive_user_ids
+  %% semantic-edge: pending_to_commit
+  pending_positive_user_ids --> campaign_user_id_commit
+  %% semantic-edge: barrier_to_commit
+  full_batch_barrier --> campaign_user_id_commit
+  %% semantic-edge: commit_to_next_batch_contexts
+  campaign_user_id_commit -->|"下一批生效<br/>Effective Next Batch Only"| next_batch_ranking_contexts
+  class primary_succeeded_positive simulated_user_decision;
+  class shadow_terminal_no_feedback simulated_user_decision;
+  class ignore_terminal_no_feedback simulated_user_decision;
+  class provider_failed_terminal_no_feedback simulated_user_decision;
+  class pending_positive_user_ids platform_recommendation;
+  class full_batch_barrier platform_recommendation;
+  class campaign_user_id_commit platform_recommendation;
+  class next_batch_ranking_contexts platform_recommendation;

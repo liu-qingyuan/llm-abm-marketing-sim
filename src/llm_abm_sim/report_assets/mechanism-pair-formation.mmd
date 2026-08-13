@@ -1,0 +1,64 @@
+---
+title: 用户与消息配对 / Pair Formation
+---
+flowchart LR
+  %% diagram-id: pair_formation
+  %% dom-title-key: pair_formation.title
+  %% dom-description-key: pair_formation.description
+  %% dom-node-key: research_sample_1000=pair_formation.node.research_sample_1000
+  %% dom-node-key: eligible_pairs_m1=pair_formation.node.eligible_pairs_m1
+  %% dom-node-key: eligible_pairs_m2=pair_formation.node.eligible_pairs_m2
+  %% dom-node-key: eligible_pairs_m3=pair_formation.node.eligible_pairs_m3
+  %% dom-node-key: eligible_pairs_total_3000=pair_formation.node.eligible_pairs_total_3000
+  %% fallback-key: pair_formation.fallback.sample_first
+  %% fallback-key: pair_formation.fallback.denominator
+  %% fallback-key: pair_formation.fallback.scope
+  %% image-raster-generation-required: true
+  %% image-visual-system: Horizontal flat 2D scientific-editorial composition on light paper, with dark ink lines and one restrained cobalt-blue accent.
+  %% image-purpose: Make the 3,000-pair denominator obvious without implying that pairing creates users.
+  %% image-composition: One stable sample mark fans into three visually distinct M1/M2/M3 paths and reconverges at the denominator.
+  %% image-required-mark: one pre-existing 1,000-user sample
+  %% image-required-mark: three 1,000-pair paths
+  %% image-required-mark: M1/M2/M3 distinguished by shape and line style
+  %% image-required-mark: one 3,000 eligible-pair total
+  %% image-forbidden-mark: people or character illustrations
+  %% image-forbidden-mark: 3D, glow, photorealistic devices, or decorative nodes
+  %% image-forbidden-mark: any text, letters, numerals, or labels rendered inside the image
+  %% image-forbidden-mark: color-only encoding
+  classDef historical_data fill:#f4f1e8,stroke:#1f2933,color:#1f2933,stroke-width:1px;
+  classDef platform_recommendation fill:#eef3fb,stroke:#2459a9,color:#1f2933,stroke-width:1.5px;
+  classDef simulated_user_decision fill:#ffffff,stroke:#1f2933,color:#1f2933,stroke-width:1.5px;
+  classDef message_m1 fill:#eef3fb,stroke:#2459a9,stroke-width:2px;
+  classDef message_m2 fill:#ffffff,stroke:#2459a9,stroke-width:2px,stroke-dasharray:6 4;
+  classDef message_m3 fill:#f4f1e8,stroke:#2459a9,stroke-width:3px;
+  subgraph historical_data_lane["历史数据层<br/>Historical Data Layer"]
+    direction TB
+    research_sample_1000(["已存在的 1,000 人研究样本<br/>Existing 1,000-User Research Sample"])
+  end
+  subgraph platform_recommendation_lane["平台推荐层<br/>Platform Recommendation Layer"]
+    direction TB
+    eligible_pairs_m1["样本 × M1 = 1,000 个配对<br/>Sample × M1 = 1,000 Pairs"]
+    eligible_pairs_m2(["样本 × M2 = 1,000 个配对<br/>Sample × M2 = 1,000 Pairs"])
+    eligible_pairs_m3{{"样本 × M3 = 1,000 个配对<br/>Sample × M3 = 1,000 Pairs"}}
+    eligible_pairs_total_3000(["1,000 位用户 × 3 条消息 = 3,000 个合格配对<br/>1,000 Users × 3 Messages = 3,000 Eligible Pairs"])
+  end
+  subgraph simulated_user_decision_lane["模拟用户决策层<br/>Simulated User Decision Layer"]
+    direction TB
+  end
+  %% semantic-edge: sample_to_m1_pairs
+  research_sample_1000 --> eligible_pairs_m1
+  %% semantic-edge: sample_to_m2_pairs
+  research_sample_1000 -.-> eligible_pairs_m2
+  %% semantic-edge: sample_to_m3_pairs
+  research_sample_1000 ==> eligible_pairs_m3
+  %% semantic-edge: m1_pairs_to_total
+  eligible_pairs_m1 --> eligible_pairs_total_3000
+  %% semantic-edge: m2_pairs_to_total
+  eligible_pairs_m2 -.-> eligible_pairs_total_3000
+  %% semantic-edge: m3_pairs_to_total
+  eligible_pairs_m3 ==> eligible_pairs_total_3000
+  class research_sample_1000 historical_data;
+  class eligible_pairs_m1 platform_recommendation,message_m1;
+  class eligible_pairs_m2 platform_recommendation,message_m2;
+  class eligible_pairs_m3 platform_recommendation,message_m3;
+  class eligible_pairs_total_3000 platform_recommendation;

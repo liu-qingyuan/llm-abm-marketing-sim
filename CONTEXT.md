@@ -16,6 +16,18 @@ Agent-Based Modeling 仿真过程。系统在社交网络上按时间步推进�
 
 仿真中的平台规则层。它负责决定用户是否看到内容、哪些邻居互动对用户可见，以及平台上下文如何影响传播机会。
 
+### Historical Data Layer
+
+机制展示三层中的**历史数据层（Historical Data Layer）**。它拥有已采集并清洗的用户画像、历史互动证据，以及由这些证据派生的 Comment-Derived User Interaction Graph，并为研究样本与静态 ranking signals 提供输入。它不表示 runtime live database、在线抓取、当前平台 feed 或一次仿真中的动态反馈。
+
+### Platform Recommendation Layer
+
+机制展示三层中的**平台推荐层（Platform Recommendation Layer）**。它拥有 eligible `user × message` pairs、Per-Message Queue、ranking、Delivery Capacity、Exposure Gate、full-batch barrier 和 next-batch ranking contexts。它决定哪些 pair 获得曝光；不能把这一层误写成 LLM、Decision Adapter 或模拟用户在调度曝光。
+
+### Simulated User Decision Layer
+
+机制展示三层中的**模拟用户决策层（Simulated User Decision Layer）**。它只在 pair 实际曝光后形成 Primary Campaign Decision 和同次曝光的 report-only Demographic Shadow Decision。它不创建 Research Sample、不维护推荐 queue，也不把 Shadow、`ignore` 或 `provider_failed` 写成可传播反馈。
+
 ### Comment-Derived User Interaction Graph
 
 从真实视频下的一级评论、二级回复和 `@` mention 关系派生的用户互动网络。节点是用户，边表示评论者到视频作者、回复者到被回复评论者或提及者到被提及用户的历史互动；它不是好友或关注关系。

@@ -1,0 +1,68 @@
+---
+title: 曝光与配对决策 / Exposure & Decisions
+---
+flowchart LR
+  %% diagram-id: exposure_decisions
+  %% dom-title-key: exposure_decisions.title
+  %% dom-description-key: exposure_decisions.description
+  %% dom-node-key: eligible_pair=exposure_decisions.node.eligible_pair
+  %% dom-node-key: per_message_queue=exposure_decisions.node.per_message_queue
+  %% dom-node-key: exposure_gate=exposure_decisions.node.exposure_gate
+  %% dom-node-key: exposed_pair=exposure_decisions.node.exposed_pair
+  %% dom-node-key: primary_campaign_decision=exposure_decisions.node.primary_campaign_decision
+  %% dom-node-key: report_only_shadow_decision=exposure_decisions.node.report_only_shadow_decision
+  %% dom-edge-key: exposed_pair_to_primary=exposure_decisions.edge.same_exposure
+  %% dom-edge-key: exposed_pair_to_shadow=exposure_decisions.edge.same_exposure
+  %% fallback-key: exposure_decisions.fallback.no_pre_exposure_decision
+  %% fallback-key: exposure_decisions.fallback.same_exposure
+  %% fallback-key: exposure_decisions.fallback.shadow_boundary
+  %% image-raster-generation-required: true
+  %% image-visual-system: Horizontal flat 2D scientific-editorial composition on light paper, with dark ink lines and one restrained cobalt-blue accent.
+  %% image-purpose: Make exposure visibly precede both paired Decisions and prevent Shadow from looking like a second exposure.
+  %% image-composition: A five-stage chain crosses from the platform lane into the simulated-user lane and ends in a solid Primary / dashed Shadow fork.
+  %% image-required-mark: eligible pair
+  %% image-required-mark: per-message queue
+  %% image-required-mark: Exposure Gate
+  %% image-required-mark: one exposed-pair mark
+  %% image-required-mark: same-exposure Primary and report-only Shadow fork
+  %% image-forbidden-mark: people or character illustrations
+  %% image-forbidden-mark: 3D, glow, photorealistic devices, or decorative nodes
+  %% image-forbidden-mark: any text, letters, numerals, or labels rendered inside the image
+  %% image-forbidden-mark: color-only encoding
+  classDef historical_data fill:#f4f1e8,stroke:#1f2933,color:#1f2933,stroke-width:1px;
+  classDef platform_recommendation fill:#eef3fb,stroke:#2459a9,color:#1f2933,stroke-width:1.5px;
+  classDef simulated_user_decision fill:#ffffff,stroke:#1f2933,color:#1f2933,stroke-width:1.5px;
+  classDef message_m1 fill:#eef3fb,stroke:#2459a9,stroke-width:2px;
+  classDef message_m2 fill:#ffffff,stroke:#2459a9,stroke-width:2px,stroke-dasharray:6 4;
+  classDef message_m3 fill:#f4f1e8,stroke:#2459a9,stroke-width:3px;
+  subgraph historical_data_lane["历史数据层<br/>Historical Data Layer"]
+    direction TB
+  end
+  subgraph platform_recommendation_lane["平台推荐层<br/>Platform Recommendation Layer"]
+    direction TB
+    eligible_pair["合格的用户 × 消息配对<br/>Eligible User × Message Pair"]
+    per_message_queue["对应消息的独立队列<br/>Per-Message Queue"]
+    exposure_gate{"曝光门<br/>Exposure Gate"}
+  end
+  subgraph simulated_user_decision_lane["模拟用户决策层<br/>Simulated User Decision Layer"]
+    direction TB
+    exposed_pair(["已曝光配对<br/>Exposed Pair"])
+    primary_campaign_decision["主要活动决策<br/>Primary Campaign Decision"]
+    report_only_shadow_decision(["仅报告的人口属性影子决策<br/>Report-Only Demographic Shadow Decision"])
+  end
+  %% semantic-edge: eligible_pair_to_queue
+  eligible_pair --> per_message_queue
+  %% semantic-edge: queue_to_exposure_gate
+  per_message_queue --> exposure_gate
+  %% semantic-edge: exposure_gate_to_exposed_pair
+  exposure_gate --> exposed_pair
+  %% semantic-edge: exposed_pair_to_primary
+  exposed_pair -->|"同一次曝光<br/>Same Exposure"| primary_campaign_decision
+  %% semantic-edge: exposed_pair_to_shadow
+  exposed_pair -.->|"同一次曝光<br/>Same Exposure"| report_only_shadow_decision
+  class eligible_pair platform_recommendation;
+  class per_message_queue platform_recommendation;
+  class exposure_gate platform_recommendation;
+  class exposed_pair simulated_user_decision;
+  class primary_campaign_decision simulated_user_decision;
+  class report_only_shadow_decision simulated_user_decision;

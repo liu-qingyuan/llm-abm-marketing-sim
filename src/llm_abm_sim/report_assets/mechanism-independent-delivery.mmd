@@ -1,0 +1,68 @@
+---
+title: 三条消息独立投放 / Independent Delivery
+---
+flowchart LR
+  %% diagram-id: independent_delivery
+  %% dom-title-key: independent_delivery.title
+  %% dom-description-key: independent_delivery.description
+  %% dom-node-key: shared_seed_launch=independent_delivery.node.shared_seed_launch
+  %% dom-node-key: message_1_capacity_600=independent_delivery.node.message_1_capacity_600
+  %% dom-node-key: message_2_capacity_600=independent_delivery.node.message_2_capacity_600
+  %% dom-node-key: message_3_capacity_600=independent_delivery.node.message_3_capacity_600
+  %% dom-node-key: independent_capacity_overlap=independent_delivery.node.independent_capacity_overlap
+  %% dom-edge-key: shared_seed_to_m1_capacity=independent_delivery.edge.shared_seed
+  %% dom-edge-key: shared_seed_to_m2_capacity=independent_delivery.edge.shared_seed
+  %% dom-edge-key: shared_seed_to_m3_capacity=independent_delivery.edge.shared_seed
+  %% fallback-key: independent_delivery.fallback.batch_zero
+  %% fallback-key: independent_delivery.fallback.capacity
+  %% fallback-key: independent_delivery.fallback.overlap
+  %% fallback-key: independent_delivery.fallback.ranking
+  %% image-raster-generation-required: true
+  %% image-visual-system: Horizontal flat 2D scientific-editorial composition on light paper, with dark ink lines and one restrained cobalt-blue accent.
+  %% image-purpose: Show three independent delivery capacities without suggesting a shared 20-slot quota.
+  %% image-composition: A compact shared-seed launch fans into three equal M1/M2/M3 queue tracks, then ends in one overlap boundary note.
+  %% image-required-mark: shared Batch 0 seed launch
+  %% image-required-mark: three independent 600-capacity tracks
+  %% image-required-mark: M1/M2/M3 distinguished by shape and line style
+  %% image-required-mark: cross-message overlap allowed
+  %% image-forbidden-mark: people or character illustrations
+  %% image-forbidden-mark: 3D, glow, photorealistic devices, or decorative nodes
+  %% image-forbidden-mark: any text, letters, numerals, or labels rendered inside the image
+  %% image-forbidden-mark: color-only encoding
+  classDef historical_data fill:#f4f1e8,stroke:#1f2933,color:#1f2933,stroke-width:1px;
+  classDef platform_recommendation fill:#eef3fb,stroke:#2459a9,color:#1f2933,stroke-width:1.5px;
+  classDef simulated_user_decision fill:#ffffff,stroke:#1f2933,color:#1f2933,stroke-width:1.5px;
+  classDef message_m1 fill:#eef3fb,stroke:#2459a9,stroke-width:2px;
+  classDef message_m2 fill:#ffffff,stroke:#2459a9,stroke-width:2px,stroke-dasharray:6 4;
+  classDef message_m3 fill:#f4f1e8,stroke:#2459a9,stroke-width:3px;
+  subgraph historical_data_lane["历史数据层<br/>Historical Data Layer"]
+    direction TB
+  end
+  subgraph platform_recommendation_lane["平台推荐层<br/>Platform Recommendation Layer"]
+    direction TB
+    shared_seed_launch(["Batch 0 共同种子启动<br/>Batch 0 Shared Seed Launch"])
+    message_1_capacity_600["M1 独立队列：30 × Top20 = 600 容量<br/>M1 Independent Queue: 30 × Top20 = 600 Capacity"]
+    message_2_capacity_600(["M2 独立队列：30 × Top20 = 600 容量<br/>M2 Independent Queue: 30 × Top20 = 600 Capacity"])
+    message_3_capacity_600{{"M3 独立队列：30 × Top20 = 600 容量<br/>M3 Independent Queue: 30 × Top20 = 600 Capacity"}}
+    independent_capacity_overlap(["三份容量互不共享；跨消息受众可重叠<br/>Three Capacities Are Not Shared; Cross-Message Audiences May Overlap"])
+  end
+  subgraph simulated_user_decision_lane["模拟用户决策层<br/>Simulated User Decision Layer"]
+    direction TB
+  end
+  %% semantic-edge: shared_seed_to_m1_capacity
+  shared_seed_launch -->|"相同 seeds；分别补足 Top20<br/>Same Seeds; Fill Top20 Independently"| message_1_capacity_600
+  %% semantic-edge: shared_seed_to_m2_capacity
+  shared_seed_launch -.->|"相同 seeds；分别补足 Top20<br/>Same Seeds; Fill Top20 Independently"| message_2_capacity_600
+  %% semantic-edge: shared_seed_to_m3_capacity
+  shared_seed_launch ==>|"相同 seeds；分别补足 Top20<br/>Same Seeds; Fill Top20 Independently"| message_3_capacity_600
+  %% semantic-edge: m1_capacity_to_overlap
+  message_1_capacity_600 --> independent_capacity_overlap
+  %% semantic-edge: m2_capacity_to_overlap
+  message_2_capacity_600 -.-> independent_capacity_overlap
+  %% semantic-edge: m3_capacity_to_overlap
+  message_3_capacity_600 ==> independent_capacity_overlap
+  class shared_seed_launch platform_recommendation;
+  class message_1_capacity_600 platform_recommendation,message_m1;
+  class message_2_capacity_600 platform_recommendation,message_m2;
+  class message_3_capacity_600 platform_recommendation,message_m3;
+  class independent_capacity_overlap platform_recommendation;

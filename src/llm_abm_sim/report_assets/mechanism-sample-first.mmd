@@ -1,0 +1,65 @@
+---
+title: 样本先存在 / Sample First
+---
+flowchart LR
+  %% diagram-id: sample_first
+  %% dom-title-key: sample_first.title
+  %% dom-description-key: sample_first.description
+  %% dom-node-key: eligible_user_pool=sample_first.node.eligible_user_pool
+  %% dom-node-key: influence_seed_union=sample_first.node.influence_seed_union
+  %% dom-node-key: seed_direct_neighbors=sample_first.node.seed_direct_neighbors
+  %% dom-node-key: quota_regular_users=sample_first.node.quota_regular_users
+  %% dom-node-key: research_sample_1000=sample_first.node.research_sample_1000
+  %% fallback-key: sample_first.fallback.source
+  %% fallback-key: sample_first.fallback.selection
+  %% fallback-key: sample_first.fallback.boundary
+  %% image-raster-generation-required: true
+  %% image-visual-system: Horizontal flat 2D scientific-editorial composition on light paper, with dark ink lines and one restrained cobalt-blue accent.
+  %% image-purpose: Show that the Research Sample exists before any message or queue.
+  %% image-composition: A left-to-right narrowing funnel in the historical-data lane, ending in one emphatic 1,000-user sample mark.
+  %% image-required-mark: full eligible pool
+  %% image-required-mark: seed union
+  %% image-required-mark: historical direct neighbors
+  %% image-required-mark: quota-filled regular users
+  %% image-required-mark: one fixed Research Sample endpoint
+  %% image-forbidden-mark: people or character illustrations
+  %% image-forbidden-mark: 3D, glow, photorealistic devices, or decorative nodes
+  %% image-forbidden-mark: any text, letters, numerals, or labels rendered inside the image
+  %% image-forbidden-mark: color-only encoding
+  classDef historical_data fill:#f4f1e8,stroke:#1f2933,color:#1f2933,stroke-width:1px;
+  classDef platform_recommendation fill:#eef3fb,stroke:#2459a9,color:#1f2933,stroke-width:1.5px;
+  classDef simulated_user_decision fill:#ffffff,stroke:#1f2933,color:#1f2933,stroke-width:1.5px;
+  classDef message_m1 fill:#eef3fb,stroke:#2459a9,stroke-width:2px;
+  classDef message_m2 fill:#ffffff,stroke:#2459a9,stroke-width:2px,stroke-dasharray:6 4;
+  classDef message_m3 fill:#f4f1e8,stroke:#2459a9,stroke-width:3px;
+  subgraph historical_data_lane["历史数据层<br/>Historical Data Layer"]
+    direction TB
+    eligible_user_pool["完整合格用户池<br/>Full Eligible User Pool"]
+    influence_seed_union(["影响力种子并集<br/>Influence Seed Union"])
+    seed_direct_neighbors["种子的历史直接一跳邻居<br/>Seed Historical Direct Neighbors"]
+    quota_regular_users["按配额补足的普通用户<br/>Quota-Filled Regular Users"]
+    research_sample_1000(["固定 1,000 人研究样本<br/>Fixed 1,000-User Research Sample"])
+  end
+  subgraph platform_recommendation_lane["平台推荐层<br/>Platform Recommendation Layer"]
+    direction TB
+  end
+  subgraph simulated_user_decision_lane["模拟用户决策层<br/>Simulated User Decision Layer"]
+    direction TB
+  end
+  %% semantic-edge: pool_to_seed_union
+  eligible_user_pool --> influence_seed_union
+  %% semantic-edge: seed_union_to_neighbors
+  influence_seed_union --> seed_direct_neighbors
+  %% semantic-edge: pool_to_quota_users
+  eligible_user_pool --> quota_regular_users
+  %% semantic-edge: seed_union_to_sample
+  influence_seed_union --> research_sample_1000
+  %% semantic-edge: neighbors_to_sample
+  seed_direct_neighbors --> research_sample_1000
+  %% semantic-edge: quota_users_to_sample
+  quota_regular_users --> research_sample_1000
+  class eligible_user_pool historical_data;
+  class influence_seed_union historical_data;
+  class seed_direct_neighbors historical_data;
+  class quota_regular_users historical_data;
+  class research_sample_1000 historical_data;
