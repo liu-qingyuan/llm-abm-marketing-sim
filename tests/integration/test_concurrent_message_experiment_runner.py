@@ -220,6 +220,11 @@ def _sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def _object_sha256(value: object) -> str:
+    payload = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
+
+
 def _rewrite_manifest_hashes(run_dir: Path, *artifact_keys: str) -> None:
     manifest_path = run_dir / "artifact_manifest.json"
     manifest = _read_json(manifest_path)
@@ -1518,6 +1523,78 @@ def test_private_primary_only_consumer_runs_without_shadow_and_commits_only_posi
     assert status["terminal_variant_count"] == 60
     assert status["closed_pair_count"] == 60
     assert status["committed_batch_count"] == 2
+    runtime_replay = ConcurrentExecutionJournal.open_existing(result.workspace_root)._replay_runtime()
+    assert [record["event_type"] for record in runtime_replay["records"]] == [
+        "run_started",
+        "batch_committed",
+        "batch_committed",
+    ]
+    assert result.runtime_resident_row_high_water == 180
+    assert result.runtime_resident_rows_after_commit == 0
+    spool_dir = result.workspace_root / "concurrent_runtime_batch_spool"
+    assert [path.name for path in sorted(spool_dir.iterdir())] == ["batch-000000.json", "batch-000001.json"]
+
+
+def test_batch_spool_preserves_prefactor_primary_and_paired_hashes(tmp_path: Path) -> None:
+    dataset_dir = _make_concurrent_fixture(tmp_path)
+    config = ConcurrentMessageExperimentConfig(
+        dataset_dir=dataset_dir,
+        sample_size=30,
+        horizon=2,
+        delivery_capacity=10,
+        configuration_profile="validation",
+    )
+    primary_result = concurrent_message_experiment_module._PrimaryOnlyConcurrentRuntimeConsumer(
+        config,
+        _ScriptedConcurrentAdapter(
+            name="compat-primary",
+            prompt_version=CONCURRENT_MESSAGE_PRIMARY_PROMPT_VERSION,
+            positive_user_ids={"u1"},
+            fail_pairs={(0, "message_3", "u4")},
+        ),
+    ).run_new(tmp_path / "compat-primary")
+    paired_output = ConcurrentMessageExperimentRunner(
+        config,
+        _ScriptedConcurrentAdapter(
+            name="compat-paired-primary",
+            prompt_version=CONCURRENT_MESSAGE_PRIMARY_PROMPT_VERSION,
+            positive_user_ids={"u1"},
+            fail_pairs=set(),
+        ),
+        _ScriptedConcurrentAdapter(
+            name="compat-paired-shadow",
+            prompt_version=CONCURRENT_MESSAGE_SHADOW_PROMPT_VERSION,
+            positive_user_ids={"u2"},
+            fail_pairs=set(),
+        ),
+    ).run_and_write(tmp_path / "compat-paired")
+
+    assert {
+        field_name: _object_sha256(getattr(primary_result, field_name))
+        for field_name in ("candidate_rows", "primary_rows", "terminal_rows", "variant_evidence_rows", "step_rows")
+    } == {
+        "candidate_rows": "f2df4183794b8acbfc21405d1abb471576abd521a8ab9a46de749509191c50aa",
+        "primary_rows": "d4b354ee92d5fab5b0ffd5d4509bc35052b459fb1c2fb59b157844adcfbf2025",
+        "terminal_rows": "9d94e12826d5177815a587d1e3bb2c70accb9520281d298c4d364c4a866435a4",
+        "variant_evidence_rows": "bfc6d83efcb7e91840707538b283e2f04874e99cd3162743579a5f114650cc22",
+        "step_rows": "721b99bc2dfac1c980c5918110c54b8200d17089838b076e93e42ace00d3a8a4",
+    }
+    assert {
+        artifact_name: _sha256(paired_output / artifact_name)
+        for artifact_name in (
+            "concurrent_runtime_candidates.csv",
+            "concurrent_runtime_pairs.csv",
+            "concurrent_runtime_terminal_rows.csv",
+            "concurrent_runtime_steps.json",
+            "concurrent_campaign_diagnostics.json",
+        )
+    } == {
+        "concurrent_runtime_candidates.csv": "6aac987fe20025d16a07cef52dc512117ea9981ab9b8e2c4a10e8d7f459bad5e",
+        "concurrent_runtime_pairs.csv": "d213acc2fab45ec2beea30bb4c9c0b7e8b151b973c56a755f9261479fccf35c0",
+        "concurrent_runtime_terminal_rows.csv": "07e35205d7fa1228b5a706d03ca942bf0f3c7d5a34c011a8bf579d690ab4155f",
+        "concurrent_runtime_steps.json": "76ff5d3acb382072d8fafc4e2771bad25174a93bb480563dff9bea737c7ab91a",
+        "concurrent_campaign_diagnostics.json": "68ac9178eaeed05a8d50bd039d447fbbcd4ff629c391331e0065900ad950f9d7",
+    }
 
 
 def test_private_primary_only_consumer_resumes_durable_batch_without_replaying_terminals(tmp_path: Path) -> None:
@@ -1569,6 +1646,134 @@ def test_private_primary_only_consumer_resumes_durable_batch_without_replaying_t
     assert resumed.step_rows == baseline.step_rows
     assert resumed_adapter.calls
     assert {call["time_step"] for call in resumed_adapter.calls} == {1}
+    assert resumed.runtime_resident_row_high_water == baseline.runtime_resident_row_high_water == 180
+    assert resumed.runtime_resident_rows_after_commit == 0
+
+
+@pytest.mark.parametrize("crash_window", ["before_journal_commit", "after_journal_commit"])
+def test_private_primary_only_resume_closes_prepared_spool_without_replaying_adapter(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    crash_window: str,
+) -> None:
+    dataset_dir = _make_concurrent_fixture(tmp_path)
+    config = ConcurrentMessageExperimentConfig(
+        dataset_dir=dataset_dir,
+        sample_size=30,
+        horizon=2,
+        delivery_capacity=10,
+        configuration_profile="validation",
+    )
+    output_target = tmp_path / f"primary-only-prepared-{crash_window}"
+    crash_state = {"triggered": False}
+    original_append = ConcurrentExecutionJournal.append
+    spool_class = concurrent_message_experiment_module._ConcurrentRuntimeBatchSpool
+    original_publish = spool_class.publish_prepared
+
+    if crash_window == "before_journal_commit":
+        def crash_once(
+            self: ConcurrentExecutionJournal,
+            *,
+            event_type: str,
+            event_identity: dict[str, object],
+            payload: dict[str, object],
+            batch_snapshot_hash: str | None = None,
+        ) -> dict[str, object]:
+            if event_type == "batch_committed" and not crash_state["triggered"]:
+                crash_state["triggered"] = True
+                raise RuntimeError("crash after spool prepare before journal commit")
+            return original_append(
+                self,
+                event_type=event_type,
+                event_identity=event_identity,
+                payload=payload,
+                batch_snapshot_hash=batch_snapshot_hash,
+            )
+
+        monkeypatch.setattr(ConcurrentExecutionJournal, "append", crash_once)
+        error = "crash after spool prepare before journal commit"
+    else:
+        def crash_once(self: Any, ref: dict[str, object]) -> None:
+            if not crash_state["triggered"]:
+                crash_state["triggered"] = True
+                raise RuntimeError("crash after journal commit before spool publish")
+            original_publish(self, ref)
+
+        monkeypatch.setattr(spool_class, "publish_prepared", crash_once)
+        error = "crash after journal commit before spool publish"
+
+    crashing_adapter = _ScriptedConcurrentAdapter(
+        name="primary-only-prepared-resume",
+        prompt_version=CONCURRENT_MESSAGE_PRIMARY_PROMPT_VERSION,
+        positive_user_ids={"u1"},
+        fail_pairs=set(),
+    )
+    with pytest.raises(RuntimeError, match=error):
+        concurrent_message_experiment_module._PrimaryOnlyConcurrentRuntimeConsumer(
+            config,
+            crashing_adapter,
+        ).run_new(output_target)
+    assert len(crashing_adapter.calls) == 30
+    workspace = derive_concurrent_execution_workspace(output_target)
+    spool_dir = workspace / "concurrent_runtime_batch_spool"
+    assert len(list(spool_dir.glob("*.pending"))) == 1
+    assert list(spool_dir.glob("*.json")) == []
+
+    resume_adapter = _ScriptedConcurrentAdapter(
+        name="primary-only-prepared-resume",
+        prompt_version=CONCURRENT_MESSAGE_PRIMARY_PROMPT_VERSION,
+        positive_user_ids={"u1"},
+        fail_pairs=set(),
+    )
+    resumed = concurrent_message_experiment_module._PrimaryOnlyConcurrentRuntimeConsumer(
+        config,
+        resume_adapter,
+    ).resume(output_target)
+
+    assert {call["time_step"] for call in resume_adapter.calls} == {1}
+    assert resumed.runtime_resident_rows_after_commit == 0
+    assert list(spool_dir.glob("*.pending")) == []
+    assert [path.name for path in sorted(spool_dir.glob("*.json"))] == [
+        "batch-000000.json",
+        "batch-000001.json",
+    ]
+
+
+def test_private_primary_only_resume_rejects_corrupt_spool_before_adapter_call(tmp_path: Path) -> None:
+    dataset_dir = _make_concurrent_fixture(tmp_path)
+    config = ConcurrentMessageExperimentConfig(
+        dataset_dir=dataset_dir,
+        sample_size=30,
+        horizon=2,
+        delivery_capacity=10,
+        configuration_profile="validation",
+    )
+    output_target = tmp_path / "primary-only-corrupt-spool"
+    concurrent_message_experiment_module._PrimaryOnlyConcurrentRuntimeConsumer(
+        config,
+        _ScriptedConcurrentAdapter(
+            name="primary-only-corrupt-spool",
+            prompt_version=CONCURRENT_MESSAGE_PRIMARY_PROMPT_VERSION,
+            positive_user_ids={"u1"},
+            fail_pairs=set(),
+        ),
+    ).run_new(output_target)
+    workspace = derive_concurrent_execution_workspace(output_target)
+    first_chunk = workspace / "concurrent_runtime_batch_spool" / "batch-000000.json"
+    first_chunk.write_bytes(first_chunk.read_bytes() + b"\n")
+    resume_adapter = _ScriptedConcurrentAdapter(
+        name="primary-only-corrupt-spool",
+        prompt_version=CONCURRENT_MESSAGE_PRIMARY_PROMPT_VERSION,
+        positive_user_ids={"u1"},
+        fail_pairs=set(),
+    )
+
+    with pytest.raises(ValueError, match="spool checksum mismatch"):
+        concurrent_message_experiment_module._PrimaryOnlyConcurrentRuntimeConsumer(
+            config,
+            resume_adapter,
+        ).resume(output_target)
+    assert resume_adapter.calls == []
 
 
 @pytest.mark.parametrize("corruption", ["snapshot", "terminal", "identity"])
@@ -1851,6 +2056,8 @@ def test_concurrent_message_runner_recovers_when_publish_marker_crashes_after_re
     assert crashed_status["lifecycle"] == "durable_partial"
     assert crashed_status["finalization_started"] is True
     assert (output_dir / "artifact_manifest.json").is_file()
+    spool_dir = workspace_dir / "concurrent_runtime_batch_spool"
+    spool_before_resume = {path.name: path.read_bytes() for path in spool_dir.iterdir()}
 
     resumed_primary = _ScriptedConcurrentAdapter(
         name="resume-primary",
@@ -1871,6 +2078,7 @@ def test_concurrent_message_runner_recovers_when_publish_marker_crashes_after_re
     assert resumed_output == output_dir
     assert resumed_primary.calls == []
     assert resumed_shadow.calls == []
+    assert spool_before_resume == {path.name: path.read_bytes() for path in spool_dir.iterdir()}
     _assert_same_files(
         baseline_output,
         resumed_output,

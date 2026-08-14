@@ -13,6 +13,11 @@ from typing import Any, Literal, TypedDict, cast
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from ._concurrent_runtime_spool import (
+    _ConcurrentRuntimeBatchSpool,
+    _ConcurrentRuntimeMaterializedRows,
+    _ConcurrentRuntimeSpoolChunk,
+)
 from .concurrent_campaign_diagnostics import ConcurrentCampaignDiagnosticArtifacts, ConcurrentCampaignDiagnostics
 from .concurrent_execution_journal import (
     CONCURRENT_MESSAGE_EXECUTION_SNAPSHOT_SCHEMA,
@@ -235,6 +240,37 @@ CONCURRENT_MESSAGE_TERMINAL_FIELDS = (
     "decision_source",
     "failure_type",
     "provider_metadata",
+)
+_CONCURRENT_MESSAGE_VARIANT_EVIDENCE_FIELDS = (
+    "terminal_row_id",
+    "pair_id",
+    "message_id",
+    "user_id",
+    "decision_variant",
+    "prompt_version",
+    "context_source_key",
+    "cache_key",
+    "profile_payload",
+    "peer_context_payload",
+    "prompt_field_inclusion",
+    "request_invocations",
+    "provider_response_count",
+    "successful_decision_count",
+    "observed_model_counts",
+    "observed_model_missing_response_count",
+    "observed_model_malformed_response_count",
+    "usage_complete",
+    "usage_complete_response_count",
+    "usage_missing_response_count",
+    "usage_malformed_response_count",
+    "input_usage",
+    "output_usage",
+    "total_usage",
+    "cached_input_usage",
+    "terminal_status",
+    "provider_status",
+    "action",
+    "decision_source",
 )
 
 _MESSAGE_1_BODY = """每次在旅途中下榻酒店，面对洗手台上那些用完即弃的全塑料洗漱用品，注重环保的你，或许也曾有过些许无奈。在锦江酒店，这件微小的日常有了不一样的答案。我们把田野里的麦浪，变成了你手心里的绿色体验。
@@ -1371,6 +1407,7 @@ class _ConcurrentRuntimeKernelState:
     pair_schedule_position: int = 0
     next_time_step: int = 0
     active_batch: dict[str, Any] | None = None
+    runtime_resident_row_high_water: int = 0
 
 
 @dataclass(frozen=True)
@@ -1405,6 +1442,13 @@ class _ConcurrentRuntimeKernel:
         self.neighbors_by_user = neighbors_by_user
         self.journal = journal
         self._terminal_variants = terminal_variants
+        self._spool = _ConcurrentRuntimeBatchSpool(
+            journal.workspace_dir,
+            run_id=journal.run_id,
+            identity_hash=journal.identity_hash,
+            terminal_variants=terminal_variants,
+            recover_prepared=not journal.read_only,
+        )
 
     @classmethod
     def paired(
@@ -1447,6 +1491,21 @@ class _ConcurrentRuntimeKernel:
     @property
     def active_batch(self) -> dict[str, Any] | None:
         return self.state.active_batch
+
+    @property
+    def runtime_resident_row_count(self) -> int:
+        return sum(
+            len(rows)
+            for rows in (
+                self.state.candidate_rows,
+                self.state.result_rows,
+                self.state.terminal_rows,
+                self.state.variant_evidence_rows,
+            )
+        )
+
+    def materialize_spool(self, replay: Mapping[str, object]) -> _ConcurrentRuntimeMaterializedRows:
+        return self._spool.materialize(replay)
 
     def plan_batch(self) -> dict[str, Any]:
         if self.state.active_batch is not None:
@@ -1513,6 +1572,7 @@ class _ConcurrentRuntimeKernel:
                 )
                 self.state.candidate_rows.append(candidate_row)
                 message_candidate_rows.append(candidate_row)
+            self._observe_resident_rows()
             batch_candidate_rows_by_message[message.message_id] = message_candidate_rows
             batch_message_summaries[message.message_id] = {
                 "message_id": message.message_id,
@@ -1620,10 +1680,10 @@ class _ConcurrentRuntimeKernel:
         if not isinstance(records, Sequence):
             raise TypeError("replay records must be a sequence")
 
+        commits = [self._restore_spooled_chunk(chunk) for chunk in self._spool.iter_committed(replay)]
         messages_by_id = {message.message_id: message for message in self.config.messages}
         expected_message_order = [message.message_id for message in self.config.messages]
         batches_by_snapshot_hash: dict[str, dict[str, Any]] = {}
-        commits: list[_ConcurrentRuntimeBatchCommit] = []
 
         for record_raw in records:
             record = _require_mapping(record_raw, "replay record")
@@ -1691,6 +1751,7 @@ class _ConcurrentRuntimeKernel:
                             }
                         )
                     self.state.candidate_rows.extend(ranked_candidates)
+                    self._observe_resident_rows()
                     selected_user_ids = self._string_list(
                         message_payload.get("selected_user_ids", []),
                         f"selected users for {message_id}",
@@ -1810,26 +1871,13 @@ class _ConcurrentRuntimeKernel:
             if record_type != "event":
                 raise ValueError(f"unsupported replay record type: {record_type}")
             event_type = _as_str(record.get("event_type"))
-            if event_type in {"run_started", "run_finalized", "run_published"}:
+            if event_type in {"run_started", "batch_committed", "run_finalized", "run_published"}:
                 continue
             batch_snapshot_hash = _as_str(record.get("batch_snapshot_hash"))
             replayed_active_batch = batches_by_snapshot_hash.get(batch_snapshot_hash)
             if replayed_active_batch is None or replayed_active_batch is not self.state.active_batch:
                 raise ValueError(f"event {event_type} references a non-active batch snapshot")
             active_batch = replayed_active_batch
-            if event_type == "batch_committed":
-                payload = _require_mapping(record.get("payload"), "event payload")
-                committed_user_ids = self._string_list(
-                    payload.get("committed_user_ids", []),
-                    "committed users",
-                )
-                expected_committed_user_ids = sorted(cast(set[str], active_batch["primary_positive_user_ids"]))
-                if committed_user_ids != expected_committed_user_ids:
-                    raise ValueError("batch_committed committed_user_ids do not match replayed Primary positives")
-                commit = self._apply_commit(active_batch, committed_user_ids)
-                commits.append(commit)
-                continue
-
             event_identity = _require_mapping(record.get("event_identity"), "event identity")
             pair_id = _as_str(event_identity.get("pair_id"))
             pair_state_by_id = cast(dict[str, dict[str, Any]], active_batch["pair_state_by_id"])
@@ -1852,9 +1900,16 @@ class _ConcurrentRuntimeKernel:
                     for field_name in CONCURRENT_MESSAGE_TERMINAL_FIELDS
                     if field_name in terminal_payload
                 }
-                variant_evidence = dict(
+                variant_payload = dict(
                     safe_data(_require_mapping(payload.get("variant_evidence"), "variant evidence"))
                 )
+                if not set(variant_payload).issubset(_CONCURRENT_MESSAGE_VARIANT_EVIDENCE_FIELDS):
+                    raise ValueError("replayed variant evidence contains an unsupported field")
+                variant_evidence = {
+                    field_name: variant_payload[field_name]
+                    for field_name in _CONCURRENT_MESSAGE_VARIANT_EVIDENCE_FIELDS
+                    if field_name in variant_payload
+                }
                 if terminal_row.get("pair_id") != pair_id or terminal_row.get("decision_variant") != decision_variant:
                     raise ValueError("replayed terminal row identity does not match its event")
                 if (
@@ -1871,6 +1926,7 @@ class _ConcurrentRuntimeKernel:
                 )
                 self.state.terminal_rows.append(terminal_row)
                 self.state.variant_evidence_rows.append(variant_evidence)
+                self._observe_resident_rows()
                 continue
             if event_type == "pair_closed":
                 self._current_pair_state(plan)
@@ -1885,9 +1941,101 @@ class _ConcurrentRuntimeKernel:
 
         if self.state.next_time_step != _as_int(status.get("committed_batch_count")):
             raise ValueError("replayed committed batch count does not match kernel state")
+        active_time_step: int | None = None
+        active_batch_complete = False
         if self.state.active_batch is not None:
             self.validate_active_batch(require_all_pairs=False)
+            active_time_step = _as_int(self.state.active_batch["time_step"])
+            batch_plans = cast(list[_PairExecutionPlan], self.state.active_batch["batch_plans"])
+            active_batch_complete = _as_int(self.state.active_batch["next_pair_index"]) == len(batch_plans)
+            if active_batch_complete:
+                self.validate_active_batch(require_all_pairs=True)
+        self._spool.validate_prepared_state(
+            active_time_step=active_time_step,
+            active_batch_complete=active_batch_complete,
+        )
         return commits
+
+    def _restore_spooled_chunk(self, chunk: _ConcurrentRuntimeSpoolChunk) -> _ConcurrentRuntimeBatchCommit:
+        if chunk.time_step != self.state.next_time_step:
+            raise ValueError("runtime batch spool chunks are not contiguous")
+        commit_payload = chunk.commit
+        frozen_user_ids = self._string_list(
+            commit_payload.get("frozen_campaign_engaged_user_ids", []),
+            "spooled frozen campaign engaged users",
+        )
+        if frozen_user_ids != sorted(self.state.campaign_engaged_user_ids):
+            raise ValueError("runtime batch spool frozen feedback does not match prior commits")
+        committed_user_ids = self._string_list(
+            commit_payload.get("committed_primary_positive_user_ids", []),
+            "spooled committed Primary-positive users",
+        )
+        if committed_user_ids != sorted(set(committed_user_ids)):
+            raise ValueError("runtime batch spool committed Primary-positive users are not canonical")
+
+        expected_message_order = [message.message_id for message in self.config.messages]
+        summaries_raw = commit_payload.get("message_summaries", [])
+        if not isinstance(summaries_raw, Sequence) or isinstance(summaries_raw, (str, bytes)):
+            raise ValueError("runtime batch spool message summaries must be a sequence")
+        summaries = [
+            cast(_BatchMessageSummary, dict(safe_data(_require_mapping(summary, "spooled message summary"))))
+            for summary in summaries_raw
+        ]
+        if [_as_str(summary.get("message_id")) for summary in summaries] != expected_message_order:
+            raise ValueError("runtime batch spool message summary order or identity is crossed")
+
+        selected_by_message = {message_id: [] for message_id in expected_message_order}
+        positive_user_ids: set[str] = set()
+        expected_position = self.state.pair_schedule_position
+        pending_exposures: list[tuple[str, str]] = []
+        for row in chunk.result_rows:
+            position = _as_int(row.get("pair_schedule_position"))
+            if position != expected_position:
+                raise ValueError("runtime batch spool pair schedule positions are not globally contiguous")
+            expected_position += 1
+            message_id = _as_str(row.get("message_id"))
+            user_id = _as_str(row.get("user_id"))
+            if message_id not in selected_by_message or user_id not in self.state.cohort.users_by_id:
+                raise ValueError("runtime batch spool result identity is outside the prepared cohort")
+            if user_id in self.state.exposed_by_message[message_id]:
+                raise ValueError("runtime batch spool repeats a message-local exposure")
+            pending_exposures.append((message_id, user_id))
+            selected_by_message[message_id].append(user_id)
+            is_positive = (
+                row.get("primary_status") == "succeeded"
+                and row.get("primary_action") in CONCURRENT_MESSAGE_POSITIVE_ACTIONS
+            )
+            if is_positive:
+                positive_user_ids.add(user_id)
+            expected_feedback = _csv_bool(is_positive and user_id in committed_user_ids)
+            if row.get("campaign_feedback_committed") != expected_feedback:
+                raise ValueError("runtime batch spool campaign feedback flag is crossed")
+        if committed_user_ids != sorted(positive_user_ids):
+            raise ValueError("runtime batch spool committed users do not match succeeded Primary positives")
+        for summary in summaries:
+            message_id = _as_str(summary.get("message_id"))
+            selected_user_ids = self._string_list(
+                summary.get("selected_user_ids", []),
+                f"spooled selected users for {message_id}",
+            )
+            if selected_user_ids != selected_by_message[message_id]:
+                raise ValueError("runtime batch spool message summary does not match result rows")
+
+        for message_id, user_id in pending_exposures:
+            self.state.exposed_by_message[message_id].add(user_id)
+        self.state.campaign_engaged_user_ids.update(committed_user_ids)
+        self.state.pair_schedule_position = expected_position
+        self.state.next_time_step = chunk.time_step + 1
+        self.state.runtime_resident_row_high_water = max(
+            self.state.runtime_resident_row_high_water,
+            chunk.resident_row_count,
+        )
+        return _ConcurrentRuntimeBatchCommit(
+            time_step=chunk.time_step,
+            frozen_campaign_engaged_user_ids=frozen_user_ids,
+            committed_primary_positive_user_ids=committed_user_ids,
+            message_summaries=summaries,
+        )
 
     def pending_plans(self) -> list[_PairExecutionPlan]:
         active_batch = self._require_active_batch()
@@ -1988,6 +2136,7 @@ class _ConcurrentRuntimeKernel:
         cast(dict[str, dict[str, object]], pair_state["variant_evidence_by_variant"])[decision_variant] = evidence_copy
         self.state.terminal_rows.append(terminal_copy)
         self.state.variant_evidence_rows.append(evidence_copy)
+        self._observe_resident_rows()
 
     def close_paired_pair(self, plan: _PairExecutionPlan, result_row: Mapping[str, object]) -> None:
         if self._terminal_variants != self._PAIRED_TERMINALS:
@@ -2103,6 +2252,22 @@ class _ConcurrentRuntimeKernel:
         batch_plans = cast(list[_PairExecutionPlan], active_batch["batch_plans"])
         committed_user_ids = sorted(cast(set[str], active_batch["primary_positive_user_ids"]))
         batch_snapshot_hash = _as_str(active_batch["batch_snapshot_hash"])
+        commit = self._prepare_commit(active_batch, committed_user_ids)
+        commit_payload = {
+            "time_step": commit.time_step,
+            "frozen_campaign_engaged_user_ids": list(commit.frozen_campaign_engaged_user_ids),
+            "committed_primary_positive_user_ids": list(commit.committed_primary_positive_user_ids),
+            "message_summaries": list(commit.message_summaries),
+        }
+        spool_ref = self._spool.prepare_batch(
+            time_step=time_step,
+            batch_snapshot_hash=batch_snapshot_hash,
+            commit=commit_payload,
+            candidate_rows=self.state.candidate_rows,
+            result_rows=self.state.result_rows,
+            terminal_rows=self.state.terminal_rows,
+            variant_evidence_rows=self.state.variant_evidence_rows,
+        )
         self.journal.append(
             event_type="batch_committed",
             event_identity={"time_step": time_step},
@@ -2111,10 +2276,13 @@ class _ConcurrentRuntimeKernel:
                 "committed_user_ids": committed_user_ids,
                 "committed_user_count": len(committed_user_ids),
                 "batch_pair_count": len(batch_plans),
+                "batch_spool_chunk": spool_ref,
             },
             batch_snapshot_hash=batch_snapshot_hash,
         )
-        return self._apply_commit(active_batch, committed_user_ids)
+        self._spool.publish_prepared(spool_ref)
+        self._finish_commit(commit)
+        return commit
 
     def _record_closed_pair(
         self,
@@ -2129,6 +2297,7 @@ class _ConcurrentRuntimeKernel:
         pair_state["pair_closed"] = True
         pair_state["result_row"] = result_copy
         self.state.result_rows.append(result_copy)
+        self._observe_resident_rows()
         active_batch["next_pair_index"] = _as_int(active_batch["next_pair_index"]) + 1
         message_summary = cast(dict[str, _BatchMessageSummary], active_batch["batch_message_summaries"])[
             plan.message.message_id
@@ -2145,7 +2314,7 @@ class _ConcurrentRuntimeKernel:
         if isinstance(shadow_terminal, Mapping) and shadow_terminal["terminal_status"] == "provider_failed":
             message_summary["shadow_provider_failed_user_ids"].append(plan.user.user_id)
 
-    def _apply_commit(
+    def _prepare_commit(
         self,
         active_batch: dict[str, Any],
         committed_user_ids: Sequence[str],
@@ -2153,16 +2322,14 @@ class _ConcurrentRuntimeKernel:
         self.validate_active_batch(require_all_pairs=True)
         time_step = _as_int(active_batch["time_step"])
         committed_user_list = list(committed_user_ids)
-        self.state.campaign_engaged_user_ids.update(committed_user_list)
-        batch_pair_start = _as_int(active_batch["batch_pair_start"])
-        for result_row in self.state.result_rows[batch_pair_start:]:
+        for result_row in self.state.result_rows:
             result_row["campaign_feedback_committed"] = _csv_bool(
                 result_row.get("primary_status") == "succeeded"
                 and result_row.get("primary_action") in CONCURRENT_MESSAGE_POSITIVE_ACTIONS
                 and str(result_row.get("user_id")) in committed_user_list
             )
         message_summaries_by_id = cast(dict[str, _BatchMessageSummary], active_batch["batch_message_summaries"])
-        commit = _ConcurrentRuntimeBatchCommit(
+        return _ConcurrentRuntimeBatchCommit(
             time_step=time_step,
             frozen_campaign_engaged_user_ids=list(active_batch["frozen_campaign_engaged_user_ids"]),
             committed_primary_positive_user_ids=committed_user_list,
@@ -2171,9 +2338,23 @@ class _ConcurrentRuntimeKernel:
                 for message in self.config.messages
             ],
         )
-        self.state.next_time_step = time_step + 1
+
+    def _finish_commit(self, commit: _ConcurrentRuntimeBatchCommit) -> None:
+        self.state.campaign_engaged_user_ids.update(commit.committed_primary_positive_user_ids)
+        self.state.next_time_step = commit.time_step + 1
         self.state.active_batch = None
-        return commit
+        self.state.candidate_rows.clear()
+        self.state.result_rows.clear()
+        self.state.terminal_rows.clear()
+        self.state.variant_evidence_rows.clear()
+        if self.runtime_resident_row_count != 0:
+            raise AssertionError("committed runtime batch rows were not released")
+
+    def _observe_resident_rows(self) -> None:
+        self.state.runtime_resident_row_high_water = max(
+            self.state.runtime_resident_row_high_water,
+            self.runtime_resident_row_count,
+        )
 
     def _current_pair_state(self, plan: _PairExecutionPlan) -> tuple[dict[str, Any], dict[str, Any]]:
         active_batch, pair_state = self._pair_state(plan)
@@ -2449,7 +2630,7 @@ class ConcurrentMessageExperimentRunner:
             derive_concurrent_execution_workspace(output_path), identity=run_identity
         )
         try:
-            replay = journal.replay()
+            replay = journal._replay_runtime()
             status = replay["status"]
             if status["lifecycle"] == "published":
                 if not output_path.exists():
@@ -2608,9 +2789,14 @@ class ConcurrentMessageExperimentRunner:
         state.pair_schedule_position = runtime_state.pair_schedule_position
         state.next_time_step = runtime_state.next_time_step
         state.active_batch = runtime_state.active_batch
-        safe_candidate_rows = _safe_runtime_rows(state.candidate_rows)
-        safe_pair_rows = _safe_runtime_rows(state.pair_rows)
-        safe_terminal_rows = _safe_runtime_rows(state.terminal_rows)
+        if kernel.runtime_resident_row_count != 0:
+            raise AssertionError("paired runtime retained committed batch rows before finalization")
+        materialized = kernel.materialize_spool(state.journal._replay_runtime())
+        if len(materialized.commits) != len(state.step_rows):
+            raise ValueError("runtime batch spool commit summaries do not close the paired step rows")
+        safe_candidate_rows = _safe_runtime_rows(materialized.candidate_rows)
+        safe_pair_rows = _safe_runtime_rows(materialized.result_rows)
+        safe_terminal_rows = _safe_runtime_rows(materialized.terminal_rows)
         campaign_diagnostics = ConcurrentCampaignDiagnostics(delivery_capacity=self.config.delivery_capacity).build(
             candidate_rows=safe_candidate_rows,
             pair_rows=safe_pair_rows,
@@ -2623,9 +2809,9 @@ class ConcurrentMessageExperimentRunner:
         )
         validation_summary = self._validation_summary(
             cohort=state.cohort,
-            pair_rows=state.pair_rows,
-            terminal_rows=state.terminal_rows,
-            variant_evidence_rows=state.variant_evidence_rows,
+            pair_rows=materialized.result_rows,
+            terminal_rows=materialized.terminal_rows,
+            variant_evidence_rows=materialized.variant_evidence_rows,
             step_rows=state.step_rows,
             diagnostics=campaign_diagnostics,
             sampling_status=sampling_status,
@@ -2640,9 +2826,9 @@ class ConcurrentMessageExperimentRunner:
         if production_deploy_eligible:
             validation_summary = self._validation_summary(
                 cohort=state.cohort,
-                pair_rows=state.pair_rows,
-                terminal_rows=state.terminal_rows,
-                variant_evidence_rows=state.variant_evidence_rows,
+                pair_rows=materialized.result_rows,
+                terminal_rows=materialized.terminal_rows,
+                variant_evidence_rows=materialized.variant_evidence_rows,
                 step_rows=state.step_rows,
                 diagnostics=campaign_diagnostics,
                 sampling_status=sampling_status,
@@ -2954,6 +3140,8 @@ class _PrimaryOnlyConcurrentRuntimeResult:
     terminal_rows: list[dict[str, object]]
     variant_evidence_rows: list[dict[str, object]]
     step_rows: list[dict[str, object]]
+    runtime_resident_row_high_water: int
+    runtime_resident_rows_after_commit: int
 
 
 class _PrimaryOnlyConcurrentRuntimeConsumer:
@@ -3006,7 +3194,7 @@ class _PrimaryOnlyConcurrentRuntimeConsumer:
             raise FileExistsError(f"Primary-only output target must remain private and absent: {output_path}")
         journal = ConcurrentExecutionJournal.open_resume(workspace, identity=identity)
         try:
-            replay = journal.replay()
+            replay = journal._replay_runtime()
         except Exception:
             journal.close()
             raise
@@ -3163,16 +3351,24 @@ class _PrimaryOnlyConcurrentRuntimeConsumer:
                     kernel.close_primary_pair(plan, self._primary_result_row(plan, terminal_row))
                 commit = kernel.commit_primary_batch()
                 step_rows.append(self._primary_step_row(commit))
+            runtime_resident_rows_after_commit = kernel.runtime_resident_row_count
+            if runtime_resident_rows_after_commit != 0:
+                raise AssertionError("Primary-only runtime retained committed batch rows before finalization")
+            materialized = kernel.materialize_spool(journal._replay_runtime())
+            if len(materialized.commits) != len(step_rows):
+                raise ValueError("runtime batch spool commit summaries do not close the Primary-only step rows")
         finally:
             journal.close()
 
         return _PrimaryOnlyConcurrentRuntimeResult(
             workspace_root=workspace,
-            candidate_rows=list(state.candidate_rows),
-            primary_rows=list(state.result_rows),
-            terminal_rows=list(state.terminal_rows),
-            variant_evidence_rows=list(state.variant_evidence_rows),
+            candidate_rows=materialized.candidate_rows,
+            primary_rows=materialized.result_rows,
+            terminal_rows=materialized.terminal_rows,
+            variant_evidence_rows=materialized.variant_evidence_rows,
             step_rows=step_rows,
+            runtime_resident_row_high_water=state.runtime_resident_row_high_water,
+            runtime_resident_rows_after_commit=runtime_resident_rows_after_commit,
         )
 
     @classmethod

@@ -38,9 +38,10 @@ personalized_delivery_score
 
 | Module / artifact | 当前职责 |
 |---|---|
-| 私有 `_ConcurrentRuntimeKernel` | ranking plan、batch-start feedback snapshot、message-local single exposure、terminal closure、campaign 去重、next-batch commit 和 validated replay |
-| `ConcurrentMessageExperimentRunner` | 保持公开 Primary+Shadow preflight，执行 paired Decisions、组装既有 candidate/pair rows 和最终 source |
-| 私有 `_PrimaryOnlyConcurrentRuntimeConsumer` | 只执行 Primary 并组装内部结果；不建立公开 Robustness Study、Shadow 或可发布 artifact |
+| 私有 `_ConcurrentRuntimeKernel` | ranking plan、batch-start feedback snapshot、message-local single exposure、terminal closure、campaign 去重、next-batch commit 和 validated replay；只持有当前 batch 的完整 row objects |
+| 私有 `_ConcurrentRuntimeBatchSpool` | 以 run/batch/snapshot identity 与 SHA-256 关闭 append-only regular-file chunks，拒绝缺失、额外、crossed、损坏、symlink 和 path escape，并按 canonical batch order 重放 |
+| `ConcurrentMessageExperimentRunner` | 保持公开 Primary+Shadow preflight，执行 paired Decisions，并从私有 spool reader 投影既有 candidate/pair rows 和最终 source |
+| 私有 `_PrimaryOnlyConcurrentRuntimeConsumer` | 只执行 Primary，并从同一私有 spool reader 组装兼容结果；不建立公开 Robustness Study、Shadow 或可发布 artifact |
 | `PlatformEnvironment` / ranking | 每条 message 的 candidates、delivery capacity、Top20、exposure gate 和稳定 tie-break |
 | Decision Adapter | 对已曝光 `user × message` pair 生成 Primary/Shadow typed decisions；不选择 exposure |
 | `ConcurrentCampaignDiagnostics` | 从 persisted candidate/pair rows 重建 funnel、allocation、response、feedback 和 sensitivity diagnostics |
@@ -50,7 +51,7 @@ personalized_delivery_score
 | Editorial candidate | bilingual presentation grouping、五个 mechanism media derivatives、run evidence surface、异步 loading/ready/error trace state 和 canonical report bytes |
 | Release Module / deploy | 独占 Formal eligibility、双 lineage、artifact inventory、approved downloads、release metadata、production identity 与 hash closure；只把已批准 stage facts 交给 Report Interface，并继续负责显式 contract、candidate health、atomic `current` 和公网验收 |
 
-Diagnostics 的 source of truth 是同一 run 的 persisted candidate rows 与 pair rows。in-memory rows 在写出前会安全化，但不构成第二份事实来源；report writer 和 release validator 都会重新 rebuild 并比较 diagnostics、summary、schema tokens、manifest 与 approved artifact set。
+Diagnostics 的 source of truth 是同一 run 的 persisted candidate rows 与 pair rows。运行中只有当前 batch rows 驻留；batch commit 先写入带 identity/hash 的 hidden prepared file，再由 journal 记录对应 chunk reference，随后原子发布 chunk 并释放当前 batch row ownership；任一 commit window 中断都按同一 identity/hash 零调用续提。finalization 通过只读 canonical reader 投影原有 persisted rows；private spool 不是 Report、Release 或 Deployment 的新 Interface，也不构成可发布的第二份事实来源。report writer 和 release validator 仍会重新 rebuild 并比较 diagnostics、summary、schema tokens、manifest 与 approved artifact set。
 
 ## Robustness workspace 与分析闭包
 
@@ -101,7 +102,7 @@ Robustness production promotion 使用版本化 `abm-report-release-contract-v5/
 
 普通 run 与 `contract-protected` Formal/release run 都遵守同一重建语义：前者可以删除后重建，后者仍必须按显式 contract 保留和验证；`contract-protected` Formal/release roots 不能仅按目录类型推断删除。workspace 或 staging 的存在不能替代 journal replay、source closure、release validation 或 deployment authorization。
 
-私有 runtime kernel 对 paired 与 Primary-only 使用显式 terminal contract：既有 paired journal 仍要求同一 `user × message` 的 Primary、Shadow 都 terminal 后才关闭；Primary-only workspace 只记录 Primary，但必须等同批三条 message 的全部已选 pairs terminal 后才能 commit。Robustness operational root 额外持有 execution identity 与 cap status，每个 cell journal 仍由 kernel 拥有；两者都从已验证 journal 恢复，workspace identity、batch snapshot、completed cell 或 terminal evidence 不一致时失败，不猜测缺失状态。Formal live cell 若在一次 external attempt 中断且 physical count 尚需 reconciliation，只返回 private resumable evidence，不自动重放未知请求。
+私有 runtime kernel 对 paired 与 Primary-only 使用显式 terminal contract：既有 paired journal 仍要求同一 `user × message` 的 Primary、Shadow 都 terminal 后才关闭；Primary-only workspace 只记录 Primary，但必须等同批三条 message 的全部已选 pairs terminal 后才能 commit。已提交 batch 从 spool chunk 恢复 exposure indexes、campaign feedback、schedule cursor 与 step aggregate；journal replay 仍验证完整 checksum/event chain，但 runtime path 只保留 commit references 和尚未提交的 active batch records。Robustness operational root 额外持有 execution identity 与 cap status，每个 cell journal 仍由 kernel 拥有；两者都从已验证 journal 与 spool 恢复，workspace identity、batch snapshot、chunk inventory、completed cell 或 terminal evidence 不一致时失败，不猜测缺失状态。Formal live cell 若在一次 external attempt 中断且 physical count 尚需 reconciliation，只返回 private resumable evidence，不自动重放未知请求。
 
 ## LLM visibility 与 evidence
 

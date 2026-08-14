@@ -7,7 +7,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from tempfile import NamedTemporaryFile
-from typing import Any
+from typing import Any, Literal
 
 from .concurrent_message_report import CONCURRENT_MESSAGE_ARTIFACT_MANIFEST_JSON
 from .safe_serialization import safe_data
@@ -244,7 +244,7 @@ class ConcurrentExecutionJournal:
                 raise FileNotFoundError(
                     f"Concurrent execution workspace is missing {CONCURRENT_MESSAGE_EXECUTION_JOURNAL_JSONL}"
                 )
-            replay = _replay_workspace(workspace)
+            replay = _replay_workspace(workspace, retain_records="runtime")
             journal._hydrate_from_replay(replay)
         except Exception:
             journal.close()
@@ -259,6 +259,10 @@ class ConcurrentExecutionJournal:
 
     def replay(self) -> dict[str, Any]:
         return _replay_workspace(self.workspace_dir)
+
+    def _replay_runtime(self) -> dict[str, Any]:
+        """Validate the full journal while retaining only commit references and the active batch."""
+        return _replay_workspace(self.workspace_dir, retain_records="runtime")
 
     def _hydrate_from_replay(self, replay: Mapping[str, Any]) -> None:
         status = _require_mapping(replay.get("status"), "replay status")
@@ -510,7 +514,13 @@ class ConcurrentExecutionJournal:
         }
 
 
-def _replay_workspace(workspace_dir: Path) -> dict[str, Any]:
+def _replay_workspace(
+    workspace_dir: Path,
+    *,
+    retain_records: Literal["all", "runtime"] = "all",
+) -> dict[str, Any]:
+    if retain_records not in {"all", "runtime"}:
+        raise ValueError("unsupported concurrent journal record-retention policy")
     workspace = Path(workspace_dir)
     identity_path = workspace / CONCURRENT_MESSAGE_EXECUTION_RUN_IDENTITY_JSON
     journal_path = workspace / CONCURRENT_MESSAGE_EXECUTION_JOURNAL_JSONL
@@ -550,6 +560,7 @@ def _replay_workspace(workspace_dir: Path) -> dict[str, Any]:
     active_batch_pair_index = 0
     active_batch_terminal_variants: tuple[str, ...] = ()
     active_batch_pair_event_index = 0
+    active_batch_record_start: int | None = None
 
     if journal_path.is_file():
         with journal_path.open(encoding="utf-8") as handle:
@@ -659,6 +670,7 @@ def _replay_workspace(workspace_dir: Path) -> dict[str, Any]:
                         "snapshot_hash": snapshot_hash,
                         "snapshot_path": _as_str(record.get("snapshot_path")),
                     }
+                    active_batch_record_start = len(records)
                     records.append(
                         {
                             "record_type": "snapshot",
@@ -848,16 +860,20 @@ def _replay_workspace(workspace_dir: Path) -> dict[str, Any]:
                         "event_identity": dict(safe_data(event_identity)),
                         "batch_snapshot_hash": batch_snapshot_hash,
                     }
-                    records.append(
-                        {
-                            "record_type": "event",
-                            "sequence": record_sequence,
-                            "event_type": event_type,
-                            "event_identity": dict(safe_data(event_identity)),
-                            "batch_snapshot_hash": batch_snapshot_hash,
-                            "payload": dict(safe_data(payload)),
-                        }
-                    )
+                    commit_record = {
+                        "record_type": "event",
+                        "sequence": record_sequence,
+                        "event_type": event_type,
+                        "event_identity": dict(safe_data(event_identity)),
+                        "batch_snapshot_hash": batch_snapshot_hash,
+                        "payload": dict(safe_data(payload)),
+                    }
+                    if retain_records == "runtime":
+                        if active_batch_record_start is None:
+                            raise ValueError(f"batch_committed has no retained snapshot at line {line_number}")
+                        del records[active_batch_record_start:]
+                    active_batch_record_start = None
+                    records.append(commit_record)
                 elif event_type == "run_finalized":
                     if committed_batch_count != expected_batch_count:
                         raise ValueError(f"run_finalized occurs before the last batch is committed at line {line_number}")
