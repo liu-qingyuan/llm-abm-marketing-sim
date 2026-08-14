@@ -31,9 +31,17 @@ from .concurrent_message_report import (
 )
 from .full_pool_formal_experiment import (
     FullPoolExperimentError,
+    _ClosedFullPoolSource,
     _read_closed_full_pool_source,
 )
 from .full_pool_presentation import (
+    _FULL_POOL_MASTER,
+    _FULL_POOL_SOURCE_DIR,
+    _HISTORICAL_DIR,
+    _HISTORICAL_MERMAID_FILENAMES,
+    _TRACE_INDEX_PATH,
+    _TRACE_INDEX_SCHEMA,
+    _TRACE_PARTITION_SCHEMA,
     _FullPoolPresentationError,
 )
 from .full_pool_presentation import (
@@ -49,6 +57,63 @@ if TYPE_CHECKING:
 
 _REPORT_PAYLOAD_SCHEMA = "concurrent-robustness-report-payload-v1"
 _REPORT_PAYLOAD_V2_SCHEMA = "concurrent-robustness-report-payload-v2"
+_FULL_POOL_REPORT_PAYLOAD_SCHEMA = "full-pool-three-lineage-report-payload-v1"
+_FULL_POOL_CANDIDATE_MANIFEST_SCHEMA = "full-pool-three-lineage-candidate-manifest-v1"
+_FULL_POOL_RELEASE_EVIDENCE_SCHEMA = "full-pool-three-lineage-release-evidence-v1"
+_FULL_POOL_PRESENTATION_INVENTORY_SCHEMA = "full-pool-presentation-inventory-v1"
+_FULL_POOL_MECHANISM_SET_SCHEMA = "full-pool-mechanism-set-v1"
+_FULL_POOL_CANDIDATE_TYPE = "full_pool_three_lineage_presentation_candidate"
+_FULL_POOL_COUNT_FIELDS = frozenset(
+    {
+        "candidate_ranking_rows",
+        "committed_batches",
+        "distinct_users",
+        "eligible_pairs",
+        "exposures",
+        "primary_terminals",
+        "provider_failed_terminals",
+        "below_delivery_capacity_pairs",
+    }
+)
+_FULL_POOL_TRACE_INDEX_FIELDS = frozenset(
+    {
+        "schema_version",
+        "source_schema_version",
+        "source_identity",
+        "source_manifest_sha256",
+        "contract_sha256",
+        "message_order",
+        "batch_order",
+        "terminal_count",
+        "terminal_identity_sha256",
+        "partition_count",
+        "partitions",
+    }
+)
+_FULL_POOL_TRACE_PARTITION_FIELDS = frozenset(
+    {
+        "message_id",
+        "time_step",
+        "relative_path",
+        "sha256",
+        "bytes",
+        "row_count",
+        "terminal_identity_sha256",
+    }
+)
+_FULL_POOL_TRACE_PARTITION_DOCUMENT_FIELDS = frozenset(
+    {
+        "schema_version",
+        "source_identity",
+        "source_manifest_sha256",
+        "message_id",
+        "time_step",
+        "row_count",
+        "terminal_identity_sha256",
+        "rows",
+    }
+)
+_IMPLEMENTATION_COMMIT_PATTERN = re.compile(r"^[0-9a-f]{7,40}$")
 _REPORT_PAYLOAD_V1_FIELDS = frozenset(
     {
         "schema_version",
@@ -867,6 +932,35 @@ class _CandidateProjection:
     payloads: dict[str, bytes]
 
 
+@dataclass(frozen=True)
+class _FullPoolCandidateInputs:
+    source: _ClosedFullPoolSource
+    projection: _CandidateProjection
+    bundle: Path
+    historical_candidate: Path
+
+
+@dataclass(frozen=True)
+class _FullPoolCandidateFacts:
+    root: Path
+    manifest_sha256: str
+    candidate_identity_sha256: str
+    candidate_content_identity_sha256: str
+    report_sha256: str
+    payload_sha256: str
+    evidence_sha256: str
+    report_payload_schema_version: str
+    implementation_commit: str
+    source_lineage: Mapping[str, Any]
+    source_lineage_identity_sha256: str
+    presentation_bundle_identity_sha256: str
+    presentation_inventory_identity_sha256: str
+    mechanism_set_identity_sha256: str
+    trace_index_sha256: str
+    artifact_hashes: Mapping[str, str]
+    approved_downloads: Mapping[str, str]
+
+
 class _ReportPresentationInterface:
     """Package-internal seam for deterministic report composition and presentation stages."""
 
@@ -1141,6 +1235,213 @@ class _ReportPresentationInterface:
                 "Full-Pool presentation bundle failed validation"
             ) from exc
 
+    def compose_full_pool_candidate(
+        self,
+        *,
+        full_pool_source_root: str | Path,
+        full_pool_manifest_sha256: str,
+        historical_formal_root: str | Path,
+        historical_study_root: str | Path,
+        presentation_bundle_dir: str | Path,
+        implementation_commit: str,
+        destination_dir: str | Path,
+    ) -> Path:
+        """Atomically bind one presentation bundle to three immutable evidence lineages."""
+        inputs = self._prepare_full_pool_candidate_inputs(
+            full_pool_source_root=full_pool_source_root,
+            full_pool_manifest_sha256=full_pool_manifest_sha256,
+            historical_formal_root=historical_formal_root,
+            historical_study_root=historical_study_root,
+            presentation_bundle_dir=presentation_bundle_dir,
+        )
+        if not _IMPLEMENTATION_COMMIT_PATTERN.fullmatch(implementation_commit):
+            raise _RobustnessReportClosureError("Full-Pool candidate implementation commit is invalid")
+        protected_roots = (
+            inputs.source.root,
+            inputs.projection.formal.run_dir,
+            inputs.projection.study.root,
+            _workspace_root_for_study(inputs.projection.study.root),
+            inputs.bundle,
+        )
+        snapshots = {
+            root: _directory_file_hashes(root)
+            for root in (
+                inputs.source.root,
+                inputs.projection.formal.run_dir,
+                inputs.projection.study.root,
+                inputs.bundle,
+            )
+        }
+        destination = _validate_destination(Path(destination_dir), protected_roots=protected_roots)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        staging = Path(
+            tempfile.mkdtemp(
+                prefix=f".{destination.name}.full-pool-candidate.",
+                suffix=".staging",
+                dir=destination.parent,
+            )
+        )
+        installed = False
+        try:
+            shutil.copytree(inputs.bundle, staging, dirs_exist_ok=True, copy_function=shutil.copyfile)
+            if _directory_file_hashes(staging) != _directory_file_hashes(inputs.bundle):
+                raise _RobustnessReportClosureError("Full-Pool presentation bundle changed during copy")
+            contracts = _build_full_pool_candidate_contracts(inputs, implementation_commit)
+            for relative_path, payload in contracts.items():
+                target = staging / relative_path
+                if target.exists() or target.is_symlink():
+                    raise _RobustnessReportClosureError("Full-Pool candidate contract path already exists")
+                target.write_bytes(payload)
+            _validate_full_pool_candidate_directory(
+                staging,
+                inputs=inputs,
+                implementation_commit=implementation_commit,
+            )
+            if os.path.lexists(destination):
+                raise _RobustnessReportConflictError(
+                    "Full-Pool candidate destination appeared during publication"
+                )
+            os.replace(staging, destination)
+            installed = True
+            _validate_full_pool_candidate_directory(
+                destination,
+                inputs=inputs,
+                implementation_commit=implementation_commit,
+            )
+            _assert_full_pool_candidate_inputs_unchanged(snapshots)
+            installed = False
+            return destination
+        except Exception:
+            if staging.is_dir() and not staging.is_symlink():
+                shutil.rmtree(staging, ignore_errors=True)
+            if installed and destination.is_dir() and not destination.is_symlink():
+                shutil.rmtree(destination, ignore_errors=True)
+            raise
+
+    def validate_full_pool_candidate(
+        self,
+        candidate_dir: str | Path,
+        *,
+        full_pool_source_root: str | Path,
+        full_pool_manifest_sha256: str,
+        historical_formal_root: str | Path,
+        historical_study_root: str | Path,
+        presentation_bundle_dir: str | Path,
+        implementation_commit: str,
+    ) -> _FullPoolCandidateFacts:
+        """Reread and validate one three-lineage candidate against explicit inputs."""
+        if not _IMPLEMENTATION_COMMIT_PATTERN.fullmatch(implementation_commit):
+            raise _RobustnessReportClosureError("Full-Pool candidate implementation commit is invalid")
+        inputs = self._prepare_full_pool_candidate_inputs(
+            full_pool_source_root=full_pool_source_root,
+            full_pool_manifest_sha256=full_pool_manifest_sha256,
+            historical_formal_root=historical_formal_root,
+            historical_study_root=historical_study_root,
+            presentation_bundle_dir=presentation_bundle_dir,
+        )
+        candidate = Path(candidate_dir)
+        try:
+            absolute = Path(os.path.abspath(candidate))
+            resolved = candidate.resolve(strict=True)
+            if (
+                ".." in candidate.parts
+                or absolute != resolved
+                or candidate.is_symlink()
+                or not resolved.is_dir()
+            ):
+                raise ValueError("Full-Pool candidate must be one explicit real directory")
+            protected_roots = (
+                inputs.source.root,
+                inputs.projection.formal.run_dir,
+                inputs.projection.study.root,
+                _workspace_root_for_study(inputs.projection.study.root),
+                inputs.bundle,
+            )
+            if any(
+                resolved == root
+                or resolved.is_relative_to(root)
+                or root.is_relative_to(resolved)
+                for root in protected_roots
+            ):
+                raise ValueError("Full-Pool candidate overlaps immutable input evidence")
+            snapshots = {
+                root: _directory_file_hashes(root)
+                for root in (
+                    inputs.source.root,
+                    inputs.projection.formal.run_dir,
+                    inputs.projection.study.root,
+                    inputs.bundle,
+                )
+            }
+            facts = _validate_full_pool_candidate_directory(
+                resolved,
+                inputs=inputs,
+                implementation_commit=implementation_commit,
+            )
+            _assert_full_pool_candidate_inputs_unchanged(snapshots)
+            return facts
+        except _RobustnessReportClosureError:
+            raise
+        except (FileNotFoundError, OSError, TypeError, ValueError, json.JSONDecodeError) as exc:
+            raise _RobustnessReportClosureError(
+                "Full-Pool three-lineage candidate failed closure validation"
+            ) from exc
+
+    def _prepare_full_pool_candidate_inputs(
+        self,
+        *,
+        full_pool_source_root: str | Path,
+        full_pool_manifest_sha256: str,
+        historical_formal_root: str | Path,
+        historical_study_root: str | Path,
+        presentation_bundle_dir: str | Path,
+    ) -> _FullPoolCandidateInputs:
+        try:
+            source = _read_closed_full_pool_source(
+                full_pool_source_root,
+                manifest_sha256=full_pool_manifest_sha256,
+            )
+            formal_path = Path(historical_formal_root)
+            study_path = Path(historical_study_root)
+            workspace_path = _workspace_root_for_study(study_path)
+            manifest, manifest_payload, manifest_sha256 = _load_study_manifest(study_path)
+            bundle = Path(presentation_bundle_dir)
+            historical_candidate = bundle / _HISTORICAL_DIR
+            _, projection = self._validate_candidate_from_inputs(
+                formal_root=formal_path,
+                study_root=study_path,
+                workspace_root=workspace_path,
+                manifest=manifest,
+                manifest_payload=manifest_payload,
+                manifest_sha256=manifest_sha256,
+                candidate_dir=historical_candidate,
+            )
+            _validate_full_pool_presentation_bundle(
+                bundle,
+                source=source,
+                historical_candidate=historical_candidate,
+            )
+            return _FullPoolCandidateInputs(
+                source=source,
+                projection=projection,
+                bundle=bundle.resolve(strict=True),
+                historical_candidate=historical_candidate.resolve(strict=True),
+            )
+        except _RobustnessReportClosureError:
+            raise
+        except (
+            FileNotFoundError,
+            FullPoolExperimentError,
+            _FullPoolPresentationError,
+            OSError,
+            TypeError,
+            ValueError,
+            json.JSONDecodeError,
+        ) as exc:
+            raise _RobustnessReportClosureError(
+                "Full-Pool candidate inputs failed independent three-lineage closure"
+            ) from exc
+
     def materialize_production(
         self,
         *,
@@ -1305,6 +1606,647 @@ class _ReportPresentationInterface:
 
 
 _REPORT_PRESENTATION = _ReportPresentationInterface()
+
+
+def _full_pool_candidate_source_lineage(inputs: _FullPoolCandidateInputs) -> dict[str, Any]:
+    source = inputs.source
+    counts = _mapping(source.manifest.get("counts"), "Full-Pool source counts")
+    if set(counts) != _FULL_POOL_COUNT_FIELDS or any(
+        type(value) is not int or value < 0 for value in counts.values()
+    ):
+        raise _RobustnessReportClosureError("Full-Pool source counts are missing, extra, or invalid")
+    provider_accounting = _mapping(
+        source.aggregates.get("provider_accounting"),
+        "Full-Pool Provider accounting",
+    )
+    if (
+        source.manifest.get("counts") != counts
+        or source.aggregates.get("counts") != counts
+        or source.manifest.get("provider_calls") != provider_accounting.get("external_request_invocations")
+        or source.manifest.get("physical_provider_attempts") != provider_accounting.get("physical_attempts")
+    ):
+        raise _RobustnessReportClosureError("Full-Pool source accounting is crossed")
+    execution = source.contract.formal_execution
+    full_pool = {
+        "source_path": source.root.as_posix(),
+        "source_schema_version": source.manifest.get("source_schema_version"),
+        "manifest_schema_version": source.manifest.get("schema_version"),
+        "contract_schema_version": source.contract.schema_version,
+        "source_identity": source.source_identity,
+        "manifest_sha256": source.manifest_sha256,
+        "contract_sha256": source.manifest.get("contract_sha256"),
+        "source_hash": source.manifest.get("source_hash"),
+        "profile": source.manifest.get("profile"),
+        "evidence_profile": source.manifest.get("evidence_profile"),
+        "requested_model": execution.requested_model if execution is not None else None,
+        "counts": counts,
+        "provider_accounting": provider_accounting,
+        "provider_calls": source.manifest.get("provider_calls"),
+        "live_api_triggered": source.manifest.get("live_api_triggered"),
+        "source_production_deploy_eligible": source.manifest.get("production_deploy_eligible"),
+        "evidence_scope": ["full_pool_main_experiment", "primary_only"],
+    }
+
+    projection = inputs.projection
+    formal = projection.formal
+    terminal_rows = formal.source_evidence.terminal_rows
+    primary_terminals = sum(row.get("decision_variant") == "primary" for row in terminal_rows)
+    shadow_terminals = sum(row.get("decision_variant") == "shadow" for row in terminal_rows)
+    formal_manifest_sha256 = formal.artifact_hashes.get(CONCURRENT_MESSAGE_ARTIFACT_MANIFEST_JSON)
+    if not _is_sha256(formal_manifest_sha256):
+        raise _RobustnessReportClosureError("historical Formal manifest hash is missing")
+    historical_counts = {
+        "distinct_users": len(formal.source_evidence.sample_manifest_rows),
+        "exposures": len(formal.source_evidence.pair_rows),
+        "primary_terminals": primary_terminals,
+        "shadow_terminals": shadow_terminals,
+        "trace_rows": len(formal.decision_trace_document.rows),
+    }
+    historical_source_kind = projection.manifest.source.kind
+    historical_sample_size = projection.manifest.sample.sample_size
+    if (
+        historical_counts["exposures"] != historical_counts["primary_terminals"]
+        or historical_counts["exposures"] != historical_counts["shadow_terminals"]
+        or historical_counts["exposures"] != historical_counts["trace_rows"]
+        or historical_counts["distinct_users"] != historical_sample_size
+        or (historical_source_kind == "formal" and historical_sample_size != 1_000)
+    ):
+        raise _RobustnessReportClosureError("historical Formal source denominators are crossed")
+    denominator_scope = (
+        "one_thousand_user_primary_shadow_only"
+        if historical_source_kind == "formal"
+        else "scaled_validation_primary_shadow_only"
+    )
+    historical_formal = {
+        "source_path": formal.run_dir.resolve(strict=True).as_posix(),
+        "source_id": projection.manifest.source.source_id,
+        "source_kind": historical_source_kind,
+        "manifest_schema_version": formal.manifest.schema_version,
+        "manifest_sha256": formal_manifest_sha256,
+        "report_payload_schema_version": formal.report_payload.schema_version,
+        "primary_prompt_token": formal.manifest.primary_prompt_token,
+        "shadow_prompt_token": formal.manifest.shadow_prompt_token,
+        "counts": historical_counts,
+        "denominator_scope": denominator_scope,
+        "evidence_scope": ["historical_primary_shadow", "demographic_sensitivity"],
+    }
+
+    study = projection.study
+    study_manifest_sha256 = projection.manifest_sha256
+    requested_models = sorted(
+        {cell.requested_model for cell in projection.manifest.prompt_model_cells}
+    )
+    robustness_study = {
+        "source_path": study.root.as_posix(),
+        "output_identity": projection.manifest.output_identity,
+        "manifest_schema_version": projection.manifest.schema_version,
+        "manifest_sha256": study_manifest_sha256,
+        "artifact_manifest_schema_version": study.root_manifest.get("schema_version"),
+        "artifact_manifest_sha256": study.file_hashes.get("artifact_manifest.json"),
+        "root_identity_sha256": study.root_manifest.get("root_identity_sha256"),
+        "sample_size": projection.manifest.sample.sample_size,
+        "ranking_weight_point_count": len(projection.manifest.weight_points),
+        "prompt_model_cell_count": len(projection.manifest.prompt_model_cells),
+        "requested_models": requested_models,
+        "row_counts": projection.rows.counts(),
+        "evidence_scope": ["ranking_weight_sensitivity", "prompt_model_primary_only"],
+    }
+    lineage = {
+        "full_pool": full_pool,
+        "historical_formal": historical_formal,
+        "robustness_study": robustness_study,
+    }
+    if any(
+        not _is_sha256(value)
+        for value in (
+            full_pool["manifest_sha256"],
+            full_pool["contract_sha256"],
+            full_pool["source_hash"],
+            historical_formal["manifest_sha256"],
+            robustness_study["manifest_sha256"],
+            robustness_study["artifact_manifest_sha256"],
+            robustness_study["root_identity_sha256"],
+        )
+    ):
+        raise _RobustnessReportClosureError("three-lineage identity hash is invalid")
+    return lineage
+
+
+def _full_pool_artifact_records(root: Path, hashes: Mapping[str, str]) -> list[dict[str, Any]]:
+    records: list[dict[str, Any]] = []
+    for relative_path, sha256 in sorted(hashes.items()):
+        pure = PurePosixPath(relative_path)
+        target = root / relative_path
+        if (
+            "\\" in relative_path
+            or pure.is_absolute()
+            or pure.as_posix() != relative_path
+            or "." in pure.parts
+            or ".." in pure.parts
+            or target.is_symlink()
+            or not target.is_file()
+            or not _is_sha256(sha256)
+        ):
+            raise _RobustnessReportClosureError("Full-Pool artifact path or hash is unsafe")
+        records.append(
+            {
+                "relative_path": relative_path,
+                "sha256": sha256,
+                "bytes": target.stat().st_size,
+            }
+        )
+    return records
+
+
+def _full_pool_approved_downloads(inputs: _FullPoolCandidateInputs) -> dict[str, str]:
+    historical_payload = _read_json(inputs.historical_candidate / _REPORT_PAYLOAD)
+    historical_downloads = _strict_string_mapping(
+        historical_payload.get("downloads"),
+        "historical approved downloads",
+    )
+    downloads = {
+        "full_pool_trace_index": _TRACE_INDEX_PATH,
+        "full_pool_mechanism_mermaid": _FULL_POOL_MASTER,
+        "full_pool_source_manifest": f"{_FULL_POOL_SOURCE_DIR}/manifest.json",
+        "full_pool_candidate_rows": f"{_FULL_POOL_SOURCE_DIR}/candidate_rows.jsonl",
+        "full_pool_pair_rows": f"{_FULL_POOL_SOURCE_DIR}/pair_rows.jsonl",
+        "full_pool_terminal_rows": f"{_FULL_POOL_SOURCE_DIR}/terminal_rows.jsonl",
+        **{
+            f"historical_{key}": f"{_HISTORICAL_DIR}/{relative_path}"
+            for key, relative_path in historical_downloads.items()
+        },
+    }
+    report = (inputs.bundle / CONCURRENT_MESSAGE_REPORT_HTML).read_text(encoding="utf-8")
+    observed_hrefs = {
+        html.unescape(match)
+        for match in re.findall(
+            r'<a\b(?=[^>]*\bdownload\b)[^>]*\bhref="([^"]+)"',
+            report,
+            re.IGNORECASE,
+        )
+    }
+    for index, relative_path in enumerate(sorted(observed_hrefs - set(downloads.values()))):
+        downloads[f"linked_artifact_{index:03d}"] = relative_path
+    if len(set(downloads.values())) != len(downloads):
+        raise _RobustnessReportClosureError("Full-Pool approved download paths are duplicated")
+    bundle_hashes = _directory_file_hashes(inputs.bundle)
+    for relative_path in downloads.values():
+        pure = PurePosixPath(relative_path)
+        if (
+            pure.is_absolute()
+            or pure.as_posix() != relative_path
+            or ".." in pure.parts
+            or relative_path not in bundle_hashes
+        ):
+            raise _RobustnessReportClosureError("Full-Pool approved download escapes its bundle inventory")
+    if observed_hrefs != set(downloads.values()):
+        raise _RobustnessReportClosureError("Full-Pool approved downloads differ from report hrefs")
+    return downloads
+
+
+def _full_pool_presentation_inventory(inputs: _FullPoolCandidateInputs) -> dict[str, Any]:
+    bundle_hashes = _directory_file_hashes(inputs.bundle)
+    bundle_records = _full_pool_artifact_records(inputs.bundle, bundle_hashes)
+    bundle_identity = _sha256_bytes(_json_bytes(dict(sorted(bundle_hashes.items()))))
+
+    expected_mermaid = {
+        _FULL_POOL_MASTER,
+        *(f"{_HISTORICAL_DIR}/{name}" for name in _HISTORICAL_MERMAID_FILENAMES),
+    }
+    actual_mermaid = {path for path in bundle_hashes if path.endswith(".mmd")}
+    if actual_mermaid != expected_mermaid:
+        raise _RobustnessReportClosureError("Full-Pool mechanism inventory is incomplete or extra")
+    mermaid_records = _full_pool_artifact_records(
+        inputs.bundle,
+        {path: bundle_hashes[path] for path in sorted(actual_mermaid)},
+    )
+    historical_mechanism = _MECHANISM_PRESENTATION.build()
+    full_pool_mechanism = _MECHANISM_PRESENTATION.build_full_pool_master()
+    mechanism_identity_document = {
+        "schema_version": _FULL_POOL_MECHANISM_SET_SCHEMA,
+        "historical_semantic_set_identity_sha256": historical_mechanism.semantic_set_identity_sha256,
+        "full_pool_semantic_set_identity_sha256": full_pool_mechanism.semantic_set_identity_sha256,
+        "masters": mermaid_records,
+    }
+    mechanism_presentation = {
+        **mechanism_identity_document,
+        "mechanism_set_identity_sha256": _sha256_bytes(
+            _json_bytes(mechanism_identity_document)
+        ),
+    }
+
+    index_path = inputs.bundle / _TRACE_INDEX_PATH
+    index = _read_json(index_path)
+    if set(index) != _FULL_POOL_TRACE_INDEX_FIELDS:
+        raise _RobustnessReportClosureError("Full-Pool trace index fields are missing or unexpected")
+    raw_partitions = _object_sequence(index.get("partitions"), "Full-Pool trace partitions")
+    partition_paths: set[str] = set()
+    partition_identities: set[tuple[str, int]] = set()
+    terminal_ids: set[str] = set()
+    ordered_terminal_ids: list[str] = []
+    partition_rows = 0
+    partitions: list[dict[str, Any]] = []
+    for entry in raw_partitions:
+        if set(entry) != _FULL_POOL_TRACE_PARTITION_FIELDS:
+            raise _RobustnessReportClosureError("Full-Pool trace partition fields are missing or unexpected")
+        relative_path = entry.get("relative_path")
+        message_id = entry.get("message_id")
+        time_step = entry.get("time_step")
+        row_count = entry.get("row_count")
+        byte_count = entry.get("bytes")
+        if (
+            not isinstance(relative_path, str)
+            or not relative_path
+            or not isinstance(message_id, str)
+            or not message_id
+            or type(time_step) is not int
+            or time_step < 0
+            or type(row_count) is not int
+            or row_count <= 0
+            or type(byte_count) is not int
+            or byte_count <= 0
+            or relative_path in partition_paths
+            or (message_id, time_step) in partition_identities
+            or relative_path not in bundle_hashes
+            or bundle_hashes[relative_path] != entry.get("sha256")
+            or (inputs.bundle / relative_path).stat().st_size != byte_count
+            or not _is_sha256(entry.get("terminal_identity_sha256"))
+        ):
+            raise _RobustnessReportClosureError("Full-Pool trace partition inventory is crossed")
+        partition_document = _read_json(inputs.bundle / relative_path)
+        if (
+            set(partition_document) != _FULL_POOL_TRACE_PARTITION_DOCUMENT_FIELDS
+            or partition_document.get("schema_version") != _TRACE_PARTITION_SCHEMA
+            or partition_document.get("source_identity") != inputs.source.source_identity
+            or partition_document.get("source_manifest_sha256") != inputs.source.manifest_sha256
+            or partition_document.get("message_id") != message_id
+            or partition_document.get("time_step") != time_step
+            or partition_document.get("row_count") != row_count
+            or partition_document.get("terminal_identity_sha256")
+            != entry.get("terminal_identity_sha256")
+        ):
+            raise _RobustnessReportClosureError("Full-Pool trace partition document is crossed")
+        rows = _object_sequence(
+            partition_document.get("rows"),
+            "Full-Pool trace partition rows",
+        )
+        row_terminal_ids: list[str] = []
+        for row in rows:
+            terminal_id = row.get("terminal_row_id")
+            if (
+                not isinstance(terminal_id, str)
+                or not terminal_id
+                or terminal_id in terminal_ids
+            ):
+                raise _RobustnessReportClosureError(
+                    "Full-Pool trace contains a missing or duplicate terminal identity"
+                )
+            terminal_ids.add(terminal_id)
+            row_terminal_ids.append(terminal_id)
+        partition_terminal_identity = hashlib.sha256(
+            json.dumps(
+                row_terminal_ids,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest()
+        if (
+            len(rows) != row_count
+            or partition_terminal_identity != entry.get("terminal_identity_sha256")
+        ):
+            raise _RobustnessReportClosureError(
+                "Full-Pool trace partition row count or terminal identity is crossed"
+            )
+        partition_paths.add(relative_path)
+        partition_identities.add((message_id, time_step))
+        ordered_terminal_ids.extend(row_terminal_ids)
+        partition_rows += len(rows)
+        partitions.append(entry)
+    terminal_count = index.get("terminal_count")
+    index_terminal_identity = hashlib.sha256(
+        json.dumps(
+            ordered_terminal_ids,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+    if (
+        index.get("schema_version") != _TRACE_INDEX_SCHEMA
+        or index.get("source_identity") != inputs.source.source_identity
+        or index.get("source_manifest_sha256") != inputs.source.manifest_sha256
+        or index.get("contract_sha256") != inputs.source.manifest.get("contract_sha256")
+        or type(terminal_count) is not int
+        or terminal_count != inputs.source.contract.expected_primary_terminals
+        or partition_rows != terminal_count
+        or index.get("partition_count") != len(partitions)
+        or len(terminal_ids) != terminal_count
+        or index.get("terminal_identity_sha256") != index_terminal_identity
+    ):
+        raise _RobustnessReportClosureError("Full-Pool trace denominator or source identity is crossed")
+    trace = {
+        "schema_version": index.get("schema_version"),
+        "index": _full_pool_artifact_records(
+            inputs.bundle,
+            {_TRACE_INDEX_PATH: bundle_hashes[_TRACE_INDEX_PATH]},
+        )[0],
+        "source_identity": index.get("source_identity"),
+        "source_manifest_sha256": index.get("source_manifest_sha256"),
+        "terminal_count": terminal_count,
+        "terminal_identity_sha256": index.get("terminal_identity_sha256"),
+        "partition_count": len(partitions),
+        "partitions": partitions,
+    }
+    report_record = _full_pool_artifact_records(
+        inputs.bundle,
+        {CONCURRENT_MESSAGE_REPORT_HTML: bundle_hashes[CONCURRENT_MESSAGE_REPORT_HTML]},
+    )[0]
+    return {
+        "schema_version": _FULL_POOL_PRESENTATION_INVENTORY_SCHEMA,
+        "bundle_path": inputs.bundle.as_posix(),
+        "bundle_identity_sha256": bundle_identity,
+        "bundle_artifacts": bundle_records,
+        "report": report_record,
+        "mechanism_presentation": mechanism_presentation,
+        "trace": trace,
+        "approved_downloads": _full_pool_approved_downloads(inputs),
+    }
+
+
+def _build_full_pool_candidate_contracts(
+    inputs: _FullPoolCandidateInputs,
+    implementation_commit: str,
+) -> dict[str, bytes]:
+    source_lineage = _full_pool_candidate_source_lineage(inputs)
+    source_lineage_identity = _sha256_bytes(_json_bytes(source_lineage))
+    presentation = _full_pool_presentation_inventory(inputs)
+    presentation_identity = _sha256_bytes(_json_bytes(presentation))
+    historical_lineage = _mapping(
+        source_lineage.get("historical_formal"),
+        "historical Formal source lineage",
+    )
+    payload = {
+        "schema_version": _FULL_POOL_REPORT_PAYLOAD_SCHEMA,
+        "title": "Full-Pool Main Experiment · Three-Lineage Presentation Candidate",
+        "implementation_commit": implementation_commit,
+        "source_lineage": source_lineage,
+        "source_lineage_identity_sha256": source_lineage_identity,
+        "presentation": presentation,
+        "presentation_inventory_identity_sha256": presentation_identity,
+        "claim_boundary": {
+            "full_pool_scope": "primary_only_main_experiment",
+            "historical_formal_scope": historical_lineage.get("denominator_scope"),
+            "robustness_study_scope": "ranking_weight_and_prompt_model_only",
+            "denominators_must_not_mix": True,
+            "causal_claim": False,
+            "population_or_model_single_factor_claim": False,
+        },
+        "provider_calls_during_composition": 0,
+        "image_generation_triggered": False,
+        "production_deploy_eligible": False,
+    }
+    payload_bytes = _json_bytes(payload)
+    payload_sha256 = _sha256_bytes(payload_bytes)
+    bundle_hashes = _directory_file_hashes(inputs.bundle)
+    content_hashes = {
+        **bundle_hashes,
+        _REPORT_PAYLOAD: payload_sha256,
+    }
+    content_identity = _sha256_bytes(_json_bytes(dict(sorted(content_hashes.items()))))
+    mechanism = _mapping(
+        presentation.get("mechanism_presentation"),
+        "Full-Pool mechanism presentation",
+    )
+    trace = _mapping(presentation.get("trace"), "Full-Pool trace presentation")
+    trace_index = _mapping(trace.get("index"), "Full-Pool trace index artifact")
+    release_evidence = {
+        "schema_version": _FULL_POOL_RELEASE_EVIDENCE_SCHEMA,
+        "candidate_type": _FULL_POOL_CANDIDATE_TYPE,
+        "implementation_commit": implementation_commit,
+        "source_lineage": source_lineage,
+        "source_lineage_identity_sha256": source_lineage_identity,
+        "report_payload_schema_version": _FULL_POOL_REPORT_PAYLOAD_SCHEMA,
+        "report_payload_sha256": payload_sha256,
+        "presentation_bundle_identity_sha256": presentation.get("bundle_identity_sha256"),
+        "presentation_inventory_identity_sha256": presentation_identity,
+        "mechanism_set_identity_sha256": mechanism.get("mechanism_set_identity_sha256"),
+        "trace_index_sha256": trace_index.get("sha256"),
+        "candidate_content_identity_sha256": content_identity,
+        "approved_downloads": presentation.get("approved_downloads"),
+        "provider_calls_during_composition": 0,
+        "image_generation_triggered": False,
+        "canonical_deployment_triggered": False,
+        "production_deploy_eligible": False,
+    }
+    evidence_bytes = _json_bytes(release_evidence)
+    evidence_sha256 = _sha256_bytes(evidence_bytes)
+    artifact_hashes = {
+        **content_hashes,
+        _RELEASE_EVIDENCE_JSON: evidence_sha256,
+    }
+    artifact_sizes = {
+        row["relative_path"]: row["bytes"]
+        for row in _full_pool_artifact_records(inputs.bundle, bundle_hashes)
+    }
+    artifact_sizes[_REPORT_PAYLOAD] = len(payload_bytes)
+    artifact_sizes[_RELEASE_EVIDENCE_JSON] = len(evidence_bytes)
+    artifacts = [
+        {
+            "relative_path": relative_path,
+            "sha256": sha256,
+            "bytes": artifact_sizes[relative_path],
+        }
+        for relative_path, sha256 in sorted(artifact_hashes.items())
+    ]
+    candidate_identity = _sha256_bytes(
+        _json_bytes(dict(sorted(artifact_hashes.items())))
+    )
+    manifest = {
+        "schema_version": _FULL_POOL_CANDIDATE_MANIFEST_SCHEMA,
+        "candidate_type": _FULL_POOL_CANDIDATE_TYPE,
+        "implementation_commit": implementation_commit,
+        "source_lineage": source_lineage,
+        "source_lineage_identity_sha256": source_lineage_identity,
+        "report_payload_schema_version": _FULL_POOL_REPORT_PAYLOAD_SCHEMA,
+        "report_payload_sha256": payload_sha256,
+        "presentation_bundle_identity_sha256": presentation.get("bundle_identity_sha256"),
+        "presentation_inventory_identity_sha256": presentation_identity,
+        "mechanism_set_identity_sha256": mechanism.get("mechanism_set_identity_sha256"),
+        "trace_index_sha256": trace_index.get("sha256"),
+        "candidate_content_identity_sha256": content_identity,
+        "candidate_identity_sha256": candidate_identity,
+        "artifacts": artifacts,
+        "approved_downloads": presentation.get("approved_downloads"),
+        "provider_calls_during_composition": 0,
+        "image_generation_triggered": False,
+        "canonical_deployment_triggered": False,
+        "production_deploy_eligible": False,
+    }
+    return {
+        _REPORT_PAYLOAD: payload_bytes,
+        _RELEASE_EVIDENCE_JSON: evidence_bytes,
+        CONCURRENT_MESSAGE_ARTIFACT_MANIFEST_JSON: _json_bytes(manifest),
+    }
+
+
+def _validate_full_pool_candidate_directory(
+    candidate: Path,
+    *,
+    inputs: _FullPoolCandidateInputs,
+    implementation_commit: str,
+) -> _FullPoolCandidateFacts:
+    try:
+        absolute = Path(os.path.abspath(candidate))
+        resolved = candidate.resolve(strict=True)
+        if absolute != resolved or candidate.is_symlink() or not resolved.is_dir():
+            raise ValueError("Full-Pool candidate is not one real directory")
+        actual_hashes = _directory_file_hashes(resolved)
+        bundle_hashes = _directory_file_hashes(inputs.bundle)
+        contracts = _build_full_pool_candidate_contracts(inputs, implementation_commit)
+        expected_paths = set(bundle_hashes) | set(contracts)
+        if set(actual_hashes) != expected_paths:
+            raise ValueError("Full-Pool candidate has missing or extra artifacts")
+        if any(actual_hashes[path] != sha256 for path, sha256 in bundle_hashes.items()):
+            raise ValueError("Full-Pool candidate presentation bytes differ from its closed bundle")
+        for relative_path, expected in contracts.items():
+            target = resolved / relative_path
+            if target.read_bytes() != expected:
+                raise ValueError(f"Full-Pool candidate contract is not reproducible: {relative_path}")
+
+        payload = _read_json(resolved / _REPORT_PAYLOAD)
+        evidence = _read_json(resolved / _RELEASE_EVIDENCE_JSON)
+        manifest = _read_json(resolved / CONCURRENT_MESSAGE_ARTIFACT_MANIFEST_JSON)
+        if (
+            payload.get("schema_version") != _FULL_POOL_REPORT_PAYLOAD_SCHEMA
+            or evidence.get("schema_version") != _FULL_POOL_RELEASE_EVIDENCE_SCHEMA
+            or manifest.get("schema_version") != _FULL_POOL_CANDIDATE_MANIFEST_SCHEMA
+            or payload.get("production_deploy_eligible") is not False
+            or evidence.get("production_deploy_eligible") is not False
+            or manifest.get("production_deploy_eligible") is not False
+            or payload.get("provider_calls_during_composition") != 0
+            or evidence.get("provider_calls_during_composition") != 0
+            or manifest.get("provider_calls_during_composition") != 0
+        ):
+            raise ValueError("Full-Pool candidate schema, eligibility, or Provider accounting is crossed")
+        artifacts = _object_sequence(manifest.get("artifacts"), "Full-Pool candidate artifacts")
+        if any(set(row) != {"relative_path", "sha256", "bytes"} for row in artifacts):
+            raise ValueError("Full-Pool candidate artifact fields are missing or unexpected")
+        artifact_paths: list[str] = []
+        for row in artifacts:
+            raw_relative_path = row.get("relative_path")
+            if not isinstance(raw_relative_path, str) or not raw_relative_path:
+                raise ValueError("Full-Pool candidate artifact path is invalid")
+            artifact_paths.append(raw_relative_path)
+        if artifact_paths != sorted(artifact_paths) or len(set(artifact_paths)) != len(artifact_paths):
+            raise ValueError("Full-Pool candidate artifact inventory is duplicated or non-canonical")
+        expected_artifact_paths = expected_paths - {CONCURRENT_MESSAGE_ARTIFACT_MANIFEST_JSON}
+        if set(artifact_paths) != expected_artifact_paths:
+            raise ValueError("Full-Pool candidate manifest inventory is incomplete")
+        for row in artifacts:
+            relative_path = str(row["relative_path"])
+            target = resolved / relative_path
+            if (
+                row.get("sha256") != actual_hashes[relative_path]
+                or row.get("bytes") != target.stat().st_size
+            ):
+                raise ValueError("Full-Pool candidate artifact hash or size is crossed")
+        artifact_hashes = {
+            str(row["relative_path"]): str(row["sha256"])
+            for row in artifacts
+        }
+        candidate_identity = _sha256_bytes(
+            _json_bytes(dict(sorted(artifact_hashes.items())))
+        )
+        if manifest.get("candidate_identity_sha256") != candidate_identity:
+            raise ValueError("Full-Pool candidate identity is crossed")
+        content_hashes = {
+            path: sha256
+            for path, sha256 in artifact_hashes.items()
+            if path != _RELEASE_EVIDENCE_JSON
+        }
+        content_identity = _sha256_bytes(_json_bytes(dict(sorted(content_hashes.items()))))
+        if (
+            manifest.get("candidate_content_identity_sha256") != content_identity
+            or evidence.get("candidate_content_identity_sha256") != content_identity
+        ):
+            raise ValueError("Full-Pool candidate content identity is crossed")
+        presentation = _mapping(payload.get("presentation"), "Full-Pool presentation inventory")
+        mechanism = _mapping(
+            presentation.get("mechanism_presentation"),
+            "Full-Pool mechanism presentation",
+        )
+        trace = _mapping(presentation.get("trace"), "Full-Pool trace inventory")
+        trace_index = _mapping(trace.get("index"), "Full-Pool trace index")
+        approved_downloads = _strict_string_mapping(
+            payload.get("presentation", {}).get("approved_downloads")
+            if isinstance(payload.get("presentation"), Mapping)
+            else None,
+            "Full-Pool approved downloads",
+        )
+        forbidden_fragments = (
+            ".env",
+            "credential",
+            "cookie",
+            "raw_prompt",
+            "raw_response",
+            "raw_provider_payload",
+            "raw_profile_payload",
+            "full_pool_attempt_ledger",
+            "full_pool_execution_status",
+            "full_pool_execution_identity",
+        )
+        if any(
+            any(fragment in path.lower() for fragment in forbidden_fragments)
+            for path in actual_hashes
+        ):
+            raise ValueError("Full-Pool candidate contains an operational or forbidden raw artifact")
+        return _FullPoolCandidateFacts(
+            root=resolved,
+            manifest_sha256=actual_hashes[CONCURRENT_MESSAGE_ARTIFACT_MANIFEST_JSON],
+            candidate_identity_sha256=candidate_identity,
+            candidate_content_identity_sha256=content_identity,
+            report_sha256=actual_hashes[CONCURRENT_MESSAGE_REPORT_HTML],
+            payload_sha256=actual_hashes[_REPORT_PAYLOAD],
+            evidence_sha256=actual_hashes[_RELEASE_EVIDENCE_JSON],
+            report_payload_schema_version=str(payload["schema_version"]),
+            implementation_commit=implementation_commit,
+            source_lineage=_mapping(payload.get("source_lineage"), "Full-Pool source lineage"),
+            source_lineage_identity_sha256=str(payload["source_lineage_identity_sha256"]),
+            presentation_bundle_identity_sha256=str(presentation["bundle_identity_sha256"]),
+            presentation_inventory_identity_sha256=str(
+                payload["presentation_inventory_identity_sha256"]
+            ),
+            mechanism_set_identity_sha256=str(mechanism["mechanism_set_identity_sha256"]),
+            trace_index_sha256=str(trace_index["sha256"]),
+            artifact_hashes=artifact_hashes,
+            approved_downloads=approved_downloads,
+        )
+    except _RobustnessReportClosureError:
+        raise
+    except (FileNotFoundError, OSError, TypeError, ValueError, KeyError, json.JSONDecodeError) as exc:
+        raise _RobustnessReportClosureError(
+            "Full-Pool three-lineage candidate artifacts failed exact closure"
+        ) from exc
+
+
+def _assert_full_pool_candidate_inputs_unchanged(
+    snapshots: Mapping[Path, Mapping[str, str]],
+) -> None:
+    if any(_directory_file_hashes(root) != dict(before) for root, before in snapshots.items()):
+        raise _RobustnessReportClosureError("Full-Pool candidate composition mutated immutable input evidence")
+
+
+def _strict_string_mapping(value: object, label: str) -> dict[str, str]:
+    if not isinstance(value, Mapping) or any(
+        not isinstance(key, str)
+        or not key
+        or not isinstance(item, str)
+        or not item
+        for key, item in value.items()
+    ):
+        raise ValueError(f"{label} must be a non-empty string mapping")
+    return dict(value)
 
 
 def _workspace_root_for_study(study_root: Path) -> Path:

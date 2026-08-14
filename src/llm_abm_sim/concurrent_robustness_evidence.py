@@ -13,6 +13,7 @@ from typing import Any
 
 from .concurrent_message_mechanism_presentation import _MECHANISM_PRESENTATION
 from .concurrent_message_report import CONCURRENT_MESSAGE_ARTIFACT_MANIFEST_JSON
+from .concurrent_robustness_report import _REPORT_PRESENTATION, _FullPoolCandidateFacts
 from .concurrent_robustness_study import (
     ConcurrentRobustnessManifest,
     _CellEvidenceDocument,
@@ -26,6 +27,7 @@ FORMAL_LOGICAL_JUDGMENTS = 28_800
 FORMAL_PHYSICAL_ATTEMPT_CAP = 86_400
 PRESENTATION_CLOSURE_SCHEMA = "concurrent-robustness-presentation-closure-contract-v1"
 PRESENTATION_CLOSURE_V2_SCHEMA = "concurrent-robustness-presentation-closure-contract-v2"
+FULL_POOL_PRESENTATION_CLOSURE_SCHEMA = "full-pool-three-lineage-presentation-closure-v1"
 _REPORT_PAYLOAD_V1_SCHEMA = "concurrent-robustness-report-payload-v1"
 _REPORT_PAYLOAD_V2_SCHEMA = "concurrent-robustness-report-payload-v2"
 _REPORT_PAYLOAD_V1_FIELDS = frozenset(
@@ -87,6 +89,45 @@ class CandidateLineageFacts:
     report_sha256: str
     payload_sha256: str
     evidence_sha256: str
+
+
+@dataclass(frozen=True)
+class FullPoolPresentationClosureFacts:
+    closure_path: Path
+    closure_sha256: str
+    closure_schema_version: str
+    implementation_commit: str
+    full_pool_source_path: Path
+    full_pool_source_schema_version: str
+    full_pool_source_identity: str
+    full_pool_source_manifest_sha256: str
+    full_pool_source_hash: str
+    historical_formal_path: Path
+    historical_formal_source_id: str
+    historical_formal_manifest_schema_version: str
+    historical_formal_manifest_sha256: str
+    robustness_study_path: Path
+    robustness_study_manifest_schema_version: str
+    robustness_study_manifest_sha256: str
+    robustness_study_artifact_manifest_sha256: str
+    robustness_study_root_identity_sha256: str
+    presentation_bundle_path: Path
+    presentation_bundle_identity_sha256: str
+    candidate_path: Path
+    candidate_manifest_sha256: str
+    candidate_identity_sha256: str
+    candidate_content_identity_sha256: str
+    candidate_report_sha256: str
+    candidate_payload_sha256: str
+    candidate_evidence_sha256: str
+    report_payload_schema_version: str
+    source_lineage_identity_sha256: str
+    presentation_inventory_identity_sha256: str
+    mechanism_set_identity_sha256: str
+    trace_index_sha256: str
+    provider_calls_during_closure: int
+    image_generation_triggered: bool
+    production_deploy_eligible: bool
 
 
 @dataclass(frozen=True)
@@ -460,11 +501,11 @@ def _validate_execution_contract(
     execution = manifest.dynamic_execution
     assert execution is not None
     for record in execution.qualifications:
-        row = row_by_model.get(record.requested_model)
+        qualification_row = row_by_model.get(record.requested_model)
         if (
-            row is None
-            or record.artifact_sha256 != row.get("evidence_sha256")
-            or record.required_observed_model != row.get("observed_model")
+            qualification_row is None
+            or record.artifact_sha256 != qualification_row.get("evidence_sha256")
+            or record.required_observed_model != qualification_row.get("observed_model")
             or record.artifact_reference != f"{qualification.resolve()}#{record.requested_model}"
         ):
             raise ConcurrentRobustnessEvidenceError("manifest qualification reference is crossed")
@@ -1095,6 +1136,466 @@ def validate_presentation_closure(
         report_payload_schema_version=new_facts.report_payload_schema_version,
         semantic_set_identity_sha256=new_facts.semantic_set_identity_sha256,
     )
+
+
+def _full_pool_closure_document(
+    *,
+    root: Path,
+    full_pool: Path,
+    historical_formal: Path,
+    robustness_study: Path,
+    presentation_bundle: Path,
+    candidate: Path,
+    facts: _FullPoolCandidateFacts,
+    implementation_commit: str,
+) -> dict[str, Any]:
+    lineage = facts.source_lineage
+    if set(lineage) != {"full_pool", "historical_formal", "robustness_study"}:
+        raise ConcurrentRobustnessEvidenceError("Full-Pool candidate lineage fields are missing or unexpected")
+    full_pool_lineage = _mapping(lineage.get("full_pool"), "Full-Pool source lineage")
+    historical_lineage = _mapping(
+        lineage.get("historical_formal"),
+        "historical Formal source lineage",
+    )
+    study_lineage = _mapping(
+        lineage.get("robustness_study"),
+        "robustness study lineage",
+    )
+    if facts.implementation_commit != implementation_commit:
+        raise ConcurrentRobustnessEvidenceError("Full-Pool candidate implementation commit is crossed")
+    return {
+        "schema_version": FULL_POOL_PRESENTATION_CLOSURE_SCHEMA,
+        "status": "complete",
+        "implementation_commit": implementation_commit,
+        "full_pool_source_directory": full_pool.relative_to(root).as_posix(),
+        "full_pool_source_schema_version": _string(
+            full_pool_lineage.get("source_schema_version"),
+            "Full-Pool source schema",
+        ),
+        "full_pool_source_identity": _string(
+            full_pool_lineage.get("source_identity"),
+            "Full-Pool source identity",
+        ),
+        "full_pool_source_manifest_sha256": _string(
+            full_pool_lineage.get("manifest_sha256"),
+            "Full-Pool source manifest SHA-256",
+        ),
+        "full_pool_source_hash": _string(
+            full_pool_lineage.get("source_hash"),
+            "Full-Pool source hash",
+        ),
+        "historical_formal_directory": historical_formal.relative_to(root).as_posix(),
+        "historical_formal_source_id": _string(
+            historical_lineage.get("source_id"),
+            "historical Formal source identity",
+        ),
+        "historical_formal_manifest_schema_version": _string(
+            historical_lineage.get("manifest_schema_version"),
+            "historical Formal manifest schema",
+        ),
+        "historical_formal_manifest_sha256": _string(
+            historical_lineage.get("manifest_sha256"),
+            "historical Formal manifest SHA-256",
+        ),
+        "robustness_study_directory": robustness_study.relative_to(root).as_posix(),
+        "robustness_study_manifest_schema_version": _string(
+            study_lineage.get("manifest_schema_version"),
+            "robustness study manifest schema",
+        ),
+        "robustness_study_manifest_sha256": _string(
+            study_lineage.get("manifest_sha256"),
+            "robustness study manifest SHA-256",
+        ),
+        "robustness_study_artifact_manifest_sha256": _string(
+            study_lineage.get("artifact_manifest_sha256"),
+            "robustness study artifact manifest SHA-256",
+        ),
+        "robustness_study_root_identity_sha256": _string(
+            study_lineage.get("root_identity_sha256"),
+            "robustness study root identity",
+        ),
+        "presentation_bundle_directory": presentation_bundle.relative_to(root).as_posix(),
+        "presentation_bundle_identity_sha256": facts.presentation_bundle_identity_sha256,
+        "candidate_directory": candidate.relative_to(root).as_posix(),
+        "candidate_manifest_sha256": facts.manifest_sha256,
+        "candidate_identity_sha256": facts.candidate_identity_sha256,
+        "candidate_content_identity_sha256": facts.candidate_content_identity_sha256,
+        "candidate_report_sha256": facts.report_sha256,
+        "candidate_payload_sha256": facts.payload_sha256,
+        "candidate_evidence_sha256": facts.evidence_sha256,
+        "report_payload_schema_version": facts.report_payload_schema_version,
+        "source_lineage_identity_sha256": facts.source_lineage_identity_sha256,
+        "presentation_inventory_identity_sha256": facts.presentation_inventory_identity_sha256,
+        "mechanism_set_identity_sha256": facts.mechanism_set_identity_sha256,
+        "trace_index_sha256": facts.trace_index_sha256,
+        "provider_calls_during_closure": 0,
+        "image_generation_triggered": False,
+        "production_deploy_eligible": False,
+    }
+
+
+def _full_pool_closure_inputs(
+    *,
+    root: Path,
+    full_pool_source_root: str | Path,
+    historical_formal_root: str | Path,
+    historical_study_root: str | Path,
+    presentation_bundle_dir: str | Path,
+    candidate_dir: str | Path,
+) -> tuple[Path, Path, Path, Path, Path]:
+    return (
+        _repo_directory(root, Path(full_pool_source_root), "Full-Pool source root"),
+        _repo_directory(root, Path(historical_formal_root), "historical Formal root"),
+        _repo_directory(root, Path(historical_study_root), "robustness study root"),
+        _repo_directory(root, Path(presentation_bundle_dir), "Full-Pool presentation bundle"),
+        _repo_directory(root, Path(candidate_dir), "Full-Pool presentation candidate"),
+    )
+
+
+def _validate_full_pool_candidate_for_closure(
+    *,
+    full_pool: Path,
+    full_pool_manifest_sha256: str,
+    historical_formal: Path,
+    robustness_study: Path,
+    presentation_bundle: Path,
+    candidate: Path,
+    implementation_commit: str,
+) -> _FullPoolCandidateFacts:
+    try:
+        return _REPORT_PRESENTATION.validate_full_pool_candidate(
+            candidate,
+            full_pool_source_root=full_pool,
+            full_pool_manifest_sha256=full_pool_manifest_sha256,
+            historical_formal_root=historical_formal,
+            historical_study_root=robustness_study,
+            presentation_bundle_dir=presentation_bundle,
+            implementation_commit=implementation_commit,
+        )
+    except (OSError, TypeError, ValueError) as exc:
+        raise ConcurrentRobustnessEvidenceError(
+            "Full-Pool candidate failed Report Presentation Interface closure"
+        ) from exc
+
+
+def _full_pool_snapshots(paths: tuple[Path, ...]) -> dict[Path, dict[str, str]]:
+    return {path: _flat_file_hashes(path) for path in paths}
+
+
+def _assert_full_pool_snapshots(snapshots: Mapping[Path, Mapping[str, str]]) -> None:
+    if any(_flat_file_hashes(path) != dict(before) for path, before in snapshots.items()):
+        raise ConcurrentRobustnessEvidenceError(
+            "Full-Pool presentation closure mutated immutable input evidence"
+        )
+
+
+def close_full_pool_presentation(
+    *,
+    repo_root: str | Path,
+    full_pool_source_root: str | Path,
+    full_pool_manifest_sha256: str,
+    historical_formal_root: str | Path,
+    historical_study_root: str | Path,
+    presentation_bundle_dir: str | Path,
+    candidate_dir: str | Path,
+    destination_path: str | Path,
+    implementation_commit: str,
+) -> FullPoolPresentationClosureFacts:
+    """Atomically close a Full-Pool three-lineage presentation without reopening a Provider."""
+    root = _real_directory(Path(repo_root), "repository root")
+    full_pool, historical_formal, study, bundle, candidate = _full_pool_closure_inputs(
+        root=root,
+        full_pool_source_root=full_pool_source_root,
+        historical_formal_root=historical_formal_root,
+        historical_study_root=historical_study_root,
+        presentation_bundle_dir=presentation_bundle_dir,
+        candidate_dir=candidate_dir,
+    )
+    destination = _new_repo_path(
+        root,
+        Path(destination_path),
+        "Full-Pool presentation closure destination",
+    )
+    protected = (full_pool, historical_formal, study, bundle, candidate)
+    if any(_paths_overlap(destination, item) for item in protected):
+        raise ConcurrentRobustnessEvidenceError(
+            "Full-Pool presentation closure destination overlaps immutable input evidence"
+        )
+    if not _COMMIT.fullmatch(implementation_commit):
+        raise ConcurrentRobustnessEvidenceError("Full-Pool presentation implementation commit is invalid")
+    snapshots = _full_pool_snapshots(protected)
+    facts = _validate_full_pool_candidate_for_closure(
+        full_pool=full_pool,
+        full_pool_manifest_sha256=full_pool_manifest_sha256,
+        historical_formal=historical_formal,
+        robustness_study=study,
+        presentation_bundle=bundle,
+        candidate=candidate,
+        implementation_commit=implementation_commit,
+    )
+    document = _full_pool_closure_document(
+        root=root,
+        full_pool=full_pool,
+        historical_formal=historical_formal,
+        robustness_study=study,
+        presentation_bundle=bundle,
+        candidate=candidate,
+        facts=facts,
+        implementation_commit=implementation_commit,
+    )
+    _assert_full_pool_snapshots(snapshots)
+
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    staging: Path | None = None
+    installed = False
+    try:
+        fd, staging_name = tempfile.mkstemp(
+            prefix=f".{destination.name}.full-pool.",
+            suffix=".staging",
+            dir=destination.parent,
+        )
+        staging = Path(staging_name)
+        with os.fdopen(fd, "wb") as stream:
+            stream.write(_json_bytes(document))
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.link(staging, destination)
+        staging.unlink()
+        staging = None
+        installed = True
+        result = validate_full_pool_presentation_closure(
+            repo_root=root,
+            closure_path=destination,
+            full_pool_source_root=full_pool,
+            full_pool_manifest_sha256=full_pool_manifest_sha256,
+            historical_formal_root=historical_formal,
+            historical_study_root=study,
+            presentation_bundle_dir=bundle,
+            candidate_dir=candidate,
+        )
+        _assert_full_pool_snapshots(snapshots)
+        installed = False
+        return result
+    except ConcurrentRobustnessEvidenceError:
+        raise
+    except (OSError, TypeError, ValueError) as exc:
+        raise ConcurrentRobustnessEvidenceError(
+            "Full-Pool presentation closure failed atomic close"
+        ) from exc
+    finally:
+        if staging is not None:
+            staging.unlink(missing_ok=True)
+        if installed and destination.exists():
+            destination.unlink(missing_ok=True)
+
+
+def validate_full_pool_presentation_closure(
+    *,
+    repo_root: str | Path,
+    closure_path: str | Path,
+    full_pool_source_root: str | Path,
+    full_pool_manifest_sha256: str,
+    historical_formal_root: str | Path,
+    historical_study_root: str | Path,
+    presentation_bundle_dir: str | Path,
+    candidate_dir: str | Path,
+) -> FullPoolPresentationClosureFacts:
+    """Reread the three source lineages, bundle, candidate, and additive closure bytes."""
+    root = _real_directory(Path(repo_root), "repository root")
+    closure = _repo_file(root, Path(closure_path), "Full-Pool presentation closure")
+    full_pool, historical_formal, study, bundle, candidate = _full_pool_closure_inputs(
+        root=root,
+        full_pool_source_root=full_pool_source_root,
+        historical_formal_root=historical_formal_root,
+        historical_study_root=historical_study_root,
+        presentation_bundle_dir=presentation_bundle_dir,
+        candidate_dir=candidate_dir,
+    )
+    protected = (full_pool, historical_formal, study, bundle, candidate)
+    if any(_paths_overlap(closure, item) for item in protected):
+        raise ConcurrentRobustnessEvidenceError(
+            "Full-Pool presentation closure overlaps immutable input evidence"
+        )
+    document = _json_object(closure)
+    required = {
+        "schema_version",
+        "status",
+        "implementation_commit",
+        "full_pool_source_directory",
+        "full_pool_source_schema_version",
+        "full_pool_source_identity",
+        "full_pool_source_manifest_sha256",
+        "full_pool_source_hash",
+        "historical_formal_directory",
+        "historical_formal_source_id",
+        "historical_formal_manifest_schema_version",
+        "historical_formal_manifest_sha256",
+        "robustness_study_directory",
+        "robustness_study_manifest_schema_version",
+        "robustness_study_manifest_sha256",
+        "robustness_study_artifact_manifest_sha256",
+        "robustness_study_root_identity_sha256",
+        "presentation_bundle_directory",
+        "presentation_bundle_identity_sha256",
+        "candidate_directory",
+        "candidate_manifest_sha256",
+        "candidate_identity_sha256",
+        "candidate_content_identity_sha256",
+        "candidate_report_sha256",
+        "candidate_payload_sha256",
+        "candidate_evidence_sha256",
+        "report_payload_schema_version",
+        "source_lineage_identity_sha256",
+        "presentation_inventory_identity_sha256",
+        "mechanism_set_identity_sha256",
+        "trace_index_sha256",
+        "provider_calls_during_closure",
+        "image_generation_triggered",
+        "production_deploy_eligible",
+    }
+    if set(document) != required:
+        raise ConcurrentRobustnessEvidenceError(
+            "Full-Pool presentation closure fields are missing or unexpected"
+        )
+    if (
+        document.get("schema_version") != FULL_POOL_PRESENTATION_CLOSURE_SCHEMA
+        or document.get("status") != "complete"
+        or type(document.get("provider_calls_during_closure")) is not int
+        or document.get("provider_calls_during_closure") != 0
+        or document.get("image_generation_triggered") is not False
+        or document.get("production_deploy_eligible") is not False
+    ):
+        raise ConcurrentRobustnessEvidenceError(
+            "Full-Pool presentation closure schema, status, or zero-call contract is crossed"
+        )
+    implementation_commit = _string(
+        document.get("implementation_commit"),
+        "Full-Pool presentation implementation commit",
+    )
+    if not _COMMIT.fullmatch(implementation_commit):
+        raise ConcurrentRobustnessEvidenceError("Full-Pool presentation implementation commit is invalid")
+
+    explicit_paths = {
+        "full_pool_source_directory": full_pool,
+        "historical_formal_directory": historical_formal,
+        "robustness_study_directory": study,
+        "presentation_bundle_directory": bundle,
+        "candidate_directory": candidate,
+    }
+    for field_name, expected_path in explicit_paths.items():
+        relative = _canonical_document_path(document.get(field_name), field_name)
+        if _repo_directory(root, Path(relative), field_name) != expected_path:
+            raise ConcurrentRobustnessEvidenceError(
+                "Full-Pool presentation closure explicit input paths are crossed"
+            )
+    snapshots = _full_pool_snapshots(protected)
+    facts = _validate_full_pool_candidate_for_closure(
+        full_pool=full_pool,
+        full_pool_manifest_sha256=full_pool_manifest_sha256,
+        historical_formal=historical_formal,
+        robustness_study=study,
+        presentation_bundle=bundle,
+        candidate=candidate,
+        implementation_commit=implementation_commit,
+    )
+    expected = _full_pool_closure_document(
+        root=root,
+        full_pool=full_pool,
+        historical_formal=historical_formal,
+        robustness_study=study,
+        presentation_bundle=bundle,
+        candidate=candidate,
+        facts=facts,
+        implementation_commit=implementation_commit,
+    )
+    if document != expected:
+        raise ConcurrentRobustnessEvidenceError(
+            "Full-Pool presentation closure hash, identity, or lineage is crossed"
+        )
+    _assert_full_pool_snapshots(snapshots)
+    lineage = facts.source_lineage
+    full_pool_lineage = _mapping(lineage.get("full_pool"), "Full-Pool source lineage")
+    historical_lineage = _mapping(
+        lineage.get("historical_formal"),
+        "historical Formal lineage",
+    )
+    study_lineage = _mapping(lineage.get("robustness_study"), "robustness study lineage")
+    return FullPoolPresentationClosureFacts(
+        closure_path=closure,
+        closure_sha256=_sha256_file(closure),
+        closure_schema_version=FULL_POOL_PRESENTATION_CLOSURE_SCHEMA,
+        implementation_commit=implementation_commit,
+        full_pool_source_path=full_pool,
+        full_pool_source_schema_version=_string(
+            full_pool_lineage.get("source_schema_version"),
+            "Full-Pool source schema",
+        ),
+        full_pool_source_identity=_string(
+            full_pool_lineage.get("source_identity"),
+            "Full-Pool source identity",
+        ),
+        full_pool_source_manifest_sha256=_string(
+            full_pool_lineage.get("manifest_sha256"),
+            "Full-Pool source manifest hash",
+        ),
+        full_pool_source_hash=_string(
+            full_pool_lineage.get("source_hash"),
+            "Full-Pool source hash",
+        ),
+        historical_formal_path=historical_formal,
+        historical_formal_source_id=_string(
+            historical_lineage.get("source_id"),
+            "historical Formal source identity",
+        ),
+        historical_formal_manifest_schema_version=_string(
+            historical_lineage.get("manifest_schema_version"),
+            "historical Formal manifest schema",
+        ),
+        historical_formal_manifest_sha256=_string(
+            historical_lineage.get("manifest_sha256"),
+            "historical Formal manifest hash",
+        ),
+        robustness_study_path=study,
+        robustness_study_manifest_schema_version=_string(
+            study_lineage.get("manifest_schema_version"),
+            "robustness study manifest schema",
+        ),
+        robustness_study_manifest_sha256=_string(
+            study_lineage.get("manifest_sha256"),
+            "robustness study manifest hash",
+        ),
+        robustness_study_artifact_manifest_sha256=_string(
+            study_lineage.get("artifact_manifest_sha256"),
+            "robustness study artifact manifest hash",
+        ),
+        robustness_study_root_identity_sha256=_string(
+            study_lineage.get("root_identity_sha256"),
+            "robustness study root identity",
+        ),
+        presentation_bundle_path=bundle,
+        presentation_bundle_identity_sha256=facts.presentation_bundle_identity_sha256,
+        candidate_path=candidate,
+        candidate_manifest_sha256=facts.manifest_sha256,
+        candidate_identity_sha256=facts.candidate_identity_sha256,
+        candidate_content_identity_sha256=facts.candidate_content_identity_sha256,
+        candidate_report_sha256=facts.report_sha256,
+        candidate_payload_sha256=facts.payload_sha256,
+        candidate_evidence_sha256=facts.evidence_sha256,
+        report_payload_schema_version=facts.report_payload_schema_version,
+        source_lineage_identity_sha256=facts.source_lineage_identity_sha256,
+        presentation_inventory_identity_sha256=facts.presentation_inventory_identity_sha256,
+        mechanism_set_identity_sha256=facts.mechanism_set_identity_sha256,
+        trace_index_sha256=facts.trace_index_sha256,
+        provider_calls_during_closure=0,
+        image_generation_triggered=False,
+        production_deploy_eligible=False,
+    )
+
+
+def _mapping(value: object, label: str) -> dict[str, Any]:
+    if not isinstance(value, Mapping):
+        raise ConcurrentRobustnessEvidenceError(f"{label} must be an object")
+    return {str(key): item for key, item in value.items()}
 
 
 def _json_bytes(payload: object) -> bytes:
