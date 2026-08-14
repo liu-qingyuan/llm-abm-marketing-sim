@@ -1,8 +1,13 @@
 from __future__ import annotations
 
+import base64
 import hashlib
 import importlib.util
 import json
+import os
+import shutil
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -96,6 +101,7 @@ def test_standalone_validator_dispatches_v7_through_its_own_branch(
         "sampling_method": "full_pool_no_membership_filter_v1",
         "sampling_status": "persisted_full_pool_formal_run",
         "decision_execution_mode": "live_provider",
+        "live_api_triggered": True,
         "report_sha256": "b" * 64,
         "production_deploy_eligible": True,
     }
@@ -127,6 +133,7 @@ def test_standalone_validator_dispatches_v7_through_its_own_branch(
     [
         {"sampling_status": "validation_run"},
         {"decision_execution_mode": "rule_based"},
+        {"decision_execution_mode": "mock_provider"},
         {"production_deploy_eligible": False},
     ],
 )
@@ -146,6 +153,7 @@ def test_formal_production_gate_accepts_only_matching_live_deployable_facts(
         "release_purpose": "full_pool_formal_research",
         "sampling_status": "persisted_full_pool_formal_run",
         "decision_execution_mode": "live_provider",
+        "live_api_triggered": True,
         "production_deploy_eligible": True,
     }
 
@@ -159,6 +167,12 @@ def test_formal_production_gate_accepts_only_matching_live_deployable_facts(
         validator._require_formal_production(
             valid_v8 | {"release_purpose": "concurrent_robustness_formal_research"}
         )
+    with pytest.raises(validator.ReleaseValidationError, match="formal production deployment"):
+        validator._require_formal_production(valid_v8 | {"live_api_triggered": False})
+    with pytest.raises(validator.ReleaseValidationError, match="formal production deployment"):
+        validator._require_formal_production(valid_v8 | {"schema_version": "abm-report-release-contract-v7"})
+    with pytest.raises(validator.ReleaseValidationError, match="formal production deployment"):
+        validator._require_formal_production(valid_v8 | {"schema_version": "unknown-v9"})
 
 
 def test_v7_deployment_facts_bind_full_mermaid_inventory_and_explicit_identity(
@@ -248,6 +262,358 @@ def test_v7_deployment_facts_bind_full_mermaid_inventory_and_explicit_identity(
             )
 
 
+def test_v8_deployment_facts_bind_full_pool_inventory_and_explicit_identity(
+    tmp_path: Path,
+) -> None:
+    validator = _load_validator()
+    source = tmp_path / "production-v8"
+    source.mkdir()
+    mermaid = {
+        "full-pool-mechanism.mmd",
+        "historical-1000/mechanism-sample-first.mmd",
+        "historical-1000/mechanism-pair-formation.mmd",
+        "historical-1000/mechanism-independent-delivery.mmd",
+        "historical-1000/mechanism-exposure-decisions.mmd",
+        "historical-1000/mechanism-feedback-boundary.mmd",
+        "historical-1000/real-batch-mechanism.mmd",
+        "historical-1000/prompt-model-factorial.mmd",
+    }
+    payloads = {
+        "report.html": "<!doctype html><title>v8</title>\n",
+        "concurrent_robustness_report_payload.json": "{}\n",
+        "full_pool_production_release_evidence.json": "{}\n",
+        "full_pool_presentation_closure.json": "{}\n",
+        "full_pool_candidate_artifact_manifest.json": "{}\n",
+        "full_pool_candidate_release_evidence.json": "{}\n",
+        "trace/full-pool-trace-index.json": "{}\n",
+        "trace/message_1/batch-000000.json": "{}\n",
+        **{path: "flowchart LR\n" for path in mermaid},
+    }
+    for relative_path, payload in payloads.items():
+        target = source / relative_path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(payload, encoding="utf-8")
+    release_identity = "c" * 64
+    approved = {
+        "full_pool_trace_index": "trace/full-pool-trace-index.json",
+        **{f"mermaid_{index}": path for index, path in enumerate(sorted(mermaid))},
+    }
+    manifest = {
+        "release_id": "full-pool-v8-release",
+        "release_identity_sha256": release_identity,
+        "approved_downloads": approved,
+    }
+    (source / "artifact_manifest.json").write_text(
+        json.dumps(manifest, sort_keys=True, separators=(",", ":")) + "\n",
+        encoding="utf-8",
+    )
+    artifact_sha256 = {
+        path.relative_to(source).as_posix(): hashlib.sha256(path.read_bytes()).hexdigest()
+        for path in source.rglob("*")
+        if path.is_file()
+    }
+    contract_path = tmp_path / "release-contract-v8.json"
+    contract = {
+        "schema_version": "abm-report-release-contract-v8",
+        "release_id": "full-pool-v8-release",
+        "canonical_endpoint": "https://abm.q1ngyuan.top/",
+        "release_identity_sha256": release_identity,
+        "artifact_sha256": artifact_sha256,
+    }
+    contract_path.write_text(json.dumps(contract, sort_keys=True) + "\n", encoding="utf-8")
+    result = {
+        "schema_version": "abm-report-release-contract-v8",
+        "release_purpose": "full_pool_formal_research",
+        "release_id": "full-pool-v8-release",
+        "source_directory": "production-v8",
+        "sampling_status": "persisted_full_pool_formal_run",
+        "decision_execution_mode": "live_provider",
+        "live_api_triggered": True,
+        "report_sha256": artifact_sha256["report.html"],
+        "production_deploy_eligible": True,
+    }
+
+    facts = validator._build_deployment_facts(
+        contract_path=contract_path,
+        contract=contract,
+        result=result,
+        evidence_dir=source,
+        deployment_release_id="full-pool-v8-release",
+        deployment_domain="abm.q1ngyuan.top",
+    )
+
+    assert facts["report_kind"] == "full-pool"
+    assert facts["release_contract_schema_version"] == "abm-report-release-contract-v8"
+    assert facts["release_identity_sha256"] == release_identity
+    assert facts["artifact_sha256"] == artifact_sha256
+    assert set(facts["approved_downloads"]) == set(approved.values())
+    assert set(facts["public_acceptance_artifacts"]) == set(artifact_sha256)
+    assert {path for path in artifact_sha256 if path.endswith(".mmd")} == mermaid
+    assert "trace/full-pool-trace-index.json" in facts["public_acceptance_artifacts"]
+    assert "trace/message_1/batch-000000.json" in facts["public_acceptance_artifacts"]
+
+
+def test_v8_schema_confusion_is_rejected_before_fake_ssh(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    scripts = repo / "scripts"
+    scripts.mkdir(parents=True)
+    deploy_script = scripts / "deploy_abm_report.sh"
+    validator_script = scripts / "validate_abm_report_release.py"
+    shutil.copy2(REPO_ROOT / "scripts" / "deploy_abm_report.sh", deploy_script)
+    shutil.copy2(VALIDATOR_PATH, validator_script)
+    source = repo / "production-v8"
+    source.mkdir()
+    (source / "report.html").write_text("candidate\n", encoding="utf-8")
+    (source / "artifact_manifest.json").write_text("{}\n", encoding="utf-8")
+    contract = repo / "release-contract-v8.json"
+    contract.write_text(
+        json.dumps({"schema_version": "abm-report-release-contract-v8"}) + "\n",
+        encoding="utf-8",
+    )
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    ssh_marker = tmp_path / "ssh-invoked"
+    ssh = fake_bin / "ssh"
+    ssh.write_text(
+        '#!/usr/bin/env bash\nprintf invoked > "${FAKE_SSH_MARKER}"\nexit 0\n',
+        encoding="utf-8",
+    )
+    ssh.chmod(0o755)
+    env = os.environ.copy()
+    env.update(
+        {
+            "PATH": f"{fake_bin}:{env['PATH']}",
+            "ABM_DEPLOY_PYTHON": sys.executable,
+            "FAKE_SSH_MARKER": str(ssh_marker),
+        }
+    )
+
+    completed = subprocess.run(
+        [
+            str(deploy_script),
+            "--contract",
+            str(contract),
+            "--source-dir",
+            str(source),
+            "--release-id",
+            "full-pool-v8-rejected",
+        ],
+        cwd=repo,
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert completed.returncode != 0
+    assert "invalid v8 Full-Pool release" in completed.stderr
+    assert not ssh_marker.exists()
+
+
+def _write_executable(path: Path, content: str) -> None:
+    path.write_text(content, encoding="utf-8")
+    path.chmod(0o755)
+
+
+@pytest.mark.parametrize("failure_mode", ["candidate-health", "post-switch"])
+def test_remote_transaction_failures_preserve_fresh_rollback_identity(
+    tmp_path: Path,
+    failure_mode: str,
+) -> None:
+    script = (REPO_ROOT / "scripts" / "deploy_abm_report.sh").read_text(encoding="utf-8")
+    remote_script = script.split("<<'REMOTE_DEPLOY'", maxsplit=1)[1].split(
+        "REMOTE_DEPLOY", maxsplit=1
+    )[0]
+    host_nginx = tmp_path / "host-nginx"
+    (host_nginx / "sites-available").mkdir(parents=True)
+    (host_nginx / "sites-enabled").mkdir()
+    remote_script = remote_script.replace("/etc/nginx", str(host_nginx))
+    transaction = tmp_path / "remote-transaction.sh"
+    _write_executable(transaction, "#!/usr/bin/env bash\n" + remote_script)
+
+    remote_root = tmp_path / "remote"
+    previous = remote_root / "releases" / "previous"
+    candidate = remote_root / "releases" / "candidate"
+    previous.mkdir(parents=True)
+    candidate.mkdir()
+    (previous / "report.html").write_text("previous report\n", encoding="utf-8")
+    (previous / "artifact_manifest.json").write_text("{}\n", encoding="utf-8")
+    release_id = "candidate"
+    release_identity = "c" * 64
+    report = (
+        '<!doctype html><head><meta name="abm-release-id" content="candidate">'
+        '<meta name="abm-release-contract" content="abm-report-release-contract-v8">'
+        "</head><body>candidate</body>\n"
+    )
+    (candidate / "report.html").write_text(report, encoding="utf-8")
+    (candidate / "artifact_manifest.json").write_text(
+        json.dumps(
+            {
+                "release_id": release_id,
+                "release_identity_sha256": release_identity,
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    (remote_root / "nginx").mkdir()
+    (remote_root / "tls").mkdir()
+    (remote_root / "tls" / "abm.example.test.crt").write_text("crt\n", encoding="utf-8")
+    (remote_root / "tls" / "abm.example.test.key").write_text("key\n", encoding="utf-8")
+    (remote_root / "current").symlink_to(previous)
+
+    previous_report_sha = hashlib.sha256((previous / "report.html").read_bytes()).hexdigest()
+    previous_manifest_sha = hashlib.sha256(
+        (previous / "artifact_manifest.json").read_bytes()
+    ).hexdigest()
+    report_sha = hashlib.sha256((candidate / "report.html").read_bytes()).hexdigest()
+    manifest_sha = hashlib.sha256((candidate / "artifact_manifest.json").read_bytes()).hexdigest()
+    checksum_rows = (
+        f"{manifest_sha}  artifact_manifest.json\n"
+        f"{report_sha}  report.html\n"
+    )
+
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    compose_count = tmp_path / "compose-count"
+    _write_executable(
+        fake_bin / "docker",
+        """#!/usr/bin/env bash
+set -euo pipefail
+command_name="$1"
+shift
+case "${command_name}" in
+  rm|logs) exit 0 ;;
+  run)
+    [[ "${FAKE_DOCKER_MODE}" != "candidate-health" ]] || exit 71
+    printf 'candidate-container\n'
+    ;;
+  inspect)
+    printf 'healthy\n'
+    ;;
+  exec)
+    container="$1"
+    shift
+    if [[ "$1" == "test" && "$2" == "-f" ]]; then
+      relative_path="${3#/usr/share/nginx/html/}"
+      if [[ "${container}" == *-candidate ]]; then
+        [[ -f "${FAKE_REMOTE_RELEASE}/${relative_path}" ]]
+      else
+        [[ -f "$(readlink -f "${FAKE_REMOTE_ROOT}/current")/${relative_path}" ]]
+      fi
+      exit
+    fi
+    [[ "$1" == "wget" ]] || exit 2
+    url="${*: -1}"
+    case "${url}" in
+      */healthz) printf 'ok\n' ;;
+      */report.html) artifact='report.html' ;;
+      */artifact_manifest.json) artifact='artifact_manifest.json' ;;
+      *) exit 2 ;;
+    esac
+    if [[ -n "${artifact:-}" ]]; then
+      if [[ "${container}" == *-candidate ]]; then
+        cat "${FAKE_REMOTE_RELEASE}/${artifact}"
+      else
+        cat "$(readlink -f "${FAKE_REMOTE_ROOT}/current")/${artifact}"
+      fi
+    fi
+    ;;
+  compose)
+    if [[ " $* " == *" up "* ]]; then
+      count=0
+      [[ ! -f "${FAKE_COMPOSE_COUNT}" ]] || count="$(<"${FAKE_COMPOSE_COUNT}")"
+      count=$((count + 1))
+      printf '%s' "${count}" > "${FAKE_COMPOSE_COUNT}"
+      if [[ "${FAKE_DOCKER_MODE}" == "post-switch" && "${count}" == "1" ]]; then
+        exit 72
+      fi
+    fi
+    ;;
+  *) exit 2 ;;
+esac
+""",
+    )
+    _write_executable(fake_bin / "nginx", "#!/usr/bin/env bash\nexit 0\n")
+    _write_executable(fake_bin / "systemctl", "#!/usr/bin/env bash\nexit 0\n")
+    _write_executable(
+        fake_bin / "mv",
+        """#!/usr/bin/env bash
+if [[ "$1" == "-Tf" ]]; then
+  /bin/mv -f "$2" "$3"
+else
+  /bin/mv "$@"
+fi
+""",
+    )
+    _write_executable(
+        fake_bin / "sed",
+        """#!/usr/bin/env bash
+set -euo pipefail
+if [[ "$1" != "-i" ]]; then
+  exec /usr/bin/sed "$@"
+fi
+if /usr/bin/sed --version >/dev/null 2>&1; then
+  /usr/bin/sed -i "$2" "$3"
+else
+  /usr/bin/sed -i '' "$2" "$3"
+fi
+""",
+    )
+    env = os.environ.copy()
+    env.update(
+        {
+            "PATH": f"{fake_bin}:{env['PATH']}",
+            "FAKE_DOCKER_MODE": failure_mode,
+            "FAKE_REMOTE_ROOT": str(remote_root),
+            "FAKE_REMOTE_RELEASE": str(candidate),
+            "FAKE_COMPOSE_COUNT": str(compose_count),
+        }
+    )
+    completed = subprocess.run(
+        [
+            str(transaction),
+            str(remote_root),
+            str(candidate),
+            str(previous),
+            previous_report_sha,
+            previous_manifest_sha,
+            "abm.example.test",
+            "18083",
+            "abm-research-report",
+            "nginx:1.27-alpine",
+            report_sha,
+            manifest_sha,
+            release_id,
+            release_identity,
+            "d" * 64,
+            base64.b64encode(checksum_rows.encode()).decode(),
+            "2",
+            "abm-report-release-contract-v8",
+        ],
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert completed.returncode != 0
+    assert (remote_root / "current").resolve() == previous.resolve()
+    assert hashlib.sha256((previous / "report.html").read_bytes()).hexdigest() == previous_report_sha
+    assert (
+        hashlib.sha256((previous / "artifact_manifest.json").read_bytes()).hexdigest()
+        == previous_manifest_sha
+    )
+    assert "remote rollback identity verification failed" not in completed.stderr
+    if failure_mode == "post-switch":
+        assert compose_count.exists(), completed.stderr
+        assert compose_count.read_text(encoding="utf-8") == "2"
+    else:
+        assert not compose_count.exists()
+
+
 def test_deploy_consumes_validated_facts_and_checks_the_snapshot_before_ssh() -> None:
     script = (REPO_ROOT / "scripts" / "deploy_abm_report.sh").read_text(encoding="utf-8")
 
@@ -283,6 +649,11 @@ def test_remote_candidate_closes_contract_inventory_and_nginx_before_atomic_swit
     assert 'validate_previous_identity "before atomic current switch"' in remote
     assert 'grep -Fq "\\"release_id\\":\\"${release_id}\\""' in remote
     assert 'grep -Fq "\\"release_identity_sha256\\":\\"${release_identity_sha}\\""' in remote
+    assert 'grep -Fq "<meta name=\\"abm-release-id\\" content=\\"${release_id}\\">"' in remote
+    assert (
+        'grep -Fq "<meta name=\\"abm-release-contract\\" content=\\"${release_contract_schema}\\">"'
+        in remote
+    )
     assert "validated_contract_sha" in remote
 
 
@@ -305,3 +676,14 @@ def test_public_acceptance_hashes_every_contract_artifact() -> None:
     assert 'for artifact, digest in sorted(facts["artifact_sha256"].items())' in script
     assert "public artifact checksum mismatch: ${artifact}" in script
     assert 'shasum -a 256 "${public_artifact}"' in script
+
+
+def test_success_emits_operational_time_and_fresh_acceptance_only_after_browser_gate() -> None:
+    script = (REPO_ROOT / "scripts" / "deploy_abm_report.sh").read_text(encoding="utf-8")
+
+    browser_gate = script.index("npx playwright test tests/playwright/deployed-abm-report.spec.ts")
+    deployment_time = script.index("DEPLOYED_AT_UTC=", browser_gate)
+    acceptance = script.index("Public acceptance: passed", deployment_time)
+    assert browser_gate < deployment_time < acceptance
+    assert "Deployment time (UTC): %s" in script
+    assert "Fresh rollback release: %s" in script

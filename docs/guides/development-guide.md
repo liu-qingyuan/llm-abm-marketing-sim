@@ -97,9 +97,9 @@ python scripts/validate_abm_report_release.py \
   --source-dir runs/<persisted-run>
 ```
 
-该命令支持历史 `abm-report-release-contract-v1` 的本地证据验证，以及 v2–v7 的版本化 Formal production 验证。v2/v3/v4 分别保护 Final Research 与 Concurrent Message 的既有合同；v5/v6/v7 通过独立 exact-field dispatch 保护 Concurrent Robustness release。v7 只接受 payload v2 + closure v2 的 semantic-only production：inventory 必须精确包含七个 Mermaid artifacts，并排除 `project-evidence-chain.mmd`、未批准 v4 PNG/WebP 与 `mechanism-image-generation-audit.json`。source directory 不允许绝对/父级 artifact path、symlink、FIFO/socket/device 等 non-regular entry、未声明文件、缺失下载或 hash 不一致；validation/mock/rule-based evidence 不能通过 `--require-formal-production`。
+该命令支持历史 `abm-report-release-contract-v1` 的本地证据验证，以及 v2–v8 的版本化 Formal production 验证。v2/v3/v4 分别保护 Final Research 与 Concurrent Message 的既有合同；v5/v6/v7 通过独立 exact-field dispatch 保护 Concurrent Robustness release；v8 独立关闭 Full-Pool Formal source、历史 Formal/study、三-lineage presentation closure 与 production identity。v7 只接受 payload v2 + closure v2 的 semantic-only production；v8 只接受 `36,400 users / 109,200 Primary terminals / 30 batches`、`live_api_triggered=true` 的 Full-Pool Formal facts。v8 inventory 必须精确包含 report、manifest/evidence、closure、八个 Mermaid artifacts、trace index/partitions 与 approved downloads。所有 source directory 都拒绝绝对/父级 artifact path、symlink、FIFO/socket/device 等 non-regular entry、未声明文件、缺失下载或 hash 不一致；validation/mock/rule-based/`live_api_triggered=false` evidence 不能通过 `--require-formal-production`。
 
-production deploy 只能显式提供通过本地 gate 的 v2–v7 Formal contract：
+production deploy 只能显式提供通过本地 gate 的 v2–v8 Formal contract：
 
 ```bash
 scripts/deploy_abm_report.sh \
@@ -108,7 +108,7 @@ scripts/deploy_abm_report.sh \
   --release-id <release-id>
 ```
 
-部署脚本先复制随机本地 snapshot，并让 standalone validator 在任何 `ssh`、上传或远程配置前一次性产出 validated deployment facts；report kind、release/domain identity、完整 artifact hashes 与 public acceptance list 只来自显式 contract。后续 checksum、tar upload 和 public acceptance 继续读取同一只读 snapshot/facts，不扫描“最新”目录，也不按文件存在猜测版本。远端在 atomic `current` 切换前核对完整 regular-file inventory、report/manifest/release identity、candidate container 与 Nginx；任一步失败都保持或恢复部署前 fresh `current`，并重新核对旧 report/manifest hashes。切换后按 contract 对每个 artifact 做公网 hash 验收，再运行 desktop/mobile、双语、键盘与交互 Playwright acceptance。
+部署脚本先复制随机本地 snapshot，并让 standalone validator 在任何 `ssh`、上传或远程配置前一次性产出 validated deployment facts；report kind、release/domain identity、完整 artifact hashes 与 public acceptance list 只来自显式 contract。后续 checksum、tar upload 和 public acceptance 继续读取同一只读 snapshot/facts，不扫描“最新”目录，也不按文件存在猜测版本。远端在 atomic `current` 切换前核对完整 regular-file inventory、report/manifest/release identity、candidate container 与 Nginx；任一步失败都保持或恢复部署前 fresh `current`，并重新核对旧 report/manifest hashes。切换后按 contract 对每个 artifact 做公网 hash 验收，再运行 desktop/mobile、双语、键盘与交互 Playwright acceptance；v8 额外覆盖 Full-Pool 主区、Historical Sensitivity、机制 disclosure 和 lazy trace filter/drawer。成功输出只记录 deployment UTC、fresh readback 与 public acceptance 等 operational evidence，不回写 immutable release bytes。
 
 实现代码、离线 runner candidate、synthetic persisted Formal fixture 和 `ready-for-agent` 状态均不授权真实 Provider 或 production deployment。后续 operational Ticket 必须单独记录 Provider、模型、adapter retry / SDK retry、调用或费用预算、独立 output directory、release ID 和 canonical deployment 授权。不要用 fake Adapter 写出 live 事实，也不要把测试 fixture 描述为真实研究运行；Concurrent Message Validation artifact 只能作为 #99 的离线 preflight evidence，不能直接生成或替代 `abm-report-release-contract-v4` Formal release。
 

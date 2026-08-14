@@ -1882,7 +1882,23 @@ def _build_full_pool_production_presentation(
         raise _RobustnessReportClosureError(
             "Full-Pool candidate production marker is missing, duplicated, or crossed"
         )
-    production_html = candidate_html.replace(false_marker, true_marker, 1)
+    if (
+        candidate_html.count(b"</head>") != 1
+        or b'name="abm-release-id"' in candidate_html
+        or b'name="abm-release-contract"' in candidate_html
+    ):
+        raise _RobustnessReportClosureError(
+            "Full-Pool candidate release metadata is missing, duplicated, or crossed"
+        )
+    release_metadata = (
+        f'<meta name="abm-release-id" content="{html.escape(stage_facts.release_id, quote=True)}">'
+        f'<meta name="abm-release-contract" content="{html.escape(stage_facts.release_contract_schema, quote=True)}">\n'
+    ).encode()
+    production_html = candidate_html.replace(false_marker, true_marker, 1).replace(
+        b"</head>",
+        release_metadata + b"</head>",
+        1,
+    )
     return _PresentationBundle(
         report_payload=_json_bytes(production_payload),
         report_html=production_html,
@@ -1961,9 +1977,18 @@ def _validate_full_pool_production_presentation(
         '<main class="full-pool-presentation" data-testid="full-pool-presentation" '
         'data-production-deploy-eligible="false"'
     )
+    release_id_meta = (
+        f'<meta name="abm-release-id" content="{html.escape(stage_facts.release_id, quote=True)}">'
+    )
+    release_contract_meta = (
+        '<meta name="abm-release-contract" '
+        f'content="{html.escape(stage_facts.release_contract_schema, quote=True)}">'
+    )
     if (
         report.count(production_root) != 1
         or candidate_root in report
+        or report.count(release_id_meta) != 1
+        or report.count(release_contract_meta) != 1
         or 'data-provider-calls-during-composition="0"' not in report
         or 'data-canonical-deployment-triggered="false"' not in report
     ):

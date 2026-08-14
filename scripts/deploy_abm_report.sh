@@ -124,6 +124,7 @@ PY
 VALIDATED_RELEASE_ID="$(deployment_fact release_id)" || fail "cannot read validated release id"
 VALIDATED_DOMAIN="$(deployment_fact canonical_domain)" || fail "cannot read validated canonical domain"
 PUBLIC_ACCEPTANCE_REPORT_KIND="$(deployment_fact report_kind)" || fail "cannot read validated report kind"
+RELEASE_CONTRACT_SCHEMA="$(deployment_fact release_contract_schema_version)" || fail "cannot read validated release contract schema"
 CONTRACT_SHA="$(deployment_fact contract_sha256)" || fail "cannot read validated contract identity"
 RELEASE_IDENTITY_SHA="$(deployment_fact release_identity_sha256)" || fail "cannot read validated release identity"
 LOCAL_REPORT_SHA="$(deployment_fact report_sha256)" || fail "cannot read validated report hash"
@@ -167,6 +168,7 @@ PY
 [[ "${VALIDATED_DOMAIN}" == "${DOMAIN}" ]] || fail "validated canonical domain is crossed"
 [[ "${ARTIFACT_COUNT}" =~ ^[1-9][0-9]*$ ]] || fail "validated artifact count is invalid"
 [[ "${CONTRACT_SHA}" =~ ^[a-f0-9]{64}$ ]] || fail "validated contract identity is invalid"
+[[ "${RELEASE_CONTRACT_SCHEMA}" =~ ^abm-report-release-contract-v[2-8]$ ]] || fail "validated release contract schema is invalid"
 [[ -z "${RELEASE_IDENTITY_SHA}" || "${RELEASE_IDENTITY_SHA}" =~ ^[a-f0-9]{64}$ ]] || fail "validated release identity is invalid"
 SOURCE_DIR="${LOCAL_SNAPSHOT_DIR}"
 find "${SOURCE_DIR}" -type d -exec chmod a-w {} +
@@ -285,7 +287,8 @@ ssh "${DEPLOY_HOST}" bash -s -- \
   "${RELEASE_IDENTITY_SHA}" \
   "${CONTRACT_SHA}" \
   "${ARTIFACT_CHECKSUMS_B64}" \
-  "${ARTIFACT_COUNT}" <<'REMOTE_DEPLOY'
+  "${ARTIFACT_COUNT}" \
+  "${RELEASE_CONTRACT_SCHEMA}" <<'REMOTE_DEPLOY'
 set -euo pipefail
 
 remote_root="$1"
@@ -307,6 +310,7 @@ release_identity_sha="${13}"
 validated_contract_sha="${14}"
 artifact_checksums_b64="${15}"
 artifact_count="${16}"
+release_contract_schema="${17}"
 
 managed_marker="# managed-by: llm-abm-marketing-sim deploy_abm_report.sh"
 site_available="/etc/nginx/sites-available/${domain}"
@@ -434,6 +438,10 @@ install -d -m 755 "${remote_root}/nginx" "${remote_root}/tls" "${remote_root}/re
   printf 'deploy error: invalid validated contract identity\n' >&2
   exit 1
 }
+[[ "${release_contract_schema}" =~ ^abm-report-release-contract-v[2-8]$ ]] || {
+  printf 'deploy error: invalid validated release contract schema\n' >&2
+  exit 1
+}
 [[ "${artifact_count}" =~ ^[1-9][0-9]*$ ]] || {
   printf 'deploy error: invalid validated artifact count\n' >&2
   exit 1
@@ -493,6 +501,14 @@ uploaded_manifest_sha="$(sha256sum "${remote_release}/artifact_manifest.json" | 
 if [[ -n "${release_identity_sha}" ]]; then
   [[ "${release_identity_sha}" =~ ^[a-f0-9]{64}$ ]] || {
     printf 'deploy error: invalid validated release identity\n' >&2
+    exit 1
+  }
+  grep -Fq "<meta name=\"abm-release-id\" content=\"${release_id}\">" "${remote_release}/report.html" || {
+    printf 'deploy error: remote report release id is crossed\n' >&2
+    exit 1
+  }
+  grep -Fq "<meta name=\"abm-release-contract\" content=\"${release_contract_schema}\">" "${remote_release}/report.html" || {
+    printf 'deploy error: remote report release contract is crossed\n' >&2
     exit 1
   }
   grep -Fq "\"release_id\":\"${release_id}\"" "${remote_release}/artifact_manifest.json" || {
@@ -802,7 +818,9 @@ ABM_DEPLOY_PUBLIC_ARTIFACTS="${PUBLIC_ACCEPTANCE_ARTIFACTS_JSON}" \
 cleanup_public_artifacts
 cleanup_local_snapshot
 trap - EXIT
+DEPLOYED_AT_UTC="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
 printf 'Deployment complete\n'
+printf 'Deployment time (UTC): %s\n' "${DEPLOYED_AT_UTC}"
 printf 'Report: https://%s/\n' "${DOMAIN}"
 if [[ "${PUBLIC_ACCEPTANCE_REPORT_KIND}" == "final-research" ]]; then
   printf 'Network feedback: https://%s/#network-feedback\n' "${DOMAIN}"

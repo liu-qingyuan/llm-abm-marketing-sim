@@ -202,6 +202,14 @@ def test_v8_promotion_materializes_an_exact_non_overwriting_local_release(tmp_pa
     assert production_evidence["provider_calls_during_promotion"] == 0
     assert production_evidence["production_deploy_eligible"] is True
     assert payload["production_deploy_eligible"] is True
+    production_html = (destination / "report.html").read_text(encoding="utf-8")
+    assert (
+        '<meta name="abm-release-id" content="full-pool-v8-test">' in production_html
+    )
+    assert (
+        '<meta name="abm-release-contract" content="abm-report-release-contract-v8">'
+        in production_html
+    )
     assert candidate_manifest["production_deploy_eligible"] is False
     assert candidate_evidence["production_deploy_eligible"] is False
     assert (destination / "full_pool_presentation_closure.json").read_bytes() == Path(
@@ -454,7 +462,29 @@ def test_v8_contract_dispatch_rejects_missing_extra_crossed_and_drifted_facts(
     assert validated["schema_version"] == "abm-report-release-contract-v8"
     assert validated["sampling_status"] == "persisted_full_pool_formal_run"
     assert validated["decision_execution_mode"] == "live_provider"
+    assert validated["live_api_triggered"] is True
     assert validated["production_deploy_eligible"] is True
+
+    snapshot = tmp_path / "production-v8-snapshot"
+    shutil.copytree(promoted.source_dir, snapshot)
+    snapshotted = release_module.validate_concurrent_robustness_production_release(
+        repo_root=tmp_path,
+        contract_document=contract,
+        source_dir=promoted.source_dir,
+        snapshot_dir=snapshot,
+    )
+    assert snapshotted["report_sha256"] == validated["report_sha256"]
+    (snapshot / "report.html").write_bytes((snapshot / "report.html").read_bytes() + b"drift\n")
+    with pytest.raises(
+        release_module.ConcurrentRobustnessReleaseError,
+        match="source inventory or artifact hashes",
+    ):
+        release_module.validate_concurrent_robustness_production_release(
+            repo_root=tmp_path,
+            contract_document=contract,
+            source_dir=promoted.source_dir,
+            snapshot_dir=snapshot,
+        )
 
     mutations: list[dict[str, object]] = []
     missing = copy.deepcopy(contract)

@@ -1726,6 +1726,7 @@ _DEPLOYMENT_REPORT_KINDS = {
     "abm-report-release-contract-v5": "concurrent-robustness",
     "abm-report-release-contract-v6": "concurrent-robustness",
     "abm-report-release-contract-v7": "concurrent-robustness",
+    "abm-report-release-contract-v8": "full-pool",
 }
 _DEPLOYMENT_RELEASE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,159}$")
 _DEPLOYMENT_DOMAIN = re.compile(r"^[A-Za-z0-9.-]+$")
@@ -1815,6 +1816,7 @@ def _build_deployment_facts(
         "abm-report-release-contract-v5",
         "abm-report-release-contract-v6",
         "abm-report-release-contract-v7",
+        "abm-report-release-contract-v8",
     }:
         if manifest.get("release_id") != deployment_release_id:
             raise ReleaseValidationError("deployment manifest release id is crossed")
@@ -1846,6 +1848,7 @@ def _require_formal_production(result: dict[str, object]) -> None:
         schema_profile_valid = (
             result.get("release_purpose") == "full_pool_formal_research"
             and result.get("sampling_status") == "persisted_full_pool_formal_run"
+            and result.get("live_api_triggered") is True
         )
     else:
         schema_profile_valid = (

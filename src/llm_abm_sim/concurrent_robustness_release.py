@@ -1699,6 +1699,7 @@ def _validate_full_pool_v8_production_release(
         "sampling_method": FULL_POOL_MEMBERSHIP_METHOD,
         "sampling_status": "persisted_full_pool_formal_run",
         "decision_execution_mode": "live_provider",
+        "live_api_triggered": evidence.formal.live_api_triggered,
         "logical_judgments": evidence.formal.logical_judgments,
         "physical_attempts": evidence.formal.physical_attempts,
         "report_sha256": actual_hashes[CONCURRENT_MESSAGE_REPORT_HTML],

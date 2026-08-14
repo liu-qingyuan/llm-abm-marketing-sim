@@ -39,6 +39,14 @@ const fallbackArtifactsByKind: Record<string, string[]> = {
     'ranking_weight_message_summary.csv',
     'prompt_model_message_summary.csv',
   ],
+  'full-pool': [
+    'artifact_manifest.json',
+    'concurrent_robustness_report_payload.json',
+    'full_pool_production_release_evidence.json',
+    'full_pool_presentation_closure.json',
+    'full-pool-mechanism.mmd',
+    'trace/full-pool-trace-index.json',
+  ],
 };
 
 async function expectNoHorizontalOverflow(page: Page): Promise<void> {
@@ -259,6 +267,70 @@ async function expectConcurrentMessageReport(page: Page): Promise<void> {
   await expect(drawer).toBeHidden();
 }
 
+async function expectFullPoolReport(page: Page): Promise<void> {
+  await expect(page).toHaveTitle('Full-Pool 主实验');
+  await expect(page.locator('html')).toHaveAttribute('lang', 'zh-CN');
+  await expect(page.locator('meta[name="abm-release-contract"]')).toHaveAttribute(
+    'content',
+    'abm-report-release-contract-v8',
+  );
+  const root = page.getByTestId('full-pool-presentation');
+  await expect(root).toHaveAttribute('data-production-deploy-eligible', 'true');
+  await expect(page.getByTestId('full-pool-main-experiment')).toBeVisible();
+  await expect(page.getByTestId('full-pool-run-evidence')).toContainText('36,400');
+  await expect(page.getByTestId('full-pool-run-evidence')).toContainText('109,200');
+  await expect(page.getByTestId('historical-sensitivity-1000')).toContainText(
+    'Historical Sensitivity · 1,000 users',
+  );
+  const mechanism = page.getByTestId('full-pool-mechanism-section');
+  await expect(mechanism.locator('[data-mechanism-node-id]')).toHaveCount(8);
+  await expect(mechanism.locator('[data-mechanism-edge-id]')).toHaveCount(8);
+  await expect(mechanism).toContainText('Primary-only');
+
+  const fallback = page.getByTestId('full-pool-mechanism-fallback');
+  const fallbackSummary = fallback.locator('summary');
+  await fallbackSummary.focus();
+  await fallbackSummary.press('Enter');
+  await expect(fallback).toHaveAttribute('open', '');
+  await fallbackSummary.press('Space');
+  await expect(fallback).not.toHaveAttribute('open', '');
+
+  const traceState = page.getByTestId('full-pool-trace-state');
+  await expect(traceState).toHaveAttribute('data-trace-state', 'ready');
+  await expect(page.getByTestId('full-pool-trace-reader')).toHaveAttribute('aria-busy', 'false');
+  await expect(page.getByTestId('full-pool-trace-message')).toBeEnabled();
+  await expect(page.getByTestId('full-pool-trace-batch')).toBeEnabled();
+  const search = page.getByTestId('full-pool-trace-search');
+  await expect(search).toBeEnabled();
+  await expect(page.getByTestId('full-pool-trace-action')).toBeEnabled();
+  const firstRow = page.getByTestId('full-pool-trace-table-body').locator('tr').first();
+  await expect(firstRow).toBeVisible();
+  const userId = (await firstRow.locator('td').first().textContent()) ?? '';
+  expect(userId).not.toBe('');
+  await search.fill(userId);
+  await expect(page.getByTestId('full-pool-trace-filtered-count')).toContainText('1');
+
+  const detailButton = page.getByTestId('full-pool-trace-row').first();
+  await detailButton.focus();
+  await detailButton.press('Enter');
+  const drawer = page.getByTestId('full-pool-trace-drawer');
+  await expect(drawer).toBeVisible();
+  await expect(drawer.getByTestId('full-pool-trace-detail')).toContainText(userId);
+  await expect(drawer.getByTestId('full-pool-trace-drawer-close')).toBeFocused();
+  await page.keyboard.press('Escape');
+  await expect(drawer).toBeHidden();
+  await expect(detailButton).toBeFocused();
+
+  await page.locator('[data-full-pool-language="en-US"]').click();
+  await expect(page.locator('html')).toHaveAttribute('lang', 'en-US');
+  await expect(
+    page.getByTestId('full-pool-main-experiment').getByRole('heading', { level: 1 }),
+  ).toHaveText('Full-Pool Main Experiment');
+  await expect(page.getByTestId('full-pool-claim-boundary')).toContainText(
+    'ranking changes exposure timing and order only',
+  );
+}
+
 async function expectRobustnessWeightFamily(page: Page, familyId: string): Promise<void> {
   await expect(page.getByTestId('ranking-weight-family-select')).toHaveValue(familyId);
   await expect(page.locator(`[data-weight-family="${familyId}"]:visible`)).toHaveCount(3);
@@ -362,8 +434,25 @@ async function expectRobustnessDownloadHeads(
   }
 }
 
+async function expectFullPoolDownloads(page: Page): Promise<void> {
+  const allowed = new Set(artifactPaths ?? fallbackArtifactsByKind['full-pool']);
+  const hrefs = await page.locator('a[href]').evaluateAll((links) =>
+    links
+      .map((link) => link.getAttribute('href') ?? '')
+      .filter((href) => href.length > 0 && !href.startsWith('#')),
+  );
+  expect(hrefs.length).toBeGreaterThan(10);
+  for (const href of hrefs) {
+    expect(!href.startsWith('/') && !href.includes('..') && !href.includes('://'), href).toBeTruthy();
+    expect(allowed.has(href), href).toBeTruthy();
+  }
+  expect(new Set(hrefs.filter((href) => href.endsWith('.mmd'))).size).toBe(8);
+}
+
 async function expectReportByKind(page: Page): Promise<void> {
-  if (reportKind === 'concurrent-robustness') {
+  if (reportKind === 'full-pool') {
+    await expectFullPoolReport(page);
+  } else if (reportKind === 'concurrent-robustness') {
     await expectConcurrentRobustnessReport(page);
   } else if (reportKind === 'concurrent-message') {
     await expectConcurrentMessageReport(page);
@@ -372,7 +461,7 @@ async function expectReportByKind(page: Page): Promise<void> {
   }
 }
 
-test.describe('deployed Seed-First report', () => {
+test.describe('deployed Formal report', () => {
   test.skip(!publicUrl, 'ABM_DEPLOY_PUBLIC_URL is required for explicit public deployment acceptance');
 
   test('serves the approved report and artifacts without responsive errors', async ({ page, request }) => {
@@ -398,6 +487,9 @@ test.describe('deployed Seed-First report', () => {
     await expectArtifactHeads(request);
     if (reportKind === 'concurrent-robustness') {
       await expectRobustnessDownloadHeads(page, request);
+    }
+    if (reportKind === 'full-pool') {
+      await expectFullPoolDownloads(page);
     }
 
     await page.setViewportSize({ width: 1600, height: 1000 });

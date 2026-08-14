@@ -1104,6 +1104,20 @@ def test_deploy_rolls_back_when_public_acceptance_fails(tmp_path: Path):
     upload_archive = tmp_path / "uploaded-release.tar.gz"
     snapshot_root = tmp_path / "snapshots"
     snapshot_root.mkdir()
+    remote_root = tmp_path / "remote"
+    previous_release = remote_root / "releases" / "previous"
+    previous_release.mkdir(parents=True)
+    (previous_release / "report.html").write_text("previous report", encoding="utf-8")
+    (previous_release / "artifact_manifest.json").write_text("{}", encoding="utf-8")
+    (remote_root / "nginx").mkdir()
+    (remote_root / "nginx" / "default.conf").write_text(
+        f'add_header X-Artifact-SHA256 "{_sha256(source / "report.html")}";\n',
+        encoding="utf-8",
+    )
+    (remote_root / "compose.yml").write_text("services: {}\n", encoding="utf-8")
+    (remote_root / "current").symlink_to(previous_release)
+    previous_report_sha = _sha256(previous_release / "report.html")
+    previous_manifest_sha = _sha256(previous_release / "artifact_manifest.json")
     shims = {
         "python": f"""#!/usr/bin/env bash
 set -euo pipefail
@@ -1138,6 +1152,41 @@ exit 0
 """,
         "curl": "#!/usr/bin/env bash\nexit 22\n",
         "sleep": "#!/usr/bin/env bash\nexit 0\n",
+        "docker": """#!/usr/bin/env bash
+set -euo pipefail
+case "$1" in
+  compose) exit 0 ;;
+  inspect) printf 'healthy\n' ;;
+  exec)
+    url="${*: -1}"
+    case "${url}" in
+      */report.html) artifact='report.html' ;;
+      */artifact_manifest.json) artifact='artifact_manifest.json' ;;
+      *) exit 2 ;;
+    esac
+    cat "$(readlink -f "${FAKE_REMOTE_ROOT}/current")/${artifact}"
+    ;;
+  *) exit 2 ;;
+esac
+""",
+        "mv": """#!/usr/bin/env bash
+if [[ "$1" == "-Tf" ]]; then
+  /bin/mv -f "$2" "$3"
+else
+  /bin/mv "$@"
+fi
+""",
+        "sed": """#!/usr/bin/env bash
+set -euo pipefail
+if [[ "$1" != "-i" ]]; then
+  exec /usr/bin/sed "$@"
+fi
+if /usr/bin/sed --version >/dev/null 2>&1; then
+  /usr/bin/sed -i "$2" "$3"
+else
+  /usr/bin/sed -i '' "$2" "$3"
+fi
+""",
         "ssh": """#!/usr/bin/env bash
 set -euo pipefail
 count=0
@@ -1147,14 +1196,25 @@ printf '%s' "${count}" > "${FAKE_SSH_COUNT}"
 printf '%s %s\n' "${count}" "$*" >> "${FAKE_SSH_LOG}"
 if [[ "${count}" == "3" ]]; then
   cat > "${FAKE_UPLOAD_ARCHIVE}"
-else
-  while IFS= read -r _line; do :; done
+  exit 0
 fi
+if [[ "${count}" == "5" ]]; then
+  exec bash -s -- "${@:5}"
+fi
+while IFS= read -r _line; do :; done
 if [[ "${count}" == "1" ]]; then
   printf '%s\t%s\t%s\n' \
-    '/tmp/abm-report/releases/previous' \
-    'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' \
-    'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'
+    "${FAKE_PREVIOUS_RELEASE}" \
+    "${FAKE_PREVIOUS_REPORT_SHA}" \
+    "${FAKE_PREVIOUS_MANIFEST_SHA}"
+fi
+if [[ "${count}" == "4" ]]; then
+  candidate="${FAKE_REMOTE_ROOT}/releases/candidate"
+  mkdir "${candidate}"
+  tar -xzf "${FAKE_UPLOAD_ARCHIVE}" -C "${candidate}"
+  temporary_link="${FAKE_REMOTE_ROOT}/.current.fake"
+  ln -s "${candidate}" "${temporary_link}"
+  /bin/mv -f "${temporary_link}" "${FAKE_REMOTE_ROOT}/current"
 fi
 exit 0
 """,
@@ -1171,10 +1231,14 @@ exit 0
             "ABM_DEPLOY_PYTHON": str(bin_dir / "python"),
             "ABM_DEPLOY_HOST": "test-host",
             "ABM_DEPLOY_DOMAIN": "abm.example.test",
-            "ABM_DEPLOY_REMOTE_ROOT": "/tmp/abm-report",
+            "ABM_DEPLOY_REMOTE_ROOT": str(remote_root),
             "FAKE_SSH_COUNT": str(ssh_count),
             "FAKE_SSH_LOG": str(ssh_log),
             "FAKE_UPLOAD_ARCHIVE": str(upload_archive),
+            "FAKE_REMOTE_ROOT": str(remote_root),
+            "FAKE_PREVIOUS_RELEASE": str(previous_release),
+            "FAKE_PREVIOUS_REPORT_SHA": previous_report_sha,
+            "FAKE_PREVIOUS_MANIFEST_SHA": previous_manifest_sha,
             "TMPDIR": str(snapshot_root),
         }
     )
@@ -1199,7 +1263,11 @@ exit 0
     assert completed.returncode != 0
     assert "Public acceptance failed; restoring previous release" in completed.stderr
     assert ssh_count.read_text(encoding="utf-8") == "5"
-    assert "/tmp/abm-report/releases/previous" in ssh_log.read_text(encoding="utf-8").splitlines()[-1]
+    assert str(previous_release) in ssh_log.read_text(encoding="utf-8").splitlines()[-1]
+    assert (remote_root / "current").resolve() == previous_release.resolve()
+    assert _sha256((remote_root / "current").resolve() / "report.html") == previous_report_sha
+    assert _sha256((remote_root / "current").resolve() / "artifact_manifest.json") == previous_manifest_sha
+    assert "automatic rollback failed" not in completed.stderr
     uploaded_report = subprocess.run(
         ["tar", "-xOzf", str(upload_archive), "./report.html"],
         check=True,
