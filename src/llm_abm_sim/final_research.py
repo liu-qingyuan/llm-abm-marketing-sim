@@ -56,7 +56,9 @@ TARGET_NETWORK_SCOPE = "锦江酒店"
 PROFILE_INDEX_METHOD = "log1p_p95_reference_weighted_v2"
 NETWORK_AUGMENTED_SAMPLE_AUDIT_VERSION = "network-augmented-sample-audit-v1"
 SEED_FIRST_SAMPLE_AUDIT_VERSION = "seed-first-sample-audit-v1"
+FULL_POOL_MEMBERSHIP_AUDIT_VERSION = "full-pool-membership-audit-v1"
 SEED_FIRST_SAMPLING_METHOD: Literal["seed_first_research_sample_v1"] = "seed_first_research_sample_v1"
+FULL_POOL_MEMBERSHIP_METHOD: Literal["full_pool_no_membership_filter_v1"] = "full_pool_no_membership_filter_v1"
 HISTORICAL_SAMPLING_METHOD: Literal["network_augmented_research_sample"] = "network_augmented_research_sample"
 VALIDATION_RUN_STATUS: Literal["validation_run"] = "validation_run"
 FORMAL_RUN_STATUS: Literal["persisted_seed_first_formal_run"] = "persisted_seed_first_formal_run"
@@ -67,6 +69,7 @@ ResearchSamplingMethod = Literal[
     "source_scope_stratified_sample_v1",
     "network_augmented_research_sample",
     "seed_first_research_sample_v1",
+    "full_pool_no_membership_filter_v1",
 ]
 ResearchSamplingStatus = Literal[
     "validation_run",
@@ -661,6 +664,127 @@ class _SampleSelection:
     audit: dict[str, object]
 
 
+def _influence_seed_union(
+    users_by_id: Mapping[str, ResearchUser],
+    *,
+    top_k_per_proxy: int,
+) -> tuple[list[str], list[str], list[str]]:
+    if top_k_per_proxy < 1 or top_k_per_proxy > len(users_by_id):
+        raise ValueError("influence seed top_k_per_proxy is outside the eligible user pool")
+    eligible_user_ids = sorted(users_by_id)
+    global_top = sorted(
+        eligible_user_ids,
+        key=lambda user_id: (-users_by_id[user_id].global_influence_score, user_id),
+    )[:top_k_per_proxy]
+    local_top = sorted(
+        eligible_user_ids,
+        key=lambda user_id: (-users_by_id[user_id].local_influence_score, user_id),
+    )[:top_k_per_proxy]
+    return global_top, local_top, sorted(set(global_top) | set(local_top))
+
+
+class _FullPoolMembershipModule:
+    """Select every eligible user while preserving the shared influence seed launch."""
+
+    def __init__(
+        self,
+        *,
+        users_by_id: Mapping[str, ResearchUser],
+        videos: Mapping[str, _VideoRecord],
+        comments: Sequence[_CommentRecord],
+        expected_user_count: int,
+        seed_top_k_per_proxy: int,
+    ) -> None:
+        self.users_by_id = users_by_id
+        self.videos = videos
+        self.comments = comments
+        self.expected_user_count = expected_user_count
+        self.seed_top_k_per_proxy = seed_top_k_per_proxy
+
+    def build(self) -> _SampleSelection:
+        eligible_user_ids = sorted(self.users_by_id)
+        if len(eligible_user_ids) != self.expected_user_count:
+            raise ValueError(
+                "full-pool membership count does not match the frozen eligible user count: "
+                f"expected {self.expected_user_count}, got {len(eligible_user_ids)}"
+            )
+        global_top, local_top, seed_user_ids = _influence_seed_union(
+            self.users_by_id,
+            top_k_per_proxy=self.seed_top_k_per_proxy,
+        )
+        seed_set = set(seed_user_ids)
+        ordinary_user_ids = [user_id for user_id in eligible_user_ids if user_id not in seed_set]
+        scope_order, primary_scope_by_user, tied_primary_scope_user_ids = _primary_source_scopes(
+            videos=self.videos,
+            comments=self.comments,
+            available_user_ids=set(eligible_user_ids),
+        )
+        scope_by_user = {
+            user_id: primary_scope_by_user.get(user_id, "remaining_users") for user_id in eligible_user_ids
+        }
+        source_scope_counts = dict(sorted(Counter(scope_by_user.values()).items()))
+        audit: dict[str, object] = {
+            "schema_version": FULL_POOL_MEMBERSHIP_AUDIT_VERSION,
+            "sampling_method": FULL_POOL_MEMBERSHIP_METHOD,
+            "sampling_status": VALIDATION_RUN_STATUS,
+            "eligible_pool": {
+                "count": len(eligible_user_ids),
+                "user_ids": eligible_user_ids,
+                "target_holdout_used": False,
+            },
+            "membership": {
+                "membership_filtering_applied": False,
+                "seed_first_quota_filtering_applied": False,
+                "included_user_ids": eligible_user_ids,
+                "excluded_user_ids": [],
+            },
+            "seed_selection": {
+                "selection_stage": "eligible_full_pool_before_delivery",
+                "requested_top_k_per_proxy": self.seed_top_k_per_proxy,
+                "effective_top_k_per_proxy": self.seed_top_k_per_proxy,
+                "global_top_user_ids": global_top,
+                "local_top_user_ids": local_top,
+                "seed_user_ids": seed_user_ids,
+                "seed_count": len(seed_user_ids),
+                "deduplicated_union": True,
+                "tie_break": "descending proxy score, then user_id ascending",
+            },
+            "source_scope_observation": {
+                "scope_order": scope_order,
+                "source_scope_counts": source_scope_counts,
+                "tied_primary_scope_user_count": len(tied_primary_scope_user_ids),
+                "tied_primary_scope_user_ids": tied_primary_scope_user_ids,
+                "membership_role": "lineage_only_not_quota_filtering",
+            },
+            "roles": {
+                "counts": {"seed": len(seed_user_ids), "network_cohort": 0, "ordinary": len(ordinary_user_ids)},
+                "user_ids": {
+                    "seed": seed_user_ids,
+                    "network_cohort": [],
+                    "ordinary": ordinary_user_ids,
+                },
+            },
+            "final_sample": {
+                "count": len(eligible_user_ids),
+                "unique_user_count": len(eligible_user_ids),
+                "user_ids": eligible_user_ids,
+                "source_scope_counts": source_scope_counts,
+                "primary_scope_by_user": dict(sorted(scope_by_user.items())),
+            },
+            "source_dataset_modified": False,
+        }
+        return _SampleSelection(
+            sampling_method=FULL_POOL_MEMBERSHIP_METHOD,
+            seed_user_ids=seed_user_ids,
+            neighbor_user_ids=[],
+            ordinary_user_ids=ordinary_user_ids,
+            sample_user_ids=eligible_user_ids,
+            scope_by_user=scope_by_user,
+            source_scope_counts=source_scope_counts,
+            audit=audit,
+        )
+
+
 class _SeedFirstSampleModule:
     """Select a deterministic seed-first sample from holdout-safe inputs."""
 
@@ -686,15 +810,10 @@ class _SeedFirstSampleModule:
     def build(self) -> _SampleSelection:
         eligible_user_ids = sorted(self.users_by_id)
         influence_top_k = min(10, max(1, self.sample_size // 2))
-        global_top = sorted(
-            eligible_user_ids,
-            key=lambda user_id: (-self.users_by_id[user_id].global_influence_score, user_id),
-        )[:influence_top_k]
-        local_top = sorted(
-            eligible_user_ids,
-            key=lambda user_id: (-self.users_by_id[user_id].local_influence_score, user_id),
-        )[:influence_top_k]
-        seed_user_ids = sorted(set(global_top) | set(local_top))
+        global_top, local_top, seed_user_ids = _influence_seed_union(
+            self.users_by_id,
+            top_k_per_proxy=influence_top_k,
+        )
         seed_set = set(seed_user_ids)
 
         neighbor_strengths: dict[str, int] = {}
@@ -911,6 +1030,12 @@ class _ResearchCohortPreparer:
         self.holdout_video_ids = frozenset(holdout_video_ids)
 
     def prepare(self) -> _PreparedResearchCohort:
+        return self._prepare(full_pool_seed_top_k_per_proxy=None)
+
+    def prepare_full_pool(self, *, seed_top_k_per_proxy: int) -> _PreparedResearchCohort:
+        return self._prepare(full_pool_seed_top_k_per_proxy=seed_top_k_per_proxy)
+
+    def _prepare(self, *, full_pool_seed_top_k_per_proxy: int | None) -> _PreparedResearchCohort:
         videos = _load_video_records(self.dataset_dir)
         historical_comments = tuple(
             comment for comment in _load_comment_records(self.dataset_dir) if comment.video_id not in self.holdout_video_ids
@@ -948,7 +1073,26 @@ class _ResearchCohortPreparer:
             historical_videos,
             historical_comments,
         )
-        if self.model_policy.sampling_method == SEED_FIRST_SAMPLING_METHOD:
+        if full_pool_seed_top_k_per_proxy is not None:
+            selection = _FullPoolMembershipModule(
+                users_by_id=users_by_id,
+                videos=historical_videos,
+                comments=historical_comments,
+                expected_user_count=self.sample_size,
+                seed_top_k_per_proxy=full_pool_seed_top_k_per_proxy,
+            ).build()
+            sample_user_ids = selection.sample_user_ids
+            base_sample_user_ids = []
+            seed_user_ids = selection.seed_user_ids
+            network_cohort_user_ids = []
+            network_cohort_added_user_ids = []
+            replaced_ordinary_user_ids = []
+            final_sample_user_ids = list(sample_user_ids)
+            base_scope_by_user = {}
+            final_scope_by_user = dict(selection.scope_by_user)
+            sample_scope_by_user = dict(selection.scope_by_user)
+            sample_audit = selection.audit
+        elif self.model_policy.sampling_method == SEED_FIRST_SAMPLING_METHOD:
             selection = _SeedFirstSampleModule(
                 users_by_id=users_by_id,
                 videos=historical_videos,
@@ -959,13 +1103,13 @@ class _ResearchCohortPreparer:
                 random_seed=self.random_seed,
             ).build()
             sample_user_ids = selection.sample_user_ids
-            base_sample_user_ids: list[str] = []
+            base_sample_user_ids = []
             seed_user_ids = selection.seed_user_ids
             network_cohort_user_ids = selection.neighbor_user_ids
             network_cohort_added_user_ids = list(network_cohort_user_ids)
-            replaced_ordinary_user_ids: list[str] = []
+            replaced_ordinary_user_ids = []
             final_sample_user_ids = list(sample_user_ids)
-            base_scope_by_user: dict[str, str] = {}
+            base_scope_by_user = {}
             final_scope_by_user = dict(selection.scope_by_user)
             sample_scope_by_user = dict(selection.scope_by_user)
             sample_audit = selection.audit
@@ -1051,7 +1195,11 @@ class _ResearchCohortPreparer:
             source_scope_sample_counts=dict(sorted(Counter(sample_scope_by_user.values()).items())),
             base_source_scope_sample_counts=dict(sorted(Counter(base_scope_by_user.values()).items())),
             final_source_scope_sample_counts=dict(sorted(Counter(final_scope_by_user.values()).items())),
-            sampling_method=self.model_policy.sampling_method,
+            sampling_method=(
+                FULL_POOL_MEMBERSHIP_METHOD
+                if full_pool_seed_top_k_per_proxy is not None
+                else self.model_policy.sampling_method
+            ),
             sample_audit=sample_audit,
             historical_videos_by_id=historical_videos,
             historical_comments=historical_comments,

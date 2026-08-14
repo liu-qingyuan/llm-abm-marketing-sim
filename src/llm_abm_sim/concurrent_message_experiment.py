@@ -1198,16 +1198,10 @@ class _PreparedConcurrentRuntimeInputs:
     neighbors_by_user: Mapping[str, set[str]]
 
 
-def _prepare_concurrent_runtime_inputs(
+def _runtime_inputs_from_cohort(
     config: ConcurrentMessageExperimentConfig,
+    cohort: _PreparedResearchCohort,
 ) -> _PreparedConcurrentRuntimeInputs:
-    cohort = _ResearchCohortPreparer(
-        dataset_dir=config.dataset_dir,
-        sample_size=config.sample_size,
-        random_seed=config.random_seed,
-        model_policy=_TARGET_DELIVERY_RANKING_POLICY,
-        holdout_video_ids=(config.sample_holdout_video_id,),
-    ).prepare()
     if len(cohort.seed_user_ids) > config.delivery_capacity:
         raise ValueError(
             f"delivery_capacity {config.delivery_capacity} is smaller than the prepared seed union "
@@ -1225,6 +1219,34 @@ def _prepare_concurrent_runtime_inputs(
         },
         neighbors_by_user=cohort.comment_graph.neighbors_by_user,
     )
+
+
+def _prepare_concurrent_runtime_inputs(
+    config: ConcurrentMessageExperimentConfig,
+) -> _PreparedConcurrentRuntimeInputs:
+    cohort = _ResearchCohortPreparer(
+        dataset_dir=config.dataset_dir,
+        sample_size=config.sample_size,
+        random_seed=config.random_seed,
+        model_policy=_TARGET_DELIVERY_RANKING_POLICY,
+        holdout_video_ids=(config.sample_holdout_video_id,),
+    ).prepare()
+    return _runtime_inputs_from_cohort(config, cohort)
+
+
+def _prepare_full_pool_concurrent_runtime_inputs(
+    config: ConcurrentMessageExperimentConfig,
+    *,
+    seed_top_k_per_proxy: int,
+) -> _PreparedConcurrentRuntimeInputs:
+    cohort = _ResearchCohortPreparer(
+        dataset_dir=config.dataset_dir,
+        sample_size=config.sample_size,
+        random_seed=config.random_seed,
+        model_policy=_TARGET_DELIVERY_RANKING_POLICY,
+        holdout_video_ids=(config.sample_holdout_video_id,),
+    ).prepare_full_pool(seed_top_k_per_proxy=seed_top_k_per_proxy)
+    return _runtime_inputs_from_cohort(config, cohort)
 
 
 def _execute_runtime_variant(
@@ -1506,6 +1528,9 @@ class _ConcurrentRuntimeKernel:
 
     def materialize_spool(self, replay: Mapping[str, object]) -> _ConcurrentRuntimeMaterializedRows:
         return self._spool.materialize(replay)
+
+    def validate_spool(self, replay: Mapping[str, object]) -> int:
+        return sum(1 for _ in self._spool.iter_committed(replay))
 
     def plan_batch(self) -> dict[str, Any]:
         if self.state.active_batch is not None:
@@ -3133,6 +3158,14 @@ class ConcurrentMessageExperimentRunner:
 
 
 @dataclass(frozen=True)
+class _PrimaryOnlyConcurrentRuntimeSpoolResult:
+    workspace_root: Path
+    step_rows: list[dict[str, object]]
+    runtime_resident_row_high_water: int
+    runtime_resident_rows_after_commit: int
+
+
+@dataclass(frozen=True)
 class _PrimaryOnlyConcurrentRuntimeResult:
     workspace_root: Path
     candidate_rows: list[dict[str, object]]
@@ -3155,6 +3188,7 @@ class _PrimaryOnlyConcurrentRuntimeConsumer:
         expected_prompt_version: str = CONCURRENT_MESSAGE_PRIMARY_PROMPT_VERSION,
         execution_contract: Mapping[str, object] | None = None,
         expected_sample_identity: str | None = None,
+        prepared_inputs: _PreparedConcurrentRuntimeInputs | None = None,
         before_logical_judgment: Callable[[Mapping[str, object]], None] | None = None,
         validate_terminal: Callable[[Mapping[str, object]], None] | None = None,
         after_logical_judgment: Callable[[Mapping[str, object]], None] | None = None,
@@ -3164,6 +3198,7 @@ class _PrimaryOnlyConcurrentRuntimeConsumer:
         self.expected_prompt_version = expected_prompt_version
         self.execution_contract = dict(safe_data(execution_contract)) if execution_contract is not None else None
         self.expected_sample_identity = expected_sample_identity
+        self.prepared_inputs = prepared_inputs
         self.before_logical_judgment = before_logical_judgment
         self.validate_terminal = validate_terminal
         self.after_logical_judgment = after_logical_judgment
@@ -3174,6 +3209,9 @@ class _PrimaryOnlyConcurrentRuntimeConsumer:
             )
 
     def run_new(self, output_dir: str | Path) -> _PrimaryOnlyConcurrentRuntimeResult:
+        return self._materialize_result(self._run_new_to_spool(output_dir))
+
+    def _run_new_to_spool(self, output_dir: str | Path) -> _PrimaryOnlyConcurrentRuntimeSpoolResult:
         output_path, workspace, prepared, provider_metadata, identity = self._runtime_contract(output_dir)
         if output_path.exists():
             raise FileExistsError(f"Primary-only output target already exists: {output_path}")
@@ -3189,6 +3227,9 @@ class _PrimaryOnlyConcurrentRuntimeConsumer:
         )
 
     def resume(self, output_dir: str | Path) -> _PrimaryOnlyConcurrentRuntimeResult:
+        return self._materialize_result(self._resume_to_spool(output_dir))
+
+    def _resume_to_spool(self, output_dir: str | Path) -> _PrimaryOnlyConcurrentRuntimeSpoolResult:
         output_path, workspace, prepared, provider_metadata, identity = self._runtime_contract(output_dir)
         if output_path.exists():
             raise FileExistsError(f"Primary-only output target must remain private and absent: {output_path}")
@@ -3220,7 +3261,9 @@ class _PrimaryOnlyConcurrentRuntimeConsumer:
         if output_path.resolve().is_relative_to(self.config.dataset_dir.resolve()):
             raise ValueError("output_dir must be outside dataset_dir")
         workspace = derive_concurrent_execution_workspace(output_path)
-        prepared = _prepare_concurrent_runtime_inputs(self.config)
+        prepared = self.prepared_inputs or _prepare_concurrent_runtime_inputs(self.config)
+        if len(prepared.cohort.sample_user_ids) != self.config.sample_size:
+            raise ValueError("Primary-only prepared membership does not match config sample_size")
         if self.expected_sample_identity is not None:
             sample_identity = hashlib.sha256(
                 json.dumps(
@@ -3243,6 +3286,7 @@ class _PrimaryOnlyConcurrentRuntimeConsumer:
         )
         configuration_snapshot["runtime_consumer"] = "primary_only"
         configuration_snapshot["primary_prompt_version"] = self.expected_prompt_version
+        configuration_snapshot["sampling_method"] = prepared.cohort.sampling_method
         message_snapshot = [message.model_dump(mode="json") for message in self.config.messages]
         try:
             prompt_contract = {
@@ -3278,7 +3322,7 @@ class _PrimaryOnlyConcurrentRuntimeConsumer:
         provider_metadata: Mapping[str, object],
         journal: ConcurrentExecutionJournal,
         replay: Mapping[str, object] | None,
-    ) -> _PrimaryOnlyConcurrentRuntimeResult:
+    ) -> _PrimaryOnlyConcurrentRuntimeSpoolResult:
         state = _ConcurrentRuntimeKernelState(
             cohort=prepared.cohort,
             exposed_by_message={message.message_id: set() for message in self.config.messages},
@@ -3354,21 +3398,42 @@ class _PrimaryOnlyConcurrentRuntimeConsumer:
             runtime_resident_rows_after_commit = kernel.runtime_resident_row_count
             if runtime_resident_rows_after_commit != 0:
                 raise AssertionError("Primary-only runtime retained committed batch rows before finalization")
-            materialized = kernel.materialize_spool(journal._replay_runtime())
-            if len(materialized.commits) != len(step_rows):
+            committed_chunk_count = kernel.validate_spool(journal._replay_runtime())
+            if committed_chunk_count != len(step_rows):
                 raise ValueError("runtime batch spool commit summaries do not close the Primary-only step rows")
         finally:
             journal.close()
 
-        return _PrimaryOnlyConcurrentRuntimeResult(
+        return _PrimaryOnlyConcurrentRuntimeSpoolResult(
             workspace_root=workspace,
+            step_rows=step_rows,
+            runtime_resident_row_high_water=state.runtime_resident_row_high_water,
+            runtime_resident_rows_after_commit=runtime_resident_rows_after_commit,
+        )
+
+    @staticmethod
+    def _materialize_result(
+        spooled: _PrimaryOnlyConcurrentRuntimeSpoolResult,
+    ) -> _PrimaryOnlyConcurrentRuntimeResult:
+        journal = ConcurrentExecutionJournal.open_existing(spooled.workspace_root)
+        replay = journal._replay_runtime()
+        materialized = _ConcurrentRuntimeBatchSpool(
+            spooled.workspace_root,
+            run_id=journal.run_id,
+            identity_hash=journal.identity_hash,
+            terminal_variants=("primary",),
+        ).materialize(replay)
+        if len(materialized.commits) != len(spooled.step_rows):
+            raise ValueError("runtime batch spool commit summaries do not close the Primary-only step rows")
+        return _PrimaryOnlyConcurrentRuntimeResult(
+            workspace_root=spooled.workspace_root,
             candidate_rows=materialized.candidate_rows,
             primary_rows=materialized.result_rows,
             terminal_rows=materialized.terminal_rows,
             variant_evidence_rows=materialized.variant_evidence_rows,
-            step_rows=step_rows,
-            runtime_resident_row_high_water=state.runtime_resident_row_high_water,
-            runtime_resident_rows_after_commit=runtime_resident_rows_after_commit,
+            step_rows=spooled.step_rows,
+            runtime_resident_row_high_water=spooled.runtime_resident_row_high_water,
+            runtime_resident_rows_after_commit=spooled.runtime_resident_rows_after_commit,
         )
 
     @classmethod

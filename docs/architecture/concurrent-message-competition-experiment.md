@@ -41,8 +41,9 @@ personalized_delivery_score
 | 私有 `_ConcurrentRuntimeKernel` | ranking plan、batch-start feedback snapshot、message-local single exposure、terminal closure、campaign 去重、next-batch commit 和 validated replay；只持有当前 batch 的完整 row objects |
 | 私有 `_ConcurrentRuntimeBatchSpool` | 以 run/batch/snapshot identity 与 SHA-256 关闭 append-only regular-file chunks，拒绝缺失、额外、crossed、损坏、symlink 和 path escape，并按 canonical batch order 重放 |
 | `ConcurrentMessageExperimentRunner` | 保持公开 Primary+Shadow preflight，执行 paired Decisions，并从私有 spool reader 投影既有 candidate/pair rows 和最终 source |
-| 私有 `_PrimaryOnlyConcurrentRuntimeConsumer` | 只执行 Primary，并从同一私有 spool reader 组装兼容结果；不建立公开 Robustness Study、Shadow 或可发布 artifact |
-| `PlatformEnvironment` / ranking | 每条 message 的 candidates、delivery capacity、Top20、exposure gate 和稳定 tie-break |
+| 私有 `_PrimaryOnlyConcurrentRuntimeConsumer` | 只执行 Primary；现有调用仍从同一私有 spool reader 组装兼容结果，Full-Pool 调用则把已关闭 spool 交给流式 source closure；不建立 Shadow 或公共 storage Seam |
+| package-internal `FullPoolFormalExperiment.run(...)` | 以 frozen contract、一个 Primary Adapter 和显式 output identity 驱动完整 eligible pool；当前只接受 deterministic Validation profile，并原子关闭独立、不可部署的 source |
+| `PlatformEnvironment` / ranking | 每条 message 的 candidates、delivery capacity、Top20 或 Full-Pool scaled capacity、exposure gate 和稳定 tie-break |
 | Decision Adapter | 对已曝光 `user × message` pair 生成 Primary/Shadow typed decisions；不选择 exposure |
 | `ConcurrentCampaignDiagnostics` | 从 persisted candidate/pair rows 重建 funnel、allocation、response、feedback 和 sensitivity diagnostics |
 | `ConcurrentRobustnessStudy` | 通过唯一公开 `run(...)` Interface 验证显式 hashed source，生成 19-point Ranking Weight workspace；在 exact 16-cell Adapter map 与 execution contract 通过全量 preflight 后运行或恢复独立 Primary-only cells，关闭 immutable study root，并调用 Report package-internal Interface 生成独立 candidate |
@@ -52,6 +53,14 @@ personalized_delivery_score
 | Release Module / deploy | 独占 Formal eligibility、双 lineage、artifact inventory、approved downloads、release metadata、production identity 与 hash closure；只把已批准 stage facts 交给 Report Interface，并继续负责显式 contract、candidate health、atomic `current` 和公网验收 |
 
 Diagnostics 的 source of truth 是同一 run 的 persisted candidate rows 与 pair rows。运行中只有当前 batch rows 驻留；batch commit 先写入带 identity/hash 的 hidden prepared file，再由 journal 记录对应 chunk reference，随后原子发布 chunk 并释放当前 batch row ownership；任一 commit window 中断都按同一 identity/hash 零调用续提。finalization 通过只读 canonical reader 投影原有 persisted rows；private spool 不是 Report、Release 或 Deployment 的新 Interface，也不构成可发布的第二份事实来源。report writer 和 release validator 仍会重新 rebuild 并比较 diagnostics、summary、schema tokens、manifest 与 approved artifact set。
+
+## Full-Pool deterministic Validation 纵向切片
+
+`FullPoolFormalExperiment.run(contract, adapter, output_dir)` 是 Full-Pool Module 当前唯一 package-internal 主测试 Seam；它没有从 package root 导出，也没有新增 planner、writer、reader、resume 或 Shadow Interface。Frozen contract 同时关闭 complete eligible user-set hash、三条 authoritative message hash、30-batch production shape、scaled Validation shape、Primary-only terminal 和 output identity。Production shape 静态固定 `36,400 users / 109,200 pairs / 30 batches / capacity 1,214 / final 1,194 / 1,691,730 candidates`，但当前 lifecycle 明确拒绝执行 production profile，不能把 Validation source 当成 Formal evidence。
+
+Validation membership 直接包含 `users.csv` 的完整 eligible set，并单独标记 `full_pool_no_membership_filter_v1`；Primary Video Source Scope 只保留 lineage 观察，不执行 Seed-First quota membership filtering。Batch 0 对三条 message 先加入同一 Full-Pool Influence Seed Union，再由各 message ranking 独立补足；之后前 `N-1` 批各取 capacity，最后一批取自然余数。每个 pair 只曝光一次，完整 closure 要求每位用户的 Campaign Exposure Coverage 为 3。
+
+运行继续复用私有 Primary-only kernel、journal 与 batch spool。Full-Pool source closure 不 materialize run-wide rows，而是按 batch 读取已提交 spool，确定性生成独立 schema、batch chunks、candidate/pair/terminal JSONL、aggregates、diagnostics 和完整 hash inventory；所有 persisted rows 再从 staging source 重放验收后才原子 rename。失败可以保留不可部署 operational evidence，但 final destination 必须不存在。Validation Adapter 的 external Provider calls 固定为 `0`，manifest 始终记录 `live_api_triggered=false` 与 `production_deploy_eligible=false`；本纵向切片不生成 Report candidate、release 或 canonical deployment。
 
 ## Robustness workspace 与分析闭包
 
