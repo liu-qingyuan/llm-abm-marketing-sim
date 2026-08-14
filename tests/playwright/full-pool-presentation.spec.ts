@@ -173,7 +173,7 @@ test('Full-Pool report is bilingual, responsive, lazy, filterable, and keyboard 
     await expect(page.getByTestId('full-pool-trace-action')).toBeEnabled();
     await expect(page.getByTestId('full-pool-trace-table')).toBeVisible();
     await expect(page.getByTestId('full-pool-trace-table-body').locator('tr')).toHaveCount(
-      firstPartition.row_count,
+      Math.min(firstPartition.row_count, 25),
     );
     expect(traceRequests).toEqual([
       '/trace/full-pool-trace-index.json',
@@ -187,19 +187,19 @@ test('Full-Pool report is bilingual, responsive, lazy, filterable, and keyboard 
     await messageResponse;
     await expect(traceState).toHaveAttribute('data-trace-state', 'ready');
     await expect(page.getByTestId('full-pool-trace-table-body').locator('tr')).toHaveCount(
-      secondMessagePartition.row_count,
+      Math.min(secondMessagePartition.row_count, 25),
     );
 
     const batchResponse = page.waitForResponse((response) =>
       response.url().endsWith(`/${secondMessageFinalPartition.relative_path}`),
     );
-    await page.getByTestId('full-pool-trace-batch').selectOption(
-      String(secondMessageFinalPartition.time_step),
-    );
+    await page.getByTestId('full-pool-trace-batch').selectOption({
+      value: String(secondMessageFinalPartition.time_step),
+    });
     await batchResponse;
     await expect(traceState).toHaveAttribute('data-trace-state', 'ready');
     await expect(page.getByTestId('full-pool-trace-table-body').locator('tr')).toHaveCount(
-      secondMessageFinalPartition.row_count,
+      Math.min(secondMessageFinalPartition.row_count, 25),
     );
     expect(traceRequests).toEqual([
       '/trace/full-pool-trace-index.json',

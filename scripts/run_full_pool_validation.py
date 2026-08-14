@@ -634,8 +634,9 @@ def _bounded_process_failure(command: list[str], *, cwd: Path, env: dict[str, st
 
 
 def _run_actual_playwright(*, repo_root: Path, candidate: Path) -> dict[str, Any]:
-    playwright = repo_root / "node_modules" / ".bin" / "playwright"
-    if not playwright.is_file() or playwright.is_symlink() or not os.access(playwright, os.X_OK):
+    node_modules = (repo_root / "node_modules").resolve(strict=True)
+    playwright = (node_modules / ".bin" / "playwright").resolve(strict=True)
+    if not playwright.is_relative_to(node_modules) or not playwright.is_file() or not os.access(playwright, os.X_OK):
         raise ValueError("local Playwright executable is unavailable")
     command = [str(playwright), "test", "tests/playwright/full-pool-presentation.spec.ts"]
     env = {
