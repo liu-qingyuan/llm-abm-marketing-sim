@@ -13,13 +13,16 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--repo-root", type=Path, required=True)
     parser.add_argument("--formal-root", type=Path, required=True)
     parser.add_argument("--study-root", type=Path, required=True)
-    parser.add_argument("--workspace-root", type=Path, required=True)
+    parser.add_argument("--workspace-root", type=Path)
     parser.add_argument("--candidate-dir", type=Path, required=True)
-    parser.add_argument("--execution-contract", type=Path, required=True)
+    parser.add_argument("--execution-contract", type=Path)
     parser.add_argument("--destination-dir", type=Path, required=True)
     parser.add_argument("--release-contract", type=Path, required=True)
     parser.add_argument("--release-id", required=True)
     parser.add_argument("--presentation-closure", "--presentation-closure-path", dest="presentation_closure", type=Path)
+    parser.add_argument("--full-pool-source-root", type=Path)
+    parser.add_argument("--full-pool-manifest-sha256")
+    parser.add_argument("--implementation-commit")
     return parser.parse_args()
 
 
@@ -36,6 +39,9 @@ def main() -> int:
         release_contract_path=args.release_contract,
         release_id=args.release_id,
         presentation_closure_path=args.presentation_closure,
+        full_pool_source_root=args.full_pool_source_root,
+        full_pool_manifest_sha256=args.full_pool_manifest_sha256,
+        implementation_commit=args.implementation_commit,
     )
     print(
         json.dumps(

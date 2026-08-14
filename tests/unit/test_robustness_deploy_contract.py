@@ -89,38 +89,76 @@ def test_standalone_validator_dispatches_v7_through_its_own_branch(
         json.dumps({"schema_version": "abm-report-release-contract-v8"}),
         encoding="utf-8",
     )
-    with pytest.raises(validator.ReleaseValidationError, match="unsupported release contract"):
-        validator.validate_release(
-            repo_root=tmp_path,
-            contract_path=contract_path,
-            source_dir=source,
-        )
+    expected_v8 = {
+        "schema_version": "abm-report-release-contract-v8",
+        "release_purpose": "full_pool_formal_research",
+        "source_directory": "release",
+        "sampling_method": "full_pool_no_membership_filter_v1",
+        "sampling_status": "persisted_full_pool_formal_run",
+        "decision_execution_mode": "live_provider",
+        "report_sha256": "b" * 64,
+        "production_deploy_eligible": True,
+    }
+    v8_calls: list[dict[str, object]] = []
+
+    def validate_v8(**kwargs: object) -> dict[str, object]:
+        v8_calls.append(kwargs)
+        return expected_v8
+
+    monkeypatch.setattr(validator, "_validate_v8", validate_v8, raising=False)
+    assert validator.validate_release(
+        repo_root=tmp_path,
+        contract_path=contract_path,
+        source_dir=source,
+        snapshot_dir=snapshot,
+    ) == expected_v8
+    assert v8_calls == [
+        {
+            "repo_root": tmp_path.resolve(),
+            "contract_document": {"schema_version": "abm-report-release-contract-v8"},
+            "source_dir": source,
+            "snapshot_dir": snapshot,
+        }
+    ]
 
 
 @pytest.mark.parametrize(
     "mutation",
     [
-        {"schema_version": "abm-report-release-contract-v8"},
         {"sampling_status": "validation_run"},
         {"decision_execution_mode": "rule_based"},
         {"production_deploy_eligible": False},
     ],
 )
-def test_formal_production_gate_accepts_only_live_deployable_v7_facts(
+def test_formal_production_gate_accepts_only_matching_live_deployable_facts(
     mutation: dict[str, object],
 ) -> None:
     validator = _load_validator()
-    valid = {
+    valid_v7 = {
         "schema_version": "abm-report-release-contract-v7",
         "release_purpose": "concurrent_robustness_formal_research",
         "sampling_status": "persisted_seed_first_formal_run",
         "decision_execution_mode": "live_provider",
         "production_deploy_eligible": True,
     }
+    valid_v8 = {
+        "schema_version": "abm-report-release-contract-v8",
+        "release_purpose": "full_pool_formal_research",
+        "sampling_status": "persisted_full_pool_formal_run",
+        "decision_execution_mode": "live_provider",
+        "production_deploy_eligible": True,
+    }
 
-    validator._require_formal_production(valid)
+    validator._require_formal_production(valid_v7)
+    validator._require_formal_production(valid_v8)
     with pytest.raises(validator.ReleaseValidationError, match="formal production deployment"):
-        validator._require_formal_production(valid | mutation)
+        validator._require_formal_production(valid_v7 | mutation)
+    with pytest.raises(validator.ReleaseValidationError, match="formal production deployment"):
+        validator._require_formal_production(valid_v8 | mutation)
+    with pytest.raises(validator.ReleaseValidationError, match="formal production deployment"):
+        validator._require_formal_production(
+            valid_v8 | {"release_purpose": "concurrent_robustness_formal_research"}
+        )
 
 
 def test_v7_deployment_facts_bind_full_mermaid_inventory_and_explicit_identity(

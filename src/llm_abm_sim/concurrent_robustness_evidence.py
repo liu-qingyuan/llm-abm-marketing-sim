@@ -21,6 +21,21 @@ from .concurrent_robustness_study import (
     _validate_cell_evidence_contract,
     _validate_completed_dynamic_root,
 )
+from .full_pool_formal_experiment import (
+    FULL_POOL_FORMAL_ADAPTER_IDENTITY,
+    FULL_POOL_FORMAL_LOGICAL_JUDGMENT_CAP,
+    FULL_POOL_FORMAL_PHYSICAL_ATTEMPT_CAP,
+    FULL_POOL_FORMAL_REQUESTED_MODEL,
+    FULL_POOL_FORMAL_REQUIRED_OBSERVED_MODEL,
+    FULL_POOL_FORMAL_SOURCE_SCHEMA,
+    FULL_POOL_FORMAL_TRANSPORT,
+    FULL_POOL_PRODUCTION_CANDIDATE_ROWS,
+    FULL_POOL_PRODUCTION_ELIGIBLE_PAIRS,
+    FULL_POOL_PRODUCTION_HORIZON,
+    FULL_POOL_PRODUCTION_USER_COUNT,
+    FullPoolExperimentError,
+    _read_closed_full_pool_source,
+)
 from .providers.pi_subscription import PI_SUBSCRIPTION_MODEL_ALIASES
 
 FORMAL_LOGICAL_JUDGMENTS = 28_800
@@ -63,6 +78,67 @@ _CANDIDATE_REPORT = "report.html"
 _CANDIDATE_PAYLOAD = "concurrent_robustness_report_payload.json"
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _COMMIT = re.compile(r"^[0-9a-f]{7,40}$")
+_FULL_POOL_RELEASE_COUNT_FIELDS = frozenset(
+    {
+        "candidate_ranking_rows",
+        "committed_batches",
+        "distinct_users",
+        "eligible_pairs",
+        "exposures",
+        "primary_terminals",
+        "provider_failed_terminals",
+        "below_delivery_capacity_pairs",
+    }
+)
+_FULL_POOL_FORMAL_ACCOUNTING_FIELDS = frozenset(
+    {
+        "schema_version",
+        "logical_judgments",
+        "physical_attempts",
+        "provider_responses",
+        "successful_decisions",
+        "observed_model_counts",
+        "usage_complete_response_count",
+        "usage_missing_response_count",
+        "usage_malformed_response_count",
+        "input_tokens",
+        "output_tokens",
+        "total_tokens",
+        "cached_input_tokens",
+        "external_request_invocations",
+        "subscription_billed_cost_usd",
+    }
+)
+_FULL_POOL_FORMAL_MANIFEST_FIELDS = frozenset(
+    {
+        "schema_version",
+        "source_schema_version",
+        "source_identity",
+        "contract_sha256",
+        "source_hash",
+        "profile",
+        "evidence_profile",
+        "physical_provider_attempts",
+        "provider_calls",
+        "live_api_triggered",
+        "production_deploy_eligible",
+        "counts",
+        "operational_lineage",
+        "artifacts",
+    }
+)
+_FULL_POOL_FORMAL_AGGREGATE_FIELDS = frozenset(
+    {
+        "schema_version",
+        "counts",
+        "per_message",
+        "evidence_profile",
+        "provider_accounting",
+        "provider_calls",
+        "live_api_triggered",
+        "production_deploy_eligible",
+    }
+)
 
 
 class ConcurrentRobustnessEvidenceError(ValueError):
@@ -125,9 +201,72 @@ class FullPoolPresentationClosureFacts:
     presentation_inventory_identity_sha256: str
     mechanism_set_identity_sha256: str
     trace_index_sha256: str
+    candidate_artifact_hashes: Mapping[str, str]
+    approved_downloads: Mapping[str, str]
+    source_lineage: Mapping[str, Any]
     provider_calls_during_closure: int
     image_generation_triggered: bool
     production_deploy_eligible: bool
+
+
+@dataclass(frozen=True)
+class FullPoolFormalReleaseFacts:
+    """Typed Formal facts accepted by v8 promotion and reclosed by its validator."""
+
+    full_pool_source_path: Path
+    full_pool_source_schema_version: str
+    full_pool_source_identity: str
+    full_pool_source_manifest_sha256: str
+    full_pool_source_hash: str
+    full_pool_contract_sha256: str
+    evidence_profile: str
+    provider_transport: str
+    adapter_identity: str
+    requested_model: str
+    qualified_observed_model: str
+    distinct_users: int
+    eligible_pairs: int
+    exposures: int
+    primary_terminals: int
+    committed_batches: int
+    candidate_ranking_rows: int
+    campaign_exposure_coverage: int
+    provider_failed_terminals: int
+    logical_judgments: int
+    physical_attempts: int
+    physical_attempt_cap: int
+    provider_responses: int
+    successful_decisions: int
+    external_request_invocations: int
+    observed_model_counts: Mapping[str, int]
+    usage_complete_response_count: int
+    usage_missing_response_count: int
+    usage_malformed_response_count: int
+    subscription_billed_cost_usd: float
+    live_api_triggered: bool
+    source_production_deploy_eligible: bool
+    historical_formal_path: Path
+    historical_formal_source_id: str
+    historical_formal_manifest_sha256: str
+    historical_formal_source_kind: str
+    historical_formal_users: int
+    historical_formal_exposures: int
+    historical_primary_terminals: int
+    historical_shadow_terminals: int
+    historical_trace_rows: int
+    historical_study_path: Path
+    historical_study_manifest_sha256: str
+    historical_study_root_identity_sha256: str
+    historical_study_profile: str
+    historical_study_evidence_profile: str
+    historical_study_cell_count: int
+    historical_study_logical_judgments: int
+
+
+@dataclass(frozen=True)
+class FullPoolProductionEvidenceFacts:
+    closure: FullPoolPresentationClosureFacts
+    formal: FullPoolFormalReleaseFacts
 
 
 @dataclass(frozen=True)
@@ -1586,10 +1725,362 @@ def validate_full_pool_presentation_closure(
         presentation_inventory_identity_sha256=facts.presentation_inventory_identity_sha256,
         mechanism_set_identity_sha256=facts.mechanism_set_identity_sha256,
         trace_index_sha256=facts.trace_index_sha256,
+        candidate_artifact_hashes=dict(facts.artifact_hashes),
+        approved_downloads=dict(facts.approved_downloads),
+        source_lineage=dict(facts.source_lineage),
         provider_calls_during_closure=0,
         image_generation_triggered=False,
         production_deploy_eligible=False,
     )
+
+
+def _close_full_pool_formal_release_facts(
+    closure: FullPoolPresentationClosureFacts,
+) -> FullPoolFormalReleaseFacts:
+    try:
+        source = _read_closed_full_pool_source(
+            closure.full_pool_source_path,
+            manifest_sha256=closure.full_pool_source_manifest_sha256,
+        )
+        counts = _mapping(source.manifest.get("counts"), "Full-Pool source counts")
+        accounting = _mapping(
+            source.aggregates.get("provider_accounting"),
+            "Full-Pool Provider accounting",
+        )
+        if (
+            set(counts) != _FULL_POOL_RELEASE_COUNT_FIELDS
+            or set(accounting) != _FULL_POOL_FORMAL_ACCOUNTING_FIELDS
+            or set(source.manifest) != _FULL_POOL_FORMAL_MANIFEST_FIELDS
+            or set(source.aggregates) != _FULL_POOL_FORMAL_AGGREGATE_FIELDS
+        ):
+            raise ConcurrentRobustnessEvidenceError(
+                "Full-Pool Formal production source fields are missing or unexpected"
+            )
+        execution = source.contract.formal_execution
+        historical = _mapping(
+            closure.source_lineage.get("historical_formal"),
+            "historical Formal lineage",
+        )
+        historical_counts = _mapping(
+            historical.get("counts"),
+            "historical Formal counts",
+        )
+        study_manifest = ConcurrentRobustnessManifest.model_validate_json(
+            (closure.robustness_study_path / "study_manifest.json").read_bytes()
+        )
+        cell_evidence = _CellEvidenceDocument.model_validate(
+            _json_object(closure.robustness_study_path / "prompt_model_cell_evidence.json")
+        )
+        dynamic = study_manifest.dynamic_execution
+        return FullPoolFormalReleaseFacts(
+            full_pool_source_path=source.root,
+            full_pool_source_schema_version=_string(
+                source.manifest.get("source_schema_version"),
+                "Full-Pool source schema",
+            ),
+            full_pool_source_identity=source.source_identity,
+            full_pool_source_manifest_sha256=source.manifest_sha256,
+            full_pool_source_hash=_string(
+                source.manifest.get("source_hash"),
+                "Full-Pool source hash",
+            ),
+            full_pool_contract_sha256=_string(
+                source.manifest.get("contract_sha256"),
+                "Full-Pool contract hash",
+            ),
+            evidence_profile=_string(
+                source.manifest.get("evidence_profile"),
+                "Full-Pool evidence profile",
+            ),
+            provider_transport=execution.transport if execution is not None else "",
+            adapter_identity=execution.adapter_identity if execution is not None else "",
+            requested_model=execution.requested_model if execution is not None else "",
+            qualified_observed_model=(
+                execution.required_observed_model if execution is not None else ""
+            ),
+            distinct_users=_strict_int(counts.get("distinct_users"), "Full-Pool users"),
+            eligible_pairs=_strict_int(counts.get("eligible_pairs"), "Full-Pool eligible pairs"),
+            exposures=_strict_int(counts.get("exposures"), "Full-Pool exposures"),
+            primary_terminals=_strict_int(
+                counts.get("primary_terminals"),
+                "Full-Pool Primary terminals",
+            ),
+            committed_batches=_strict_int(
+                counts.get("committed_batches"),
+                "Full-Pool committed batches",
+            ),
+            candidate_ranking_rows=_strict_int(
+                counts.get("candidate_ranking_rows"),
+                "Full-Pool candidate rows",
+            ),
+            campaign_exposure_coverage=len(source.contract.message_ids),
+            provider_failed_terminals=_strict_int(
+                counts.get("provider_failed_terminals"),
+                "Full-Pool provider failures",
+            ),
+            logical_judgments=_strict_int(
+                accounting.get("logical_judgments"),
+                "Full-Pool logical judgments",
+            ),
+            physical_attempts=_strict_int(
+                accounting.get("physical_attempts"),
+                "Full-Pool physical attempts",
+            ),
+            physical_attempt_cap=(execution.physical_attempt_cap if execution is not None else 0),
+            provider_responses=_strict_int(
+                accounting.get("provider_responses"),
+                "Full-Pool Provider responses",
+            ),
+            successful_decisions=_strict_int(
+                accounting.get("successful_decisions"),
+                "Full-Pool successful Decisions",
+            ),
+            external_request_invocations=_strict_int(
+                accounting.get("external_request_invocations"),
+                "Full-Pool external requests",
+            ),
+            observed_model_counts={
+                str(model): _strict_int(count, "Full-Pool observed-model count")
+                for model, count in _mapping(
+                    accounting.get("observed_model_counts"),
+                    "Full-Pool observed-model counts",
+                ).items()
+            },
+            usage_complete_response_count=_strict_int(
+                accounting.get("usage_complete_response_count"),
+                "Full-Pool complete usage responses",
+            ),
+            usage_missing_response_count=_strict_int(
+                accounting.get("usage_missing_response_count"),
+                "Full-Pool missing usage responses",
+            ),
+            usage_malformed_response_count=_strict_int(
+                accounting.get("usage_malformed_response_count"),
+                "Full-Pool malformed usage responses",
+            ),
+            subscription_billed_cost_usd=float(
+                accounting.get("subscription_billed_cost_usd", -1.0)
+            ),
+            live_api_triggered=source.manifest.get("live_api_triggered") is True,
+            source_production_deploy_eligible=(
+                source.manifest.get("production_deploy_eligible") is True
+            ),
+            historical_formal_path=closure.historical_formal_path,
+            historical_formal_source_id=closure.historical_formal_source_id,
+            historical_formal_manifest_sha256=closure.historical_formal_manifest_sha256,
+            historical_formal_source_kind=_string(
+                historical.get("source_kind"),
+                "historical Formal source kind",
+            ),
+            historical_formal_users=_strict_int(
+                historical_counts.get("distinct_users"),
+                "historical Formal users",
+            ),
+            historical_formal_exposures=_strict_int(
+                historical_counts.get("exposures"),
+                "historical Formal exposures",
+            ),
+            historical_primary_terminals=_strict_int(
+                historical_counts.get("primary_terminals"),
+                "historical Primary terminals",
+            ),
+            historical_shadow_terminals=_strict_int(
+                historical_counts.get("shadow_terminals"),
+                "historical Shadow terminals",
+            ),
+            historical_trace_rows=_strict_int(
+                historical_counts.get("trace_rows"),
+                "historical trace rows",
+            ),
+            historical_study_path=closure.robustness_study_path,
+            historical_study_manifest_sha256=closure.robustness_study_manifest_sha256,
+            historical_study_root_identity_sha256=(
+                closure.robustness_study_root_identity_sha256
+            ),
+            historical_study_profile=(dynamic.profile if dynamic is not None else ""),
+            historical_study_evidence_profile=cell_evidence.evidence_profile,
+            historical_study_cell_count=cell_evidence.cell_count,
+            historical_study_logical_judgments=cell_evidence.logical_judgment_count,
+        )
+    except ConcurrentRobustnessEvidenceError:
+        raise
+    except (
+        FullPoolExperimentError,
+        OSError,
+        TypeError,
+        ValueError,
+        json.JSONDecodeError,
+    ) as exc:
+        raise ConcurrentRobustnessEvidenceError(
+            "Full-Pool Formal production facts failed source and historical closure"
+        ) from exc
+
+
+def _validate_full_pool_formal_release_facts(
+    facts: FullPoolFormalReleaseFacts,
+    *,
+    closure: FullPoolPresentationClosureFacts,
+) -> None:
+    full_pool_lineage = _mapping(
+        closure.source_lineage.get("full_pool"),
+        "Full-Pool source lineage",
+    )
+    expected_identity = (
+        facts.full_pool_source_path == closure.full_pool_source_path
+        and facts.full_pool_source_schema_version == FULL_POOL_FORMAL_SOURCE_SCHEMA
+        and facts.full_pool_source_schema_version == closure.full_pool_source_schema_version
+        and facts.full_pool_source_identity == closure.full_pool_source_identity
+        and facts.full_pool_source_manifest_sha256
+        == closure.full_pool_source_manifest_sha256
+        and facts.full_pool_source_hash == closure.full_pool_source_hash
+        and facts.full_pool_contract_sha256 == full_pool_lineage.get("contract_sha256")
+        and facts.historical_formal_path == closure.historical_formal_path
+        and facts.historical_formal_source_id == closure.historical_formal_source_id
+        and facts.historical_formal_manifest_sha256
+        == closure.historical_formal_manifest_sha256
+        and facts.historical_study_path == closure.robustness_study_path
+        and facts.historical_study_manifest_sha256
+        == closure.robustness_study_manifest_sha256
+        and facts.historical_study_root_identity_sha256
+        == closure.robustness_study_root_identity_sha256
+    )
+    exact_values = {
+        "evidence_profile": (facts.evidence_profile, "formal_live"),
+        "provider_transport": (facts.provider_transport, FULL_POOL_FORMAL_TRANSPORT),
+        "adapter_identity": (facts.adapter_identity, FULL_POOL_FORMAL_ADAPTER_IDENTITY),
+        "requested_model": (facts.requested_model, FULL_POOL_FORMAL_REQUESTED_MODEL),
+        "qualified_observed_model": (
+            facts.qualified_observed_model,
+            FULL_POOL_FORMAL_REQUIRED_OBSERVED_MODEL,
+        ),
+        "distinct_users": (facts.distinct_users, FULL_POOL_PRODUCTION_USER_COUNT),
+        "eligible_pairs": (facts.eligible_pairs, FULL_POOL_PRODUCTION_ELIGIBLE_PAIRS),
+        "exposures": (facts.exposures, FULL_POOL_PRODUCTION_ELIGIBLE_PAIRS),
+        "primary_terminals": (
+            facts.primary_terminals,
+            FULL_POOL_PRODUCTION_ELIGIBLE_PAIRS,
+        ),
+        "committed_batches": (facts.committed_batches, FULL_POOL_PRODUCTION_HORIZON),
+        "candidate_ranking_rows": (
+            facts.candidate_ranking_rows,
+            FULL_POOL_PRODUCTION_CANDIDATE_ROWS,
+        ),
+        "campaign_exposure_coverage": (facts.campaign_exposure_coverage, 3),
+        "provider_failed_terminals": (facts.provider_failed_terminals, 0),
+        "logical_judgments": (
+            facts.logical_judgments,
+            FULL_POOL_FORMAL_LOGICAL_JUDGMENT_CAP,
+        ),
+        "physical_attempt_cap": (
+            facts.physical_attempt_cap,
+            FULL_POOL_FORMAL_PHYSICAL_ATTEMPT_CAP,
+        ),
+        "provider_responses": (
+            facts.provider_responses,
+            FULL_POOL_FORMAL_LOGICAL_JUDGMENT_CAP,
+        ),
+        "successful_decisions": (
+            facts.successful_decisions,
+            FULL_POOL_FORMAL_LOGICAL_JUDGMENT_CAP,
+        ),
+        "usage_complete_response_count": (
+            facts.usage_complete_response_count,
+            FULL_POOL_FORMAL_LOGICAL_JUDGMENT_CAP,
+        ),
+        "usage_missing_response_count": (facts.usage_missing_response_count, 0),
+        "usage_malformed_response_count": (facts.usage_malformed_response_count, 0),
+        "subscription_billed_cost_usd": (facts.subscription_billed_cost_usd, 0.0),
+        "live_api_triggered": (facts.live_api_triggered, True),
+        "source_production_deploy_eligible": (
+            facts.source_production_deploy_eligible,
+            True,
+        ),
+        "historical_formal_source_kind": (facts.historical_formal_source_kind, "formal"),
+        "historical_formal_users": (facts.historical_formal_users, 1_000),
+        "historical_formal_exposures": (facts.historical_formal_exposures, 1_800),
+        "historical_primary_terminals": (facts.historical_primary_terminals, 1_800),
+        "historical_shadow_terminals": (facts.historical_shadow_terminals, 1_800),
+        "historical_trace_rows": (facts.historical_trace_rows, 1_800),
+        "historical_study_profile": (facts.historical_study_profile, "formal_live"),
+        "historical_study_evidence_profile": (
+            facts.historical_study_evidence_profile,
+            "formal_live",
+        ),
+        "historical_study_cell_count": (facts.historical_study_cell_count, 16),
+        "historical_study_logical_judgments": (
+            facts.historical_study_logical_judgments,
+            FORMAL_LOGICAL_JUDGMENTS,
+        ),
+    }
+    if (
+        not expected_identity
+        or any(type(actual) is not type(expected) or actual != expected for actual, expected in exact_values.values())
+        or type(facts.physical_attempts) is not int
+        or not FULL_POOL_FORMAL_LOGICAL_JUDGMENT_CAP
+        <= facts.physical_attempts
+        <= FULL_POOL_FORMAL_PHYSICAL_ATTEMPT_CAP
+        or facts.external_request_invocations != facts.physical_attempts
+        or dict(facts.observed_model_counts)
+        != {FULL_POOL_FORMAL_REQUIRED_OBSERVED_MODEL: FULL_POOL_FORMAL_LOGICAL_JUDGMENT_CAP}
+    ):
+        raise ConcurrentRobustnessEvidenceError(
+            "Full-Pool Formal production facts are incomplete, crossed, or non-Formal"
+        )
+
+
+def validate_full_pool_production_evidence(
+    *,
+    repo_root: str | Path,
+    closure_path: str | Path,
+    full_pool_source_root: str | Path,
+    full_pool_manifest_sha256: str,
+    historical_formal_root: str | Path,
+    historical_study_root: str | Path,
+    candidate_dir: str | Path,
+    implementation_commit: str,
+    formal_facts: FullPoolFormalReleaseFacts | None = None,
+) -> FullPoolProductionEvidenceFacts:
+    """Close all v8 lineages; tests may inject non-persisted typed Formal facts."""
+    root = _real_directory(Path(repo_root), "repository root")
+    closure_file = _repo_file(root, Path(closure_path), "Full-Pool presentation closure")
+    closure_document = _json_object(closure_file)
+    bundle_relative = _canonical_document_path(
+        closure_document.get("presentation_bundle_directory"),
+        "Full-Pool presentation bundle directory",
+    )
+    bundle = _repo_directory(
+        root,
+        Path(bundle_relative),
+        "Full-Pool presentation bundle",
+    )
+    closure = validate_full_pool_presentation_closure(
+        repo_root=root,
+        closure_path=closure_file,
+        full_pool_source_root=full_pool_source_root,
+        full_pool_manifest_sha256=full_pool_manifest_sha256,
+        historical_formal_root=historical_formal_root,
+        historical_study_root=historical_study_root,
+        presentation_bundle_dir=bundle,
+        candidate_dir=candidate_dir,
+    )
+    if (
+        not _COMMIT.fullmatch(implementation_commit)
+        or closure.implementation_commit != implementation_commit
+    ):
+        raise ConcurrentRobustnessEvidenceError(
+            "Full-Pool production implementation commit is crossed"
+        )
+    selected_facts = (
+        _close_full_pool_formal_release_facts(closure)
+        if formal_facts is None
+        else formal_facts
+    )
+    if not isinstance(selected_facts, FullPoolFormalReleaseFacts):
+        raise ConcurrentRobustnessEvidenceError(
+            "Full-Pool Formal production facts must use the typed Evidence contract"
+        )
+    _validate_full_pool_formal_release_facts(selected_facts, closure=closure)
+    return FullPoolProductionEvidenceFacts(closure=closure, formal=selected_facts)
 
 
 def _mapping(value: object, label: str) -> dict[str, Any]:

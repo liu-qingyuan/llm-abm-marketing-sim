@@ -205,6 +205,85 @@ def test_candidate_validator_rejects_schema_inventory_and_trace_mutations(
         )
 
 
+def test_report_interface_materializes_and_validates_full_pool_production_bytes(
+    tmp_path: Path,
+) -> None:
+    inputs, candidate = _compose_candidate(tmp_path)
+    candidate_facts = report_module._REPORT_PRESENTATION.validate_full_pool_candidate(
+        candidate,
+        full_pool_source_root=inputs["full_pool_source"],
+        full_pool_manifest_sha256=inputs["full_pool_manifest_sha256"],
+        historical_formal_root=inputs["historical_formal"],
+        historical_study_root=inputs["historical_study"],
+        presentation_bundle_dir=inputs["bundle"],
+        implementation_commit="abcdef0",
+    )
+    before = _snapshot(candidate)
+    stage_facts = report_module._FullPoolProductionPresentationFacts(
+        release_id="full-pool-v8-test",
+        release_contract_schema="abm-report-release-contract-v8",
+        canonical_endpoint="https://abm.q1ngyuan.top/",
+        production_evidence_schema="full-pool-production-release-evidence-v1",
+        implementation_commit="abcdef0",
+        full_pool_source_identity=str(
+            candidate_facts.source_lineage["full_pool"]["source_identity"]
+        ),
+        full_pool_source_manifest_sha256=str(
+            candidate_facts.source_lineage["full_pool"]["manifest_sha256"]
+        ),
+        distinct_users=36_400,
+        eligible_pairs=109_200,
+        exposures=109_200,
+        primary_terminals=109_200,
+        committed_batches=30,
+        candidate_ranking_rows=1_691_730,
+        campaign_exposure_coverage=3,
+        provider_failed_terminals=0,
+        logical_judgments=109_200,
+        physical_attempts=109_200,
+        provider_transport="openai-codex",
+        requested_model="gpt-5.6-sol",
+        qualified_observed_model="gpt-5.6-sol",
+        usage_complete_response_count=109_200,
+        subscription_billed_cost_usd=0.0,
+        approved_downloads=candidate_facts.approved_downloads,
+    )
+
+    production = report_module._REPORT_PRESENTATION.materialize_full_pool_production(
+        full_pool_source_root=inputs["full_pool_source"],
+        full_pool_manifest_sha256=inputs["full_pool_manifest_sha256"],
+        historical_formal_root=inputs["historical_formal"],
+        historical_study_root=inputs["historical_study"],
+        presentation_bundle_dir=inputs["bundle"],
+        candidate_dir=candidate,
+        implementation_commit="abcdef0",
+        stage_facts=stage_facts,
+    )
+
+    payload = json.loads(production.report_payload)
+    assert payload["schema_version"] == "full-pool-three-lineage-report-payload-v1"
+    assert payload["production_deploy_eligible"] is True
+    assert payload["production_release"]["schema_version"] == (
+        "full-pool-production-presentation-v1"
+    )
+    assert payload["production_release"]["release_id"] == "full-pool-v8-test"
+    assert (
+        b'<main class="full-pool-presentation" data-testid="full-pool-presentation" '
+        b'data-production-deploy-eligible="true"'
+    ) in production.report_html
+    assert (
+        b'<main class="full-pool-presentation" data-testid="full-pool-presentation" '
+        b'data-production-deploy-eligible="false"'
+    ) not in production.report_html
+    assert len(production.report_html) < 3 * 1024 * 1024
+    report_module._REPORT_PRESENTATION.validate_full_pool_production_bundle(
+        production,
+        candidate_dir=candidate,
+        stage_facts=stage_facts,
+    )
+    assert _snapshot(candidate) == before
+
+
 def test_candidate_rejects_nested_output_and_allows_zero_call_retry(tmp_path: Path) -> None:
     inputs = _compose_inputs(tmp_path)
     bundle = inputs["bundle"]
@@ -441,3 +520,130 @@ def test_closure_failure_is_atomic_and_destination_cannot_overlap_input(tmp_path
     with pytest.raises(evidence_module.ConcurrentRobustnessEvidenceError, match="overlap"):
         _close_candidate(tmp_path, inputs, candidate, nested)
     assert not nested.exists()
+
+
+def test_production_evidence_rejects_formal_shaped_validation_source(tmp_path: Path) -> None:
+    source, source_hash, _, _ = _formal_shaped_full_pool_source(tmp_path / "full-pool")
+    historical_formal, historical_study, historical_candidate = _historical_candidate(
+        tmp_path / "historical"
+    )
+    bundle = tmp_path / "bundle"
+    report_module._REPORT_PRESENTATION.compose_full_pool_presentation_bundle(
+        full_pool_source_root=source,
+        full_pool_manifest_sha256=source_hash,
+        historical_formal_root=historical_formal,
+        historical_study_root=historical_study,
+        historical_candidate_dir=historical_candidate,
+        destination_dir=bundle,
+    )
+    candidate = tmp_path / "candidate"
+    report_module._REPORT_PRESENTATION.compose_full_pool_candidate(
+        full_pool_source_root=source,
+        full_pool_manifest_sha256=source_hash,
+        historical_formal_root=historical_formal,
+        historical_study_root=historical_study,
+        presentation_bundle_dir=bundle,
+        implementation_commit="abcdef0",
+        destination_dir=candidate,
+    )
+    closure = tmp_path / "closure.json"
+    closure_facts = evidence_module.close_full_pool_presentation(
+        repo_root=tmp_path,
+        full_pool_source_root=source,
+        full_pool_manifest_sha256=source_hash,
+        historical_formal_root=historical_formal,
+        historical_study_root=historical_study,
+        presentation_bundle_dir=bundle,
+        candidate_dir=candidate,
+        destination_path=closure,
+        implementation_commit="abcdef0",
+    )
+
+    with pytest.raises(
+        evidence_module.ConcurrentRobustnessEvidenceError,
+        match="Formal production facts",
+    ):
+        evidence_module.validate_full_pool_production_evidence(
+            repo_root=tmp_path,
+            closure_path=closure,
+            full_pool_source_root=source,
+            full_pool_manifest_sha256=source_hash,
+            historical_formal_root=historical_formal,
+            historical_study_root=historical_study,
+            candidate_dir=candidate,
+            implementation_commit="abcdef0",
+        )
+
+    injected = evidence_module.FullPoolFormalReleaseFacts(
+        full_pool_source_path=source.resolve(),
+        full_pool_source_schema_version="full-pool-formal-source-v1",
+        full_pool_source_identity=closure_facts.full_pool_source_identity,
+        full_pool_source_manifest_sha256=source_hash,
+        full_pool_source_hash=closure_facts.full_pool_source_hash,
+        full_pool_contract_sha256=str(
+            closure_facts.source_lineage["full_pool"]["contract_sha256"]
+        ),
+        evidence_profile="formal_live",
+        provider_transport="openai-codex",
+        adapter_identity=evidence_module.FULL_POOL_FORMAL_ADAPTER_IDENTITY,
+        requested_model="gpt-5.6-sol",
+        qualified_observed_model="gpt-5.6-sol",
+        distinct_users=36_400,
+        eligible_pairs=109_200,
+        exposures=109_200,
+        primary_terminals=109_200,
+        committed_batches=30,
+        candidate_ranking_rows=1_691_730,
+        campaign_exposure_coverage=3,
+        provider_failed_terminals=0,
+        logical_judgments=109_200,
+        physical_attempts=109_200,
+        physical_attempt_cap=120_120,
+        provider_responses=109_200,
+        successful_decisions=109_200,
+        external_request_invocations=109_200,
+        observed_model_counts={"gpt-5.6-sol": 109_200},
+        usage_complete_response_count=109_200,
+        usage_missing_response_count=0,
+        usage_malformed_response_count=0,
+        subscription_billed_cost_usd=0.0,
+        live_api_triggered=True,
+        source_production_deploy_eligible=True,
+        historical_formal_path=historical_formal.resolve(),
+        historical_formal_source_id=closure_facts.historical_formal_source_id,
+        historical_formal_manifest_sha256=(
+            closure_facts.historical_formal_manifest_sha256
+        ),
+        historical_formal_source_kind="formal",
+        historical_formal_users=1_000,
+        historical_formal_exposures=1_800,
+        historical_primary_terminals=1_800,
+        historical_shadow_terminals=1_800,
+        historical_trace_rows=1_800,
+        historical_study_path=historical_study.resolve(),
+        historical_study_manifest_sha256=(
+            closure_facts.robustness_study_manifest_sha256
+        ),
+        historical_study_root_identity_sha256=(
+            closure_facts.robustness_study_root_identity_sha256
+        ),
+        historical_study_profile="formal_live",
+        historical_study_evidence_profile="formal_live",
+        historical_study_cell_count=16,
+        historical_study_logical_judgments=28_800,
+    )
+    validated = evidence_module.validate_full_pool_production_evidence(
+        repo_root=tmp_path,
+        closure_path=closure,
+        full_pool_source_root=source,
+        full_pool_manifest_sha256=source_hash,
+        historical_formal_root=historical_formal,
+        historical_study_root=historical_study,
+        candidate_dir=candidate,
+        implementation_commit="abcdef0",
+        formal_facts=injected,
+    )
+    assert validated.formal is injected
+    assert validated.closure.candidate_identity_sha256 == (
+        closure_facts.candidate_identity_sha256
+    )

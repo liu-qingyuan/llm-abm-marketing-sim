@@ -903,6 +903,35 @@ class _ProductionPresentationFacts:
 
 
 @dataclass(frozen=True)
+class _FullPoolProductionPresentationFacts:
+    """v8 release facts presented by Report without moving eligibility knowledge here."""
+
+    release_id: str
+    release_contract_schema: str
+    canonical_endpoint: str
+    production_evidence_schema: str
+    implementation_commit: str
+    full_pool_source_identity: str
+    full_pool_source_manifest_sha256: str
+    distinct_users: int
+    eligible_pairs: int
+    exposures: int
+    primary_terminals: int
+    committed_batches: int
+    candidate_ranking_rows: int
+    campaign_exposure_coverage: int
+    provider_failed_terminals: int
+    logical_judgments: int
+    physical_attempts: int
+    provider_transport: str
+    requested_model: str
+    qualified_observed_model: str
+    usage_complete_response_count: int
+    subscription_billed_cost_usd: float
+    approved_downloads: Mapping[str, str]
+
+
+@dataclass(frozen=True)
 class _PresentationBundle:
     report_payload: bytes
     report_html: bytes
@@ -1097,14 +1126,25 @@ class _ReportPresentationInterface:
                 full_pool_path,
                 manifest_sha256=full_pool_manifest_sha256,
             )
-            if (
-                source.manifest.get("production_deploy_eligible") is not False
-                or source.manifest.get("provider_calls") != 0
-                or source.manifest.get("live_api_triggered") is not False
-                or source.aggregates.get("production_deploy_eligible") is not False
-            ):
+            validation_source = (
+                source.manifest.get("production_deploy_eligible") is False
+                and source.manifest.get("provider_calls") == 0
+                and source.manifest.get("live_api_triggered") is False
+                and source.aggregates.get("production_deploy_eligible") is False
+            )
+            source_provider_calls = source.manifest.get("provider_calls")
+            formal_source = (
+                source.manifest.get("production_deploy_eligible") is True
+                and source.manifest.get("evidence_profile") == "formal_live"
+                and isinstance(source_provider_calls, int)
+                and not isinstance(source_provider_calls, bool)
+                and source_provider_calls > 0
+                and source.manifest.get("live_api_triggered") is True
+                and source.aggregates.get("production_deploy_eligible") is True
+            )
+            if not validation_source and not formal_source:
                 raise ValueError(
-                    "Full-Pool presentation composition requires a closed zero-call Validation source"
+                    "Full-Pool presentation composition requires an exact closed Validation or Formal source"
                 )
             manifest, manifest_payload, manifest_sha256 = _load_study_manifest(study_path)
             candidate, projection = self._validate_candidate_from_inputs(
@@ -1387,6 +1427,67 @@ class _ReportPresentationInterface:
                 "Full-Pool three-lineage candidate failed closure validation"
             ) from exc
 
+    def materialize_full_pool_production(
+        self,
+        *,
+        full_pool_source_root: str | Path,
+        full_pool_manifest_sha256: str,
+        historical_formal_root: str | Path,
+        historical_study_root: str | Path,
+        presentation_bundle_dir: str | Path,
+        candidate_dir: str | Path,
+        implementation_commit: str,
+        stage_facts: _FullPoolProductionPresentationFacts,
+    ) -> _PresentationBundle:
+        """Materialize v8 payload and HTML from one independently closed candidate."""
+        candidate_facts = self.validate_full_pool_candidate(
+            candidate_dir,
+            full_pool_source_root=full_pool_source_root,
+            full_pool_manifest_sha256=full_pool_manifest_sha256,
+            historical_formal_root=historical_formal_root,
+            historical_study_root=historical_study_root,
+            presentation_bundle_dir=presentation_bundle_dir,
+            implementation_commit=implementation_commit,
+        )
+        candidate = candidate_facts.root
+        candidate_before = _directory_file_hashes(candidate)
+        bundle = _build_full_pool_production_presentation(
+            candidate,
+            candidate_facts=candidate_facts,
+            stage_facts=stage_facts,
+        )
+        self.validate_full_pool_production_bundle(
+            bundle,
+            candidate_dir=candidate,
+            stage_facts=stage_facts,
+        )
+        if _directory_file_hashes(candidate) != candidate_before:
+            raise _RobustnessReportClosureError(
+                "Full-Pool production materialization mutated its candidate"
+            )
+        return bundle
+
+    def validate_full_pool_production_bundle(
+        self,
+        bundle: _PresentationBundle,
+        *,
+        candidate_dir: str | Path,
+        stage_facts: _FullPoolProductionPresentationFacts,
+    ) -> None:
+        """Validate v8 payload, HTML markers, downloads, size, and deterministic bytes."""
+        try:
+            _validate_full_pool_production_presentation(
+                bundle,
+                candidate=Path(candidate_dir),
+                stage_facts=stage_facts,
+            )
+        except _RobustnessReportClosureError:
+            raise
+        except (OSError, TypeError, ValueError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise _RobustnessReportClosureError(
+                "Full-Pool production presentation failed validation"
+            ) from exc
+
     def _prepare_full_pool_candidate_inputs(
         self,
         *,
@@ -1606,6 +1707,286 @@ class _ReportPresentationInterface:
 
 
 _REPORT_PRESENTATION = _ReportPresentationInterface()
+
+
+_FULL_POOL_PRODUCTION_PRESENTATION_SCHEMA = "full-pool-production-presentation-v1"
+_FULL_POOL_PRODUCTION_RELEASE_FIELDS = frozenset(
+    {
+        "schema_version",
+        "release_contract_schema",
+        "release_id",
+        "canonical_endpoint",
+        "production_evidence_schema",
+        "implementation_commit",
+        "full_pool_source_identity",
+        "full_pool_source_manifest_sha256",
+        "counts",
+        "provider",
+        "production_deploy_eligible",
+    }
+)
+_FULL_POOL_PRODUCTION_COUNT_FIELDS = frozenset(
+    {
+        "distinct_users",
+        "eligible_pairs",
+        "exposures",
+        "primary_terminals",
+        "committed_batches",
+        "candidate_ranking_rows",
+        "campaign_exposure_coverage",
+        "provider_failed_terminals",
+    }
+)
+_FULL_POOL_PRODUCTION_PROVIDER_FIELDS = frozenset(
+    {
+        "logical_judgments",
+        "physical_attempts",
+        "transport",
+        "requested_model",
+        "qualified_observed_model",
+        "usage_complete_response_count",
+        "subscription_billed_cost_usd",
+    }
+)
+
+
+def _validate_full_pool_production_stage_facts(
+    stage_facts: _FullPoolProductionPresentationFacts,
+    *,
+    candidate_facts: _FullPoolCandidateFacts | None = None,
+) -> dict[str, str]:
+    if not isinstance(stage_facts, _FullPoolProductionPresentationFacts):
+        raise _RobustnessReportClosureError("Full-Pool production facts use an invalid Interface")
+    strict_integer_values = (
+        stage_facts.distinct_users,
+        stage_facts.eligible_pairs,
+        stage_facts.exposures,
+        stage_facts.primary_terminals,
+        stage_facts.committed_batches,
+        stage_facts.candidate_ranking_rows,
+        stage_facts.campaign_exposure_coverage,
+        stage_facts.provider_failed_terminals,
+        stage_facts.logical_judgments,
+        stage_facts.physical_attempts,
+        stage_facts.usage_complete_response_count,
+    )
+    if (
+        not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,159}", stage_facts.release_id)
+        or stage_facts.release_contract_schema != "abm-report-release-contract-v8"
+        or stage_facts.canonical_endpoint != "https://abm.q1ngyuan.top/"
+        or stage_facts.production_evidence_schema
+        != "full-pool-production-release-evidence-v1"
+        or not _IMPLEMENTATION_COMMIT_PATTERN.fullmatch(stage_facts.implementation_commit)
+        or not stage_facts.full_pool_source_identity
+        or not _is_sha256(stage_facts.full_pool_source_manifest_sha256)
+        or any(type(value) is not int or value < 0 for value in strict_integer_values)
+        or not stage_facts.provider_transport
+        or not stage_facts.requested_model
+        or not stage_facts.qualified_observed_model
+        or type(stage_facts.subscription_billed_cost_usd) is not float
+        or stage_facts.subscription_billed_cost_usd < 0.0
+    ):
+        raise _RobustnessReportClosureError(
+            "Full-Pool production presentation facts are invalid or crossed"
+        )
+    approved_downloads = _strict_string_mapping(
+        stage_facts.approved_downloads,
+        "Full-Pool production approved downloads",
+    )
+    if candidate_facts is not None:
+        full_pool_lineage = _mapping(
+            candidate_facts.source_lineage.get("full_pool"),
+            "Full-Pool candidate source lineage",
+        )
+        if (
+            stage_facts.implementation_commit != candidate_facts.implementation_commit
+            or stage_facts.full_pool_source_identity != full_pool_lineage.get("source_identity")
+            or stage_facts.full_pool_source_manifest_sha256
+            != full_pool_lineage.get("manifest_sha256")
+            or approved_downloads != dict(candidate_facts.approved_downloads)
+        ):
+            raise _RobustnessReportClosureError(
+                "Full-Pool production facts are crossed with the closed candidate"
+            )
+    return approved_downloads
+
+
+def _full_pool_production_release_payload(
+    stage_facts: _FullPoolProductionPresentationFacts,
+) -> dict[str, Any]:
+    return {
+        "schema_version": _FULL_POOL_PRODUCTION_PRESENTATION_SCHEMA,
+        "release_contract_schema": stage_facts.release_contract_schema,
+        "release_id": stage_facts.release_id,
+        "canonical_endpoint": stage_facts.canonical_endpoint,
+        "production_evidence_schema": stage_facts.production_evidence_schema,
+        "implementation_commit": stage_facts.implementation_commit,
+        "full_pool_source_identity": stage_facts.full_pool_source_identity,
+        "full_pool_source_manifest_sha256": stage_facts.full_pool_source_manifest_sha256,
+        "counts": {
+            "distinct_users": stage_facts.distinct_users,
+            "eligible_pairs": stage_facts.eligible_pairs,
+            "exposures": stage_facts.exposures,
+            "primary_terminals": stage_facts.primary_terminals,
+            "committed_batches": stage_facts.committed_batches,
+            "candidate_ranking_rows": stage_facts.candidate_ranking_rows,
+            "campaign_exposure_coverage": stage_facts.campaign_exposure_coverage,
+            "provider_failed_terminals": stage_facts.provider_failed_terminals,
+        },
+        "provider": {
+            "logical_judgments": stage_facts.logical_judgments,
+            "physical_attempts": stage_facts.physical_attempts,
+            "transport": stage_facts.provider_transport,
+            "requested_model": stage_facts.requested_model,
+            "qualified_observed_model": stage_facts.qualified_observed_model,
+            "usage_complete_response_count": stage_facts.usage_complete_response_count,
+            "subscription_billed_cost_usd": stage_facts.subscription_billed_cost_usd,
+        },
+        "production_deploy_eligible": True,
+    }
+
+
+def _build_full_pool_production_presentation(
+    candidate: Path,
+    *,
+    candidate_facts: _FullPoolCandidateFacts,
+    stage_facts: _FullPoolProductionPresentationFacts,
+) -> _PresentationBundle:
+    _validate_full_pool_production_stage_facts(
+        stage_facts,
+        candidate_facts=candidate_facts,
+    )
+    payload = _read_json(candidate / _REPORT_PAYLOAD)
+    if (
+        payload.get("schema_version") != _FULL_POOL_REPORT_PAYLOAD_SCHEMA
+        or payload.get("production_deploy_eligible") is not False
+        or "production_release" in payload
+    ):
+        raise _RobustnessReportClosureError(
+            "Full-Pool production source is not an exact non-deployable candidate"
+        )
+    production_payload = json.loads(json.dumps(payload, ensure_ascii=False, allow_nan=False))
+    production_payload["production_release"] = _full_pool_production_release_payload(stage_facts)
+    production_payload["production_deploy_eligible"] = True
+
+    candidate_html = (candidate / CONCURRENT_MESSAGE_REPORT_HTML).read_bytes()
+    false_marker = (
+        b'<main class="full-pool-presentation" data-testid="full-pool-presentation" '
+        b'data-production-deploy-eligible="false"'
+    )
+    true_marker = (
+        b'<main class="full-pool-presentation" data-testid="full-pool-presentation" '
+        b'data-production-deploy-eligible="true"'
+    )
+    if candidate_html.count(false_marker) != 1 or true_marker in candidate_html:
+        raise _RobustnessReportClosureError(
+            "Full-Pool candidate production marker is missing, duplicated, or crossed"
+        )
+    production_html = candidate_html.replace(false_marker, true_marker, 1)
+    return _PresentationBundle(
+        report_payload=_json_bytes(production_payload),
+        report_html=production_html,
+    )
+
+
+def _validate_full_pool_production_presentation(
+    bundle: _PresentationBundle,
+    *,
+    candidate: Path,
+    stage_facts: _FullPoolProductionPresentationFacts,
+) -> None:
+    if not isinstance(bundle, _PresentationBundle):
+        raise _RobustnessReportClosureError("Full-Pool production bundle has an invalid type")
+    absolute = Path(os.path.abspath(candidate))
+    resolved = candidate.resolve(strict=True)
+    if absolute != resolved or candidate.is_symlink() or not resolved.is_dir():
+        raise _RobustnessReportClosureError("Full-Pool production candidate is not a real directory")
+    candidate_manifest = _read_json(resolved / CONCURRENT_MESSAGE_ARTIFACT_MANIFEST_JSON)
+    candidate_payload = _read_json(resolved / _REPORT_PAYLOAD)
+    source_lineage = _mapping(candidate_payload.get("source_lineage"), "Full-Pool source lineage")
+    full_pool_lineage = _mapping(source_lineage.get("full_pool"), "Full-Pool source lineage")
+    synthetic_facts = _FullPoolCandidateFacts(
+        root=resolved,
+        manifest_sha256=_sha256_file(resolved / CONCURRENT_MESSAGE_ARTIFACT_MANIFEST_JSON),
+        candidate_identity_sha256=str(candidate_manifest.get("candidate_identity_sha256", "")),
+        candidate_content_identity_sha256=str(
+            candidate_manifest.get("candidate_content_identity_sha256", "")
+        ),
+        report_sha256=_sha256_file(resolved / CONCURRENT_MESSAGE_REPORT_HTML),
+        payload_sha256=_sha256_file(resolved / _REPORT_PAYLOAD),
+        evidence_sha256=_sha256_file(resolved / _RELEASE_EVIDENCE_JSON),
+        report_payload_schema_version=str(candidate_payload.get("schema_version", "")),
+        implementation_commit=str(candidate_manifest.get("implementation_commit", "")),
+        source_lineage=source_lineage,
+        source_lineage_identity_sha256=str(
+            candidate_manifest.get("source_lineage_identity_sha256", "")
+        ),
+        presentation_bundle_identity_sha256=str(
+            candidate_manifest.get("presentation_bundle_identity_sha256", "")
+        ),
+        presentation_inventory_identity_sha256=str(
+            candidate_manifest.get("presentation_inventory_identity_sha256", "")
+        ),
+        mechanism_set_identity_sha256=str(
+            candidate_manifest.get("mechanism_set_identity_sha256", "")
+        ),
+        trace_index_sha256=str(candidate_manifest.get("trace_index_sha256", "")),
+        artifact_hashes={},
+        approved_downloads=_strict_string_mapping(
+            candidate_manifest.get("approved_downloads"),
+            "Full-Pool candidate approved downloads",
+        ),
+    )
+    _validate_full_pool_production_stage_facts(
+        stage_facts,
+        candidate_facts=synthetic_facts,
+    )
+    expected = _build_full_pool_production_presentation(
+        resolved,
+        candidate_facts=synthetic_facts,
+        stage_facts=stage_facts,
+    )
+    if bundle != expected:
+        raise _RobustnessReportClosureError(
+            "Full-Pool production payload or HTML differs from deterministic materialization"
+        )
+    if len(bundle.report_html) >= 3 * 1024 * 1024:
+        raise _RobustnessReportClosureError("Full-Pool production report exceeds the 3 MiB gate")
+    report = bundle.report_html.decode("utf-8")
+    production_root = (
+        '<main class="full-pool-presentation" data-testid="full-pool-presentation" '
+        'data-production-deploy-eligible="true"'
+    )
+    candidate_root = (
+        '<main class="full-pool-presentation" data-testid="full-pool-presentation" '
+        'data-production-deploy-eligible="false"'
+    )
+    if (
+        report.count(production_root) != 1
+        or candidate_root in report
+        or 'data-provider-calls-during-composition="0"' not in report
+        or 'data-canonical-deployment-triggered="false"' not in report
+    ):
+        raise _RobustnessReportClosureError(
+            "Full-Pool production HTML status markers are missing or crossed"
+        )
+    payload = json.loads(bundle.report_payload)
+    release = _mapping(payload.get("production_release"), "Full-Pool production release")
+    counts = _mapping(release.get("counts"), "Full-Pool production counts")
+    provider = _mapping(release.get("provider"), "Full-Pool production Provider facts")
+    if (
+        set(payload) != set(candidate_payload) | {"production_release"}
+        or payload.get("production_deploy_eligible") is not True
+        or set(release) != _FULL_POOL_PRODUCTION_RELEASE_FIELDS
+        or set(counts) != _FULL_POOL_PRODUCTION_COUNT_FIELDS
+        or set(provider) != _FULL_POOL_PRODUCTION_PROVIDER_FIELDS
+        or release != _full_pool_production_release_payload(stage_facts)
+        or full_pool_lineage.get("source_identity")
+        != stage_facts.full_pool_source_identity
+    ):
+        raise _RobustnessReportClosureError(
+            "Full-Pool production payload fields or source identity are crossed"
+        )
 
 
 def _full_pool_candidate_source_lineage(inputs: _FullPoolCandidateInputs) -> dict[str, Any]:
