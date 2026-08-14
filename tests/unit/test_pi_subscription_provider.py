@@ -5,6 +5,8 @@ from pathlib import Path
 
 import pytest
 
+import llm_abm_sim.providers.pi_subscription as pi_subscription_module
+from llm_abm_sim.decision import ProviderResponseProvenanceUnknown
 from llm_abm_sim.prompt_contracts import CONCURRENT_ROBUSTNESS_PROMPT_TOKENS
 from llm_abm_sim.providers.openai_compatible import OpenAICompatibleDecisionAdapter
 from llm_abm_sim.providers.pi_subscription import PiSubscriptionProviderClient, PiSubscriptionProviderError
@@ -96,6 +98,30 @@ def test_subscription_client_requires_explicit_live_gate(tmp_path: Path, monkeyp
     monkeypatch.delenv("LLM_ABM_RUN_LIVE_LLM", raising=False)
     with pytest.raises(PiSubscriptionProviderError, match="explicit"):
         PiSubscriptionProviderClient(worker_path=_fake_worker(tmp_path / "worker.mjs"))
+
+
+def test_subscription_unknown_response_provenance_is_not_retryable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LLM_ABM_RUN_LIVE_LLM", "1")
+    client = PiSubscriptionProviderClient(worker_path=_fake_worker(tmp_path / "worker.mjs"))
+
+    def timeout_without_readback(*_args: object, **_kwargs: object) -> str:
+        raise PiSubscriptionProviderError("response timed out")
+
+    try:
+        with monkeypatch.context() as context:
+            context.setattr(pi_subscription_module, "_readline_with_timeout", timeout_without_readback)
+            with pytest.raises(ProviderResponseProvenanceUnknown, match="provenance"):
+                client.create_response(
+                    [{"role": "user", "content": "bounded test"}],
+                    "gpt-5.4-mini",
+                    reasoning_effort="low",
+                    output_token_ceiling=256,
+                )
+    finally:
+        client.close()
 
 
 def test_subscription_client_is_external_accounted_and_secret_free(

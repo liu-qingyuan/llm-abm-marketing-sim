@@ -41,6 +41,10 @@ class EngageDecision(BaseModel):
         return self
 
 
+class ProviderResponseProvenanceUnknown(RuntimeError):
+    """Raised when a dispatched request has no verifiable response or readback."""
+
+
 class ProviderDecisionError(RuntimeError):
     """Raised when provider attempts are exhausted at the decision seam."""
 

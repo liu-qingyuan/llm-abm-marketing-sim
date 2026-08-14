@@ -3192,6 +3192,7 @@ class _PrimaryOnlyConcurrentRuntimeConsumer:
         before_logical_judgment: Callable[[Mapping[str, object]], None] | None = None,
         validate_terminal: Callable[[Mapping[str, object]], None] | None = None,
         after_logical_judgment: Callable[[Mapping[str, object]], None] | None = None,
+        before_resume_runtime: Callable[[Mapping[str, object]], None] | None = None,
     ) -> None:
         self.config = config
         self.primary_adapter = primary_adapter
@@ -3202,6 +3203,7 @@ class _PrimaryOnlyConcurrentRuntimeConsumer:
         self.before_logical_judgment = before_logical_judgment
         self.validate_terminal = validate_terminal
         self.after_logical_judgment = after_logical_judgment
+        self.before_resume_runtime = before_resume_runtime
         prompt_version = _adapter_prompt_version(primary_adapter)
         if prompt_version != expected_prompt_version:
             raise ValueError(
@@ -3236,6 +3238,8 @@ class _PrimaryOnlyConcurrentRuntimeConsumer:
         journal = ConcurrentExecutionJournal.open_resume(workspace, identity=identity)
         try:
             replay = journal._replay_runtime()
+            if self.before_resume_runtime is not None:
+                self.before_resume_runtime(replay)
         except Exception:
             journal.close()
             raise

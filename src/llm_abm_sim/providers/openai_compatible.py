@@ -7,7 +7,13 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any, Protocol, cast
 
-from llm_abm_sim.decision import DecisionInput, EngageDecision, LLMDecisionAdapter, ProviderDecisionError
+from llm_abm_sim.decision import (
+    DecisionInput,
+    EngageDecision,
+    LLMDecisionAdapter,
+    ProviderDecisionError,
+    ProviderResponseProvenanceUnknown,
+)
 from llm_abm_sim.prompt_contracts import CONCURRENT_ROBUSTNESS_PROMPT_TOKENS
 from llm_abm_sim.prompting import build_engagement_prompt
 from llm_abm_sim.provider_accounting import (
@@ -189,6 +195,8 @@ class OpenAICompatibleDecisionAdapter(LLMDecisionAdapter):
                         "provider_metadata": self.safe_metadata,
                     }
                 )
+            except ProviderResponseProvenanceUnknown:
+                raise
             except Exception as exc:
                 last_error = exc
                 if attempt < self.config.max_retries:

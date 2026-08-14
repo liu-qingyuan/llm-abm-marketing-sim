@@ -10,6 +10,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import IO, Any
 
+from llm_abm_sim.decision import ProviderResponseProvenanceUnknown
 from llm_abm_sim.provider_accounting import ProviderResponseEnvelope
 from llm_abm_sim.provider_request_contract import ReasoningEffortValue
 
@@ -224,26 +225,47 @@ class PiSubscriptionProviderClient:
             self._sequence += 1
             request_id = self._sequence
             request = {"id": request_id, **payload}
+            provider_request = payload.get("type") == "request"
             try:
                 process.stdin.write(json.dumps(request, ensure_ascii=False, separators=(",", ":")) + "\n")
                 process.stdin.flush()
             except (BrokenPipeError, OSError) as exc:
+                if provider_request:
+                    raise ProviderResponseProvenanceUnknown(
+                        "Pi subscription request dispatch could not be reconciled"
+                    ) from exc
                 raise PiSubscriptionProviderError("Pi subscription worker pipe failed") from exc
             try:
                 line = _readline_with_timeout(process.stdout, self.response_timeout_seconds + 15.0)
-            except PiSubscriptionProviderError:
+            except PiSubscriptionProviderError as exc:
                 self._discard_process(process)
+                if provider_request:
+                    raise ProviderResponseProvenanceUnknown(
+                        "Pi subscription request timed out without verifiable response provenance"
+                    ) from exc
                 raise
             if not line:
                 self._discard_process(process)
+                if provider_request:
+                    raise ProviderResponseProvenanceUnknown(
+                        "Pi subscription request ended without verifiable response provenance"
+                    )
                 raise PiSubscriptionProviderError("Pi subscription worker stopped without a response")
             try:
                 response = json.loads(line)
             except json.JSONDecodeError as exc:
                 self._discard_process(process)
+                if provider_request:
+                    raise ProviderResponseProvenanceUnknown(
+                        "Pi subscription request returned an unverifiable response"
+                    ) from exc
                 raise PiSubscriptionProviderError("Pi subscription worker returned malformed JSON") from exc
             if not isinstance(response, dict) or response.get("id") != request_id:
                 self._discard_process(process)
+                if provider_request:
+                    raise ProviderResponseProvenanceUnknown(
+                        "Pi subscription request response identity could not be reconciled"
+                    )
                 raise PiSubscriptionProviderError("Pi subscription worker response identity is crossed")
             if response.get("ok") is not True:
                 error = response.get("error")
