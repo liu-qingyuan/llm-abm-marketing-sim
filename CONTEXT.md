@@ -140,6 +140,22 @@ processed 数据中可用于构建历史信号的视频集合。对于单目标�
 
 三个 Experimental Message Videos 从 Batch 0 起同时运行独立的 Per-Message Personalized Top20，并在同一 1,000 用户池中形成允许重叠的个性化受众。每条 message 固定每批 Top20、30 批共 600 次曝光；“competition”表示三条并行 campaign 面向同一用户池并产生可比较的受众响应，不表示争抢同一个 20-slot message quota。实验不提供真实世界文案效果的因果排名。
 
+### Full-Pool 30-Batch Run
+
+使用全部 36,400 位合格 processed users、现有三条 Experimental Message Videos 和固定 30 个推荐批次的 Concurrent Message 运行。每条 message 每批容量为 1,214、最后一批为 1,194，使 109,200 个 `user × message` pairs 各获得一次曝光和一次 Primary Campaign Decision；不执行新的 Shadow，现有 ranking、barrier 和正向 Primary 的 next-batch feedback 边界保持不变。
+
+### Full-Pool Formal Main Experiment
+
+通过显式 Live Provider Gate 为 Full-Pool 30-Batch Run 生成 fresh Primary Decisions 的 Formal experiment。它是下一版 additive report 的主要运行证据，并使用独立 run、candidate 和 release lineage，immutable v7 保持不变。
+
+### Full-Pool Mechanism Master
+
+为 Full-Pool Formal Main Experiment 新增的单张端到端 Mermaid 总图，文件名为 `full-pool-mechanism.mmd`。它只表达全池分母、30-batch delivery、Primary-only Decision 和 feedback 主路径；现有五张主机制图、`real-batch-mechanism.mmd` 与 Prompt–Model factorial 保持原字节，不复制另一套分图。
+
+### Historical 1,000-User Sensitivity Layer
+
+与全池主实验并列保留的历史 Primary–Shadow sensitivity、19-point Ranking Weight Sensitivity 和 `4 Prompt × 4 model` Robustness evidence。该层继续绑定原始 1,000-user sources、hashes 与分母，不在全池上重跑，也不能解释为 36,400-user 结果。
+
 ### Prompt–Model Robustness Study
 
 在固定 1,000-user Research Sample 和三条 Experimental Message Videos 上，对 4 个信息等价 Prompt 与 4 个同 provider 精确模型做完整 categorical factorial。每个 cell 只运行一次 1,800-Primary-Decision 动态轨迹，统一使用 low reasoning contract、fresh calls 和独立 store，不重跑 Shadow、不建立完整 Decision Bank；Batch 0 shared seeds 支持配对 `engage` 比较，其余互动、曝光和传播结果只描述单次 realized path。该研究没有 ground truth，不称为 Calibration，也不单独估计模型随机性。
