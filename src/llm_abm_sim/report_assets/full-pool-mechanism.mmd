@@ -1,0 +1,88 @@
+---
+title: 全池主实验机制 / Full-Pool Main Experiment Mechanism
+---
+flowchart LR
+  %% diagram-id: full_pool_main
+  %% dom-title-key: full_pool_main.title
+  %% dom-description-key: full_pool_main.description
+  %% dom-node-key: full_eligible_pool_36400=full_pool_main.node.full_eligible_pool_36400
+  %% dom-node-key: eligible_pairs_109200=full_pool_main.node.eligible_pairs_109200
+  %% dom-node-key: independent_queues_30_batches=full_pool_main.node.independent_queues_30_batches
+  %% dom-node-key: exposure_gate=full_pool_main.node.exposure_gate
+  %% dom-node-key: primary_only_decision=full_pool_main.node.primary_only_decision
+  %% dom-node-key: full_batch_barrier=full_pool_main.node.full_batch_barrier
+  %% dom-node-key: next_batch_ranking_context=full_pool_main.node.next_batch_ranking_context
+  %% dom-node-key: complete_three_message_coverage=full_pool_main.node.complete_three_message_coverage
+  %% dom-edge-key: full_pool_to_pairs=full_pool_main.edge.full_pool_to_pairs
+  %% dom-edge-key: pairs_to_queues=full_pool_main.edge.pairs_to_queues
+  %% dom-edge-key: queues_to_exposure=full_pool_main.edge.queues_to_exposure
+  %% dom-edge-key: exposure_to_primary=full_pool_main.edge.exposure_to_primary
+  %% dom-edge-key: primary_to_barrier=full_pool_main.edge.primary_to_barrier
+  %% dom-edge-key: barrier_to_next_batch=full_pool_main.edge.barrier_to_next_batch
+  %% dom-edge-key: next_batch_feedback=full_pool_main.edge.next_batch_feedback
+  %% dom-edge-key: barrier_to_complete_coverage=full_pool_main.edge.barrier_to_complete_coverage
+  %% fallback-key: full_pool_main.fallback.denominator
+  %% fallback-key: full_pool_main.fallback.schedule
+  %% fallback-key: full_pool_main.fallback.primary_only
+  %% fallback-key: full_pool_main.fallback.feedback
+  %% fallback-key: full_pool_main.fallback.coverage
+  %% image-raster-generation-required: false
+  %% image-visual-system: Horizontal flat 2D scientific-editorial composition on light paper, with dark ink lines and one restrained cobalt-blue accent.
+  %% image-purpose: Provide one deterministic end-to-end Full-Pool semantic master without generating a raster asset.
+  %% image-composition: One three-lane flow from the 36,400-user denominator through complete three-message coverage and the next-batch feedback loop.
+  %% image-required-mark: exactly eight semantic nodes
+  %% image-required-mark: 36,400 users and 109,200 pairs
+  %% image-required-mark: three independent 30-batch queues with 1,214 / 1,194 capacity
+  %% image-required-mark: Primary-only decision and full-batch feedback boundary
+  %% image-required-mark: complete three-message coverage
+  %% image-forbidden-mark: people or character illustrations
+  %% image-forbidden-mark: 3D, glow, photorealistic devices, or decorative nodes
+  %% image-forbidden-mark: any text, letters, numerals, or labels rendered inside the image
+  %% image-forbidden-mark: color-only encoding
+  classDef historical_data fill:#f4f1e8,stroke:#1f2933,color:#1f2933,stroke-width:1px;
+  classDef platform_recommendation fill:#eef3fb,stroke:#2459a9,color:#1f2933,stroke-width:1.5px;
+  classDef simulated_user_decision fill:#ffffff,stroke:#1f2933,color:#1f2933,stroke-width:1.5px;
+  classDef message_m1 fill:#eef3fb,stroke:#2459a9,stroke-width:2px;
+  classDef message_m2 fill:#ffffff,stroke:#2459a9,stroke-width:2px,stroke-dasharray:6 4;
+  classDef message_m3 fill:#f4f1e8,stroke:#2459a9,stroke-width:3px;
+  subgraph historical_data_lane["历史数据层<br/>Historical Data Layer"]
+    direction TB
+    full_eligible_pool_36400["36,400 位完整合格用户<br/>36,400 Full Eligible Users"]
+  end
+  subgraph platform_recommendation_lane["平台推荐层<br/>Platform Recommendation Layer"]
+    direction TB
+    eligible_pairs_109200["109,200 个 user × message 配对<br/>109,200 User × Message Pairs"]
+    independent_queues_30_batches(["三条独立队列 · 30 批 · 每条 1,214 / 最后一批 1,194<br/>Three Independent Queues · 30 Batches · 1,214 Each / Final 1,194"])
+    exposure_gate{"曝光闸门 · 每个配对仅一次<br/>Exposure Gate · One Exposure per Pair"}
+    full_batch_barrier{{"完整批次屏障 · 正向 Primary 按 user_id 去重<br/>Full-Batch Barrier · Positive Primary Deduplicated by user_id"}}
+    next_batch_ranking_context["仅进入下一批排序上下文<br/>Next-Batch Ranking Context Only"]
+    complete_three_message_coverage(["完整三消息覆盖 · below capacity = 0<br/>Complete Three-Message Coverage · Below Capacity = 0"])
+  end
+  subgraph simulated_user_decision_lane["模拟用户决策层<br/>Simulated User Decision Layer"]
+    direction TB
+    primary_only_decision["Primary-only 决策 · 不运行 Shadow<br/>Primary-only Decision · No Shadow"]
+  end
+  %% semantic-edge: full_pool_to_pairs
+  full_eligible_pool_36400 -->|"每位用户 × 三条消息<br/>Each User × Three Messages"| eligible_pairs_109200
+  %% semantic-edge: pairs_to_queues
+  eligible_pairs_109200 -->|"按消息维护剩余配对<br/>Maintain Remaining Pairs per Message"| independent_queues_30_batches
+  %% semantic-edge: queues_to_exposure
+  independent_queues_30_batches -->|"排序选择本批曝光顺序<br/>Ranking Selects This Batch and Order"| exposure_gate
+  %% semantic-edge: exposure_to_primary
+  exposure_gate -->|"曝光后才执行决策<br/>Decide Only After Exposure"| primary_only_decision
+  %% semantic-edge: primary_to_barrier
+  primary_only_decision -->|"全部终态关闭；仅成功正向行为提交<br/>Close Every Terminal; Commit Succeeded Positive Actions Only"| full_batch_barrier
+  %% semantic-edge: barrier_to_next_batch
+  full_batch_barrier -->|"同批结束后提交<br/>Commit After the Full Batch"| next_batch_ranking_context
+  %% semantic-edge: next_batch_feedback
+  next_batch_ranking_context -.->|"下一批重新排序<br/>Rerank the Next Batch"| independent_queues_30_batches
+  %% semantic-edge: barrier_to_complete_coverage
+  full_batch_barrier ==>|"30 批关闭后<br/>After 30 Batches Close"| complete_three_message_coverage
+  class full_eligible_pool_36400 historical_data;
+  class eligible_pairs_109200 platform_recommendation;
+  class independent_queues_30_batches platform_recommendation;
+  class exposure_gate platform_recommendation;
+  class primary_only_decision simulated_user_decision;
+  class full_batch_barrier platform_recommendation;
+  class next_batch_ranking_context platform_recommendation;
+  class complete_three_message_coverage platform_recommendation;

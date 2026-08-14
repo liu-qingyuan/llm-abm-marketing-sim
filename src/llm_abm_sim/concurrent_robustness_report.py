@@ -29,6 +29,19 @@ from .concurrent_message_report import (
     ConcurrentMessageArtifactClosure,
     close_concurrent_message_artifacts,
 )
+from .full_pool_formal_experiment import (
+    FullPoolExperimentError,
+    _read_closed_full_pool_source,
+)
+from .full_pool_presentation import (
+    _FullPoolPresentationError,
+)
+from .full_pool_presentation import (
+    compose_full_pool_presentation_bundle as _compose_full_pool_presentation_bundle,
+)
+from .full_pool_presentation import (
+    validate_full_pool_presentation_bundle as _validate_full_pool_presentation_bundle,
+)
 from .prompt_contracts import CONCURRENT_ROBUSTNESS_PROMPT_REGISTRY
 
 if TYPE_CHECKING:
@@ -969,6 +982,164 @@ class _ReportPresentationInterface:
         _assert_formal_unchanged(projection.formal, formal_before)
         _assert_study_unchanged(projection.study, study_before)
         return destination
+
+    def compose_full_pool_presentation_bundle(
+        self,
+        *,
+        full_pool_source_root: str | Path,
+        full_pool_manifest_sha256: str,
+        historical_formal_root: str | Path,
+        historical_study_root: str | Path,
+        historical_candidate_dir: str | Path,
+        destination_dir: str | Path,
+    ) -> Path:
+        """Compose one closed, zero-call, non-promotable Full-Pool presentation bundle."""
+        full_pool_path = Path(full_pool_source_root)
+        formal_path = Path(historical_formal_root)
+        study_path = Path(historical_study_root)
+        workspace_path = _workspace_root_for_study(study_path)
+        try:
+            source = _read_closed_full_pool_source(
+                full_pool_path,
+                manifest_sha256=full_pool_manifest_sha256,
+            )
+            if (
+                source.manifest.get("production_deploy_eligible") is not False
+                or source.manifest.get("provider_calls") != 0
+                or source.manifest.get("live_api_triggered") is not False
+                or source.aggregates.get("production_deploy_eligible") is not False
+            ):
+                raise ValueError(
+                    "Full-Pool presentation composition requires a closed zero-call Validation source"
+                )
+            manifest, manifest_payload, manifest_sha256 = _load_study_manifest(study_path)
+            candidate, projection = self._validate_candidate_from_inputs(
+                formal_root=formal_path,
+                study_root=study_path,
+                workspace_root=workspace_path,
+                manifest=manifest,
+                manifest_payload=manifest_payload,
+                manifest_sha256=manifest_sha256,
+                candidate_dir=historical_candidate_dir,
+            )
+            historical_payload = _read_json(candidate / _REPORT_PAYLOAD)
+            if (
+                _validate_report_payload_contract(
+                    historical_payload,
+                    production=False,
+                    candidate=candidate,
+                )
+                != _REPORT_PAYLOAD_V2_SCHEMA
+            ):
+                raise ValueError(
+                    "Full-Pool presentation requires the approved semantic v7 historical candidate"
+                )
+            historical_mermaid = {
+                path.name
+                for path in candidate.glob("*.mmd")
+                if path.is_file() and not path.is_symlink()
+            }
+            if historical_mermaid != set(_SEMANTIC_MERMAID_DOWNLOADS.values()):
+                raise ValueError("historical Mermaid inventory is incomplete or crossed")
+            destination = _validate_destination(
+                Path(destination_dir),
+                protected_roots=(
+                    source.root,
+                    formal_path,
+                    study_path,
+                    workspace_path,
+                    candidate,
+                ),
+            )
+            source_before = _directory_file_hashes(source.root)
+            candidate_before = _directory_file_hashes(candidate)
+            formal_before = dict(projection.formal.artifact_hashes)
+            study_before = dict(projection.study.file_hashes)
+            created = _compose_full_pool_presentation_bundle(
+                source=source,
+                historical_candidate=candidate,
+                historical_inventory=candidate_before,
+                destination=destination,
+            )
+            _validate_full_pool_presentation_bundle(
+                created,
+                source=source,
+                historical_candidate=candidate,
+            )
+            if source_before != _directory_file_hashes(source.root):
+                raise _RobustnessReportClosureError(
+                    "Full-Pool presentation composition mutated its closed source"
+                )
+            if candidate_before != _directory_file_hashes(candidate):
+                raise _RobustnessReportClosureError(
+                    "Full-Pool presentation composition mutated its historical candidate"
+                )
+            _assert_formal_unchanged(projection.formal, formal_before)
+            _assert_study_unchanged(projection.study, study_before)
+            return created
+        except (
+            _RobustnessReportPathError,
+            _RobustnessReportConflictError,
+            _RobustnessReportClosureError,
+        ):
+            raise
+        except (
+            FileNotFoundError,
+            FullPoolExperimentError,
+            _FullPoolPresentationError,
+            OSError,
+            TypeError,
+            ValueError,
+            json.JSONDecodeError,
+        ) as exc:
+            raise _RobustnessReportClosureError(
+                "Full-Pool presentation bundle composition failed closed"
+            ) from exc
+
+    def validate_full_pool_presentation_bundle(
+        self,
+        bundle_dir: str | Path,
+        *,
+        full_pool_source_root: str | Path,
+        full_pool_manifest_sha256: str,
+        historical_candidate_dir: str | Path,
+    ) -> None:
+        """Validate one materialized Full-Pool bundle against explicit immutable inputs."""
+        try:
+            source = _read_closed_full_pool_source(
+                full_pool_source_root,
+                manifest_sha256=full_pool_manifest_sha256,
+            )
+            candidate = Path(historical_candidate_dir)
+            historical_payload = _read_json(candidate / _REPORT_PAYLOAD)
+            if (
+                _validate_report_payload_contract(
+                    historical_payload,
+                    production=False,
+                    candidate=candidate,
+                )
+                != _REPORT_PAYLOAD_V2_SCHEMA
+            ):
+                raise ValueError("historical candidate is not semantic v7")
+            _validate_full_pool_presentation_bundle(
+                Path(bundle_dir),
+                source=source,
+                historical_candidate=candidate,
+            )
+        except _RobustnessReportClosureError:
+            raise
+        except (
+            FileNotFoundError,
+            FullPoolExperimentError,
+            _FullPoolPresentationError,
+            OSError,
+            TypeError,
+            ValueError,
+            json.JSONDecodeError,
+        ) as exc:
+            raise _RobustnessReportClosureError(
+                "Full-Pool presentation bundle failed validation"
+            ) from exc
 
     def materialize_production(
         self,

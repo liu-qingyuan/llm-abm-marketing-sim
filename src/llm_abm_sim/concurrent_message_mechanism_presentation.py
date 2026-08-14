@@ -6,6 +6,7 @@ import re
 from dataclasses import dataclass
 
 _SCHEMA_VERSION = "concurrent-message-mechanism-presentation-v1"
+_FULL_POOL_SCHEMA_VERSION = "full-pool-mechanism-presentation-v1"
 _SEMANTIC_SET_SCHEMA_VERSION = "mechanism-semantic-set-v1"
 _LANE_ORDER = (
     "historical_data",
@@ -945,6 +946,218 @@ def _definitions() -> tuple[_DiagramDefinition, ...]:
     )
 
 
+def _full_pool_definition() -> _DiagramDefinition:
+    return _DiagramDefinition(
+        diagram_id="full_pool_main",
+        filename="full-pool-mechanism.mmd",
+        navigation_anchor="full-pool-main",
+        title=_text(
+            "full_pool_main.title",
+            "全池主实验机制",
+            "Full-Pool Main Experiment Mechanism",
+        ),
+        description=_text(
+            "full_pool_main.description",
+            "36,400 位合格用户与三条消息形成 109,200 个配对，在 30 个完整批次中全部曝光并执行 Primary-only 决策；排序只改变曝光批次与顺序。",
+            "36,400 eligible users form 109,200 pairs with three messages. Every pair is exposed and receives one Primary-only decision across 30 complete batches; ranking changes batch and order only.",
+        ),
+        nodes=(
+            _node(
+                "full_eligible_pool_36400",
+                "full_pool_main.node.full_eligible_pool_36400",
+                "36,400 位完整合格用户",
+                "36,400 Full Eligible Users",
+                lane="historical_data",
+                stage=1,
+            ),
+            _node(
+                "eligible_pairs_109200",
+                "full_pool_main.node.eligible_pairs_109200",
+                "109,200 个 user × message 配对",
+                "109,200 User × Message Pairs",
+                lane="platform_recommendation",
+                stage=2,
+            ),
+            _node(
+                "independent_queues_30_batches",
+                "full_pool_main.node.independent_queues_30_batches",
+                "三条独立队列 · 30 批 · 每条 1,214 / 最后一批 1,194",
+                "Three Independent Queues · 30 Batches · 1,214 Each / Final 1,194",
+                lane="platform_recommendation",
+                stage=3,
+                shape="rounded",
+            ),
+            _node(
+                "exposure_gate",
+                "full_pool_main.node.exposure_gate",
+                "曝光闸门 · 每个配对仅一次",
+                "Exposure Gate · One Exposure per Pair",
+                lane="platform_recommendation",
+                stage=4,
+                shape="diamond",
+            ),
+            _node(
+                "primary_only_decision",
+                "full_pool_main.node.primary_only_decision",
+                "Primary-only 决策 · 不运行 Shadow",
+                "Primary-only Decision · No Shadow",
+                lane="simulated_user_decision",
+                stage=5,
+            ),
+            _node(
+                "full_batch_barrier",
+                "full_pool_main.node.full_batch_barrier",
+                "完整批次屏障 · 正向 Primary 按 user_id 去重",
+                "Full-Batch Barrier · Positive Primary Deduplicated by user_id",
+                lane="platform_recommendation",
+                stage=6,
+                shape="hexagon",
+            ),
+            _node(
+                "next_batch_ranking_context",
+                "full_pool_main.node.next_batch_ranking_context",
+                "仅进入下一批排序上下文",
+                "Next-Batch Ranking Context Only",
+                lane="platform_recommendation",
+                stage=7,
+            ),
+            _node(
+                "complete_three_message_coverage",
+                "full_pool_main.node.complete_three_message_coverage",
+                "完整三消息覆盖 · below capacity = 0",
+                "Complete Three-Message Coverage · Below Capacity = 0",
+                lane="platform_recommendation",
+                stage=8,
+                shape="stadium",
+            ),
+        ),
+        edges=(
+            _edge(
+                "full_pool_to_pairs",
+                "full_eligible_pool_36400",
+                "eligible_pairs_109200",
+                label=_text(
+                    "full_pool_main.edge.full_pool_to_pairs",
+                    "每位用户 × 三条消息",
+                    "Each User × Three Messages",
+                ),
+            ),
+            _edge(
+                "pairs_to_queues",
+                "eligible_pairs_109200",
+                "independent_queues_30_batches",
+                label=_text(
+                    "full_pool_main.edge.pairs_to_queues",
+                    "按消息维护剩余配对",
+                    "Maintain Remaining Pairs per Message",
+                ),
+            ),
+            _edge(
+                "queues_to_exposure",
+                "independent_queues_30_batches",
+                "exposure_gate",
+                label=_text(
+                    "full_pool_main.edge.queues_to_exposure",
+                    "排序选择本批曝光顺序",
+                    "Ranking Selects This Batch and Order",
+                ),
+            ),
+            _edge(
+                "exposure_to_primary",
+                "exposure_gate",
+                "primary_only_decision",
+                label=_text(
+                    "full_pool_main.edge.exposure_to_primary",
+                    "曝光后才执行决策",
+                    "Decide Only After Exposure",
+                ),
+            ),
+            _edge(
+                "primary_to_barrier",
+                "primary_only_decision",
+                "full_batch_barrier",
+                label=_text(
+                    "full_pool_main.edge.primary_to_barrier",
+                    "全部终态关闭；仅成功正向行为提交",
+                    "Close Every Terminal; Commit Succeeded Positive Actions Only",
+                ),
+            ),
+            _edge(
+                "barrier_to_next_batch",
+                "full_batch_barrier",
+                "next_batch_ranking_context",
+                label=_text(
+                    "full_pool_main.edge.barrier_to_next_batch",
+                    "同批结束后提交",
+                    "Commit After the Full Batch",
+                ),
+            ),
+            _edge(
+                "next_batch_feedback",
+                "next_batch_ranking_context",
+                "independent_queues_30_batches",
+                label=_text(
+                    "full_pool_main.edge.next_batch_feedback",
+                    "下一批重新排序",
+                    "Rerank the Next Batch",
+                ),
+                style="dashed",
+            ),
+            _edge(
+                "barrier_to_complete_coverage",
+                "full_batch_barrier",
+                "complete_three_message_coverage",
+                label=_text(
+                    "full_pool_main.edge.barrier_to_complete_coverage",
+                    "30 批关闭后",
+                    "After 30 Batches Close",
+                ),
+                style="thick",
+            ),
+        ),
+        fallback=(
+            _text(
+                "full_pool_main.fallback.denominator",
+                "完整合格用户池包含 36,400 位用户；三条消息形成 109,200 个 eligible pairs。",
+                "The full eligible pool contains 36,400 users; three messages form 109,200 eligible pairs.",
+            ),
+            _text(
+                "full_pool_main.fallback.schedule",
+                "每条消息在前 29 批最多曝光 1,214 个剩余配对，最后一批曝光 1,194 个。",
+                "Each message exposes up to 1,214 remaining pairs in the first 29 batches and 1,194 in the final batch.",
+            ),
+            _text(
+                "full_pool_main.fallback.primary_only",
+                "每次曝光只执行 Primary Decision；不运行新的 Demographic Shadow。",
+                "Each exposure executes one Primary Decision; no new Demographic Shadow is run.",
+            ),
+            _text(
+                "full_pool_main.fallback.feedback",
+                "只有成功的 like、comment 或 share 在完整批次屏障后按 user_id 去重，并进入下一批排序上下文；ignore 与 provider_failed 不传播。",
+                "Only succeeded like, comment, or share actions are deduplicated by user_id after the full-batch barrier and enter the next-batch ranking context; ignore and provider_failed do not propagate.",
+            ),
+            _text(
+                "full_pool_main.fallback.coverage",
+                "所有配对最终获得一次曝光和一个 Primary terminal，因此排序只改变曝光批次与顺序，不改变最终覆盖。",
+                "Every pair ultimately receives one exposure and one Primary terminal, so ranking changes exposure batch and order, not final coverage.",
+            ),
+        ),
+        node_budget=8,
+        image_brief=_image_brief(
+            "Provide one deterministic end-to-end Full-Pool semantic master without generating a raster asset.",
+            "One three-lane flow from the 36,400-user denominator through complete three-message coverage and the next-batch feedback loop.",
+            (
+                "exactly eight semantic nodes",
+                "36,400 users and 109,200 pairs",
+                "three independent 30-batch queues with 1,214 / 1,194 capacity",
+                "Primary-only decision and full-batch feedback boundary",
+                "complete three-message coverage",
+            ),
+            generate_raster=False,
+        ),
+    )
+
+
 def _projection(definition: _DiagramDefinition, language: str) -> _MechanismLanguageProjection:
     texts: list[_BilingualText] = [
         definition.title,
@@ -1104,6 +1317,40 @@ def _validate_definitions(definitions: tuple[_DiagramDefinition, ...]) -> None:
             raise ValueError(f"bilingual projection is incomplete in {definition.diagram_id}")
 
 
+def _validate_full_pool_definition(definition: _DiagramDefinition) -> None:
+    if (
+        definition.diagram_id != "full_pool_main"
+        or definition.filename != "full-pool-mechanism.mmd"
+        or definition.node_budget != 8
+        or definition.image_brief.generate_raster
+    ):
+        raise ValueError("Full-Pool mechanism identity or raster boundary is crossed")
+    nodes = {node.semantic_id: node for node in definition.nodes}
+    edge_ids = {edge.semantic_id for edge in definition.edges}
+    if len(nodes) != len(definition.nodes) or len(edge_ids) != len(definition.edges):
+        raise ValueError("duplicate Full-Pool mechanism semantic ID")
+    if len(nodes) > definition.node_budget:
+        raise ValueError("Full-Pool mechanism node budget exceeded")
+    if any(_STABLE_ID.fullmatch(semantic_id) is None for semantic_id in (*nodes, *edge_ids)):
+        raise ValueError("Full-Pool mechanism has an unstable semantic ID")
+    if {node.stage for node in definition.nodes} != set(range(1, 9)):
+        raise ValueError("Full-Pool mechanism stages are not complete")
+    if any(node.lane not in _LANE_ORDER for node in definition.nodes):
+        raise ValueError("Full-Pool mechanism has unknown lane ownership")
+    if any(edge.source not in nodes or edge.target not in nodes for edge in definition.edges):
+        raise ValueError("Full-Pool mechanism edge endpoint is missing")
+    texts = (
+        definition.title,
+        definition.description,
+        *(_LANE_LABELS[lane] for lane in _LANE_ORDER),
+        *(node.label for node in definition.nodes),
+        *(edge.label for edge in definition.edges if edge.label is not None),
+        *definition.fallback,
+    )
+    if any(not text.key or not text.zh_cn.strip() or not text.en_us.strip() for text in texts):
+        raise ValueError("Full-Pool mechanism bilingual projection is incomplete")
+
+
 def _semantic_set_identity(artifacts: tuple[_MechanismArtifact, ...]) -> str:
     identity_document = {
         "schema_version": _SEMANTIC_SET_SCHEMA_VERSION,
@@ -1120,6 +1367,40 @@ def _semantic_set_identity(artifacts: tuple[_MechanismArtifact, ...]) -> str:
 
 class _MechanismPresentationInterface:
     """Package-internal Interface owning every mechanism semantic projection."""
+
+    def build_full_pool_master(self) -> _MechanismPresentation:
+        """Build the additive Full-Pool master without changing the historical set."""
+        definition = _full_pool_definition()
+        _validate_full_pool_definition(definition)
+        diagram = _MechanismDiagram(
+            diagram_id=definition.diagram_id,
+            filename=definition.filename,
+            navigation_anchor=definition.navigation_anchor,
+            title_key=definition.title.key,
+            description_key=definition.description.key,
+            lane_order=_LANE_ORDER,
+            stage_count=max(node.stage for node in definition.nodes),
+            node_budget=definition.node_budget,
+            nodes=definition.nodes,
+            edges=definition.edges,
+            projections=tuple(
+                _projection(definition, language) for language in ("zh-CN", "en-US")
+            ),
+            image_brief=definition.image_brief,
+        )
+        payload = _mermaid_bytes(definition)
+        artifact = _MechanismArtifact(
+            filename=definition.filename,
+            payload=payload,
+            sha256=hashlib.sha256(payload).hexdigest(),
+        )
+        return _MechanismPresentation(
+            schema_version=_FULL_POOL_SCHEMA_VERSION,
+            lane_order=_LANE_ORDER,
+            diagrams=(diagram,),
+            mermaid_artifacts=(artifact,),
+            semantic_set_identity_sha256=_semantic_set_identity((artifact,)),
+        )
 
     def build(self) -> _MechanismPresentation:
         definitions = _definitions()

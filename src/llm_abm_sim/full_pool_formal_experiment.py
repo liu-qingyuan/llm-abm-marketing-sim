@@ -746,6 +746,25 @@ class FullPoolRunResult(_FrozenContractModel):
         return self
 
 
+@dataclass(frozen=True)
+class _ClosedFullPoolSource:
+    """Read-only immutable source view for package-internal report composition."""
+
+    root: Path
+    contract: FullPoolExperimentContract
+    source_identity: str
+    manifest_sha256: str
+    manifest: Mapping[str, object]
+    aggregates: Mapping[str, object]
+    diagnostics: Mapping[str, object]
+    batch_paths: tuple[Path, ...]
+
+    def read_batch(self, time_step: int) -> Mapping[str, object]:
+        if time_step < 0 or time_step >= len(self.batch_paths):
+            raise IndexError("Full-Pool batch index is outside the closed source")
+        return _read_json_object(self.batch_paths[time_step])
+
+
 class _SourceAccumulator:
     def __init__(self, contract: FullPoolExperimentContract, *, expected_user_ids: set[str]) -> None:
         self.contract = contract
@@ -1890,6 +1909,62 @@ def _preflight_formal_adapter(
     return adapter
 
 
+def _read_closed_full_pool_source(
+    source_root: str | Path,
+    *,
+    manifest_sha256: str,
+) -> _ClosedFullPoolSource:
+    """Validate one explicit closed source without reading its operational workspace."""
+    source = Path(source_root).expanduser()
+    try:
+        if ".." in source.parts or not _SHA256_PATTERN.fullmatch(manifest_sha256):
+            raise ValueError("Full-Pool source path or explicit manifest hash is invalid")
+        absolute = Path(os.path.abspath(source))
+        resolved = source.resolve(strict=True)
+        if absolute != resolved or source.is_symlink() or not resolved.is_dir():
+            raise ValueError("Full-Pool source must be one explicit real directory")
+        manifest_path = resolved / _MANIFEST_FILE
+        if _sha256_file(manifest_path) != manifest_sha256:
+            raise ValueError("Full-Pool source manifest differs from the explicit hash")
+        contract = FullPoolExperimentContract.model_validate(
+            _read_json_object(resolved / _CONTRACT_FILE)
+        )
+        if resolved.name != contract.output_identity:
+            raise ValueError("Full-Pool source directory is crossed with output_identity")
+        manifest = _read_json_object(manifest_path)
+        source_identity = _non_empty(
+            manifest.get("source_identity"),
+            "closed Full-Pool source identity",
+        )
+        _validate_staged_source(
+            resolved,
+            contract=contract,
+            source_identity=source_identity,
+            verify_operational_lineage=False,
+        )
+        aggregates = _read_json_object(resolved / _AGGREGATES_FILE)
+        diagnostics = _read_json_object(resolved / _DIAGNOSTICS_FILE)
+        batch_paths = tuple(
+            resolved / _BATCHES_DIR / f"batch-{time_step:06d}.json"
+            for time_step in range(contract.horizon)
+        )
+        return _ClosedFullPoolSource(
+            root=resolved,
+            contract=contract,
+            source_identity=source_identity,
+            manifest_sha256=manifest_sha256,
+            manifest=manifest,
+            aggregates=aggregates,
+            diagnostics=diagnostics,
+            batch_paths=batch_paths,
+        )
+    except (FileNotFoundError, OSError, TypeError, ValueError, ValidationError, json.JSONDecodeError) as exc:
+        raise FullPoolExperimentError(
+            FullPoolExperimentErrorCode.SOURCE_CLOSURE_FAILED,
+            "explicit Full-Pool source failed immutable source-only closure",
+        ) from exc
+
+
 def _load_closed_source_result(
     contract: FullPoolExperimentContract,
     source_root: Path,
@@ -2380,6 +2455,7 @@ def _validate_staged_source(
     contract: FullPoolExperimentContract,
     source_identity: str,
     operational_root: Path | None = None,
+    verify_operational_lineage: bool = True,
 ) -> None:
     _require_real_directory(source_root, "Full-Pool source staging")
     schemas = _full_pool_source_schemas(contract)
@@ -2423,7 +2499,19 @@ def _validate_staged_source(
         else source_root.parent / f".{source_root.name}.operational"
     )
     if contract.formal_execution is not None:
-        if manifest.get("operational_lineage") != _operational_workspace_lineage(expected_workspace):
+        operational_lineage = manifest.get("operational_lineage")
+        if not isinstance(operational_lineage, Mapping) or set(operational_lineage) != {
+            "schema_version",
+            "workspace_identity",
+            "artifacts",
+            "inventory_sha256",
+        }:
+            raise ValueError("Full-Pool operational lineage record is incomplete")
+        if operational_lineage.get("schema_version") != "full-pool-operational-lineage-v1":
+            raise ValueError("Full-Pool operational lineage schema is unsupported")
+        if verify_operational_lineage and operational_lineage != _operational_workspace_lineage(
+            expected_workspace
+        ):
             raise ValueError("Full-Pool operational journal or spool lineage changed after source closure")
     elif manifest.get("operational_lineage") is not None:
         raise ValueError("legacy Validation source must not bind path-specific operational lineage")

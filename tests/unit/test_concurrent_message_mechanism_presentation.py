@@ -27,6 +27,15 @@ _EXPECTED_FILENAMES = (
     "mechanism-feedback-boundary.mmd",
     "real-batch-mechanism.mmd",
 )
+_FULL_POOL_FILENAME = "full-pool-mechanism.mmd"
+_HISTORICAL_APPROVED_HASHES = {
+    "mechanism-sample-first.mmd": "30786e0b98a576ab299b51e0aebceedb6b6d8fc03a7955ba56bc782bde594b81",
+    "mechanism-pair-formation.mmd": "567859f204eed780ec8196aa1b23d6ed120e29a45161a442efa53fcf6431fb2e",
+    "mechanism-independent-delivery.mmd": "a4c933e87ff25132434e8c890449d3c38326bf17b5da93309ab4f199513d3f87",
+    "mechanism-exposure-decisions.mmd": "02ef23e190bb5fe5bbb313c3ac902201da8e44239f026189c529d75a0687bed8",
+    "mechanism-feedback-boundary.mmd": "536a4de2b120e19a19b930c458ae481580541a8bc301a47cd7413a14b9e15675",
+    "real-batch-mechanism.mmd": "73ea8c840faa315b0a5ee70b2958723fcf0fe140bfc000964a3d04c8f65bd907",
+}
 
 
 def test_interface_builds_one_deterministic_six_master_set() -> None:
@@ -203,6 +212,56 @@ def test_committed_masters_and_low_fidelity_review_packet_match_the_interface() 
         assert artifact.payload.decode().strip() in review
     for diagram in presentation.diagrams:
         assert diagram.image_brief.purpose in review
+
+
+def test_full_pool_master_is_additive_bilingual_and_keeps_historical_bytes_exact() -> None:
+    historical_before = {
+        filename: (_ASSET_ROOT / filename).read_bytes()
+        for filename in _HISTORICAL_APPROVED_HASHES
+    }
+
+    first = _MECHANISM_PRESENTATION.build_full_pool_master()
+    second = _MECHANISM_PRESENTATION.build_full_pool_master()
+
+    assert first == second
+    assert tuple(diagram.filename for diagram in first.diagrams) == (_FULL_POOL_FILENAME,)
+    assert tuple(artifact.filename for artifact in first.mermaid_artifacts) == (_FULL_POOL_FILENAME,)
+    diagram = first.diagrams[0]
+    artifact = first.mermaid_artifacts[0]
+    node_ids = {node.semantic_id for node in diagram.nodes}
+    edge_pairs = {(edge.source, edge.target) for edge in diagram.edges}
+    assert len(diagram.nodes) <= 8
+    assert diagram.image_brief.generate_raster is False
+    assert {projection.language for projection in diagram.projections} == {"zh-CN", "en-US"}
+    assert {
+        "full_eligible_pool_36400",
+        "eligible_pairs_109200",
+        "independent_queues_30_batches",
+        "exposure_gate",
+        "primary_only_decision",
+        "full_batch_barrier",
+        "next_batch_ranking_context",
+        "complete_three_message_coverage",
+    } == node_ids
+    assert ("primary_only_decision", "full_batch_barrier") in edge_pairs
+    assert ("full_batch_barrier", "next_batch_ranking_context") in edge_pairs
+    assert ("next_batch_ranking_context", "independent_queues_30_batches") in edge_pairs
+    assert (_ASSET_ROOT / _FULL_POOL_FILENAME).read_bytes() == artifact.payload
+    assert artifact.sha256 == hashlib.sha256(artifact.payload).hexdigest()
+    assert b"36,400" in artifact.payload
+    assert b"109,200" in artifact.payload
+    assert b"1,214 / 1,194" in artifact.payload
+    assert b"Primary-only" in artifact.payload
+
+    historical_after = {
+        filename: (_ASSET_ROOT / filename).read_bytes()
+        for filename in _HISTORICAL_APPROVED_HASHES
+    }
+    assert historical_after == historical_before
+    assert {
+        filename: hashlib.sha256(payload).hexdigest()
+        for filename, payload in historical_after.items()
+    } == _HISTORICAL_APPROVED_HASHES
 
 
 def test_module_has_one_package_internal_interface_and_no_public_export() -> None:
