@@ -17,6 +17,16 @@ type FullPoolFixture = {
 };
 
 function generateFullPoolFixture(outputDir: string): FullPoolFixture {
+  const explicitBundle = process.env.FULL_POOL_PRESENTATION_BUNDLE;
+  if (explicitBundle) {
+    const bundleDir = path.resolve(explicitBundle);
+    const reportPath = path.join(bundleDir, 'report.html');
+    const indexPath = path.join(bundleDir, 'trace', 'full-pool-trace-index.json');
+    if (!existsSync(reportPath) || !existsSync(indexPath)) {
+      throw new Error('FULL_POOL_PRESENTATION_BUNDLE must contain report.html and the trace index');
+    }
+    return { bundleDir, index: JSON.parse(readFileSync(indexPath, 'utf8')) };
+  }
   const root = path.join(outputDir, 'full-pool-presentation-fixture');
   const command = `
 set -euo pipefail
@@ -97,6 +107,18 @@ test('Full-Pool report is bilingual, responsive, lazy, filterable, and keyboard 
   test.setTimeout(180_000);
   const fixture = generateFullPoolFixture(testInfo.outputDir);
   const { baseURL, server } = await serveFixture(fixture.bundleDir);
+  const firstPartition = fixture.index.partitions.find(
+    (entry) => entry.message_id === 'message_1' && entry.time_step === 0,
+  );
+  const secondMessagePartition = fixture.index.partitions.find(
+    (entry) => entry.message_id === 'message_2' && entry.time_step === 0,
+  );
+  const secondMessageFinalPartition = fixture.index.partitions
+    .filter((entry) => entry.message_id === 'message_2')
+    .sort((left, right) => right.time_step - left.time_step)[0];
+  if (!firstPartition || !secondMessagePartition || !secondMessageFinalPartition) {
+    throw new Error('Full-Pool trace index is missing required message/batch partitions');
+  }
   const traceRequests: string[] = [];
   const thirdPartyRequests: string[] = [];
   const consoleErrors: string[] = [];
@@ -150,32 +172,40 @@ test('Full-Pool report is bilingual, responsive, lazy, filterable, and keyboard 
     await expect(page.getByTestId('full-pool-trace-search')).toBeEnabled();
     await expect(page.getByTestId('full-pool-trace-action')).toBeEnabled();
     await expect(page.getByTestId('full-pool-trace-table')).toBeVisible();
-    await expect(page.getByTestId('full-pool-trace-table-body').locator('tr')).toHaveCount(3);
+    await expect(page.getByTestId('full-pool-trace-table-body').locator('tr')).toHaveCount(
+      firstPartition.row_count,
+    );
     expect(traceRequests).toEqual([
       '/trace/full-pool-trace-index.json',
-      '/trace/message_1/batch-000000.json',
+      `/${firstPartition.relative_path}`,
     ]);
 
     const messageResponse = page.waitForResponse((response) =>
-      response.url().endsWith('/trace/message_2/batch-000000.json'),
+      response.url().endsWith(`/${secondMessagePartition.relative_path}`),
     );
     await page.getByTestId('full-pool-trace-message').selectOption('message_2');
     await messageResponse;
     await expect(traceState).toHaveAttribute('data-trace-state', 'ready');
-    await expect(page.getByTestId('full-pool-trace-table-body').locator('tr')).toHaveCount(3);
+    await expect(page.getByTestId('full-pool-trace-table-body').locator('tr')).toHaveCount(
+      secondMessagePartition.row_count,
+    );
 
     const batchResponse = page.waitForResponse((response) =>
-      response.url().endsWith('/trace/message_2/batch-000002.json'),
+      response.url().endsWith(`/${secondMessageFinalPartition.relative_path}`),
     );
-    await page.getByTestId('full-pool-trace-batch').selectOption('2');
+    await page.getByTestId('full-pool-trace-batch').selectOption(
+      String(secondMessageFinalPartition.time_step),
+    );
     await batchResponse;
     await expect(traceState).toHaveAttribute('data-trace-state', 'ready');
-    await expect(page.getByTestId('full-pool-trace-table-body').locator('tr')).toHaveCount(1);
+    await expect(page.getByTestId('full-pool-trace-table-body').locator('tr')).toHaveCount(
+      secondMessageFinalPartition.row_count,
+    );
     expect(traceRequests).toEqual([
       '/trace/full-pool-trace-index.json',
-      '/trace/message_1/batch-000000.json',
-      '/trace/message_2/batch-000000.json',
-      '/trace/message_2/batch-000002.json',
+      `/${firstPartition.relative_path}`,
+      `/${secondMessagePartition.relative_path}`,
+      `/${secondMessageFinalPartition.relative_path}`,
     ]);
 
     const firstRow = page.getByTestId('full-pool-trace-table-body').locator('tr').first();
