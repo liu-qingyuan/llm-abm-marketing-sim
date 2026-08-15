@@ -354,7 +354,8 @@ def _trace_projection(
                 }
             )
             total = message_totals[message_id]
-            total["message_title"] = str(partition_rows[0]["message_title"])
+            if partition_rows:
+                total["message_title"] = str(partition_rows[0]["message_title"])
             total["exposures"] = cast(int, total["exposures"]) + len(partition_rows)
             total["successful_primary_decisions"] = cast(int, total["successful_primary_decisions"]) + successful
             total["provider_failures"] = cast(int, total["provider_failures"]) + provider_failures

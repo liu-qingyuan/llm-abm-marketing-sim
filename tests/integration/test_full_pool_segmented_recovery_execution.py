@@ -10,6 +10,11 @@ import pytest
 
 import llm_abm_sim.full_pool_segmented_continuation as continuation_module
 from llm_abm_sim.decision import EngageDecision, ProviderResponseProvenanceUnknown
+from llm_abm_sim.full_pool_segmented_continuation import (
+    SegmentedRecoveryAccountingFacts,
+    SegmentedRecoveryLineageFacts,
+    _read_closed_segmented_full_pool_source,
+)
 from llm_abm_sim.full_pool_segmented_recovery import FullPoolSegmentedRecoveryPreflight
 from llm_abm_sim.full_pool_segmented_recovery_execution import (
     FullPoolSegmentedRecovery,
@@ -160,6 +165,58 @@ def _read_jsonl(path: Path) -> list[dict[str, Any]]:
     return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line]
 
 
+def _write_json(path: Path, payload: object) -> None:
+    path.write_text(_canonical(payload) + "\n", encoding="utf-8")
+
+
+def _reanchor_recovered_source(source: Path) -> str:
+    manifest_path = source / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    for ref in manifest["artifacts"]:
+        artifact = source / ref["relative_path"]
+        ref["byte_length"] = artifact.stat().st_size
+        ref["sha256"] = _sha(artifact)
+    manifest["complete_status"]["terminal_rows_sha256"] = _sha(
+        source / "terminal_rows.jsonl"
+    )
+    _write_json(manifest_path, manifest)
+    manifest_sha256 = _sha(manifest_path)
+
+    workspace = source.parent
+    ledger_path = workspace / "segmented_continuation_ledger.jsonl"
+    records = _read_jsonl(ledger_path)
+    assert records[-1]["event_type"] == "source_v2_prepared"
+    records[-1]["payload"] = {
+        "source_manifest_sha256": manifest_sha256,
+        "complete_status": manifest["complete_status"],
+    }
+    previous: str | None = None
+    for sequence, record in enumerate(records, start=1):
+        record["sequence"] = sequence
+        record["previous_checksum"] = previous
+        body = {key: value for key, value in record.items() if key != "checksum"}
+        record["checksum"] = hashlib.sha256(_canonical(body).encode()).hexdigest()
+        previous = record["checksum"]
+    ledger_path.write_text(
+        "".join(_canonical(record) + "\n" for record in records),
+        encoding="utf-8",
+    )
+
+    continuation_status_path = workspace / "segmented_continuation_status.json"
+    continuation_status = json.loads(
+        continuation_status_path.read_text(encoding="utf-8")
+    )
+    continuation_status.update(manifest["complete_status"])
+    continuation_status["source_manifest_sha256"] = manifest_sha256
+    _write_json(continuation_status_path, continuation_status)
+
+    recovery_status_path = workspace / "segmented_recovery_status.json"
+    recovery_status = json.loads(recovery_status_path.read_text(encoding="utf-8"))
+    recovery_status["result"]["source_manifest_sha256"] = manifest_sha256
+    _write_json(recovery_status_path, recovery_status)
+    return manifest_sha256
+
+
 def test_recovers_only_two_unresolved_pairs_and_closes_lineage_bound_source_v2(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -243,6 +300,29 @@ def test_recovers_only_two_unresolved_pairs_and_closes_lineage_bound_source_v2(
     assert _sha(source / "concurrency_qualification.json") == plan["failed_run_lineage"][
         "qualification_artifact_sha256"
     ]
+
+    closed = _read_closed_segmented_full_pool_source(
+        source,
+        manifest_sha256=result.source_manifest_sha256,
+    )
+    assert isinstance(closed.facts.recovery_lineage, SegmentedRecoveryLineageFacts)
+    assert isinstance(closed.facts.recovery_accounting, SegmentedRecoveryAccountingFacts)
+    assert closed.facts.recovery_lineage.unresolved_pair_ids == tuple(unresolved_ids)
+    assert closed.facts.recovery_lineage.recovery_plan_sha256 == request.recovery_plan_sha256
+    assert (
+        closed.facts.recovery_lineage.human_authorization_sha256
+        == request.authorization_sha256
+    )
+    assert closed.facts.recovery_lineage.failed_artifact_hashes["continuation_ledger"] == plan[
+        "failed_run_lineage"
+    ]["continuation_ledger_sha256"]
+    assert closed.facts.recovery_accounting.historical_logical_count == 25
+    assert closed.facts.recovery_accounting.logical_retry_charge == 0
+    assert closed.facts.recovery_accounting.uncertainty_physical_charge == 6
+    assert closed.facts.recovery_accounting.retry_actual_physical_attempts == 2
+    assert closed.facts.recovery_accounting.continuation_actual_physical_attempts == 5
+    assert closed.facts.recovery_accounting.aggregate_physical_attempts == 38
+    assert closed.facts.reconciliation_retry_count == 2
     assert {path: path.read_bytes() for path in protected} == protected
 
     (request.recovery_workspace / "segmented_recovery_status.json").unlink()
@@ -255,6 +335,102 @@ def test_recovers_only_two_unresolved_pairs_and_closes_lineage_bound_source_v2(
     )
     assert replay == result
     assert replay_factory_calls == []
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    (
+        "extra_manifest_field",
+        "failed_ledger_hash",
+        "recovery_plan_hash",
+        "authorization_model",
+        "uncertainty_charge",
+        "retry_identity",
+        "terminal_mapping",
+        "usage",
+        "observed_model",
+    ),
+)
+def test_recovered_source_reader_rejects_deep_lineage_and_terminal_tamper(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    mutation: str,
+) -> None:
+    request, _failed = _prepared_recovery(tmp_path, monkeypatch)
+    result = FullPoolSegmentedRecovery(now=_clock).run(
+        request,
+        adapter_factory=lambda _lane_id: _LaneAdapter([]),
+    )
+    assert result.source_root is not None
+    assert result.source_manifest_sha256 is not None
+    source = result.source_root
+    manifest_path = source / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest_sha256 = result.source_manifest_sha256
+
+    if mutation == "extra_manifest_field":
+        manifest["caller_formal_override"] = True
+        _write_json(manifest_path, manifest)
+        manifest_sha256 = _sha(manifest_path)
+    elif mutation == "failed_ledger_hash":
+        plan = json.loads((source / "recovery-plan.json").read_text(encoding="utf-8"))[
+            "payload"
+        ]
+        failed_ledger = Path(
+            plan["failed_run_lineage"]["artifact_refs"]["continuation_ledger"]["path"]
+        )
+        failed_ledger.write_bytes(failed_ledger.read_bytes() + b" ")
+    elif mutation == "recovery_plan_hash":
+        path = source / "recovery-plan.json"
+        envelope = json.loads(path.read_text(encoding="utf-8"))
+        envelope["payload"]["provider_calls"] = 1
+        envelope["payload_sha256"] = hashlib.sha256(
+            _canonical(envelope["payload"]).encode()
+        ).hexdigest()
+        _write_json(path, envelope)
+        manifest["recovery_lineage"]["recovery_plan_sha256"] = _sha(path)
+        _write_json(manifest_path, manifest)
+        manifest_sha256 = _reanchor_recovered_source(source)
+    elif mutation == "authorization_model":
+        path = source / "human-authorization.json"
+        envelope = json.loads(path.read_text(encoding="utf-8"))
+        envelope["payload"]["requested_model"] = "crossed-model"
+        envelope["payload_sha256"] = hashlib.sha256(
+            _canonical(envelope["payload"]).encode()
+        ).hexdigest()
+        _write_json(path, envelope)
+        manifest["recovery_lineage"]["human_authorization_sha256"] = _sha(path)
+        _write_json(manifest_path, manifest)
+        manifest_sha256 = _reanchor_recovered_source(source)
+    elif mutation == "uncertainty_charge":
+        manifest["recovery_accounting"][
+            "unresolved_uncertainty_physical_charge"
+        ] = 5
+        _write_json(manifest_path, manifest)
+        manifest_sha256 = _reanchor_recovered_source(source)
+    else:
+        terminal_path = source / "terminal_rows.jsonl"
+        rows = _read_jsonl(terminal_path)
+        retry = next(row for row in rows if row["reconciliation_retry"])
+        if mutation == "retry_identity":
+            retry["reconciliation_retry"] = False
+        elif mutation == "terminal_mapping":
+            retry["terminal_row_id"] = f"{retry['pair_id']}:crossed"
+        elif mutation == "usage":
+            retry["input_usage"] = 1
+        else:
+            retry["observed_model_counts"] = _canonical({"crossed-model": 1})
+        terminal_path.write_text(
+            "".join(_canonical(row) + "\n" for row in rows),
+            encoding="utf-8",
+        )
+        manifest_sha256 = _reanchor_recovered_source(source)
+
+    with pytest.raises(ValueError):
+        _read_closed_segmented_full_pool_source(
+            source,
+            manifest_sha256=manifest_sha256,
+        )
 
 
 class _UnknownRetryAdapter(_LaneAdapter):

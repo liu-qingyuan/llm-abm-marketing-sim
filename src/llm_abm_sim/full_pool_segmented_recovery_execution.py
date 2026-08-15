@@ -880,6 +880,56 @@ def _read_failed_ledger(
     )
 
 
+def _validate_persisted_recovery_source_inputs(
+    *,
+    source_root: Path,
+    recovery_workspace: Path,
+    recovery_plan_sha256: str,
+    authorization_sha256: str,
+) -> _ValidatedRecoveryInputs:
+    """Reclose source-copied recovery artifacts without re-evaluating live authorization time."""
+    copied_plan = _require_regular_file(
+        source_root / "recovery-plan.json", "source-v2 recovery plan copy"
+    )
+    if _sha256_file(copied_plan) != recovery_plan_sha256:
+        raise ValueError("source-v2 recovery plan hash is crossed")
+    plan_envelope = _read_json(copied_plan)
+    plan = _mapping(plan_envelope.get("payload"), "source-v2 recovery plan payload")
+    plan_identity = _mapping(plan.get("recovery_identity"), "source-v2 recovery plan identity")
+    original_plan = _require_regular_file(
+        Path(_non_empty(plan_identity.get("recovery_root"), "recovery plan root"))
+        / "recovery-plan.json",
+        "original persisted recovery plan",
+    )
+    if (
+        original_plan.read_bytes() != copied_plan.read_bytes()
+        or _sha256_file(original_plan) != recovery_plan_sha256
+    ):
+        raise ValueError("source-v2 recovery plan copy differs from its persisted origin")
+
+    copied_authorization = _require_regular_file(
+        source_root / "human-authorization.json", "source-v2 human authorization copy"
+    )
+    if _sha256_file(copied_authorization) != authorization_sha256:
+        raise ValueError("source-v2 human authorization hash is crossed")
+    authorization_envelope = _read_json(copied_authorization)
+    authorization = _mapping(
+        authorization_envelope.get("payload"), "source-v2 human authorization payload"
+    )
+    authorized_at = _utc_datetime(
+        authorization.get("authorized_at"), "source-v2 authorization timestamp"
+    )
+    request = SegmentedRecoveryExecutionRequest.model_construct(
+        recovery_plan_path=original_plan,
+        recovery_plan_sha256=recovery_plan_sha256,
+        authorization_path=copied_authorization,
+        authorization_sha256=authorization_sha256,
+        recovery_id=_non_empty(authorization.get("recovery_id"), "source-v2 recovery id"),
+        recovery_workspace=recovery_workspace,
+    )
+    return FullPoolSegmentedRecovery(now=lambda: authorized_at)._validated_inputs(request)
+
+
 def _snapshot_documents(replay: Mapping[str, object]) -> dict[int, dict[str, object]]:
     documents: dict[int, dict[str, object]] = {}
     records = replay.get("records", [])

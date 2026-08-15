@@ -1922,6 +1922,7 @@ def _close_segmented_source_v2(
     total_usage = 0
     cached_input_usage = 0
     cached_reported = False
+    selected_candidate_seed_marker: dict[tuple[str, str, int], object] = {}
 
     chunks = chain(
         (
@@ -1931,11 +1932,9 @@ def _close_segmented_source_v2(
         ),
         continuation_spool.iter_committed(continuation_replay),
     )
-    retry_pair_ids = set(
-        prefix.unknown_pair_ids
-        if recovery_retry_pair_ids is None
-        else recovery_retry_pair_ids
-    )
+    retry_pair_ids = set(prefix.unknown_pair_ids)
+    if recovery_retry_pair_ids is not None:
+        retry_pair_ids.update(recovery_retry_pair_ids)
     with (
         candidate_path.open("x", encoding="utf-8", newline="\n") as candidate_handle,
         pair_path.open("x", encoding="utf-8", newline="\n") as pair_handle,
@@ -1947,6 +1946,17 @@ def _close_segmented_source_v2(
                 raise ValueError("segmented source-v2 batches are missing, extra, or out of order")
             for row in chunk.candidate_rows:
                 candidate_handle.write(_canonical_json(row) + "\n")
+                if row.get("selected") == "true":
+                    candidate_key = (
+                        _non_empty(row.get("user_id"), "source-v2 candidate user_id"),
+                        _non_empty(row.get("message_id"), "source-v2 candidate message_id"),
+                        _strict_non_negative_int(
+                            row.get("time_step"), "source-v2 candidate time_step"
+                        ),
+                    )
+                    if candidate_key in selected_candidate_seed_marker:
+                        raise ValueError("source-v2 selected candidate identity is duplicated")
+                    selected_candidate_seed_marker[candidate_key] = row.get("is_seed")
                 candidate_count += 1
             for row in chunk.result_rows:
                 pair_id = _non_empty(row.get("pair_id"), "source-v2 pair_id")
@@ -1958,10 +1968,22 @@ def _close_segmented_source_v2(
                 pair_ids.add(pair_id)
                 ordered_pair_ids.append(pair_id)
                 expected_position += 1
+                candidate_key = (
+                    _non_empty(row.get("user_id"), "source-v2 pair user_id"),
+                    _non_empty(row.get("message_id"), "source-v2 pair message_id"),
+                    _strict_non_negative_int(
+                        row.get("time_step"), "source-v2 pair time_step"
+                    ),
+                )
+                if candidate_key not in selected_candidate_seed_marker:
+                    raise ValueError("source-v2 pair lacks its selected candidate")
                 pair_handle.write(
                     _canonical_json(
                         {
                             **row,
+                            # Persist the ranking-plan seed marker. Historical runtime
+                            # result rows derived this cell from an unmutated user profile.
+                            "is_seed": selected_candidate_seed_marker[candidate_key],
                             "execution_segment": (
                                 "serial_prefix" if pair_id in prefix_terminal_ids else "concurrent_suffix"
                             ),
@@ -3604,6 +3626,117 @@ _SEGMENTED_SOURCE_MANIFEST_FIELDS = frozenset(
         "production_deploy_eligible",
     }
 )
+_SEGMENTED_RECOVERY_SOURCE_MANIFEST_FIELDS = _SEGMENTED_SOURCE_MANIFEST_FIELDS | {
+    "recovery_lineage",
+    "recovery_accounting",
+}
+_SEGMENTED_RECOVERY_LINEAGE_FIELDS = frozenset(
+    {
+        "failed_v1_run_identity_hash",
+        "failed_continuation_identity_hash",
+        "failed_continuation_ledger_sha256",
+        "recovery_plan_sha256",
+        "recovery_plan_identity_hash",
+        "human_authorization_sha256",
+        "qualification_artifact_sha256",
+        "recovery_identity_hash",
+        "unresolved_pair_ids",
+        "configured_max_concurrency",
+        "provider_calls",
+        "production_deploy_eligible",
+    }
+)
+_SEGMENTED_RECOVERY_ACCOUNTING_FIELDS = frozenset(
+    {
+        "logical_cap",
+        "historical_logical_count",
+        "logical_retry_charge",
+        "fresh_logical_count",
+        "logical_count",
+        "physical_cap",
+        "historical_physical_attempts",
+        "unresolved_uncertainty_physical_charge",
+        "retry_actual_physical_attempts",
+        "continuation_actual_physical_attempts",
+        "physical_attempt_count",
+    }
+)
+_SEGMENTED_RECOVERY_SOURCE_ARTIFACTS = frozenset(
+    {"recovery-plan.json", "human-authorization.json"}
+)
+_RECOVERY_EXECUTION_IDENTITY_SCHEMA = "full-pool-segmented-recovery-execution-identity-v1"
+_RECOVERY_CUTOFF_SCHEMA = "full-pool-segmented-recovery-cutoff-manifest-v1"
+_RECOVERY_CUTOFF_ENVELOPE_SCHEMA = "full-pool-segmented-recovery-cutoff-envelope-v1"
+_RECOVERY_STATUS_SCHEMA = "full-pool-segmented-recovery-status-v1"
+_RECOVERY_PLAN_SCHEMA = "full-pool-segmented-recovery-plan-v1"
+_RECOVERY_PLAN_ENVELOPE_SCHEMA = "full-pool-segmented-recovery-plan-envelope-v1"
+_RECOVERY_AUTHORIZATION_SCHEMA = "full-pool-segmented-recovery-human-authorization-v1"
+_RECOVERY_AUTHORIZATION_ENVELOPE_SCHEMA = (
+    "full-pool-segmented-recovery-human-authorization-envelope-v1"
+)
+_RECOVERY_CUTOFF_FIELDS = frozenset(
+    {
+        "schema_version",
+        "recovery_id",
+        "recovery_workspace",
+        "recovery_plan_sha256",
+        "recovery_plan_identity_hash",
+        "human_authorization_sha256",
+        "failed_continuation_identity_hash",
+        "prefix_identity_hash",
+        "unresolved_pair_ids",
+        "imported_durable_terminal_count",
+        "expected_horizon",
+        "expected_logical_count",
+        "historical_logical_count",
+        "historical_physical_attempts",
+        "unresolved_uncertainty_physical_charge",
+        "logical_cap",
+        "physical_cap",
+        "max_concurrency",
+        "production_deploy_eligible",
+    }
+)
+_RECOVERY_EXECUTION_IDENTITY_FIELDS = frozenset(
+    {
+        "schema_version",
+        "recovery_id",
+        "workspace",
+        "run_id",
+        "recovery_cutoff_manifest_sha256",
+        "recovery_plan_sha256",
+        "human_authorization_sha256",
+        "failed_continuation_identity_hash",
+        "prefix_identity_hash",
+        "provider_contract",
+        "prompt_contract",
+        "max_concurrency",
+        "logical_cap",
+        "physical_cap",
+        "production_deploy_eligible",
+        "identity_hash",
+    }
+)
+_RECOVERY_STATUS_RESULT_FIELDS = frozenset(
+    {
+        "status",
+        "workspace_root",
+        "recovery_identity_hash",
+        "source_root",
+        "source_manifest_sha256",
+        "logical_count",
+        "historical_physical_attempts",
+        "uncertainty_physical_charge",
+        "retry_physical_attempts",
+        "continuation_physical_attempts",
+        "physical_attempt_count",
+        "imported_durable_terminal_count",
+        "recovered_pair_ids",
+        "unknown_pair_ids",
+        "provider_calls",
+        "production_deploy_eligible",
+    }
+)
 _SEGMENTED_ACCOUNTING_FIELDS = frozenset(
     {
         "invocations",
@@ -3692,6 +3825,60 @@ _SEGMENTED_IDENTITY_FIELDS = frozenset(
 
 
 @dataclass(frozen=True)
+class SegmentedRecoveryUnresolvedPairFacts:
+    """One ordered recovery retry and its persisted uncertainty classification."""
+
+    pair_id: str
+    canonical_schedule_position: int
+    classification: str
+    historical_physical_attempts: int
+    uncertainty_physical_charge: int
+    logical_retry_charge: int
+    terminal_row_id: str
+
+
+@dataclass(frozen=True)
+class SegmentedRecoveryLineageFacts:
+    """Exact failed-run, plan, authorization, and retry lineage from source-v2."""
+
+    failed_v1_run_identity_hash: str
+    failed_continuation_identity_hash: str
+    failed_continuation_ledger_sha256: str
+    recovery_plan_sha256: str
+    recovery_plan_identity_hash: str
+    human_authorization_sha256: str
+    qualification_artifact_sha256: str
+    recovery_identity_hash: str
+    unresolved_pairs: tuple[
+        SegmentedRecoveryUnresolvedPairFacts,
+        SegmentedRecoveryUnresolvedPairFacts,
+    ]
+    configured_max_concurrency: int
+    failed_artifact_hashes: Mapping[str, str]
+
+    @property
+    def unresolved_pair_ids(self) -> tuple[str, str]:
+        return (self.unresolved_pairs[0].pair_id, self.unresolved_pairs[1].pair_id)
+
+
+@dataclass(frozen=True)
+class SegmentedRecoveryAccountingFacts:
+    """Logical and physical recovery accounting without collapsing uncertainty."""
+
+    logical_cap: int
+    historical_logical_count: int
+    logical_retry_charge: int
+    fresh_logical_count: int
+    logical_count: int
+    physical_cap: int
+    historical_physical_attempts: int
+    uncertainty_physical_charge: int
+    retry_actual_physical_attempts: int
+    continuation_actual_physical_attempts: int
+    aggregate_physical_attempts: int
+
+
+@dataclass(frozen=True)
 class SegmentedFullPoolSourceFacts:
     """Typed source-v2 facts consumed by Report, Evidence, and v9 Release."""
 
@@ -3745,6 +3932,20 @@ class SegmentedFullPoolSourceFacts:
     artifact_hashes: Mapping[str, str]
     live_api_triggered: bool
     production_deploy_eligible: bool
+    recovery_lineage: SegmentedRecoveryLineageFacts | None = None
+    recovery_accounting: SegmentedRecoveryAccountingFacts | None = None
+
+
+@dataclass(frozen=True)
+class _SegmentedRecoverySourceContext:
+    cutoff: Mapping[str, object]
+    source_cutoff_sha256: str
+    identity: Mapping[str, object]
+    failed_identity: Mapping[str, object]
+    lineage: SegmentedRecoveryLineageFacts
+    accounting: SegmentedRecoveryAccountingFacts
+    unresolved_historical_physical_attempts: int
+    imported_durable_terminal_count: int
 
 
 @dataclass(frozen=True)
@@ -4054,8 +4255,14 @@ def _read_closed_segmented_full_pool_source(
     if _sha256_file(manifest_path) != manifest_sha256:
         raise ValueError("segmented source-v2 manifest differs from the explicit hash")
     manifest = _read_json_object(manifest_path)
+    manifest_fields = frozenset(manifest)
+    is_recovery = manifest_fields == _SEGMENTED_RECOVERY_SOURCE_MANIFEST_FIELDS
     if (
-        set(manifest) != _SEGMENTED_SOURCE_MANIFEST_FIELDS
+        manifest_fields
+        not in {
+            _SEGMENTED_SOURCE_MANIFEST_FIELDS,
+            _SEGMENTED_RECOVERY_SOURCE_MANIFEST_FIELDS,
+        }
         or manifest.get("schema_version") != _SEGMENTED_SOURCE_SCHEMA
         or manifest.get("max_concurrency") != FULL_POOL_SEGMENTED_MAX_CONCURRENCY
         or manifest.get("production_deploy_eligible") is not False
@@ -4063,19 +4270,31 @@ def _read_closed_segmented_full_pool_source(
         raise ValueError("segmented source-v2 manifest fields are missing, extra, or unsupported")
 
     artifact_hashes = _validate_segmented_artifacts(resolved, manifest)
-    cutoff, cutoff_hash = _read_segmented_cutoff(workspace)
-    identity = _read_segmented_identity(workspace, cutoff_hash=cutoff_hash)
-    if (
-        manifest.get("cutoff_manifest_sha256") != cutoff_hash
-        or manifest.get("continuation_identity_hash") != identity.get("identity_hash")
-        or manifest.get("prefix_identity_hash") != identity.get("prefix_identity_hash")
-        or cutoff.get("continuation_id") != identity.get("continuation_id")
-        or _mapping(cutoff.get("v1_run_identity"), "segmented v1 run identity").get(
-            "identity_hash"
+    recovery_context: _SegmentedRecoverySourceContext | None = None
+    if is_recovery:
+        recovery_context = _read_segmented_recovery_source_context(
+            resolved,
+            workspace,
+            manifest,
+            artifact_hashes=artifact_hashes,
         )
-        != identity.get("prefix_identity_hash")
-    ):
-        raise ValueError("segmented source-v2 cutoff or continuation identity is crossed")
+        cutoff = dict(recovery_context.cutoff)
+        cutoff_hash = recovery_context.source_cutoff_sha256
+        identity = dict(recovery_context.identity)
+    else:
+        cutoff, cutoff_hash = _read_segmented_cutoff(workspace)
+        identity = _read_segmented_identity(workspace, cutoff_hash=cutoff_hash)
+        if (
+            manifest.get("cutoff_manifest_sha256") != cutoff_hash
+            or manifest.get("continuation_identity_hash") != identity.get("identity_hash")
+            or manifest.get("prefix_identity_hash") != identity.get("prefix_identity_hash")
+            or cutoff.get("continuation_id") != identity.get("continuation_id")
+            or _mapping(cutoff.get("v1_run_identity"), "segmented v1 run identity").get(
+                "identity_hash"
+            )
+            != identity.get("prefix_identity_hash")
+        ):
+            raise ValueError("segmented source-v2 cutoff or continuation identity is crossed")
 
     run_identity = _mapping(cutoff.get("v1_run_identity"), "segmented v1 run identity")
     formal_identity = _mapping(
@@ -4174,7 +4393,7 @@ def _read_closed_segmented_full_pool_source(
         prompt_canonical_hash = formal_lineage.prompt_canonical_hash
     else:
         profile = "validation"
-    if horizon < 2 or capacity < 1 or not capacity * (horizon - 1) < sample_size <= capacity * horizon:
+    if horizon < 2 or capacity < 1 or not capacity * (horizon - 1) <= sample_size <= capacity * horizon:
         raise ValueError("segmented source-v2 schedule is invalid")
     expected_pairs = sample_size * len(message_ids)
     expected_candidates = len(message_ids) * (
@@ -4298,14 +4517,36 @@ def _read_closed_segmented_full_pool_source(
         or prefix_physical != serial_invocations
     ):
         raise ValueError("segmented serial prefix accounting is crossed")
+    legacy_retry_pair_ids = tuple(
+        _string_list(cutoff.get("unknown_pair_ids"), "segmented migration unknown IDs")
+    )
     migration_charge, unknown_count = _validate_segmented_reconciliation(
         cutoff,
-        retry_pair_ids=pair_scan.retry_pair_ids,
+        retry_pair_ids=legacy_retry_pair_ids,
         prefix_identity_hash=_non_empty(
             identity.get("prefix_identity_hash"), "segmented prefix identity hash"
         ),
         maximum_attempts=maximum_attempts,
     )
+    if recovery_context is None:
+        expected_retry_pair_ids = legacy_retry_pair_ids
+    else:
+        expected_retry_pair_ids = (
+            *legacy_retry_pair_ids,
+            *recovery_context.lineage.unresolved_pair_ids,
+        )
+    if pair_scan.retry_pair_ids != expected_retry_pair_ids:
+        raise ValueError("segmented reconciliation retry identities are crossed")
+    if recovery_context is not None:
+        for unresolved in recovery_context.lineage.unresolved_pairs:
+            position = unresolved.canonical_schedule_position
+            if (
+                position >= len(pair_scan.ordered_pair_ids)
+                or pair_scan.ordered_pair_ids[position] != unresolved.pair_id
+                or pair_scan.ordered_terminal_ids[position]
+                != unresolved.terminal_row_id
+            ):
+                raise ValueError("segmented recovery terminal mapping is crossed")
     if (unknown_count == 0 and pending_physical != 0) or (
         unknown_count == 1 and pending_physical > 3
     ):
@@ -4313,14 +4554,6 @@ def _read_closed_segmented_full_pool_source(
     accounting = _mapping(manifest.get("accounting"), "segmented source-v2 accounting")
     if set(accounting) != _SEGMENTED_ACCOUNTING_FIELDS:
         raise ValueError("segmented source-v2 accounting fields are missing or extra")
-    expected_accounting = {
-        key: terminal_accounting[key]
-        for key in _SEGMENTED_ACCOUNTING_FIELDS
-        if key != "migration_unknown_physical_charge"
-    }
-    expected_accounting["migration_unknown_physical_charge"] = migration_charge
-    if accounting != expected_accounting:
-        raise ValueError("segmented source-v2 Provider/model/usage accounting is crossed")
     logical = _strict_non_negative_int(manifest.get("logical_count"), "segmented logical count")
     physical = _strict_non_negative_int(
         manifest.get("physical_attempt_count"), "segmented physical count"
@@ -4328,9 +4561,43 @@ def _read_closed_segmented_full_pool_source(
     accounted_invocations = _strict_non_negative_int(
         terminal_accounting["invocations"], "segmented accounted invocations"
     )
+    aggregate_unresolved_charge = physical - accounted_invocations
+    if recovery_context is None:
+        expected_unresolved_charge = migration_charge
+    else:
+        recovery_accounting = recovery_context.accounting
+        expected_unresolved_charge = (
+            migration_charge
+            + recovery_context.unresolved_historical_physical_attempts
+            + recovery_accounting.uncertainty_physical_charge
+        )
+        if (
+            recovery_accounting.logical_count != logical
+            or recovery_accounting.aggregate_physical_attempts != physical
+            or recovery_accounting.historical_logical_count
+            + recovery_accounting.fresh_logical_count
+            != expected_pairs
+            or recovery_accounting.historical_logical_count
+            != recovery_context.imported_durable_terminal_count + 2
+            or accounted_invocations
+            != recovery_accounting.historical_physical_attempts
+            - migration_charge
+            - recovery_context.unresolved_historical_physical_attempts
+            + recovery_accounting.retry_actual_physical_attempts
+            + recovery_accounting.continuation_actual_physical_attempts
+        ):
+            raise ValueError("segmented recovery aggregate logical or physical accounting is crossed")
+    expected_accounting = {
+        key: terminal_accounting[key]
+        for key in _SEGMENTED_ACCOUNTING_FIELDS
+        if key != "migration_unknown_physical_charge"
+    }
+    expected_accounting["migration_unknown_physical_charge"] = expected_unresolved_charge
+    if accounting != expected_accounting:
+        raise ValueError("segmented source-v2 Provider/model/usage accounting is crossed")
     if (
         logical != expected_pairs
-        or physical != accounted_invocations + migration_charge
+        or aggregate_unresolved_charge != expected_unresolved_charge
         or physical > FULL_POOL_SEGMENTED_PHYSICAL_CAP
     ):
         raise ValueError("segmented source-v2 logical or physical accounting is crossed")
@@ -4362,14 +4629,31 @@ def _read_closed_segmented_full_pool_source(
             identity.get("identity_hash"), "segmented continuation identity hash"
         ),
     )
-    suffix_pair_ids = list(pair_scan.ordered_pair_ids[pair_scan.serial_count :])
-    serial_physical = _strict_non_negative_int(
-        terminal_accounting["serial_invocations"], "segmented serial physical attempts"
-    )
+    if recovery_context is None:
+        expected_dispatched = list(
+            pair_scan.ordered_pair_ids[pair_scan.serial_count :]
+        )
+        serial_physical = _strict_non_negative_int(
+            terminal_accounting["serial_invocations"],
+            "segmented serial physical attempts",
+        )
+        expected_ledger_physical = accounted_invocations - serial_physical
+    else:
+        recovery_accounting = recovery_context.accounting
+        expected_dispatched = [
+            *recovery_context.lineage.unresolved_pair_ids,
+            *pair_scan.ordered_pair_ids[
+                recovery_accounting.historical_logical_count :
+            ],
+        ]
+        expected_ledger_physical = (
+            recovery_accounting.retry_actual_physical_attempts
+            + recovery_accounting.continuation_actual_physical_attempts
+        )
     if (
-        dispatched != suffix_pair_ids
-        or durable != suffix_pair_ids
-        or suffix_physical != accounted_invocations - serial_physical
+        dispatched != expected_dispatched
+        or durable != expected_dispatched
+        or suffix_physical != expected_ledger_physical
         or source_anchor
         != {
             "source_manifest_sha256": manifest_sha256,
@@ -4417,6 +4701,41 @@ def _read_closed_segmented_full_pool_source(
         or continuation_status.get("production_deploy_eligible") is not False
     ):
         raise ValueError("segmented continuation status is crossed with source-v2")
+    if recovery_context is not None:
+        recovery_status = _read_json_object(workspace / "segmented_recovery_status.json")
+        recovery_result = _mapping(
+            recovery_status.get("result"), "segmented recovery result"
+        )
+        recovery_accounting = recovery_context.accounting
+        if (
+            set(recovery_status) != {"schema_version", "result"}
+            or recovery_status.get("schema_version") != _RECOVERY_STATUS_SCHEMA
+            or set(recovery_result) != _RECOVERY_STATUS_RESULT_FIELDS
+            or recovery_result.get("status") != "complete"
+            or recovery_result.get("workspace_root") != str(workspace)
+            or recovery_result.get("recovery_identity_hash")
+            != recovery_context.lineage.recovery_identity_hash
+            or recovery_result.get("source_root") != str(resolved)
+            or recovery_result.get("source_manifest_sha256") != manifest_sha256
+            or recovery_result.get("logical_count") != logical
+            or recovery_result.get("historical_physical_attempts")
+            != recovery_accounting.historical_physical_attempts
+            or recovery_result.get("uncertainty_physical_charge")
+            != recovery_accounting.uncertainty_physical_charge
+            or recovery_result.get("retry_physical_attempts")
+            != recovery_accounting.retry_actual_physical_attempts
+            or recovery_result.get("continuation_physical_attempts")
+            != recovery_accounting.continuation_actual_physical_attempts
+            or recovery_result.get("physical_attempt_count") != physical
+            or recovery_result.get("imported_durable_terminal_count")
+            != recovery_context.imported_durable_terminal_count
+            or recovery_result.get("recovered_pair_ids")
+            != list(recovery_context.lineage.unresolved_pair_ids)
+            or recovery_result.get("unknown_pair_ids") != []
+            or recovery_result.get("provider_calls") != 0
+            or recovery_result.get("production_deploy_eligible") is not False
+        ):
+            raise ValueError("segmented recovery status is crossed with source-v2")
 
     provider_by_variant = _mapping(run_identity.get("provider_contract"), "segmented provider contract")
     provider = _mapping(provider_by_variant.get("primary"), "segmented Primary provider contract")
@@ -4478,7 +4797,14 @@ def _read_closed_segmented_full_pool_source(
     if _SHA256_PATTERN.fullmatch(contract_sha256) is None:
         raise ValueError("segmented v1 contract hash is invalid")
     source_hash = _sha256_json(dict(sorted(artifact_hashes.items())))
-    external_requests = terminal_accounting["invocations"] if live_api_triggered else 0
+    if not live_api_triggered:
+        external_requests = 0
+    elif recovery_context is None:
+        external_requests = terminal_accounting["invocations"]
+    else:
+        external_requests = (
+            physical - recovery_context.accounting.uncertainty_physical_charge
+        )
     facts = SegmentedFullPoolSourceFacts(
         source_root=resolved,
         workspace_root=workspace,
@@ -4546,6 +4872,12 @@ def _read_closed_segmented_full_pool_source(
         artifact_hashes=artifact_hashes,
         live_api_triggered=live_api_triggered,
         production_deploy_eligible=False,
+        recovery_lineage=(
+            recovery_context.lineage if recovery_context is not None else None
+        ),
+        recovery_accounting=(
+            recovery_context.accounting if recovery_context is not None else None
+        ),
     )
     facade_counts = {
         "candidate_ranking_rows": expected_candidates,
@@ -4664,6 +4996,8 @@ def _validate_segmented_artifacts(
     manifest: Mapping[str, object],
 ) -> dict[str, str]:
     expected_artifacts: set[str] = set(_SEGMENTED_SOURCE_ARTIFACTS)
+    if set(manifest) == _SEGMENTED_RECOVERY_SOURCE_MANIFEST_FIELDS:
+        expected_artifacts.update(_SEGMENTED_RECOVERY_SOURCE_ARTIFACTS)
     qualification_sha256 = manifest.get("concurrency_qualification_artifact_sha256")
     if qualification_sha256 is not None:
         if not isinstance(qualification_sha256, str) or _SHA256_PATTERN.fullmatch(qualification_sha256) is None:
@@ -4692,6 +5026,353 @@ def _validate_segmented_artifacts(
             )
         )
     return {name: cast(str, by_path[name]["sha256"]) for name in sorted(expected_artifacts)}
+
+
+def _read_segmented_recovery_source_context(
+    source: Path,
+    workspace: Path,
+    manifest: Mapping[str, object],
+    *,
+    artifact_hashes: Mapping[str, str],
+) -> _SegmentedRecoverySourceContext:
+    lineage_document = _mapping(
+        manifest.get("recovery_lineage"), "segmented recovery lineage"
+    )
+    accounting_document = _mapping(
+        manifest.get("recovery_accounting"), "segmented recovery accounting"
+    )
+    if set(lineage_document) != _SEGMENTED_RECOVERY_LINEAGE_FIELDS:
+        raise ValueError("segmented recovery lineage fields are missing or extra")
+    if set(accounting_document) != _SEGMENTED_RECOVERY_ACCOUNTING_FIELDS:
+        raise ValueError("segmented recovery accounting fields are missing or extra")
+    unresolved_ids_raw = tuple(
+        _string_list(
+            lineage_document.get("unresolved_pair_ids"),
+            "segmented recovery unresolved pair IDs",
+        )
+    )
+    if len(unresolved_ids_raw) != 2 or len(set(unresolved_ids_raw)) != 2:
+        raise ValueError("segmented recovery requires two ordered unresolved pair IDs")
+    unresolved_ids = cast(tuple[str, str], unresolved_ids_raw)
+    recovery_plan_sha256 = _non_empty(
+        lineage_document.get("recovery_plan_sha256"), "recovery plan SHA-256"
+    )
+    authorization_sha256 = _non_empty(
+        lineage_document.get("human_authorization_sha256"),
+        "human authorization SHA-256",
+    )
+    if (
+        _SHA256_PATTERN.fullmatch(recovery_plan_sha256) is None
+        or _SHA256_PATTERN.fullmatch(authorization_sha256) is None
+        or artifact_hashes.get("recovery-plan.json") != recovery_plan_sha256
+        or artifact_hashes.get("human-authorization.json") != authorization_sha256
+    ):
+        raise ValueError("segmented recovery plan or authorization artifact hash is crossed")
+
+    from .full_pool_segmented_recovery_execution import (
+        _validate_persisted_recovery_source_inputs,
+    )
+
+    inputs = _validate_persisted_recovery_source_inputs(
+        source_root=source,
+        recovery_workspace=workspace,
+        recovery_plan_sha256=recovery_plan_sha256,
+        authorization_sha256=authorization_sha256,
+    )
+    plan = inputs.plan
+    plan_identity = _mapping(plan.get("recovery_identity"), "recovery plan identity")
+    failed_lineage = _mapping(plan.get("failed_run_lineage"), "failed run lineage")
+    expected_failed_lineage_fields = {
+        "v1_run_identity_hash",
+        "v1_execution_contract_sha256",
+        "continuation_id",
+        "continuation_identity_hash",
+        "cutoff_manifest_sha256",
+        "qualification_artifact_sha256",
+        "continuation_ledger_sha256",
+        "continuation_status_sha256",
+        "continuation_result_sha256",
+        "failure_audit_sha256",
+        "artifact_refs",
+    }
+    artifact_refs = _mapping(failed_lineage.get("artifact_refs"), "failed artifact refs")
+    expected_ref_names = {
+        "cutover_plan",
+        "preflight",
+        "cutover",
+        "reconciliation",
+        "continuation_authorization",
+        "qualification",
+        "continuation_identity",
+        "cutoff_manifest",
+        "continuation_ledger",
+        "continuation_status",
+        "continuation_result",
+        "failure_audit",
+    }
+    if (
+        set(failed_lineage) != expected_failed_lineage_fields
+        or set(artifact_refs) != expected_ref_names
+    ):
+        raise ValueError("segmented failed-run lineage or artifact reference set is not exact")
+    failed_artifact_hashes: dict[str, str] = {}
+    for label in sorted(expected_ref_names):
+        ref = _mapping(artifact_refs.get(label), f"failed {label} artifact ref")
+        if set(ref) != {"path", "sha256", "bytes"}:
+            raise ValueError("segmented failed artifact reference fields are not exact")
+        digest = _non_empty(ref.get("sha256"), f"failed {label} SHA-256")
+        if _SHA256_PATTERN.fullmatch(digest) is None:
+            raise ValueError("segmented failed artifact reference hash is invalid")
+        failed_artifact_hashes[label] = digest
+
+    cutoff_envelope = _read_json_object(workspace / _MANIFEST_FILE)
+    if set(cutoff_envelope) != {"schema_version", "manifest", "manifest_sha256"}:
+        raise ValueError("segmented recovery cutoff envelope fields are not exact")
+    recovery_cutoff = _mapping(
+        cutoff_envelope.get("manifest"), "segmented recovery cutoff"
+    )
+    source_cutoff_sha256 = _non_empty(
+        cutoff_envelope.get("manifest_sha256"), "segmented recovery cutoff hash"
+    )
+    if (
+        cutoff_envelope.get("schema_version") != _RECOVERY_CUTOFF_ENVELOPE_SCHEMA
+        or set(recovery_cutoff) != _RECOVERY_CUTOFF_FIELDS
+        or recovery_cutoff.get("schema_version") != _RECOVERY_CUTOFF_SCHEMA
+        or _SHA256_PATTERN.fullmatch(source_cutoff_sha256) is None
+        or _sha256_json(recovery_cutoff) != source_cutoff_sha256
+    ):
+        raise ValueError("segmented recovery cutoff fields, schema, or hash are crossed")
+
+    identity = _read_json_object(workspace / _IDENTITY_FILE)
+    identity_body = {key: value for key, value in identity.items() if key != "identity_hash"}
+    if (
+        set(identity) != _RECOVERY_EXECUTION_IDENTITY_FIELDS
+        or identity.get("schema_version") != _RECOVERY_EXECUTION_IDENTITY_SCHEMA
+        or identity.get("identity_hash") != _sha256_json(identity_body)
+        or identity.get("workspace") != str(workspace)
+        or identity.get("run_id") != f"recovery-{identity.get('recovery_id')}"
+        or identity.get("recovery_cutoff_manifest_sha256") != source_cutoff_sha256
+        or identity.get("max_concurrency") != FULL_POOL_SEGMENTED_MAX_CONCURRENCY
+        or identity.get("logical_cap") != FULL_POOL_SEGMENTED_LOGICAL_CAP
+        or identity.get("physical_cap") != FULL_POOL_SEGMENTED_PHYSICAL_CAP
+        or identity.get("production_deploy_eligible") is not False
+    ):
+        raise ValueError("segmented recovery identity fields, hash, or caps are crossed")
+
+    failed_workspace = inputs.cutover_request.continuation_workspace
+    failed_cutoff, failed_cutoff_sha256 = _read_segmented_cutoff(failed_workspace)
+    failed_identity = _read_segmented_identity(
+        failed_workspace,
+        cutoff_hash=failed_cutoff_sha256,
+    )
+    plan_accounting = _mapping(plan.get("accounting"), "recovery plan accounting")
+    plan_snapshot = _mapping(plan.get("recovery_snapshot"), "recovery plan snapshot")
+    unresolved_rows = _mapping_sequence(
+        plan_snapshot.get("unresolved_pairs"), "recovery unresolved pairs"
+    )
+    plan_unresolved_ids = tuple(
+        _non_empty(row.get("pair_id"), "recovery unresolved pair ID")
+        for row in unresolved_rows
+    )
+    unresolved_historical_attempts = sum(
+        _strict_non_negative_int(
+            row.get("historical_physical_attempts"),
+            "recovery unresolved historical attempts",
+        )
+        for row in unresolved_rows
+    )
+    unresolved_pair_facts = cast(
+        tuple[
+            SegmentedRecoveryUnresolvedPairFacts,
+            SegmentedRecoveryUnresolvedPairFacts,
+        ],
+        tuple(
+            SegmentedRecoveryUnresolvedPairFacts(
+                pair_id=_non_empty(row.get("pair_id"), "recovery unresolved pair ID"),
+                canonical_schedule_position=_strict_non_negative_int(
+                    row.get("canonical_schedule_position"),
+                    "recovery unresolved schedule position",
+                ),
+                classification=_non_empty(
+                    row.get("classification"), "recovery unresolved classification"
+                ),
+                historical_physical_attempts=_strict_non_negative_int(
+                    row.get("historical_physical_attempts"),
+                    "recovery unresolved historical attempts",
+                ),
+                uncertainty_physical_charge=_strict_non_negative_int(
+                    row.get("uncertainty_physical_charge"),
+                    "recovery unresolved uncertainty charge",
+                ),
+                logical_retry_charge=_strict_non_negative_int(
+                    row.get("logical_retry_charge"),
+                    "recovery unresolved logical retry charge",
+                ),
+                terminal_row_id=(
+                    f"{_non_empty(row.get('pair_id'), 'recovery unresolved pair ID')}:primary"
+                ),
+            )
+            for row in unresolved_rows
+        ),
+    )
+    recovery_identity_hash = _non_empty(
+        identity.get("identity_hash"), "recovery execution identity hash"
+    )
+    qualification_sha256 = _non_empty(
+        lineage_document.get("qualification_artifact_sha256"),
+        "recovery qualification SHA-256",
+    )
+    if (
+        manifest.get("cutoff_manifest_sha256") != source_cutoff_sha256
+        or manifest.get("continuation_identity_hash") != recovery_identity_hash
+        or manifest.get("prefix_identity_hash") != inputs.prefix.run_identity.get("identity_hash")
+        or recovery_cutoff.get("recovery_plan_sha256") != recovery_plan_sha256
+        or recovery_cutoff.get("human_authorization_sha256") != authorization_sha256
+        or recovery_cutoff.get("recovery_plan_identity_hash") != plan_identity.get("identity_hash")
+        or recovery_cutoff.get("failed_continuation_identity_hash")
+        != failed_identity.get("identity_hash")
+        or recovery_cutoff.get("prefix_identity_hash")
+        != inputs.prefix.run_identity.get("identity_hash")
+        or recovery_cutoff.get("unresolved_pair_ids") != list(unresolved_ids)
+        or recovery_cutoff.get("imported_durable_terminal_count")
+        != inputs.imported_durable_terminal_count
+        or recovery_cutoff.get("historical_logical_count")
+        != plan_accounting.get("historical_logical_count")
+        or recovery_cutoff.get("historical_physical_attempts")
+        != plan_accounting.get("historical_physical_attempts")
+        or recovery_cutoff.get("unresolved_uncertainty_physical_charge") != 6
+        or recovery_cutoff.get("logical_cap") != FULL_POOL_SEGMENTED_LOGICAL_CAP
+        or recovery_cutoff.get("physical_cap") != FULL_POOL_SEGMENTED_PHYSICAL_CAP
+        or recovery_cutoff.get("max_concurrency") != FULL_POOL_SEGMENTED_MAX_CONCURRENCY
+        or recovery_cutoff.get("production_deploy_eligible") is not False
+        or identity.get("recovery_plan_sha256") != recovery_plan_sha256
+        or identity.get("human_authorization_sha256") != authorization_sha256
+        or identity.get("failed_continuation_identity_hash")
+        != failed_identity.get("identity_hash")
+        or identity.get("prefix_identity_hash") != inputs.prefix.run_identity.get("identity_hash")
+        or identity.get("provider_contract") != inputs.prefix.provider_contract
+        or identity.get("prompt_contract") != inputs.prefix.prompt_contract
+        or lineage_document.get("failed_v1_run_identity_hash")
+        != inputs.prefix.run_identity.get("identity_hash")
+        or lineage_document.get("failed_continuation_identity_hash")
+        != failed_identity.get("identity_hash")
+        or lineage_document.get("failed_continuation_ledger_sha256")
+        != failed_lineage.get("continuation_ledger_sha256")
+        or lineage_document.get("recovery_plan_identity_hash")
+        != plan_identity.get("identity_hash")
+        or lineage_document.get("recovery_identity_hash") != recovery_identity_hash
+        or lineage_document.get("unresolved_pair_ids") != list(unresolved_ids)
+        or lineage_document.get("configured_max_concurrency")
+        != FULL_POOL_SEGMENTED_MAX_CONCURRENCY
+        or lineage_document.get("provider_calls") != 0
+        or lineage_document.get("production_deploy_eligible") is not False
+        or plan_unresolved_ids != unresolved_ids
+        or failed_lineage.get("continuation_identity_hash")
+        != failed_identity.get("identity_hash")
+        or failed_lineage.get("cutoff_manifest_sha256") != failed_cutoff_sha256
+        or failed_lineage.get("continuation_ledger_sha256")
+        != failed_artifact_hashes["continuation_ledger"]
+        or failed_lineage.get("qualification_artifact_sha256") != qualification_sha256
+        or failed_lineage.get("v1_run_identity_hash")
+        != inputs.prefix.run_identity.get("identity_hash")
+        or qualification_sha256 != artifact_hashes.get(SEGMENTED_CONCURRENCY_QUALIFICATION_FILE)
+    ):
+        raise ValueError("segmented recovery lineage is crossed")
+
+    accounting = SegmentedRecoveryAccountingFacts(
+        logical_cap=_strict_non_negative_int(
+            accounting_document.get("logical_cap"), "recovery logical cap"
+        ),
+        historical_logical_count=_strict_non_negative_int(
+            accounting_document.get("historical_logical_count"),
+            "recovery historical logical count",
+        ),
+        logical_retry_charge=_strict_non_negative_int(
+            accounting_document.get("logical_retry_charge"),
+            "recovery logical retry charge",
+        ),
+        fresh_logical_count=_strict_non_negative_int(
+            accounting_document.get("fresh_logical_count"),
+            "recovery fresh logical count",
+        ),
+        logical_count=_strict_non_negative_int(
+            accounting_document.get("logical_count"), "recovery logical count"
+        ),
+        physical_cap=_strict_non_negative_int(
+            accounting_document.get("physical_cap"), "recovery physical cap"
+        ),
+        historical_physical_attempts=_strict_non_negative_int(
+            accounting_document.get("historical_physical_attempts"),
+            "recovery historical physical attempts",
+        ),
+        uncertainty_physical_charge=_strict_non_negative_int(
+            accounting_document.get("unresolved_uncertainty_physical_charge"),
+            "recovery uncertainty physical charge",
+        ),
+        retry_actual_physical_attempts=_strict_non_negative_int(
+            accounting_document.get("retry_actual_physical_attempts"),
+            "recovery retry actual attempts",
+        ),
+        continuation_actual_physical_attempts=_strict_non_negative_int(
+            accounting_document.get("continuation_actual_physical_attempts"),
+            "recovery continuation actual attempts",
+        ),
+        aggregate_physical_attempts=_strict_non_negative_int(
+            accounting_document.get("physical_attempt_count"),
+            "recovery aggregate physical attempts",
+        ),
+    )
+    if (
+        accounting.logical_cap != FULL_POOL_SEGMENTED_LOGICAL_CAP
+        or accounting.physical_cap != FULL_POOL_SEGMENTED_PHYSICAL_CAP
+        or accounting.logical_retry_charge != 0
+        or accounting.uncertainty_physical_charge != 6
+        or accounting.historical_logical_count
+        != plan_accounting.get("historical_logical_count")
+        or accounting.historical_physical_attempts
+        != plan_accounting.get("historical_physical_attempts")
+        or accounting.logical_count
+        != accounting.historical_logical_count + accounting.fresh_logical_count
+        or accounting.aggregate_physical_attempts
+        != accounting.historical_physical_attempts
+        + accounting.uncertainty_physical_charge
+        + accounting.retry_actual_physical_attempts
+        + accounting.continuation_actual_physical_attempts
+        or accounting.aggregate_physical_attempts > accounting.physical_cap
+    ):
+        raise ValueError("segmented recovery accounting is crossed")
+
+    lineage = SegmentedRecoveryLineageFacts(
+        failed_v1_run_identity_hash=cast(
+            str, lineage_document["failed_v1_run_identity_hash"]
+        ),
+        failed_continuation_identity_hash=cast(
+            str, lineage_document["failed_continuation_identity_hash"]
+        ),
+        failed_continuation_ledger_sha256=cast(
+            str, lineage_document["failed_continuation_ledger_sha256"]
+        ),
+        recovery_plan_sha256=recovery_plan_sha256,
+        recovery_plan_identity_hash=cast(
+            str, lineage_document["recovery_plan_identity_hash"]
+        ),
+        human_authorization_sha256=authorization_sha256,
+        qualification_artifact_sha256=qualification_sha256,
+        recovery_identity_hash=recovery_identity_hash,
+        unresolved_pairs=unresolved_pair_facts,
+        configured_max_concurrency=FULL_POOL_SEGMENTED_MAX_CONCURRENCY,
+        failed_artifact_hashes=dict(sorted(failed_artifact_hashes.items())),
+    )
+    return _SegmentedRecoverySourceContext(
+        cutoff=failed_cutoff,
+        source_cutoff_sha256=source_cutoff_sha256,
+        identity=identity,
+        failed_identity=failed_identity,
+        lineage=lineage,
+        accounting=accounting,
+        unresolved_historical_physical_attempts=unresolved_historical_attempts,
+        imported_durable_terminal_count=inputs.imported_durable_terminal_count,
+    )
 
 
 def _read_segmented_cutoff(workspace: Path) -> tuple[dict[str, object], str]:
@@ -4908,6 +5589,12 @@ def _scan_segmented_candidates(
                 ] += 1
             rows_in_batch += 1
             row_count += 1
+    while len(ranges) < horizon:
+        time_step = len(ranges)
+        if sample_size - capacity * time_step != 0:
+            raise ValueError("segmented candidate rows do not cover every batch")
+        end = path.stat(follow_symlinks=False).st_size
+        ranges.append(_JsonlBatchRange(start=end, end=end, row_count=0))
     if len(ranges) != horizon:
         raise ValueError("segmented candidate rows do not cover every batch")
     normalized_summary: dict[tuple[int, str], Mapping[str, object]] = {}
@@ -4916,6 +5603,16 @@ def _scan_segmented_candidates(
         expected_selected = min(capacity, expected)
         for message_id in message_ids:
             evidence = summary.get((time_step, message_id))
+            if evidence is None and expected == 0:
+                evidence = {
+                    "eligible_users": 0,
+                    "ranked_candidates": 0,
+                    "below_delivery_capacity": 0,
+                    "selected_user_ids": [],
+                    "seed_user_ids": [],
+                    "personalized_topup_user_ids": [],
+                    "selection_reason_counts": Counter(),
+                }
             if (
                 counts[(time_step, message_id)] != expected
                 or evidence is None
@@ -5231,6 +5928,13 @@ def _scan_segmented_pairs_and_terminals(
             expected_position += 1
             pair_count += 1
             terminal_count += 1
+    if final_capacity == 0 and len(pair_ranges) == horizon - 1:
+        pair_end = pair_path.stat(follow_symlinks=False).st_size
+        terminal_end = terminal_path.stat(follow_symlinks=False).st_size
+        pair_ranges.append(_JsonlBatchRange(start=pair_end, end=pair_end, row_count=0))
+        terminal_ranges.append(
+            _JsonlBatchRange(start=terminal_end, end=terminal_end, row_count=0)
+        )
     if (
         observed_pair_keys != set(selected_rows)
         or len(pair_ranges) != horizon
@@ -5281,10 +5985,15 @@ def _scan_segmented_pairs_and_terminals(
             key: tuple(value) for key, value in selected_users_by_batch_message.items()
         },
         failed_users_by_batch_message={
-            key: tuple(sorted(value)) for key, value in failed_users_by_batch_message.items()
+            key: tuple(value) for key, value in failed_users_by_batch_message.items()
         },
         positive_users_by_batch_message={
-            key: tuple(sorted(value)) for key, value in positive_users_by_batch_message.items()
+            key: tuple(
+                user_id
+                for user_id in selected_users_by_batch_message[key]
+                if user_id in value
+            )
+            for key, value in positive_users_by_batch_message.items()
         },
     )
 
@@ -5328,19 +6037,38 @@ def _scan_segmented_steps(
                 if set(summary) != _SEGMENTED_MESSAGE_SUMMARY_FIELDS:
                     raise ValueError("segmented message summary fields are missing or extra")
                 candidate = candidate_summary[(time_step, message_id)]
+                summary_positive = _string_list(
+                    summary.get("primary_positive_user_ids"),
+                    "segmented summary positive users",
+                )
+                summary_failed = _string_list(
+                    summary.get("primary_provider_failed_user_ids"),
+                    "segmented summary failed users",
+                )
+                expected_positive = pair_scan.positive_users_by_batch_message.get(
+                    (time_step, message_id), ()
+                )
+                expected_failed = pair_scan.failed_users_by_batch_message.get(
+                    (time_step, message_id), ()
+                )
+                if (
+                    len(summary_positive) != len(set(summary_positive))
+                    or set(summary_positive) != set(expected_positive)
+                    or len(summary_failed) != len(set(summary_failed))
+                    or set(summary_failed) != set(expected_failed)
+                ):
+                    raise ValueError("segmented message outcome membership is crossed")
                 expected = {
                     **candidate,
                     "message_id": message_id,
                     "message_title": message_titles[message_id],
                     "selected_user_ids": list(
-                        pair_scan.selected_users_by_batch_message[(time_step, message_id)]
+                        pair_scan.selected_users_by_batch_message.get(
+                            (time_step, message_id), ()
+                        )
                     ),
-                    "primary_positive_user_ids": list(
-                        pair_scan.positive_users_by_batch_message.get((time_step, message_id), ())
-                    ),
-                    "primary_provider_failed_user_ids": list(
-                        pair_scan.failed_users_by_batch_message.get((time_step, message_id), ())
-                    ),
+                    "primary_positive_user_ids": summary_positive,
+                    "primary_provider_failed_user_ids": summary_failed,
                     "shadow_provider_failed_user_ids": [],
                 }
                 if summary != expected:
@@ -5474,8 +6202,55 @@ def _validate_segmented_reconciliation(
     return parsed.physical_attempt_charge, unknown_count
 
 
-def _segmented_execution_document(facts: SegmentedFullPoolSourceFacts) -> dict[str, object]:
+def _segmented_recovery_lineage_document(
+    facts: SegmentedRecoveryLineageFacts,
+) -> dict[str, object]:
     return {
+        "failed_v1_run_identity_hash": facts.failed_v1_run_identity_hash,
+        "failed_continuation_identity_hash": facts.failed_continuation_identity_hash,
+        "failed_continuation_ledger_sha256": facts.failed_continuation_ledger_sha256,
+        "recovery_plan_sha256": facts.recovery_plan_sha256,
+        "recovery_plan_identity_hash": facts.recovery_plan_identity_hash,
+        "human_authorization_sha256": facts.human_authorization_sha256,
+        "qualification_artifact_sha256": facts.qualification_artifact_sha256,
+        "recovery_identity_hash": facts.recovery_identity_hash,
+        "unresolved_pairs": [
+            {
+                "pair_id": pair.pair_id,
+                "canonical_schedule_position": pair.canonical_schedule_position,
+                "classification": pair.classification,
+                "historical_physical_attempts": pair.historical_physical_attempts,
+                "uncertainty_physical_charge": pair.uncertainty_physical_charge,
+                "logical_retry_charge": pair.logical_retry_charge,
+                "terminal_row_id": pair.terminal_row_id,
+            }
+            for pair in facts.unresolved_pairs
+        ],
+        "configured_max_concurrency": facts.configured_max_concurrency,
+        "failed_artifact_sha256": dict(sorted(facts.failed_artifact_hashes.items())),
+    }
+
+
+def _segmented_recovery_accounting_document(
+    facts: SegmentedRecoveryAccountingFacts,
+) -> dict[str, object]:
+    return {
+        "logical_cap": facts.logical_cap,
+        "historical_logical_count": facts.historical_logical_count,
+        "logical_retry_charge": facts.logical_retry_charge,
+        "fresh_logical_count": facts.fresh_logical_count,
+        "logical_count": facts.logical_count,
+        "physical_cap": facts.physical_cap,
+        "historical_physical_attempts": facts.historical_physical_attempts,
+        "uncertainty_physical_charge": facts.uncertainty_physical_charge,
+        "retry_actual_physical_attempts": facts.retry_actual_physical_attempts,
+        "continuation_actual_physical_attempts": facts.continuation_actual_physical_attempts,
+        "aggregate_physical_attempts": facts.aggregate_physical_attempts,
+    }
+
+
+def _segmented_execution_document(facts: SegmentedFullPoolSourceFacts) -> dict[str, object]:
+    document: dict[str, object] = {
         "execution_topology": "serial_prefix_then_concurrent_suffix",
         "serial_prefix_terminal_count": facts.serial_prefix_terminal_count,
         "concurrent_suffix_terminal_count": facts.concurrent_suffix_terminal_count,
@@ -5496,6 +6271,16 @@ def _segmented_execution_document(facts: SegmentedFullPoolSourceFacts) -> dict[s
         "migration_unknown_physical_charge": facts.migration_unknown_physical_charge,
         "total_physical_attempts": facts.physical_attempts,
     }
+    if facts.recovery_lineage is not None or facts.recovery_accounting is not None:
+        if facts.recovery_lineage is None or facts.recovery_accounting is None:
+            raise ValueError("segmented recovery typed facts are incomplete")
+        document["recovery_lineage"] = _segmented_recovery_lineage_document(
+            facts.recovery_lineage
+        )
+        document["recovery_accounting"] = _segmented_recovery_accounting_document(
+            facts.recovery_accounting
+        )
+    return document
 
 
 def _read_jsonl_range(path: Path, row_range: _JsonlBatchRange) -> list[dict[str, object]]:

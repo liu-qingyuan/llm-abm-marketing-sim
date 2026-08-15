@@ -832,6 +832,110 @@ def _validate_recovery_payload(payload: Mapping[str, object], *, artifact_path: 
     ):
         raise ValueError("recovery accounting charge or cap closure is crossed")
 
+    execution = _mapping(payload.get("execution_contract"), "recovery execution contract")
+    if set(execution) != {
+        "configured_max_concurrency",
+        "prompt_version",
+        "provider_contract_sha256",
+        "prompt_contract_sha256",
+        "qualification_lane_count",
+        "qualification_provider_concurrency_reduction",
+    }:
+        raise ValueError("recovery execution contract fields are not exact")
+    if (
+        execution.get("configured_max_concurrency") != FULL_POOL_SEGMENTED_MAX_CONCURRENCY
+        or execution.get("qualification_lane_count") != FULL_POOL_SEGMENTED_MAX_CONCURRENCY
+        or execution.get("qualification_provider_concurrency_reduction") is not False
+        or not _non_empty(execution.get("prompt_version"), "recovery prompt version")
+        or any(
+            _SHA256.fullmatch(
+                _non_empty(execution.get(field), f"recovery {field}")
+            )
+            is None
+            for field in ("provider_contract_sha256", "prompt_contract_sha256")
+        )
+    ):
+        raise ValueError("recovery execution contract is crossed")
+
+    failed_lineage = _mapping(payload.get("failed_run_lineage"), "failed run lineage")
+    if set(failed_lineage) != {
+        "v1_run_identity_hash",
+        "v1_execution_contract_sha256",
+        "continuation_id",
+        "continuation_identity_hash",
+        "cutoff_manifest_sha256",
+        "qualification_artifact_sha256",
+        "continuation_ledger_sha256",
+        "continuation_status_sha256",
+        "continuation_result_sha256",
+        "failure_audit_sha256",
+        "artifact_refs",
+    }:
+        raise ValueError("failed run lineage fields are not exact")
+    for field in (
+        "v1_run_identity_hash",
+        "v1_execution_contract_sha256",
+        "continuation_identity_hash",
+        "cutoff_manifest_sha256",
+        "qualification_artifact_sha256",
+        "continuation_ledger_sha256",
+        "continuation_status_sha256",
+        "continuation_result_sha256",
+        "failure_audit_sha256",
+    ):
+        if _SHA256.fullmatch(_non_empty(failed_lineage.get(field), field)) is None:
+            raise ValueError("failed run lineage SHA-256 is invalid")
+    _non_empty(failed_lineage.get("continuation_id"), "failed continuation id")
+    artifact_refs = _mapping(failed_lineage.get("artifact_refs"), "failed artifact refs")
+    if set(artifact_refs) != {
+        "cutover_plan",
+        "preflight",
+        "cutover",
+        "reconciliation",
+        "continuation_authorization",
+        "qualification",
+        "continuation_identity",
+        "cutoff_manifest",
+        "continuation_ledger",
+        "continuation_status",
+        "continuation_result",
+        "failure_audit",
+    }:
+        raise ValueError("failed artifact reference set is not exact")
+    for label, raw_ref in artifact_refs.items():
+        ref = _mapping(raw_ref, f"failed {label} artifact ref")
+        if set(ref) != {"path", "sha256", "bytes"}:
+            raise ValueError("failed artifact reference fields are not exact")
+        _non_empty(ref.get("path"), f"failed {label} path")
+        if (
+            _SHA256.fullmatch(_non_empty(ref.get("sha256"), f"failed {label} hash"))
+            is None
+            or _strict_non_negative_int(ref.get("bytes"), f"failed {label} bytes") < 1
+        ):
+            raise ValueError("failed artifact reference is invalid")
+
+    source_inventories = _mapping(payload.get("source_inventories"), "source inventories")
+    if set(source_inventories) != {"frozen_prefix", "failed_continuation"}:
+        raise ValueError("recovery source inventory fields are not exact")
+    for label in ("frozen_prefix", "failed_continuation"):
+        inventory = _mapping(source_inventories.get(label), f"{label} inventory")
+        for relative, raw_ref in inventory.items():
+            ref = _mapping(raw_ref, f"{label} inventory ref")
+            if (
+                set(ref) != {"relative_path", "sha256", "bytes"}
+                or ref.get("relative_path") != relative
+                or _SHA256.fullmatch(
+                    _non_empty(ref.get("sha256"), f"{label} inventory hash")
+                )
+                is None
+                or _strict_non_negative_int(ref.get("bytes"), f"{label} inventory bytes")
+                < 0
+            ):
+                raise ValueError("recovery source inventory reference is crossed")
+            relative_path = Path(relative)
+            if relative_path.is_absolute() or ".." in relative_path.parts:
+                raise ValueError("recovery source inventory path escapes its root")
+
     snapshot = _mapping(payload.get("recovery_snapshot"), "recovery snapshot")
     if set(snapshot) != {
         "durable_prefix_terminals",
@@ -872,6 +976,97 @@ def _validate_recovery_payload(payload: Mapping[str, object], *, artifact_path: 
     if positions[1] != positions[0] + 1:
         raise ValueError("recovery unresolved schedule order is crossed")
 
+    durable_prefix = _string_list(
+        snapshot.get("durable_prefix_terminals"), "recovery durable prefix terminals"
+    )
+    if len(durable_prefix) != len(set(durable_prefix)):
+        raise ValueError("recovery durable prefix terminal identity is duplicated")
+    durable_suffix = _mapping_sequence(
+        snapshot.get("durable_suffix_terminals"), "recovery durable suffix terminals"
+    )
+    seen_suffix: set[str] = set()
+    prior_sequence = 0
+    for ref in durable_suffix:
+        if set(ref) != {"pair_id", "ledger_sequence", "terminal_evidence_sha256"}:
+            raise ValueError("recovery durable suffix terminal fields are not exact")
+        pair_id = _non_empty(ref.get("pair_id"), "recovery durable suffix pair id")
+        sequence = _strict_non_negative_int(
+            ref.get("ledger_sequence"), "recovery durable suffix ledger sequence"
+        )
+        digest = _non_empty(
+            ref.get("terminal_evidence_sha256"),
+            "recovery durable suffix terminal hash",
+        )
+        if (
+            pair_id in seen_suffix
+            or sequence <= prior_sequence
+            or _SHA256.fullmatch(digest) is None
+        ):
+            raise ValueError("recovery durable suffix terminal order is crossed")
+        seen_suffix.add(pair_id)
+        prior_sequence = sequence
+
+    batch_snapshots = _mapping_sequence(
+        snapshot.get("batch_snapshots"), "recovery batch snapshots"
+    )
+    common_batch_fields = {
+        "time_step",
+        "state",
+        "candidate_schedule_pair_ids",
+        "candidate_schedule_positions",
+        "candidate_schedule_sha256",
+        "snapshot_ref",
+        "frozen_feedback_user_ids",
+        "committed_feedback_user_ids",
+        "durable_terminal_pair_ids",
+    }
+    for expected_time_step, batch in enumerate(batch_snapshots):
+        state = batch.get("state")
+        allowed_fields = (
+            common_batch_fields | {"spool_ref"}
+            if state == "committed" and "spool_ref" in batch
+            else common_batch_fields
+        )
+        pair_ids = _string_list(
+            batch.get("candidate_schedule_pair_ids"),
+            "recovery candidate schedule pair ids",
+        )
+        positions_raw = batch.get("candidate_schedule_positions")
+        if not isinstance(positions_raw, Sequence) or isinstance(
+            positions_raw, (str, bytes)
+        ):
+            raise ValueError("recovery candidate schedule positions must be a sequence")
+        schedule_positions = [
+            _strict_non_negative_int(value, "recovery candidate schedule position")
+            for value in positions_raw
+        ]
+        durable_ids = _string_list(
+            batch.get("durable_terminal_pair_ids"),
+            "recovery durable terminal pair ids",
+        )
+        if (
+            set(batch) != allowed_fields
+            or state not in {"committed", "active_incomplete"}
+            or batch.get("time_step") != expected_time_step
+            or len(pair_ids) != len(schedule_positions)
+            or len(pair_ids) != len(set(pair_ids))
+            or batch.get("candidate_schedule_sha256") != _sha256_json(pair_ids)
+            or durable_ids != pair_ids[: len(durable_ids)]
+            or (state == "active_incomplete" and expected_time_step != len(batch_snapshots) - 1)
+            or (state == "committed" and expected_time_step == len(batch_snapshots) - 1)
+        ):
+            raise ValueError("recovery batch snapshot fields or schedule are crossed")
+        _string_list(
+            batch.get("frozen_feedback_user_ids"), "recovery frozen feedback users"
+        )
+        _string_list(
+            batch.get("committed_feedback_user_ids"),
+            "recovery committed feedback users",
+        )
+        _mapping(batch.get("snapshot_ref"), "recovery batch snapshot ref")
+        if "spool_ref" in batch:
+            _mapping(batch.get("spool_ref"), "recovery batch spool ref")
+
     status = _mapping(payload.get("status_output"), "recovery status output")
     durable_progress = _mapping(status.get("durable_progress"), "recovery durable progress")
     prefix_terminals = _string_list(
@@ -901,6 +1096,51 @@ def _validate_recovery_payload(payload: Mapping[str, object], *, artifact_path: 
         "identity_hash",
     }:
         raise ValueError("recovery identity fields are not exact")
+    recovery_implementation = _mapping(
+        identity.get("recovery_implementation"), "recovery implementation"
+    )
+    if set(recovery_implementation) != {
+        "repository_commit",
+        "recovery_module_sha256",
+        "failed_run_loaded_repository_commit",
+        "failed_run_implementation_commit",
+        "failed_run_implementation_artifacts",
+    }:
+        raise ValueError("recovery implementation fields are not exact")
+    implementation_artifacts = _mapping(
+        recovery_implementation.get("failed_run_implementation_artifacts"),
+        "failed run implementation artifacts",
+    )
+    if set(implementation_artifacts) != {
+        "operator_module",
+        "continuation_module",
+        "operator_cli",
+    }:
+        raise ValueError("failed run implementation artifact set is not exact")
+    for digest in (
+        recovery_implementation.get("recovery_module_sha256"),
+        *implementation_artifacts.values(),
+    ):
+        if _SHA256.fullmatch(_non_empty(digest, "recovery implementation hash")) is None:
+            raise ValueError("recovery implementation hash is invalid")
+    for field in (
+        "repository_commit",
+        "failed_run_loaded_repository_commit",
+    ):
+        if re.fullmatch(
+            r"[0-9a-f]{40}",
+            _non_empty(recovery_implementation.get(field), field),
+        ) is None:
+            raise ValueError("recovery implementation repository commit is invalid")
+    if re.fullmatch(
+        r"[0-9a-f]{7,40}",
+        _non_empty(
+            recovery_implementation.get("failed_run_implementation_commit"),
+            "failed run implementation commit",
+        ),
+    ) is None:
+        raise ValueError("failed run implementation commit is invalid")
+
     identity_body = {key: value for key, value in identity.items() if key != "identity_hash"}
     if (
         identity.get("schema_version") != _RECOVERY_IDENTITY_SCHEMA

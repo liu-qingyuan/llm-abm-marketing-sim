@@ -39,7 +39,11 @@ from .full_pool_presentation import (
     _HISTORICAL_DIR,
     _HISTORICAL_MERMAID_FILENAMES,
 )
-from .full_pool_segmented_continuation import SegmentedFullPoolSourceFacts
+from .full_pool_segmented_continuation import (
+    SegmentedFullPoolSourceFacts,
+    _segmented_recovery_accounting_document,
+    _segmented_recovery_lineage_document,
+)
 from .providers.pi_subscription import PI_SUBSCRIPTION_MODEL_ALIASES
 
 ROBUSTNESS_PRODUCTION_MANIFEST_SCHEMA = "concurrent-robustness-production-release-manifest-v1"
@@ -161,6 +165,10 @@ _RELEASE_CONTRACT_V9_FIELDS = _RELEASE_CONTRACT_V8_FIELDS | {
     "segmented_source_facts",
     "physical_snapshot_identity_sha256",
 }
+_RELEASE_CONTRACT_V9_RECOVERY_FIELDS = _RELEASE_CONTRACT_V9_FIELDS | {
+    "recovery_lineage_facts",
+    "recovery_accounting_facts",
+}
 _SEGMENTED_SOURCE_FACT_FIELDS = frozenset(
     {
         "source_schema_version",
@@ -185,6 +193,36 @@ _SEGMENTED_SOURCE_FACT_FIELDS = frozenset(
         "unknown_pair_count",
         "reconciliation_retry_count",
         "source_artifact_sha256",
+    }
+)
+_RECOVERY_LINEAGE_FACT_FIELDS = frozenset(
+    {
+        "failed_v1_run_identity_hash",
+        "failed_continuation_identity_hash",
+        "failed_continuation_ledger_sha256",
+        "recovery_plan_sha256",
+        "recovery_plan_identity_hash",
+        "human_authorization_sha256",
+        "qualification_artifact_sha256",
+        "recovery_identity_hash",
+        "unresolved_pairs",
+        "configured_max_concurrency",
+        "failed_artifact_sha256",
+    }
+)
+_RECOVERY_ACCOUNTING_FACT_FIELDS = frozenset(
+    {
+        "logical_cap",
+        "historical_logical_count",
+        "logical_retry_charge",
+        "fresh_logical_count",
+        "logical_count",
+        "physical_cap",
+        "historical_physical_attempts",
+        "uncertainty_physical_charge",
+        "retry_actual_physical_attempts",
+        "continuation_actual_physical_attempts",
+        "aggregate_physical_attempts",
     }
 )
 _FULL_POOL_FORMAL_FACT_FIELDS = frozenset(
@@ -905,6 +943,25 @@ def _v9_segmented_fact_document(
     if set(document) != _SEGMENTED_SOURCE_FACT_FIELDS:
         raise ConcurrentRobustnessReleaseError("v9 segmented source fact fields are crossed")
     return document
+
+
+def _v9_recovery_fact_documents(
+    facts: SegmentedFullPoolSourceFacts,
+) -> tuple[dict[str, object] | None, dict[str, object] | None]:
+    if facts.recovery_lineage is None or facts.recovery_accounting is None:
+        if facts.recovery_lineage is not None or facts.recovery_accounting is not None:
+            raise ConcurrentRobustnessReleaseError(
+                "v9 recovery lineage and accounting must close together"
+            )
+        return None, None
+    lineage = _segmented_recovery_lineage_document(facts.recovery_lineage)
+    accounting = _segmented_recovery_accounting_document(facts.recovery_accounting)
+    if (
+        set(lineage) != _RECOVERY_LINEAGE_FACT_FIELDS
+        or set(accounting) != _RECOVERY_ACCOUNTING_FACT_FIELDS
+    ):
+        raise ConcurrentRobustnessReleaseError("v9 recovery fact fields are crossed")
+    return lineage, accounting
 
 
 def _v9_base_evidence(
@@ -1680,6 +1737,9 @@ def _promote_full_pool_v9_release(
         evidence.formal
     )
     segmented_facts = _v9_segmented_fact_document(evidence.segmented)
+    recovery_lineage_facts, recovery_accounting_facts = _v9_recovery_fact_documents(
+        evidence.segmented
+    )
 
     destination.parent.mkdir(parents=True, exist_ok=True)
     contract_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1707,7 +1767,7 @@ def _promote_full_pool_v9_release(
         )
         release_hashes = _flat_file_hashes(staging)
         snapshot_identity = _physical_snapshot_identity(release_hashes)
-        contract_document = {
+        contract_document: dict[str, object] = {
             "schema_version": ROBUSTNESS_RELEASE_CONTRACT_SCHEMA_V9,
             "release_purpose": "full_pool_segmented_formal_research",
             "release_id": release_id,
@@ -1755,7 +1815,17 @@ def _promote_full_pool_v9_release(
             "production_deploy_eligible": True,
             "artifact_sha256": dict(sorted(release_hashes.items())),
         }
-        if set(contract_document) != _RELEASE_CONTRACT_V9_FIELDS:
+        if recovery_lineage_facts is not None and recovery_accounting_facts is not None:
+            contract_document.update(
+                {
+                    "recovery_lineage_facts": recovery_lineage_facts,
+                    "recovery_accounting_facts": recovery_accounting_facts,
+                }
+            )
+            expected_contract_fields = _RELEASE_CONTRACT_V9_RECOVERY_FIELDS
+        else:
+            expected_contract_fields = _RELEASE_CONTRACT_V9_FIELDS
+        if set(contract_document) != expected_contract_fields:
             raise ConcurrentRobustnessReleaseError("v9 release contract fields are crossed")
         contract_staging.write_bytes(_json_bytes(contract_document))
         if destination.exists() or contract_path.exists():
@@ -2042,9 +2112,14 @@ def _validate_full_pool_v9_production_release(
     snapshot_dir: str | Path | None = None,
 ) -> dict[str, object]:
     root = _real_directory(Path(repo_root), "repository root")
+    contract_fields = frozenset(contract_document)
     if (
         contract_document.get("schema_version") != ROBUSTNESS_RELEASE_CONTRACT_SCHEMA_V9
-        or set(contract_document) != _RELEASE_CONTRACT_V9_FIELDS
+        or contract_fields
+        not in {
+            _RELEASE_CONTRACT_V9_FIELDS,
+            _RELEASE_CONTRACT_V9_RECOVERY_FIELDS,
+        }
     ):
         raise ConcurrentRobustnessReleaseError(
             "v9 release contract fields are missing, unexpected, or schema-confused"
@@ -2145,6 +2220,27 @@ def _validate_full_pool_v9_production_release(
         evidence.formal
     )
     segmented_facts = _v9_segmented_fact_document(evidence.segmented)
+    recovery_lineage_facts, recovery_accounting_facts = _v9_recovery_fact_documents(
+        evidence.segmented
+    )
+    if recovery_lineage_facts is None or recovery_accounting_facts is None:
+        recovery_facts_exact = contract_fields == _RELEASE_CONTRACT_V9_FIELDS
+    else:
+        supplied_recovery_lineage = _object_mapping(
+            contract_document.get("recovery_lineage_facts"),
+            "v9 recovery lineage facts",
+        )
+        supplied_recovery_accounting = _object_mapping(
+            contract_document.get("recovery_accounting_facts"),
+            "v9 recovery accounting facts",
+        )
+        recovery_facts_exact = (
+            contract_fields == _RELEASE_CONTRACT_V9_RECOVERY_FIELDS
+            and set(supplied_recovery_lineage) == _RECOVERY_LINEAGE_FACT_FIELDS
+            and set(supplied_recovery_accounting) == _RECOVERY_ACCOUNTING_FACT_FIELDS
+            and supplied_recovery_lineage == recovery_lineage_facts
+            and supplied_recovery_accounting == recovery_accounting_facts
+        )
     supplied_full_pool = _object_mapping(
         contract_document.get("full_pool_formal_facts"), "v9 Full-Pool Formal facts"
     )
@@ -2166,6 +2262,7 @@ def _validate_full_pool_v9_production_release(
         or supplied_historical != historical_formal_facts
         or supplied_study != historical_study_facts
         or supplied_segmented != segmented_facts
+        or not recovery_facts_exact
     ):
         raise ConcurrentRobustnessReleaseError(
             "v9 segmented, model, usage, count, or historical facts are crossed"

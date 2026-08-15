@@ -2289,6 +2289,18 @@ def _full_pool_presentation_inventory(inputs: _FullPoolCandidateInputs) -> dict[
         time_step = entry.get("time_step")
         row_count = entry.get("row_count")
         byte_count = entry.get("bytes")
+        expected_partition_rows: int | None = None
+        if (
+            isinstance(message_id, str)
+            and message_id in inputs.source.contract.message_ids
+            and type(time_step) is int
+            and 0 <= time_step < inputs.source.contract.horizon
+        ):
+            expected_partition_rows = (
+                inputs.source.contract.per_message_capacity
+                if time_step < inputs.source.contract.horizon - 1
+                else inputs.source.contract.expected_final_batch_pairs_per_message
+            )
         if (
             not isinstance(relative_path, str)
             or not relative_path
@@ -2297,7 +2309,8 @@ def _full_pool_presentation_inventory(inputs: _FullPoolCandidateInputs) -> dict[
             or type(time_step) is not int
             or time_step < 0
             or type(row_count) is not int
-            or row_count <= 0
+            or expected_partition_rows is None
+            or row_count != expected_partition_rows
             or type(byte_count) is not int
             or byte_count <= 0
             or relative_path in partition_paths

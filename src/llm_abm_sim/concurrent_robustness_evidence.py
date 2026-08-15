@@ -2188,6 +2188,116 @@ def _validate_segmented_formal_release_facts(
         closure.source_lineage.get("full_pool"),
         "segmented Full-Pool source lineage",
     )
+    recovery_lineage = segmented.recovery_lineage
+    recovery_accounting = segmented.recovery_accounting
+    if (recovery_lineage is None) != (recovery_accounting is None):
+        raise ConcurrentRobustnessEvidenceError(
+            "segmented recovery lineage and accounting must close together"
+        )
+    if recovery_lineage is None or recovery_accounting is None:
+        execution_accounting_exact = (
+            segmented.external_request_invocations
+            == segmented.physical_attempts - segmented.migration_unknown_physical_charge
+            and segmented.unknown_pair_count in {0, 1}
+            and segmented.reconciliation_retry_count == segmented.unknown_pair_count
+            and segmented.migration_unknown_physical_charge
+            == (3 if segmented.unknown_pair_count else 0)
+            and set(segmented.artifact_hashes)
+            == {
+                "candidate_rows.jsonl",
+                "pair_rows.jsonl",
+                "terminal_rows.jsonl",
+                "steps.jsonl",
+                "concurrency_qualification.json",
+            }
+        )
+    else:
+        unresolved = recovery_lineage.unresolved_pairs
+        execution_accounting_exact = (
+            recovery_lineage.failed_v1_run_identity_hash == segmented.prefix_identity_hash
+            and recovery_lineage.recovery_identity_hash
+            == segmented.continuation_identity_hash
+            and recovery_lineage.qualification_artifact_sha256
+            == segmented.concurrency_qualification_artifact_sha256
+            and recovery_lineage.configured_max_concurrency == 10
+            and recovery_lineage.unresolved_pair_ids
+            == (
+                "70400636033:message_1:5",
+                "70401299326:message_1:5",
+            )
+            and tuple(pair.classification for pair in unresolved)
+            == (
+                "missing_terminal_evidence",
+                "blocked_by_prior_canonical_gap",
+            )
+            and tuple(pair.canonical_schedule_position for pair in unresolved)
+            == (18_998, 18_999)
+            and all(pair.historical_physical_attempts == 1 for pair in unresolved)
+            and all(pair.uncertainty_physical_charge == 3 for pair in unresolved)
+            and all(pair.logical_retry_charge == 0 for pair in unresolved)
+            and all(pair.terminal_row_id == f"{pair.pair_id}:primary" for pair in unresolved)
+            and recovery_accounting.logical_cap == FULL_POOL_FORMAL_LOGICAL_JUDGMENT_CAP
+            and recovery_accounting.historical_logical_count == 19_000
+            and recovery_accounting.logical_retry_charge == 0
+            and recovery_accounting.fresh_logical_count == 90_200
+            and recovery_accounting.logical_count == FULL_POOL_FORMAL_LOGICAL_JUDGMENT_CAP
+            and recovery_accounting.physical_cap == FULL_POOL_FORMAL_PHYSICAL_ATTEMPT_CAP
+            and recovery_accounting.historical_physical_attempts == 19_117
+            and recovery_accounting.uncertainty_physical_charge == 6
+            and 2 <= recovery_accounting.retry_actual_physical_attempts <= 6
+            and 90_200
+            <= recovery_accounting.continuation_actual_physical_attempts
+            <= 100_995
+            and recovery_accounting.aggregate_physical_attempts
+            == segmented.physical_attempts
+            and segmented.external_request_invocations
+            == segmented.physical_attempts - recovery_accounting.uncertainty_physical_charge
+            and segmented.unknown_pair_count == 1
+            and segmented.reconciliation_retry_count == 3
+            and segmented.migration_unknown_physical_charge == 3
+            and set(segmented.artifact_hashes)
+            == {
+                "candidate_rows.jsonl",
+                "pair_rows.jsonl",
+                "terminal_rows.jsonl",
+                "steps.jsonl",
+                "concurrency_qualification.json",
+                "recovery-plan.json",
+                "human-authorization.json",
+            }
+            and set(recovery_lineage.failed_artifact_hashes)
+            == {
+                "cutover_plan",
+                "preflight",
+                "cutover",
+                "reconciliation",
+                "continuation_authorization",
+                "qualification",
+                "continuation_identity",
+                "cutoff_manifest",
+                "continuation_ledger",
+                "continuation_status",
+                "continuation_result",
+                "failure_audit",
+            }
+            and recovery_lineage.failed_artifact_hashes.get("continuation_ledger")
+            == recovery_lineage.failed_continuation_ledger_sha256
+            and recovery_lineage.failed_artifact_hashes.get("qualification")
+            == recovery_lineage.qualification_artifact_sha256
+            and all(
+                _SHA256.fullmatch(value)
+                for value in (
+                    recovery_lineage.failed_continuation_identity_hash,
+                    recovery_lineage.failed_continuation_ledger_sha256,
+                    recovery_lineage.recovery_plan_sha256,
+                    recovery_lineage.recovery_plan_identity_hash,
+                    recovery_lineage.human_authorization_sha256,
+                    recovery_lineage.qualification_artifact_sha256,
+                    recovery_lineage.recovery_identity_hash,
+                    *recovery_lineage.failed_artifact_hashes.values(),
+                )
+            )
+        )
     exact_segmented = (
         segmented.source_root == closure.full_pool_source_path
         and segmented.source_schema_version == "full-pool-segmented-source-v2"
@@ -2240,20 +2350,14 @@ def _validate_segmented_formal_release_facts(
         and segmented.physical_attempt_cap == FULL_POOL_FORMAL_PHYSICAL_ATTEMPT_CAP
         and segmented.provider_responses == FULL_POOL_FORMAL_LOGICAL_JUDGMENT_CAP
         and segmented.successful_decisions == FULL_POOL_FORMAL_LOGICAL_JUDGMENT_CAP
-        and segmented.external_request_invocations
-        == segmented.physical_attempts - segmented.migration_unknown_physical_charge
+        and execution_accounting_exact
         and dict(segmented.observed_model_counts)
         == {FULL_POOL_FORMAL_REQUIRED_OBSERVED_MODEL: FULL_POOL_FORMAL_LOGICAL_JUDGMENT_CAP}
         and segmented.usage_complete_response_count == FULL_POOL_FORMAL_LOGICAL_JUDGMENT_CAP
         and segmented.usage_missing_response_count == 0
         and segmented.usage_malformed_response_count == 0
-        and segmented.unknown_pair_count in {0, 1}
-        and segmented.reconciliation_retry_count == segmented.unknown_pair_count
-        and segmented.migration_unknown_physical_charge
-        == (3 if segmented.unknown_pair_count else 0)
         and segmented.live_api_triggered is True
         and segmented.production_deploy_eligible is False
-        and len(segmented.artifact_hashes) == 4
         and all(_SHA256.fullmatch(value) for value in segmented.artifact_hashes.values())
     )
     mirrored_source = (
@@ -2324,10 +2428,8 @@ def validate_segmented_full_pool_production_evidence(
     historical_study_root: str | Path,
     candidate_dir: str | Path,
     implementation_commit: str,
-    formal_facts: FullPoolFormalReleaseFacts | None = None,
-    segmented_facts: SegmentedFullPoolSourceFacts | None = None,
 ) -> SegmentedFullPoolProductionEvidenceFacts:
-    """Close v9 lineages; injected typed facts are reserved for deterministic tests."""
+    """Close v9 lineages only from the explicit persisted production artifacts."""
     root = _real_directory(Path(repo_root), "repository root")
     closure_file = _repo_file(root, Path(closure_path), "Full-Pool presentation closure")
     closure_document = _json_object(closure_file)
@@ -2355,23 +2457,15 @@ def validate_segmented_full_pool_production_evidence(
         raise ConcurrentRobustnessEvidenceError(
             "segmented Full-Pool production implementation commit is crossed"
         )
-    selected_segmented = (
-        _read_closed_segmented_full_pool_source(
-            closure.full_pool_source_path,
-            manifest_sha256=closure.full_pool_source_manifest_sha256,
-        ).facts
-        if segmented_facts is None
-        else segmented_facts
-    )
+    selected_segmented = _read_closed_segmented_full_pool_source(
+        closure.full_pool_source_path,
+        manifest_sha256=closure.full_pool_source_manifest_sha256,
+    ).facts
     if not isinstance(selected_segmented, SegmentedFullPoolSourceFacts):
         raise ConcurrentRobustnessEvidenceError(
             "segmented Full-Pool source facts must use the typed Evidence contract"
         )
-    selected_formal = (
-        _segmented_formal_release_facts(closure, selected_segmented)
-        if formal_facts is None
-        else formal_facts
-    )
+    selected_formal = _segmented_formal_release_facts(closure, selected_segmented)
     if not isinstance(selected_formal, FullPoolFormalReleaseFacts):
         raise ConcurrentRobustnessEvidenceError(
             "segmented Full-Pool Formal facts must use the typed Evidence contract"

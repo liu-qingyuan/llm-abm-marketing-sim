@@ -1,6 +1,6 @@
 # Full-Pool Segmented Continuation Runtime
 
-本 note 只描述 source-side 的离线可验证增量。它不改变 Full-Pool v1 contract，不执行 live migration，不生成 Report/Release v9，也不声明 production cutover 已发生。
+本 note 描述 segmented source runtime、显式 recovery，以及 source-v2 到 Report/Evidence/Release v9 的离线 persisted projection。它不改变 Full-Pool v1 contract，不提供 live authorization，不执行 Provider、SSH 或 canonical deployment，也不声明 production recovery/cutover 已完成。
 
 ## Module 与 Interface
 
@@ -235,6 +235,12 @@ Module 在新 workspace 中重新验证并只读导入 frozen prefix、失败 co
 
 recovered `source-v2` 继续物化完整 candidate、pair、terminal 和 step rows，同时复制 hash-bound recovery plan、human authorization 与既有 concurrency qualification，并在 manifest 分开披露 failed-run/recovery lineage、historical physical、六次 uncertainty charge、retry actual、later actual 和 aggregate accounting。source rename 或 status write 中断只能从 durable source anchor 零调用完成；删除或篡改 recovery/qualification artifact 会失败关闭。该 source 固定 `production_deploy_eligible=false`；v9 persisted consumer、Report/Evidence/Release、真实 Provider run 与部署属于后续 Module 或显式 operational authorization。
 
+## Recovery lineage 的 persisted consumer
+
+versioned source reader 现在 exact 区分普通 segmented source-v2 与 recovered source-v2。recovered 分支从 source 内 hash-bound 的 recovery plan、human authorization、十 lane qualification，以及只读 failed continuation/frozen prefix artifacts 重新闭合 Formal identity；调用方不能传入或覆盖 typed Formal facts。reader 同时验证两个有序 unresolved 的 classification、canonical schedule 与 retry terminal mapping，分别保留 historical physical、六次 uncertainty charge、retry actual、later actual 和 aggregate physical accounting。
+
+Report candidate、Evidence closure 与 Release v9 复用同一 typed recovery lineage/accounting 投影。v9 recovery contract 在安装后重新读取 persisted source 并逐字段 round-trip；Validation/mock/rule-based source 仍保持 `production_deploy_eligible=false`，不能通过 promotion、standalone validator 或 deployment preflight。v8、历史 sources、immutable v7 与旧七张 Mermaid masters 保持原合同和原 bytes。
+
 ## 局部边界与后续 seam
 
-本 Module 负责从任意单一 active cutoff 连续运行到 horizon，并关闭完整 source-v2；Report/Evidence adapter 后续只消费 source-v2，不读取运行中 workspace。recovery-preflight 只准备 nondeployable 计划；两者都不执行 Report/Release v9 或部署，也不修改冻结的 v1 prefix 或失败 continuation。
+Source Module 负责从任意单一 active cutoff 连续运行到 horizon 并关闭完整 source-v2；recovery-preflight 只准备 nondeployable 计划，recovery consumer 只消费外部 persisted authorization。Report/Evidence/Release 只读取已关闭 source-v2，不读取运行中 workspace；这些 Module 都不创建 live authorization，也不执行 Provider、SSH 或 canonical deployment。

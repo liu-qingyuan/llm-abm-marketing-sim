@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import inspect
 import json
 from dataclasses import replace
 from pathlib import Path
@@ -15,6 +16,7 @@ from llm_abm_sim.full_pool_segmented_continuation import (
     FullPoolReconciliationAuthorization,
     FullPoolSegmentedContinuation,
     SegmentedContinuationStatus,
+    SegmentedRecoveryUnresolvedPairFacts,
     _read_closed_segmented_full_pool_source,
     _read_segmented_formal_lineage,
     _scan_segmented_candidates,
@@ -22,6 +24,7 @@ from llm_abm_sim.full_pool_segmented_continuation import (
     _validate_segmented_cutoff_order,
     _validate_segmented_reconciliation,
 )
+from llm_abm_sim.full_pool_segmented_recovery_execution import FullPoolSegmentedRecovery
 from llm_abm_sim.safe_serialization import safe_data
 from tests.integration.test_full_pool_formal_experiment import (
     _formal_execution_contract,
@@ -32,6 +35,12 @@ from tests.integration.test_full_pool_presentation_bundle import _historical_can
 from tests.integration.test_full_pool_segmented_multibatch import (
     _LaneAdapter,
     _mid_batch_prefix,
+)
+from tests.integration.test_full_pool_segmented_recovery_execution import (
+    _clock as _recovery_clock,
+)
+from tests.integration.test_full_pool_segmented_recovery_execution import (
+    _prepared_recovery,
 )
 
 
@@ -44,6 +53,20 @@ def _source(tmp_path: Path) -> tuple[Path, str]:
         adapter_factory=lambda _lane_id: _LaneAdapter([]),
     )
     assert result.status is SegmentedContinuationStatus.COMPLETE
+    assert result.source_root is not None
+    assert result.source_manifest_sha256 is not None
+    return result.source_root, result.source_manifest_sha256
+
+
+def _recovered_source(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> tuple[Path, str]:
+    request, _failed = _prepared_recovery(tmp_path, monkeypatch)
+    result = FullPoolSegmentedRecovery(now=_recovery_clock).run(
+        request,
+        adapter_factory=lambda _lane_id: _LaneAdapter([]),
+    )
     assert result.source_root is not None
     assert result.source_manifest_sha256 is not None
     return result.source_root, result.source_manifest_sha256
@@ -185,6 +208,14 @@ def _mid_batch_unknown_prefix(tmp_path: Path, *, pending_attempts: int) -> tuple
         _canonical(old_status), encoding="utf-8"
     )
     return prefix, unknown_pair_id
+
+
+def test_v9_evidence_interface_has_no_caller_formal_fact_injection() -> None:
+    parameters = inspect.signature(
+        evidence_module.validate_segmented_full_pool_production_evidence
+    ).parameters
+    assert "formal_facts" not in parameters
+    assert "segmented_facts" not in parameters
 
 
 def test_segmented_formal_lineage_recloses_contract_authorization_qualification_and_p0(
@@ -613,6 +644,262 @@ def test_segmented_source_v2_composes_candidate_and_evidence_closure_without_cal
         )
     assert not rejected_destination.exists()
     assert not rejected_contract.exists()
+
+
+def test_recovered_source_composes_candidate_and_evidence_closure_but_cannot_promote(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source, manifest_sha256 = _recovered_source(tmp_path / "recovered", monkeypatch)
+    historical_formal, historical_study, historical_candidate = _historical_candidate(
+        tmp_path / "historical-recovery"
+    )
+    bundle = tmp_path / "recovery-bundle"
+    report_module._REPORT_PRESENTATION.compose_full_pool_presentation_bundle(
+        full_pool_source_root=source,
+        full_pool_manifest_sha256=manifest_sha256,
+        historical_formal_root=historical_formal,
+        historical_study_root=historical_study,
+        historical_candidate_dir=historical_candidate,
+        destination_dir=bundle,
+    )
+    candidate = tmp_path / "recovery-candidate"
+    report_module._REPORT_PRESENTATION.compose_full_pool_candidate(
+        full_pool_source_root=source,
+        full_pool_manifest_sha256=manifest_sha256,
+        historical_formal_root=historical_formal,
+        historical_study_root=historical_study,
+        presentation_bundle_dir=bundle,
+        implementation_commit="abcdef0",
+        destination_dir=candidate,
+    )
+    payload = json.loads(
+        (candidate / "concurrent_robustness_report_payload.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    segmented = payload["source_lineage"]["full_pool"]["segmented_execution"]
+    closed = _read_closed_segmented_full_pool_source(
+        source,
+        manifest_sha256=manifest_sha256,
+    )
+    release_lineage, release_accounting = release_module._v9_recovery_fact_documents(
+        closed.facts
+    )
+    assert segmented["recovery_lineage"] == release_lineage
+    assert segmented["recovery_accounting"] == release_accounting
+    assert [
+        row["pair_id"] for row in segmented["recovery_lineage"]["unresolved_pairs"]
+    ] == ["u7:message_2:1", "u8:message_2:1"]
+    assert segmented["recovery_accounting"]["uncertainty_physical_charge"] == 6
+    assert segmented["recovery_accounting"]["logical_retry_charge"] == 0
+    assert payload["production_deploy_eligible"] is False
+
+    closure_path = tmp_path / "recovery-closure.json"
+    closure = evidence_module.close_full_pool_presentation(
+        repo_root=tmp_path,
+        full_pool_source_root=source,
+        full_pool_manifest_sha256=manifest_sha256,
+        historical_formal_root=historical_formal,
+        historical_study_root=historical_study,
+        presentation_bundle_dir=bundle,
+        candidate_dir=candidate,
+        destination_path=closure_path,
+        implementation_commit="abcdef0",
+    )
+    closed_segmented = closure.source_lineage["full_pool"]["segmented_execution"]
+    assert closed_segmented["recovery_lineage"] == segmented["recovery_lineage"]
+    assert closed_segmented["recovery_accounting"] == segmented["recovery_accounting"]
+    assert closure.provider_calls_during_closure == 0
+    assert closure.production_deploy_eligible is False
+
+    destination = tmp_path / "forbidden-recovery-v9"
+    contract_path = tmp_path / "forbidden-recovery-v9.json"
+    with pytest.raises(
+        release_module.ConcurrentRobustnessReleaseError,
+        match="non-live|non-Formal|incomplete",
+    ):
+        release_module.promote_concurrent_robustness_release(
+            repo_root=tmp_path,
+            formal_root=historical_formal,
+            study_root=historical_study,
+            workspace_root=None,
+            candidate_dir=candidate,
+            execution_contract_path=None,
+            destination_dir=destination,
+            release_contract_path=contract_path,
+            release_id="recovery-validation-rejected",
+            presentation_closure_path=closure_path,
+            full_pool_source_root=source,
+            full_pool_manifest_sha256=manifest_sha256,
+            implementation_commit="abcdef0",
+        )
+    assert not destination.exists()
+    assert not contract_path.exists()
+
+
+def test_recovery_typed_facts_close_the_exact_issue_205_production_accounting(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source, manifest_sha256 = _recovered_source(
+        tmp_path / "recovery-formal-facts",
+        monkeypatch,
+    )
+    historical_formal, historical_study, historical_candidate = _historical_candidate(
+        tmp_path / "historical-formal-facts"
+    )
+    bundle = tmp_path / "recovery-formal-bundle"
+    report_module._REPORT_PRESENTATION.compose_full_pool_presentation_bundle(
+        full_pool_source_root=source,
+        full_pool_manifest_sha256=manifest_sha256,
+        historical_formal_root=historical_formal,
+        historical_study_root=historical_study,
+        historical_candidate_dir=historical_candidate,
+        destination_dir=bundle,
+    )
+    candidate = tmp_path / "recovery-formal-candidate"
+    report_module._REPORT_PRESENTATION.compose_full_pool_candidate(
+        full_pool_source_root=source,
+        full_pool_manifest_sha256=manifest_sha256,
+        historical_formal_root=historical_formal,
+        historical_study_root=historical_study,
+        presentation_bundle_dir=bundle,
+        implementation_commit="abcdef0",
+        destination_dir=candidate,
+    )
+    closure = evidence_module.close_full_pool_presentation(
+        repo_root=tmp_path,
+        full_pool_source_root=source,
+        full_pool_manifest_sha256=manifest_sha256,
+        historical_formal_root=historical_formal,
+        historical_study_root=historical_study,
+        presentation_bundle_dir=bundle,
+        candidate_dir=candidate,
+        destination_path=tmp_path / "recovery-formal-closure.json",
+        implementation_commit="abcdef0",
+    )
+    closed = _read_closed_segmented_full_pool_source(
+        source,
+        manifest_sha256=manifest_sha256,
+    )
+    assert closed.facts.recovery_lineage is not None
+    assert closed.facts.recovery_accounting is not None
+    retry_ids = (
+        "70400636033:message_1:5",
+        "70401299326:message_1:5",
+    )
+    recovery_lineage = replace(
+        closed.facts.recovery_lineage,
+        failed_v1_run_identity_hash=closed.facts.prefix_identity_hash,
+        recovery_identity_hash=closed.facts.continuation_identity_hash,
+        unresolved_pairs=(
+            SegmentedRecoveryUnresolvedPairFacts(
+                pair_id=retry_ids[0],
+                canonical_schedule_position=18_998,
+                classification="missing_terminal_evidence",
+                historical_physical_attempts=1,
+                uncertainty_physical_charge=3,
+                logical_retry_charge=0,
+                terminal_row_id=f"{retry_ids[0]}:primary",
+            ),
+            SegmentedRecoveryUnresolvedPairFacts(
+                pair_id=retry_ids[1],
+                canonical_schedule_position=18_999,
+                classification="blocked_by_prior_canonical_gap",
+                historical_physical_attempts=1,
+                uncertainty_physical_charge=3,
+                logical_retry_charge=0,
+                terminal_row_id=f"{retry_ids[1]}:primary",
+            ),
+        ),
+    )
+    recovery_accounting = replace(
+        closed.facts.recovery_accounting,
+        historical_logical_count=19_000,
+        fresh_logical_count=90_200,
+        logical_count=109_200,
+        historical_physical_attempts=19_117,
+        uncertainty_physical_charge=6,
+        retry_actual_physical_attempts=2,
+        continuation_actual_physical_attempts=90_200,
+        aggregate_physical_attempts=109_325,
+    )
+    segmented = replace(
+        closed.facts,
+        configuration_profile="production",
+        evidence_profile="formal_live",
+        provider_transport=evidence_module.FULL_POOL_FORMAL_TRANSPORT,
+        adapter_identity=evidence_module.FULL_POOL_FORMAL_ADAPTER_IDENTITY,
+        requested_model=evidence_module.FULL_POOL_FORMAL_REQUESTED_MODEL,
+        qualified_observed_model=evidence_module.FULL_POOL_FORMAL_REQUIRED_OBSERVED_MODEL,
+        formal_execution_contract_sha256="1" * 64,
+        authorization_artifact_sha256="2" * 64,
+        qualification_artifact_sha256="3" * 64,
+        observed_model_evidence_sha256="4" * 64,
+        prompt_variant_id="P0",
+        prompt_version="jinjiang-concurrent-message-primary-prompt-v1",
+        prompt_canonical_hash=(
+            evidence_module.CONCURRENT_ROBUSTNESS_PROMPT_REGISTRY.resolve(
+                "jinjiang-concurrent-message-primary-prompt-v1"
+            ).canonical_hash
+        ),
+        distinct_users=36_400,
+        eligible_pairs=109_200,
+        exposures=109_200,
+        primary_terminals=109_200,
+        committed_batches=30,
+        candidate_ranking_rows=1_691_730,
+        provider_failed_terminals=0,
+        serial_prefix_terminal_count=8_782,
+        concurrent_suffix_terminal_count=100_418,
+        logical_judgments=109_200,
+        physical_attempts=109_325,
+        physical_attempt_cap=120_120,
+        provider_responses=109_200,
+        successful_decisions=109_200,
+        external_request_invocations=109_319,
+        observed_model_counts={"gpt-5.6-sol": 109_200},
+        usage_complete_response_count=109_200,
+        usage_missing_response_count=0,
+        usage_malformed_response_count=0,
+        migration_unknown_physical_charge=3,
+        unknown_pair_count=1,
+        reconciliation_retry_count=3,
+        live_api_triggered=True,
+        recovery_lineage=recovery_lineage,
+        recovery_accounting=recovery_accounting,
+    )
+    formal = replace(
+        evidence_module._segmented_formal_release_facts(closure, segmented),
+        historical_formal_source_kind="formal",
+        historical_formal_users=1_000,
+        historical_formal_exposures=1_800,
+        historical_primary_terminals=1_800,
+        historical_shadow_terminals=1_800,
+        historical_trace_rows=1_800,
+        historical_study_profile="formal_live",
+        historical_study_evidence_profile="formal_live",
+        historical_study_cell_count=16,
+        historical_study_logical_judgments=28_800,
+    )
+
+    evidence_module._validate_segmented_formal_release_facts(
+        segmented,
+        formal,
+        closure=closure,
+    )
+    release_lineage, release_accounting = release_module._v9_recovery_fact_documents(
+        segmented
+    )
+    assert release_lineage is not None
+    assert release_accounting is not None
+    unresolved_documents = release_lineage["unresolved_pairs"]
+    assert isinstance(unresolved_documents, list)
+    first_unresolved = unresolved_documents[0]
+    assert isinstance(first_unresolved, dict)
+    assert first_unresolved["terminal_row_id"] == "70400636033:message_1:5:primary"
+    assert release_accounting["aggregate_physical_attempts"] == 109_325
 
 
 def test_v9_promotes_and_validates_an_exact_local_release_with_typed_fixture_facts(
