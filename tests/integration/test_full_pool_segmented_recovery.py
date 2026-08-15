@@ -57,9 +57,10 @@ def _rewrite_ledger(path: Path, mutate: Any) -> None:
 class _FailingLaneAdapter(_LaneAdapter):
     external_request_invocations = 0
 
-    def __init__(self, lane_id: int, calls: list[str]) -> None:
+    def __init__(self, lane_id: int, calls: list[str], *, fail_lane_id: int = 7) -> None:
         super().__init__(calls)
         self.lane_id = lane_id
+        self.fail_lane_id = fail_lane_id
         self.external_request_invocations = 0
 
     def decide(
@@ -72,7 +73,7 @@ class _FailingLaneAdapter(_LaneAdapter):
     ) -> EngageDecision:
         self.external_request_invocations += 1
         decision = super().decide(post, profile, peer_context, platform_context, time_step)
-        if time_step == 1 and self.lane_id == 7:
+        if time_step == 1 and self.lane_id == self.fail_lane_id:
             raise ProviderResponseProvenanceUnknown("offline injected recovery fixture gap")
         return decision
 
@@ -122,12 +123,17 @@ def _write_qualification(
 def _failed_run(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch | None = None,
+    *,
+    delivery_capacity: int = 4,
+    sample_size: int = 7,
+    fail_lane_id: int = 7,
 ) -> tuple[SegmentedRecoveryPlanRequest, dict[str, Any]]:
     prefix, dataset, _ = _mid_batch_prefix(
         tmp_path / "fixture",
         horizon=3,
-        delivery_capacity=4,
+        delivery_capacity=delivery_capacity,
         terminal_limit=1,
+        sample_size=sample_size,
     )
     runtime = json.loads((prefix / "concurrent_message_execution_run_identity.json").read_text())
     formal = json.loads((prefix / "full_pool_execution_identity.json").read_text())
@@ -200,7 +206,11 @@ def _failed_run(
         request.continuation_workspace,
         continuation_id=request.continuation_id,
         dataset_dir=request.dataset_dir,
-        adapter_factory=lambda lane_id: _FailingLaneAdapter(lane_id, calls),
+        adapter_factory=lambda lane_id: _FailingLaneAdapter(
+            lane_id,
+            calls,
+            fail_lane_id=fail_lane_id,
+        ),
         first_wave_observer=qualify,
     )
     assert result.status.value == "reconciliation_required"

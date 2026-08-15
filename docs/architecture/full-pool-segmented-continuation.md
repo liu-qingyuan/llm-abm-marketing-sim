@@ -225,7 +225,15 @@ Module 重新验证 cutover artifact chain、frozen-prefix inventory、exact ten
 
 计划账务分别保留 historical logical/physical、每个 unresolved 的完整三次 uncertainty charge、future retry physical attempts 和 `logical_retry_charge=0`。输出只能在独立新路径 create once，生命周期固定为 `recovery_prepared`，并持续声明 configured concurrency `10`、recorded worker state、durable progress、unresolved count、`provider_calls=0` 与 `production_deploy_eligible=false`。失败 continuation、frozen prefix、qualification、result 和 audit 在发布前后重新 inventory；任一变化会删除候选计划并失败关闭。
 
-该 preflight 不创建 human authorization，也不重调 unresolved pair。显式授权消费、retry 与后续 source-v2 closure 属于独立后续 Module。
+该 preflight 不创建 human authorization，也不重调 unresolved pair。
+
+## 显式双未决 recovery consumer
+
+package-internal `FullPoolSegmentedRecovery` 是 `recovery_prepared` 之后唯一的授权消费 Interface。调用方只提供 persisted recovery plan/hash、外部 create-once human authorization/hash，以及授权中 exact 绑定的新 recovery identity/workspace；Module 不创建授权，也不从 issue label、环境变量或调用方布尔值推定授权。授权在任何 Adapter/client 创建前绑定两个有序 unresolved IDs、十 lanes、Provider/model/P0 request contract、每 pair 三次 retry window、合计六次 uncertainty charge 和 109,200/120,120 caps；missing、tampered、expired 或 crossed artifact 均零调用拒绝。
+
+Module 在新 workspace 中重新验证并只读导入 frozen prefix、失败 continuation、十 lane qualification、全部 durable terminals、committed batch chunks、candidate schedules 与 feedback barriers。恢复先单独 dispatch 两个 unresolved pair，logical retry charge 固定为零；随后回到十条隔离 Adapter lanes、canonical drain、full-batch barrier、next-batch-only feedback 和 dynamic pre-call cap guard。旧 workspace 与 plan/auth artifacts 始终只读，任何已 durable pair 都不会重新进入 Adapter。新的 provenance unknown、多个未决、ledger/identity drift 或不可恢复 crash 关闭为新 identity 下的 `reconciliation_required`，重入只读返回，不自动 retry。
+
+recovered `source-v2` 继续物化完整 candidate、pair、terminal 和 step rows，同时复制 hash-bound recovery plan、human authorization 与既有 concurrency qualification，并在 manifest 分开披露 failed-run/recovery lineage、historical physical、六次 uncertainty charge、retry actual、later actual 和 aggregate accounting。source rename 或 status write 中断只能从 durable source anchor 零调用完成；删除或篡改 recovery/qualification artifact 会失败关闭。该 source 固定 `production_deploy_eligible=false`；v9 persisted consumer、Report/Evidence/Release、真实 Provider run 与部署属于后续 Module 或显式 operational authorization。
 
 ## 局部边界与后续 seam
 

@@ -40,7 +40,7 @@ def _write_csv(path: Path, fieldnames: list[str], rows: list[dict[str, Any]]) ->
         writer.writerows(rows)
 
 
-def _dataset(tmp_path: Path) -> Path:
+def _dataset(tmp_path: Path, *, user_count: int = 7) -> Path:
     root = tmp_path / "dataset"
     _write_csv(
         root / "videos.csv",
@@ -107,7 +107,7 @@ def _dataset(tmp_path: Path) -> Path:
                 "like_count": 20 - number,
                 "comment_level": "comment",
             }
-            for number in range(1, 8)
+            for number in range(1, user_count + 1)
         ],
     )
     latent = [
@@ -170,7 +170,7 @@ def _dataset(tmp_path: Path) -> Path:
                 "latent_education": "bachelor",
                 "latent_monthly_income": "income_8001_15000",
             }
-            for number in range(1, 8)
+            for number in range(1, user_count + 1)
         ],
     )
     return root
@@ -340,11 +340,12 @@ def _mid_batch_prefix(
     horizon: int = 3,
     delivery_capacity: int = 3,
     terminal_limit: int = 11,
+    sample_size: int = 7,
 ) -> tuple[Path, Path, list[str]]:
-    dataset = _dataset(tmp_path)
+    dataset = _dataset(tmp_path, user_count=sample_size)
     config = ConcurrentMessageExperimentConfig(
         dataset_dir=dataset,
-        sample_size=7,
+        sample_size=sample_size,
         horizon=horizon,
         delivery_capacity=delivery_capacity,
         configuration_profile="validation",

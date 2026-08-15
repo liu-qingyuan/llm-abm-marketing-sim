@@ -918,12 +918,14 @@ class _SegmentedKernelJournal:
         identity_hash: str,
         ledger: _ContinuationLedger,
         base_time_step: int,
+        record_runtime_events: bool = False,
     ) -> None:
         self.workspace_dir = workspace
         self.run_id = run_id
         self.identity_hash = identity_hash
         self.ledger = ledger
         self.base_time_step = base_time_step
+        self.record_runtime_events = record_runtime_events
         self.records: list[dict[str, object]] = []
         self.snapshot_dir = workspace / "segmented_runtime_snapshots"
         self.snapshot_dir.mkdir(exist_ok=True)
@@ -988,6 +990,9 @@ class _SegmentedKernelJournal:
                     "payload": dict(payload),
                 },
             )
+            self.records.append(record)
+        elif self.record_runtime_events:
+            self.ledger.append("kernel_runtime_event", {"record": record})
             self.records.append(record)
         return record
 
@@ -1842,6 +1847,11 @@ def _close_segmented_source_v2(
     continuation_identity_hash: str,
     qualification_artifact: SegmentedQualificationArtifactRef | None,
     ledger: _ContinuationLedger,
+    historical_chunks: Sequence[_ConcurrentRuntimeSpoolChunk] | None = None,
+    recovery_retry_pair_ids: Sequence[str] | None = None,
+    recovery_lineage: Mapping[str, object] | None = None,
+    recovery_accounting: Mapping[str, object] | None = None,
+    recovery_artifacts: Mapping[str, Path] | None = None,
 ) -> tuple[Path, str, dict[str, object]]:
     source = continuation / "source-v2"
     staging = continuation / ".source-v2.staging"
@@ -1853,6 +1863,23 @@ def _close_segmented_source_v2(
     terminal_path = staging / "terminal_rows.jsonl"
     step_path = staging / "steps.jsonl"
     concurrency_qualification_sha256: str | None = None
+    copied_recovery_artifact_names: list[str] = []
+    if recovery_artifacts is not None:
+        if recovery_lineage is None or recovery_accounting is None:
+            raise ValueError("recovery source artifacts require lineage and accounting")
+        expected_recovery_names = {"recovery-plan.json", "human-authorization.json"}
+        if set(recovery_artifacts) != expected_recovery_names:
+            raise ValueError("recovery source artifact names are not exact")
+        for name in sorted(expected_recovery_names):
+            source_path = _require_real_file(
+                recovery_artifacts[name], f"recovery source artifact {name}"
+            )
+            target_path = staging / name
+            with target_path.open("xb") as target_handle:
+                target_handle.write(source_path.read_bytes())
+                target_handle.flush()
+                os.fsync(target_handle.fileno())
+            copied_recovery_artifact_names.append(name)
     if qualification_artifact is not None:
         qualification_bytes, qualification_payload = _validated_concurrency_qualification_bytes(
             qualification_artifact
@@ -1897,8 +1924,17 @@ def _close_segmented_source_v2(
     cached_reported = False
 
     chunks = chain(
-        _iter_prefix_committed_chunks(prefix),
+        (
+            _iter_prefix_committed_chunks(prefix)
+            if historical_chunks is None
+            else iter(historical_chunks)
+        ),
         continuation_spool.iter_committed(continuation_replay),
+    )
+    retry_pair_ids = set(
+        prefix.unknown_pair_ids
+        if recovery_retry_pair_ids is None
+        else recovery_retry_pair_ids
     )
     with (
         candidate_path.open("x", encoding="utf-8", newline="\n") as candidate_handle,
@@ -1994,7 +2030,7 @@ def _close_segmented_source_v2(
                             segment=(
                                 "serial_prefix" if pair_id in prefix_terminal_ids else "concurrent_suffix"
                             ),
-                            reconciliation_retry=pair_id in prefix.unknown_pair_ids,
+                            reconciliation_retry=pair_id in retry_pair_ids,
                         )
                     )
                     + "\n"
@@ -2049,8 +2085,15 @@ def _close_segmented_source_v2(
     if not invocations >= responses >= successes:
         raise ValueError("source-v2 Provider accounting invariant failed")
     migration_unknown_charge = physical_attempt_count - invocations
-    if migration_unknown_charge not in {0, 1, 2, 3}:
-        raise ValueError("source-v2 migration unknown accounting is crossed")
+    if recovery_accounting is None:
+        if migration_unknown_charge not in {0, 1, 2, 3}:
+            raise ValueError("source-v2 migration unknown accounting is crossed")
+    elif (
+        migration_unknown_charge < 0
+        or recovery_accounting.get("physical_attempt_count") != physical_attempt_count
+        or physical_attempt_count > FULL_POOL_SEGMENTED_PHYSICAL_CAP
+    ):
+        raise ValueError("recovered source-v2 physical accounting is crossed")
     accounting = {
         "invocations": invocations,
         "responses": responses,
@@ -2072,6 +2115,7 @@ def _close_segmented_source_v2(
     artifact_names = ["candidate_rows.jsonl", "pair_rows.jsonl", "terminal_rows.jsonl", "steps.jsonl"]
     if concurrency_qualification_sha256 is not None:
         artifact_names.append(SEGMENTED_CONCURRENCY_QUALIFICATION_FILE)
+    artifact_names.extend(copied_recovery_artifact_names)
     artifacts = [_file_ref(staging, staging / name) for name in artifact_names]
     terminal_rows_sha256 = _sha256_file(terminal_path)
     complete_status = {
@@ -2107,6 +2151,11 @@ def _close_segmented_source_v2(
         "max_concurrency": FULL_POOL_SEGMENTED_MAX_CONCURRENCY,
         "production_deploy_eligible": False,
     }
+    if recovery_lineage is not None or recovery_accounting is not None:
+        if recovery_lineage is None or recovery_accounting is None:
+            raise ValueError("recovered source-v2 requires complete lineage and accounting")
+        manifest["recovery_lineage"] = dict(recovery_lineage)
+        manifest["recovery_accounting"] = dict(recovery_accounting)
     _atomic_write_json(staging / "manifest.json", manifest)
     manifest_sha256 = _sha256_file(staging / "manifest.json")
     ledger.append(
