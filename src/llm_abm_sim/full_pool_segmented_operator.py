@@ -16,6 +16,7 @@ from typing import Protocol, cast
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from .decision import LLMDecisionAdapter
+from .full_pool_formal_experiment import FullPoolFormalRequestContract
 from .full_pool_segmented_continuation import (
     FULL_POOL_SEGMENTED_LOGICAL_CAP,
     FULL_POOL_SEGMENTED_MAX_CONCURRENCY,
@@ -26,9 +27,11 @@ from .full_pool_segmented_continuation import (
     SegmentedQualificationWave,
     _freeze_v1_prefix,
 )
+from .prompt_field_summary import CONCURRENT_MESSAGE_PRIMARY_PROMPT_VERSION
 from .providers.openai_compatible import OpenAICompatibleDecisionAdapter
 from .providers.pi_subscription import (
     PI_SUBSCRIPTION_ADAPTER_IDENTITY,
+    PI_SUBSCRIPTION_MODEL_ALIASES,
     PI_SUBSCRIPTION_PROVIDER,
     PiSubscriptionProviderClient,
 )
@@ -39,7 +42,7 @@ SEGMENTED_AUTHORIZATION_REFERENCE = (
     "https://github.com/liu-qingyuan/llm-abm-marketing-sim/issues/205#issuecomment-5300395226"
 )
 SEGMENTED_REQUESTED_MODEL = "gpt-5.6-sol"
-SEGMENTED_PROMPT_VERSION = "concurrent-primary-observed-v2"
+SEGMENTED_PROMPT_VERSION = CONCURRENT_MESSAGE_PRIMARY_PROMPT_VERSION
 SEGMENTED_LIVE_GATE = "LLM_ABM_RUN_FULL_POOL_SEGMENTED_CONTINUATION"
 
 _PLAN_SCHEMA = "full-pool-segmented-cutover-plan-v1"
@@ -260,12 +263,18 @@ class SystemProcessController:
         return tuple(sorted(owners))
 
     def lock_is_released(self, path: Path) -> bool:
+        if path.is_symlink() or not path.is_file():
+            raise RuntimeError("workspace lock must remain an existing regular file")
         try:
             import fcntl
 
-            with path.open("a+", encoding="utf-8") as handle:
-                fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+            flags = os.O_RDWR | getattr(os, "O_NOFOLLOW", 0)
+            descriptor = os.open(path, flags)
+            try:
+                fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                fcntl.flock(descriptor, fcntl.LOCK_UN)
+            finally:
+                os.close(descriptor)
         except BlockingIOError:
             return False
         return True
@@ -322,6 +331,9 @@ class LocalOperatorFilesystem:
                     os.fsync(target_handle.fileno())
             else:
                 raise ValueError(f"operator refuses symlink or special workspace entry: {relative}")
+        directories = [path for path in target.rglob("*") if path.is_dir()]
+        for directory in sorted(directories, key=lambda item: len(item.parts), reverse=True):
+            self.fsync_directory(directory)
         self.fsync_directory(target)
 
     def write_json(self, path: Path, payload: Mapping[str, object], *, exclusive: bool = False) -> None:
@@ -350,10 +362,8 @@ class LocalOperatorFilesystem:
             os.fsync(handle.fileno())
 
     def fsync_directory(self, path: Path) -> None:
-        try:
-            descriptor = os.open(path, os.O_DIRECTORY)
-        except (AttributeError, OSError):
-            return
+        flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+        descriptor = os.open(path, flags)
         try:
             os.fsync(descriptor)
         finally:
@@ -644,6 +654,12 @@ class FullPoolSegmentedCutoverOperator:
         plan, _ = self._read_plan(plan_path)
         request = CutoverPlanRequest.model_validate(_request_fields(plan))
         authorization, authorization_hash = self._validate_run_artifacts(request)
+        continuation_exists = request.continuation_workspace.exists() or request.continuation_workspace.is_symlink()
+        self._validate_qualification_state(
+            request,
+            continuation_exists=continuation_exists,
+            authorization_hash=authorization_hash,
+        )
         if os.environ.get("LLM_ABM_RUN_LIVE_LLM") != "1" or os.environ.get(SEGMENTED_LIVE_GATE) != "1":
             raise RuntimeError(
                 f"live segmented run requires LLM_ABM_RUN_LIVE_LLM=1 and {SEGMENTED_LIVE_GATE}=1"
@@ -800,8 +816,12 @@ class FullPoolSegmentedCutoverOperator:
         for index, line in enumerate(lines):
             stripped = line.strip()
             if not stripped:
-                accepted_length += len(line)
-                continue
+                raise ValueError(f"{path.name} contains a blank checksum-chain record")
+            if not line.endswith(b"\n"):
+                if index != len(lines) - 1:
+                    raise ValueError(f"{path.name} contains an unterminated middle record")
+                truncated = True
+                break
             try:
                 record = json.loads(stripped)
                 if not isinstance(record, dict):
@@ -1038,6 +1058,29 @@ class FullPoolSegmentedCutoverOperator:
             raise ValueError("remaining caps cannot reserve the mandatory ten-lane qualification wave")
         return authorization, authorization_hash
 
+    def _validate_qualification_state(
+        self,
+        request: CutoverPlanRequest,
+        *,
+        continuation_exists: bool,
+        authorization_hash: str,
+    ) -> None:
+        path = request.qualification_artifact
+        if not continuation_exists:
+            if path.exists() or path.is_symlink():
+                raise FileExistsError("qualification artifact must be absent before the first official wave")
+            return
+        if path.is_symlink() or not path.is_file():
+            raise ValueError("existing continuation lacks its bounded qualification artifact")
+        qualification, _ = self._read_artifact(path, _QUALIFICATION_SCHEMA)
+        if (
+            qualification.get("continuation_authorization_sha256") != authorization_hash
+            or qualification.get("status") != "qualified"
+            or qualification.get("lane_count") != FULL_POOL_SEGMENTED_MAX_CONCURRENCY
+            or qualification.get("provider_concurrency_reduction") is not False
+        ):
+            raise ValueError("existing continuation qualification is failed or crossed")
+
     @staticmethod
     def _migration_authorization(
         request: CutoverPlanRequest,
@@ -1077,32 +1120,60 @@ class LiveLanePool:
         if lane_id in self.adapters:
             raise ValueError("adapter_factory refuses duplicate lane creation")
         client = self.client_factory(response_timeout_seconds=30.0)
-        if any(client is existing for existing in self.clients.values()):
-            raise ValueError("Pi client factory returned a shared client")
-        adapter = OpenAICompatibleDecisionAdapter(
-            ProviderLLMConfig(
-                enabled=True,
-                provider="openai_compatible",
-                model=SEGMENTED_REQUESTED_MODEL,
-                wire_api="responses",
-                require_live_env=True,
-                timeout_seconds=30.0,
-                max_retries=2,
-                retry_backoff_seconds=1.0,
-                fail_closed_action=FailClosedAction.RAISE,
-                prompt_version=self.prompt_version,
-                reasoning_effort=ReasoningEffort.LOW,
-                max_output_tokens=256,
-            ),
-            client=client,
-        )
+        try:
+            if any(client is existing for existing in self.clients.values()):
+                raise ValueError("Pi client factory returned a shared client")
+            _validate_live_client(client)
+            adapter = OpenAICompatibleDecisionAdapter(
+                ProviderLLMConfig(
+                    enabled=True,
+                    provider="openai_compatible",
+                    model=SEGMENTED_REQUESTED_MODEL,
+                    wire_api="responses",
+                    require_live_env=True,
+                    timeout_seconds=30.0,
+                    max_retries=2,
+                    retry_backoff_seconds=1.0,
+                    fail_closed_action=FailClosedAction.RAISE,
+                    prompt_version=self.prompt_version,
+                    reasoning_effort=ReasoningEffort.LOW,
+                    max_output_tokens=256,
+                ),
+                client=client,
+            )
+            FullPoolFormalRequestContract.model_validate(adapter.request_contract.audit_record())
+        except Exception:
+            client.close()
+            raise
         self.clients[lane_id] = client
         self.adapters[lane_id] = adapter
         return adapter
 
     def close(self) -> None:
+        first_error: Exception | None = None
         for lane_id in sorted(self.clients, reverse=True):
-            self.clients[lane_id].close()
+            try:
+                self.clients[lane_id].close()
+            except Exception as exc:  # pragma: no cover - real transport cleanup failure.
+                if first_error is None:
+                    first_error = exc
+        if first_error is not None:
+            raise first_error
+
+
+def _validate_live_client(client: PiSubscriptionProviderClient) -> None:
+    if client.ready is not True or client.response_timeout_seconds != 30.0:
+        raise ValueError("Pi client is not ready with the exact timeout contract")
+    metadata = _mapping(client.safe_metadata, "Pi client safe metadata")
+    expected = {
+        "provider_transport": PI_SUBSCRIPTION_PROVIDER,
+        "adapter_identity": PI_SUBSCRIPTION_ADAPTER_IDENTITY,
+        "requested_model_aliases": PI_SUBSCRIPTION_MODEL_ALIASES,
+        "output_token_ceiling_enforcement": "application_fail_closed",
+    }
+    for key, value in expected.items():
+        if metadata.get(key) != value:
+            raise ValueError(f"Pi client safe metadata {key} is crossed")
 
 
 class _QualificationRecorder:
@@ -1198,6 +1269,9 @@ def _validate_live_provider_contract(contract: Mapping[str, object]) -> None:
     for key, value in expected.items():
         if contract.get(key) != value:
             raise ValueError(f"v1 Primary provider contract {key} is crossed")
+    FullPoolFormalRequestContract.model_validate(
+        _mapping(contract.get("request_contract"), "v1 P0 request contract")
+    )
     transport = _mapping(contract.get("external_transport"), "v1 Pi transport")
     if (
         transport.get("provider_transport") != PI_SUBSCRIPTION_PROVIDER

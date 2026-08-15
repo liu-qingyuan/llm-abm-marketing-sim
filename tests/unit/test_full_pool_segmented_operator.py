@@ -7,14 +7,19 @@ from pathlib import Path
 
 import pytest
 
+from llm_abm_sim.full_pool_segmented_continuation import SegmentedQualificationWave
 from llm_abm_sim.full_pool_segmented_operator import (
     SEGMENTED_AUTHORIZATION_REFERENCE,
     SEGMENTED_IMPLEMENTATION_COMMIT,
+    SEGMENTED_PROMPT_VERSION,
     CutoverPlanRequest,
     FullPoolSegmentedCutoverOperator,
     LiveLanePool,
     LocalOperatorFilesystem,
     ProcessSnapshot,
+    SystemProcessController,
+    _QualificationRecorder,
+    _validate_live_provider_contract,
 )
 
 FIXTURES = Path(__file__).parents[1] / "fixtures"
@@ -134,6 +139,45 @@ def _setup(
         stop_wait_timeout_seconds=1.0,
     )
     return operator, controller, request, plan_path, prefix
+
+
+def test_system_lock_probe_never_creates_a_missing_lock(tmp_path: Path) -> None:
+    missing = tmp_path / "missing.lock"
+    with pytest.raises(RuntimeError, match="existing regular file"):
+        SystemProcessController().lock_is_released(missing)
+    assert not missing.exists()
+
+
+def test_tail_acceptance_discards_a_valid_but_unterminated_final_record(tmp_path: Path) -> None:
+    path = tmp_path / "ledger.jsonl"
+    records: list[dict[str, object]] = []
+    previous: str | None = None
+    for sequence in (1, 2):
+        body: dict[str, object] = {
+            "schema_version": "fixture-v1",
+            "sequence": sequence,
+            "previous_checksum": previous,
+            "identity": "a" * 64,
+        }
+        checksum = hashlib.sha256(
+            json.dumps(body, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()
+        records.append({**body, "checksum": checksum})
+        previous = checksum
+    first = json.dumps(records[0], ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n"
+    second = json.dumps(records[1], ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    path.write_text(first + second, encoding="utf-8")
+
+    accepted = FullPoolSegmentedCutoverOperator()._truncate_incomplete_jsonl_tail(
+        path,
+        expected_schema="fixture-v1",
+        identity_field="identity",
+        identity_value="a" * 64,
+    )
+
+    assert path.read_text(encoding="utf-8") == first
+    assert accepted["accepted_bytes"] == len(first.encode())
+    assert accepted["truncated_bytes"] == len(second.encode())
 
 
 def test_prepare_and_dry_run_require_exact_process_lock_and_confirmation_token(tmp_path: Path) -> None:
@@ -303,6 +347,46 @@ def test_status_is_read_only_and_reports_prefix_suffix_physical_unknown_and_sour
     assert {path: path.read_bytes() for path in tracked_before} == tracked_before
 
 
+def test_qualification_artifact_binds_authorization_and_exact_ten_lane_wave(tmp_path: Path) -> None:
+    _operator, _controller, request, _plan_path, _prefix = _setup(tmp_path)
+    authorization_hash = "b" * 64
+    recorder = _QualificationRecorder(
+        path=request.qualification_artifact,
+        filesystem=LocalOperatorFilesystem(),
+        continuation_authorization_sha256=authorization_hash,
+    )
+    recorder.observe(
+        SegmentedQualificationWave(
+            pair_ids=tuple(f"u{index}:message_1:2" for index in range(10)),
+            elapsed_seconds=2.0,
+            physical_attempt_count=10,
+            provider_response_count=10,
+            successful_decision_count=10,
+            terminal_status_counts={"succeeded": 10},
+            observed_model_counts={"gpt-5.6-sol": 10},
+            usage_complete_response_count=10,
+            usage_missing_response_count=0,
+            usage_malformed_response_count=0,
+            input_tokens=100,
+            output_tokens=20,
+            total_tokens=120,
+            cached_input_tokens=0,
+        )
+    )
+
+    FullPoolSegmentedCutoverOperator()._validate_qualification_state(
+        request,
+        continuation_exists=True,
+        authorization_hash=authorization_hash,
+    )
+    with pytest.raises(ValueError, match="failed or crossed"):
+        FullPoolSegmentedCutoverOperator()._validate_qualification_state(
+            request,
+            continuation_exists=True,
+            authorization_hash="c" * 64,
+        )
+
+
 class _FakePiClient:
     external_provider_client = True
     safe_metadata = {
@@ -320,6 +404,7 @@ class _FakePiClient:
 
     def __init__(self, *, response_timeout_seconds: float) -> None:
         self.response_timeout_seconds = response_timeout_seconds
+        self.ready = True
         self.closed = False
 
     def close(self) -> None:
@@ -334,17 +419,26 @@ def test_live_lane_pool_builds_exactly_ten_isolated_clients_and_never_falls_back
     clients: list[_FakePiClient] = []
 
     def client_factory(**kwargs: object) -> _FakePiClient:
-        client = _FakePiClient(response_timeout_seconds=float(kwargs["response_timeout_seconds"]))
+        timeout = kwargs["response_timeout_seconds"]
+        assert isinstance(timeout, (int, float)) and not isinstance(timeout, bool)
+        client = _FakePiClient(response_timeout_seconds=float(timeout))
         clients.append(client)
         return client
 
-    pool = LiveLanePool(prompt_version="concurrent-primary-observed-v2", client_factory=client_factory)  # type: ignore[arg-type]
+    pool = LiveLanePool(prompt_version=SEGMENTED_PROMPT_VERSION, client_factory=client_factory)  # type: ignore[arg-type]
     adapters = [pool.adapter_factory(lane_id) for lane_id in range(10)]
 
     assert len(adapters) == 10
     assert len({id(adapter) for adapter in adapters}) == 10
     assert len({id(client) for client in clients}) == 10
     assert all(adapter.__dict__["client"] is clients[index] for index, adapter in enumerate(adapters))
+    metadata = adapters[0].safe_metadata  # type: ignore[attr-defined]
+    _validate_live_provider_contract(metadata)
+    assert metadata["prompt_version"] == "jinjiang-concurrent-message-primary-prompt-v1"
+    crossed = dict(metadata)
+    crossed["prompt_version"] = "concurrent-primary-observed-v2"
+    with pytest.raises(ValueError, match="prompt_version"):
+        _validate_live_provider_contract(crossed)
     with pytest.raises(ValueError, match="duplicate lane"):
         pool.adapter_factory(9)
     with pytest.raises(ValueError, match="outside"):
