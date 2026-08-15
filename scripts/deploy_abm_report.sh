@@ -168,7 +168,7 @@ PY
 [[ "${VALIDATED_DOMAIN}" == "${DOMAIN}" ]] || fail "validated canonical domain is crossed"
 [[ "${ARTIFACT_COUNT}" =~ ^[1-9][0-9]*$ ]] || fail "validated artifact count is invalid"
 [[ "${CONTRACT_SHA}" =~ ^[a-f0-9]{64}$ ]] || fail "validated contract identity is invalid"
-[[ "${RELEASE_CONTRACT_SCHEMA}" =~ ^abm-report-release-contract-v[2-8]$ ]] || fail "validated release contract schema is invalid"
+[[ "${RELEASE_CONTRACT_SCHEMA}" =~ ^abm-report-release-contract-v[2-9]$ ]] || fail "validated release contract schema is invalid"
 [[ -z "${RELEASE_IDENTITY_SHA}" || "${RELEASE_IDENTITY_SHA}" =~ ^[a-f0-9]{64}$ ]] || fail "validated release identity is invalid"
 SOURCE_DIR="${LOCAL_SNAPSHOT_DIR}"
 find "${SOURCE_DIR}" -type d -exec chmod a-w {} +
@@ -438,7 +438,7 @@ install -d -m 755 "${remote_root}/nginx" "${remote_root}/tls" "${remote_root}/re
   printf 'deploy error: invalid validated contract identity\n' >&2
   exit 1
 }
-[[ "${release_contract_schema}" =~ ^abm-report-release-contract-v[2-8]$ ]] || {
+[[ "${release_contract_schema}" =~ ^abm-report-release-contract-v[2-9]$ ]] || {
   printf 'deploy error: invalid validated release contract schema\n' >&2
   exit 1
 }

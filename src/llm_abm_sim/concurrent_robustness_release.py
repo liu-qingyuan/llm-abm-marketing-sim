@@ -34,12 +34,12 @@ from .concurrent_robustness_study import (
     ConcurrentRobustnessManifest,
 )
 from .final_research import FULL_POOL_MEMBERSHIP_METHOD
-from .full_pool_segmented_continuation import SegmentedFullPoolSourceFacts
 from .full_pool_presentation import (
     _FULL_POOL_MASTER,
     _HISTORICAL_DIR,
     _HISTORICAL_MERMAID_FILENAMES,
 )
+from .full_pool_segmented_continuation import SegmentedFullPoolSourceFacts
 from .providers.pi_subscription import PI_SUBSCRIPTION_MODEL_ALIASES
 
 ROBUSTNESS_PRODUCTION_MANIFEST_SCHEMA = "concurrent-robustness-production-release-manifest-v1"

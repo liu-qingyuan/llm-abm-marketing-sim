@@ -3322,7 +3322,9 @@ def _read_closed_segmented_full_pool_source(
         or manifest.get("continuation_identity_hash") != identity.get("identity_hash")
         or manifest.get("prefix_identity_hash") != identity.get("prefix_identity_hash")
         or cutoff.get("continuation_id") != identity.get("continuation_id")
-        or cutoff.get("v1_run_identity", {}).get("identity_hash")
+        or _mapping(cutoff.get("v1_run_identity"), "segmented v1 run identity").get(
+            "identity_hash"
+        )
         != identity.get("prefix_identity_hash")
     ):
         raise ValueError("segmented source-v2 cutoff or continuation identity is crossed")
@@ -3420,16 +3422,29 @@ def _read_closed_segmented_full_pool_source(
     prefix_logical = _strict_non_negative_int(
         cutoff_prefix.get("logical_count"), "segmented prefix logical count"
     )
+    prefix_physical = _strict_non_negative_int(
+        cutoff_prefix.get("physical_attempt_count"), "segmented prefix physical count"
+    )
+    pending_physical = _strict_non_negative_int(
+        cutoff_prefix.get("pending_physical_count"), "segmented pending physical count"
+    )
+    serial_invocations = _strict_non_negative_int(
+        terminal_accounting["serial_invocations"], "segmented serial invocations"
+    )
     if (
         prefix_logical != serial_count
         or cutoff.get("remaining_logical_count") != expected_pairs - prefix_logical
-        or cutoff_prefix.get("physical_attempt_count") != terminal_accounting["serial_invocations"]
+        or prefix_physical != serial_invocations
     ):
         raise ValueError("segmented serial prefix accounting is crossed")
     migration_charge, unknown_count = _validate_segmented_reconciliation(
         cutoff,
         reconciliation_retry_count=reconciliation_retry_count,
     )
+    if (unknown_count == 0 and pending_physical != 0) or (
+        unknown_count == 1 and pending_physical > 3
+    ):
+        raise ValueError("segmented pending physical attempts are crossed with migration unknown")
     accounting = _mapping(manifest.get("accounting"), "segmented source-v2 accounting")
     if set(accounting) != _SEGMENTED_ACCOUNTING_FIELDS:
         raise ValueError("segmented source-v2 accounting fields are missing or extra")
@@ -3445,9 +3460,12 @@ def _read_closed_segmented_full_pool_source(
     physical = _strict_non_negative_int(
         manifest.get("physical_attempt_count"), "segmented physical count"
     )
+    accounted_invocations = _strict_non_negative_int(
+        terminal_accounting["invocations"], "segmented accounted invocations"
+    )
     if (
         logical != expected_pairs
-        or physical != terminal_accounting["invocations"] + migration_charge
+        or physical != accounted_invocations + migration_charge
         or physical > FULL_POOL_SEGMENTED_PHYSICAL_CAP
     ):
         raise ValueError("segmented source-v2 logical or physical accounting is crossed")

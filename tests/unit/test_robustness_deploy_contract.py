@@ -127,6 +127,38 @@ def test_standalone_validator_dispatches_v7_through_its_own_branch(
         }
     ]
 
+    contract_path.write_text(
+        json.dumps({"schema_version": "abm-report-release-contract-v9"}),
+        encoding="utf-8",
+    )
+    expected_v9 = {
+        **expected_v8,
+        "schema_version": "abm-report-release-contract-v9",
+        "release_purpose": "full_pool_segmented_formal_research",
+        "sampling_status": "persisted_full_pool_segmented_formal_run",
+    }
+    v9_calls: list[dict[str, object]] = []
+
+    def validate_v9(**kwargs: object) -> dict[str, object]:
+        v9_calls.append(kwargs)
+        return expected_v9
+
+    monkeypatch.setattr(validator, "_validate_v9", validate_v9, raising=False)
+    assert validator.validate_release(
+        repo_root=tmp_path,
+        contract_path=contract_path,
+        source_dir=source,
+        snapshot_dir=snapshot,
+    ) == expected_v9
+    assert v9_calls == [
+        {
+            "repo_root": tmp_path.resolve(),
+            "contract_document": {"schema_version": "abm-report-release-contract-v9"},
+            "source_dir": source,
+            "snapshot_dir": snapshot,
+        }
+    ]
+
 
 @pytest.mark.parametrize(
     "mutation",
@@ -156,13 +188,22 @@ def test_formal_production_gate_accepts_only_matching_live_deployable_facts(
         "live_api_triggered": True,
         "production_deploy_eligible": True,
     }
+    valid_v9 = {
+        **valid_v8,
+        "schema_version": "abm-report-release-contract-v9",
+        "release_purpose": "full_pool_segmented_formal_research",
+        "sampling_status": "persisted_full_pool_segmented_formal_run",
+    }
 
     validator._require_formal_production(valid_v7)
     validator._require_formal_production(valid_v8)
+    validator._require_formal_production(valid_v9)
     with pytest.raises(validator.ReleaseValidationError, match="formal production deployment"):
         validator._require_formal_production(valid_v7 | mutation)
     with pytest.raises(validator.ReleaseValidationError, match="formal production deployment"):
         validator._require_formal_production(valid_v8 | mutation)
+    with pytest.raises(validator.ReleaseValidationError, match="formal production deployment"):
+        validator._require_formal_production(valid_v9 | mutation)
     with pytest.raises(validator.ReleaseValidationError, match="formal production deployment"):
         validator._require_formal_production(
             valid_v8 | {"release_purpose": "concurrent_robustness_formal_research"}
@@ -351,6 +392,62 @@ def test_v8_deployment_facts_bind_full_pool_inventory_and_explicit_identity(
     assert {path for path in artifact_sha256 if path.endswith(".mmd")} == mermaid
     assert "trace/full-pool-trace-index.json" in facts["public_acceptance_artifacts"]
     assert "trace/message_1/batch-000000.json" in facts["public_acceptance_artifacts"]
+
+
+def test_v9_deployment_facts_preserve_segmented_release_identity(tmp_path: Path) -> None:
+    validator = _load_validator()
+    source = tmp_path / "production-v9"
+    source.mkdir()
+    (source / "report.html").write_text("<!doctype html><title>v9</title>\n", encoding="utf-8")
+    release_identity = "d" * 64
+    manifest = {
+        "release_id": "full-pool-segmented-v9",
+        "release_identity_sha256": release_identity,
+        "approved_downloads": {},
+    }
+    (source / "artifact_manifest.json").write_text(
+        json.dumps(manifest, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    artifact_sha256 = {
+        path.name: hashlib.sha256(path.read_bytes()).hexdigest()
+        for path in source.iterdir()
+        if path.is_file()
+    }
+    contract_path = tmp_path / "release-contract-v9.json"
+    contract = {
+        "schema_version": "abm-report-release-contract-v9",
+        "release_id": "full-pool-segmented-v9",
+        "canonical_endpoint": "https://abm.q1ngyuan.top/",
+        "release_identity_sha256": release_identity,
+        "artifact_sha256": artifact_sha256,
+    }
+    contract_path.write_text(json.dumps(contract, sort_keys=True) + "\n", encoding="utf-8")
+    result = {
+        "schema_version": "abm-report-release-contract-v9",
+        "release_purpose": "full_pool_segmented_formal_research",
+        "release_id": "full-pool-segmented-v9",
+        "source_directory": "production-v9",
+        "sampling_status": "persisted_full_pool_segmented_formal_run",
+        "decision_execution_mode": "live_provider",
+        "live_api_triggered": True,
+        "report_sha256": artifact_sha256["report.html"],
+        "production_deploy_eligible": True,
+    }
+
+    facts = validator._build_deployment_facts(
+        contract_path=contract_path,
+        contract=contract,
+        result=result,
+        evidence_dir=source,
+        deployment_release_id="full-pool-segmented-v9",
+        deployment_domain="abm.q1ngyuan.top",
+    )
+
+    assert facts["report_kind"] == "full-pool"
+    assert facts["release_contract_schema_version"] == "abm-report-release-contract-v9"
+    assert facts["release_identity_sha256"] == release_identity
+    assert facts["artifact_sha256"] == artifact_sha256
 
 
 def test_v8_schema_confusion_is_rejected_before_fake_ssh(tmp_path: Path) -> None:

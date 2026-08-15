@@ -18,7 +18,7 @@ from collections import defaultdict
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from .concurrent_message_editorial_candidate import _render_editorial_v4
 from .concurrent_message_mechanism_presentation import _MECHANISM_PRESENTATION
@@ -32,9 +32,6 @@ from .concurrent_message_report import (
 from .full_pool_formal_experiment import (
     FullPoolExperimentError,
     _ClosedFullPoolSource,
-)
-from .full_pool_segmented_continuation import (
-    _read_closed_full_pool_source_versioned as _read_closed_full_pool_source,
 )
 from .full_pool_presentation import (
     _FULL_POOL_MASTER,
@@ -51,6 +48,9 @@ from .full_pool_presentation import (
 )
 from .full_pool_presentation import (
     validate_full_pool_presentation_bundle as _validate_full_pool_presentation_bundle,
+)
+from .full_pool_segmented_continuation import (
+    _read_closed_full_pool_source_versioned as _read_closed_full_pool_source,
 )
 from .prompt_contracts import CONCURRENT_ROBUSTNESS_PROMPT_REGISTRY
 
@@ -1124,9 +1124,12 @@ class _ReportPresentationInterface:
         study_path = Path(historical_study_root)
         workspace_path = _workspace_root_for_study(study_path)
         try:
-            source = _read_closed_full_pool_source(
-                full_pool_path,
-                manifest_sha256=full_pool_manifest_sha256,
+            source = cast(
+                _ClosedFullPoolSource,
+                _read_closed_full_pool_source(
+                    full_pool_path,
+                    manifest_sha256=full_pool_manifest_sha256,
+                ),
             )
             validation_source = (
                 source.manifest.get("production_deploy_eligible") is False
@@ -1135,15 +1138,26 @@ class _ReportPresentationInterface:
                 and source.aggregates.get("production_deploy_eligible") is False
             )
             source_provider_calls = source.manifest.get("provider_calls")
-            formal_source = (
-                source.manifest.get("production_deploy_eligible") is True
-                and source.manifest.get("evidence_profile") == "formal_live"
+            live_formal_evidence = (
+                source.manifest.get("evidence_profile") == "formal_live"
                 and isinstance(source_provider_calls, int)
                 and not isinstance(source_provider_calls, bool)
                 and source_provider_calls > 0
                 and source.manifest.get("live_api_triggered") is True
+            )
+            legacy_formal_source = (
+                live_formal_evidence
+                and source.manifest.get("production_deploy_eligible") is True
                 and source.aggregates.get("production_deploy_eligible") is True
             )
+            segmented_formal_source = (
+                live_formal_evidence
+                and source.manifest.get("source_schema_version")
+                == "full-pool-segmented-source-v2"
+                and source.manifest.get("production_deploy_eligible") is False
+                and source.aggregates.get("production_deploy_eligible") is False
+            )
+            formal_source = legacy_formal_source or segmented_formal_source
             if not validation_source and not formal_source:
                 raise ValueError(
                     "Full-Pool presentation composition requires an exact closed Validation or Formal source"
@@ -1242,9 +1256,12 @@ class _ReportPresentationInterface:
     ) -> None:
         """Validate one materialized Full-Pool bundle against explicit immutable inputs."""
         try:
-            source = _read_closed_full_pool_source(
-                full_pool_source_root,
-                manifest_sha256=full_pool_manifest_sha256,
+            source = cast(
+                _ClosedFullPoolSource,
+                _read_closed_full_pool_source(
+                    full_pool_source_root,
+                    manifest_sha256=full_pool_manifest_sha256,
+                ),
             )
             candidate = Path(historical_candidate_dir)
             historical_payload = _read_json(candidate / _REPORT_PAYLOAD)
@@ -1500,9 +1517,12 @@ class _ReportPresentationInterface:
         presentation_bundle_dir: str | Path,
     ) -> _FullPoolCandidateInputs:
         try:
-            source = _read_closed_full_pool_source(
-                full_pool_source_root,
-                manifest_sha256=full_pool_manifest_sha256,
+            source = cast(
+                _ClosedFullPoolSource,
+                _read_closed_full_pool_source(
+                    full_pool_source_root,
+                    manifest_sha256=full_pool_manifest_sha256,
+                ),
             )
             formal_path = Path(historical_formal_root)
             study_path = Path(historical_study_root)

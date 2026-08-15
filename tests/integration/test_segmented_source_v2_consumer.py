@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from dataclasses import replace
 from pathlib import Path
@@ -9,7 +10,9 @@ import pytest
 from llm_abm_sim import concurrent_robustness_evidence as evidence_module
 from llm_abm_sim import concurrent_robustness_release as release_module
 from llm_abm_sim import concurrent_robustness_report as report_module
+from llm_abm_sim.concurrent_execution_journal import ConcurrentExecutionJournal
 from llm_abm_sim.full_pool_segmented_continuation import (
+    FullPoolReconciliationAuthorization,
     FullPoolSegmentedContinuation,
     SegmentedContinuationStatus,
     _read_closed_segmented_full_pool_source,
@@ -45,6 +48,134 @@ def _rewrite_jsonl(path: Path, rows: list[dict[str, object]]) -> None:
     )
 
 
+def _canonical(value: object) -> str:
+    return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+
+
+def _mid_batch_unknown_prefix(tmp_path: Path, *, pending_attempts: int) -> tuple[Path, str]:
+    prefix, _dataset, _calls = _mid_batch_prefix(tmp_path)
+    journal_identity = json.loads(
+        (prefix / "concurrent_message_execution_run_identity.json").read_text(encoding="utf-8")
+    )
+    journal = ConcurrentExecutionJournal.open_resume(prefix, identity=journal_identity)
+    try:
+        replay = journal.replay()
+        terminal = next(
+            row
+            for row in reversed(replay["records"])
+            if row.get("event_type") == "variant_terminal"
+        )
+        terminal_payload = terminal["payload"]
+        terminal_row = terminal_payload["terminal_row"]
+        pair_id = terminal_payload["pair_id"]
+        batch_hash = terminal["batch_snapshot_hash"]
+        snapshot_path = next(
+            path
+            for path in (prefix / "concurrent_message_execution_snapshots").glob("*.json")
+            if json.loads(path.read_text(encoding="utf-8"))["payload"]["time_step"] == 1
+        )
+        snapshot = json.loads(snapshot_path.read_text(encoding="utf-8"))["payload"]
+        plans = [
+            plan
+            for message in snapshot["messages"]
+            for plan in message["selected_pair_plans"]
+        ]
+        terminal_plan = next(plan for plan in plans if plan["pair_id"] == pair_id)
+        journal.append(
+            event_type="pair_closed",
+            event_identity={"pair_id": pair_id, "time_step": terminal_row["time_step"]},
+            payload={
+                "pair_id": pair_id,
+                "pair_schedule_position": terminal_row["pair_schedule_position"],
+                "message_id": terminal_row["message_id"],
+                "message_title": terminal_plan["message_title"],
+                "user_id": terminal_row["user_id"],
+                "primary_terminal_row_id": terminal_row["terminal_row_id"],
+                "primary_status": terminal_row["terminal_status"],
+            },
+            batch_snapshot_hash=batch_hash,
+        )
+        unknown = next(
+            plan for plan in plans if plan["pair_schedule_position"] == terminal_row["pair_schedule_position"] + 1
+        )
+        unknown_pair_id = unknown["pair_id"]
+        journal.append(
+            event_type="variant_started",
+            event_identity={
+                "pair_id": unknown_pair_id,
+                "decision_variant": "primary",
+                "event_type": "variant_started",
+                "time_step": unknown["time_step"],
+            },
+            payload={
+                "pair_id": unknown_pair_id,
+                "pair_schedule_position": unknown["pair_schedule_position"],
+                "message_id": unknown["message_id"],
+                "message_title": unknown["message_title"],
+                "user_id": unknown["user_id"],
+                "ranking_position": unknown["ranking_position"],
+                "selection_reason": unknown["selection_reason"],
+            },
+            batch_snapshot_hash=batch_hash,
+        )
+    finally:
+        journal.close()
+
+    identity = json.loads((prefix / "full_pool_execution_identity.json").read_text(encoding="utf-8"))
+    ledger_path = prefix / "full_pool_attempt_ledger.jsonl"
+    ledger = [json.loads(line) for line in ledger_path.read_text(encoding="utf-8").splitlines()]
+    sequence = ledger[-1]["sequence"]
+    previous = ledger[-1]["checksum"]
+
+    def append(event_type: str, payload: dict[str, object]) -> None:
+        nonlocal sequence, previous
+        sequence += 1
+        body = {
+            "schema_version": "full-pool-formal-attempt-ledger-v1",
+            "sequence": sequence,
+            "previous_checksum": previous,
+            "execution_contract_sha256": identity["execution_contract_sha256"],
+            "event_type": event_type,
+            "payload": payload,
+        }
+        checksum = hashlib.sha256(_canonical(body).encode()).hexdigest()
+        ledger.append({**body, "checksum": checksum})
+        previous = checksum
+
+    old_status = json.loads((prefix / "full_pool_execution_status.json").read_text(encoding="utf-8"))
+    append(
+        "judgment_reserved",
+        {
+            "pair_id": unknown_pair_id,
+            "reserved_logical_judgments": old_status["logical_judgments"] + 1,
+            "reserved_physical_attempts": old_status["physical_attempts"] + 3,
+            "maximum_physical_attempts": 3,
+        },
+    )
+    for attempt in range(1, pending_attempts + 1):
+        append(
+            "physical_attempt_accounted",
+            {
+                "pair_id": unknown_pair_id,
+                "attempt_index": attempt,
+                "attempt_outcome": "migration_unknown",
+            },
+        )
+    ledger_path.write_text("".join(_canonical(row) + "\n" for row in ledger), encoding="utf-8")
+    old_status.update(
+        {
+            "lifecycle": "attempt_reserved",
+            "reserved_logical_judgments": old_status["logical_judgments"] + 1,
+            "reserved_physical_attempts": old_status["physical_attempts"] + 3,
+            "last_pair_id": unknown_pair_id,
+        }
+    )
+    (prefix / "full_pool_execution_status.json").write_text(
+        _canonical(old_status), encoding="utf-8"
+    )
+    return prefix, unknown_pair_id
+
+
 def test_segmented_source_v2_validator_closes_rows_cutoff_identity_and_accounting(
     tmp_path: Path,
 ) -> None:
@@ -73,6 +204,45 @@ def test_segmented_source_v2_validator_closes_rows_cutoff_identity_and_accountin
     assert closed.facts.production_deploy_eligible is False
     assert len(closed.batch_paths) == 3
     assert closed.read_batch(0)["time_step"] == 0
+
+
+def test_segmented_source_v2_preserves_pending_unknown_invocations_and_separate_retry_charge(
+    tmp_path: Path,
+) -> None:
+    prefix, unknown_pair_id = _mid_batch_unknown_prefix(tmp_path, pending_attempts=2)
+    run_identity = json.loads(
+        (prefix / "concurrent_message_execution_run_identity.json").read_text(encoding="utf-8")
+    )
+    result = FullPoolSegmentedContinuation().run(
+        prefix,
+        tmp_path / "continuation",
+        continuation_id="segmented-unknown-source-v2",
+        adapter_factory=lambda _lane_id: _LaneAdapter([]),
+        reconciliation_authorization=FullPoolReconciliationAuthorization(
+            prefix_run_identity_hash=run_identity["identity_hash"],
+            unknown_pair_id=unknown_pair_id,
+            authorization_reference="fixture://approved-one-migration-unknown",
+            physical_attempt_charge=3,
+            retry_authorized=True,
+        ),
+    )
+    assert result.status is SegmentedContinuationStatus.COMPLETE
+    assert result.source_root is not None
+    assert result.source_manifest_sha256 is not None
+
+    manifest = json.loads((result.source_root / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["physical_attempt_count"] == 24
+    assert manifest["accounting"]["invocations"] == 21
+    assert manifest["accounting"]["usage_incomplete_attempts"] == 21
+    assert manifest["accounting"]["migration_unknown_physical_charge"] == 3
+    closed = _read_closed_segmented_full_pool_source(
+        result.source_root,
+        manifest_sha256=result.source_manifest_sha256,
+    )
+    assert closed.facts.physical_attempts == 24
+    assert closed.facts.migration_unknown_physical_charge == 3
+    assert closed.facts.unknown_pair_count == 1
+    assert closed.facts.reconciliation_retry_count == 1
 
 
 @pytest.mark.parametrize(
@@ -107,6 +277,55 @@ def test_segmented_source_v2_validator_rejects_count_topology_accounting_and_fee
             source,
             manifest_sha256=manifest_sha256,
         )
+
+
+def test_segmented_formal_source_remains_non_deployable_until_evidence_promotion(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source, manifest_sha256 = _source(tmp_path / "segmented")
+    closed = _read_closed_segmented_full_pool_source(
+        source,
+        manifest_sha256=manifest_sha256,
+    )
+    formal = replace(
+        closed,
+        manifest={
+            **closed.manifest,
+            "profile": "production",
+            "evidence_profile": "formal_live",
+            "provider_calls": 21,
+            "live_api_triggered": True,
+            "production_deploy_eligible": False,
+        },
+        aggregates={
+            **closed.aggregates,
+            "evidence_profile": "formal_live",
+            "production_deploy_eligible": False,
+        },
+    )
+    monkeypatch.setattr(
+        report_module,
+        "_read_closed_full_pool_source",
+        lambda *_args, **_kwargs: formal,
+    )
+    historical_formal, historical_study, historical_candidate = _historical_candidate(
+        tmp_path / "historical"
+    )
+
+    bundle = report_module._REPORT_PRESENTATION.compose_full_pool_presentation_bundle(
+        full_pool_source_root=source,
+        full_pool_manifest_sha256=manifest_sha256,
+        historical_formal_root=historical_formal,
+        historical_study_root=historical_study,
+        historical_candidate_dir=historical_candidate,
+        destination_dir=tmp_path / "bundle",
+    )
+
+    assert bundle.is_dir()
+    assert 'data-testid="full-pool-segmented-lineage"' in (
+        bundle / "report.html"
+    ).read_text(encoding="utf-8")
 
 
 def test_segmented_source_v2_composes_candidate_and_evidence_closure_without_calls(
