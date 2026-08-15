@@ -217,6 +217,16 @@ classDiagram
     FullPoolSegmentedContinuation --> SegmentedContinuationResult
 ```
 
+## Read-only recovery preflight
+
+`FullPoolSegmentedRecoveryPreflight` 是 `reconciliation_required` 之后唯一的授权前 Seam。调用方只提交显式 cutover plan、persisted continuation result、failure audit 的已知 SHA-256，以及全新的 recovery identity/root；Interface 不接收 Adapter、client、Decision、授权布尔值或 live gate。
+
+Module 重新验证 cutover artifact chain、frozen-prefix inventory、exact ten-lane qualification、continuation identity/cutoff manifest、canonical ledger chain、status/result/audit 和已落盘的 batch spool/snapshot bytes。恢复 snapshot 只复制 hash-bound terminal IDs/refs、batch commits、feedback barriers、candidate schedules 和两个有序 unresolved pair 的证据分类，不复制或推断未持久化 action、reason、usage、observed-model evidence 或其他 Decision 内容。
+
+计划账务分别保留 historical logical/physical、每个 unresolved 的完整三次 uncertainty charge、future retry physical attempts 和 `logical_retry_charge=0`。输出只能在独立新路径 create once，生命周期固定为 `recovery_prepared`，并持续声明 configured concurrency `10`、recorded worker state、durable progress、unresolved count、`provider_calls=0` 与 `production_deploy_eligible=false`。失败 continuation、frozen prefix、qualification、result 和 audit 在发布前后重新 inventory；任一变化会删除候选计划并失败关闭。
+
+该 preflight 不创建 human authorization，也不重调 unresolved pair。显式授权消费、retry 与后续 source-v2 closure 属于独立后续 Module。
+
 ## 局部边界与后续 seam
 
-本 Module 负责从任意单一 active cutoff 连续运行到 horizon，并关闭完整 source-v2；Report/Evidence adapter 后续只消费 source-v2，不读取运行中 workspace。它仍不执行 live cutover、Report/Release v9 或部署，也不修改冻结的 v1 prefix。
+本 Module 负责从任意单一 active cutoff 连续运行到 horizon，并关闭完整 source-v2；Report/Evidence adapter 后续只消费 source-v2，不读取运行中 workspace。recovery-preflight 只准备 nondeployable 计划；两者都不执行 Report/Release v9 或部署，也不修改冻结的 v1 prefix 或失败 continuation。
