@@ -2,7 +2,7 @@
 
 本 note 描述 Issue #205 的 source-side cutover/operator 纵向切片。它固定采用 **freeze-after-external-stop**：operator 只读核验 PID、command、cwd 与 workspace lock owner，但没有 signal Interface；人工必须只停止已核验的单个 v1 PID，operator 随后等待 PID 消失、lock 释放与文件稳定。该边界避免误杀进程组或不匹配成员。
 
-所有命令都读取显式 plan，不扫描 `latest`。plan 绑定原 v1 identity、recorded paths、PID/pidfile、dataset hashes、`2884bbd...` implementation commit、Issue #205 segmented authorization comment、独立 frozen-prefix/continuation/artifact paths、109,200/120,120 caps 与十 lane continuation identity。`status` 只读 artifacts 和指定 PID，不依赖当前 Git HEAD。
+所有命令都读取显式 plan，不扫描 `latest`。plan 绑定原 v1 identity、recorded paths、PID/pidfile、dataset hashes、`2884bbd...` source implementation commit、当前 operator/source/CLI 的逐文件 SHA-256、Issue #205 segmented authorization comment、独立 frozen-prefix/continuation/artifact paths、109,200/120,120 caps 与十 lane continuation identity；`dry-run`、`cutover`、`run` 都重新核对这些实现 bytes。`status` 只读 artifacts 和指定 PID，不依赖当前 Git HEAD；suffix 运行期间仅从 continuation ledger 的完整换行快照重放 dispatched/durable/physical progress，绝不截断或写回 live ledger。
 
 `cutover` 先把原 workspace byte-for-byte 复制到显式 staging，保存 raw inventory，再只在副本处理末尾未完整 JSONL record。每项截断记录 original bytes/hash、accepted length/hash；中段 corruption 直接失败。runtime durable terminal 若领先 attempt-ledger 尾部，operator 只从同 pair 的 durable `variant_evidence` 导入 allowlisted accounting，并生成 reconciliation artifact；不得丢 terminal 或重调。started-without-terminal 最多一个，migration physical charge 固定为 3。冻结完成后由既有 `FullPoolSegmentedContinuation` 再验证 prefix。
 

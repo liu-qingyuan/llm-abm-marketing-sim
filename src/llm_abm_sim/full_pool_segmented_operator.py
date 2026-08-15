@@ -401,6 +401,7 @@ class FullPoolSegmentedCutoverOperator:
             "schema_version": _PLAN_SCHEMA,
             "plan_path": str(target),
             **request.model_dump(mode="json"),
+            "implementation_artifacts": self._implementation_artifacts(),
             "validated_v1_facts": facts,
             "automatic_signal_policy": "forbidden-freeze-after-external-stop-v1",
             "provider_calls": 0,
@@ -411,6 +412,7 @@ class FullPoolSegmentedCutoverOperator:
 
     def dry_run(self, plan_path: str | Path) -> dict[str, object]:
         plan, plan_file_hash = self._read_plan(plan_path)
+        self._validate_implementation_artifacts(plan)
         request = CutoverPlanRequest.model_validate(_request_fields(plan))
         facts = self._validate_static_facts(request, require_running=True)
         token = _confirmation_token(request, _sha256_json(plan))
@@ -439,6 +441,7 @@ class FullPoolSegmentedCutoverOperator:
 
     def cutover(self, plan_path: str | Path, *, confirmation_token: str) -> dict[str, object]:
         plan, plan_file_hash = self._read_plan(plan_path)
+        self._validate_implementation_artifacts(plan)
         request = CutoverPlanRequest.model_validate(_request_fields(plan))
         preflight, preflight_file_hash = self._read_artifact(request.preflight_artifact, _PREFLIGHT_SCHEMA)
         if preflight.get("plan_sha256") != plan_file_hash:
@@ -573,10 +576,17 @@ class FullPoolSegmentedCutoverOperator:
         plan, _ = self._read_plan(plan_path)
         request = CutoverPlanRequest.model_validate(_request_fields(plan))
         process = self.process_controller.snapshot(request.expected_pid)
+        process_state = "not_running"
+        if process is not None:
+            process_state = (
+                "running"
+                if process.command == request.expected_command and process.cwd == request.expected_cwd
+                else "pid_reused_or_crossed"
+            )
         response: dict[str, object] = {
             "schema_version": "full-pool-segmented-operator-status-v1",
             "pid": request.expected_pid,
-            "process_state": "running" if process is not None else "not_running",
+            "process_state": process_state,
             "prefix_logical_count": None,
             "suffix_logical_count": 0,
             "physical_attempt_count": None,
@@ -694,6 +704,7 @@ class FullPoolSegmentedCutoverOperator:
         client_factory: Callable[..., PiSubscriptionProviderClient] = PiSubscriptionProviderClient,
     ) -> SegmentedContinuationResult:
         plan, _ = self._read_plan(plan_path)
+        self._validate_implementation_artifacts(plan)
         request = CutoverPlanRequest.model_validate(_request_fields(plan))
         authorization, authorization_hash = self._validate_run_artifacts(request)
         continuation_exists = request.continuation_workspace.exists() or request.continuation_workspace.is_symlink()
@@ -824,6 +835,10 @@ class FullPoolSegmentedCutoverOperator:
         lock_path = request.prefix_workspace / _LOCK_FILE
         while True:
             snapshot = self.process_controller.snapshot(request.expected_pid)
+            if snapshot is not None and (
+                snapshot.command != request.expected_command or snapshot.cwd != request.expected_cwd
+            ):
+                raise ValueError("expected PID was reused or crossed during the external-stop wait")
             owners = self.process_controller.lock_owner_pids(lock_path)
             released = self.process_controller.lock_is_released(lock_path)
             if snapshot is None and not owners and released:
@@ -1032,6 +1047,25 @@ class FullPoolSegmentedCutoverOperator:
             "accepted_logical_count": ledger_state["logical_count"],
             "accepted_physical_attempt_count": ledger_state["physical_attempt_count"],
         }
+
+    def _implementation_artifacts(self) -> dict[str, str]:
+        repository = Path(__file__).resolve().parents[2]
+        paths = {
+            "operator_module": Path(__file__).resolve(),
+            "continuation_module": (repository / "src/llm_abm_sim/full_pool_segmented_continuation.py").resolve(),
+            "operator_cli": (repository / "scripts/run_full_pool_segmented_continuation.py").resolve(),
+        }
+        artifacts: dict[str, str] = {}
+        for label, path in paths.items():
+            if path.is_symlink() or not path.is_file():
+                raise ValueError(f"tracked implementation artifact is missing or unsafe: {label}")
+            artifacts[label] = self.filesystem.sha256_file(path)
+        return artifacts
+
+    def _validate_implementation_artifacts(self, plan: Mapping[str, object]) -> None:
+        expected = _mapping(plan.get("implementation_artifacts"), "implementation artifacts")
+        if expected != self._implementation_artifacts():
+            raise ValueError("loaded operator/source bytes differ from the prepared implementation artifacts")
 
     def _read_plan(self, path: str | Path) -> tuple[dict[str, object], str]:
         resolved = Path(path).expanduser().resolve(strict=True)

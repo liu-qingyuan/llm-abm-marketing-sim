@@ -187,11 +187,17 @@ def test_prepare_and_dry_run_require_exact_process_lock_and_confirmation_token(t
     preflight = operator.dry_run(plan_path)
 
     assert plan["implementation_commit"] == SEGMENTED_IMPLEMENTATION_COMMIT
+    implementation_artifacts = plan["implementation_artifacts"]
+    assert isinstance(implementation_artifacts, dict)
+    assert set(implementation_artifacts) == {"operator_module", "continuation_module", "operator_cli"}
     assert preflight["manual_stop_required"] is True
     token = str(preflight["exact_confirmation_token"])
     assert token.startswith("CUTOVER-ISSUE-205-424242-")
     assert controller.sleeps == []
 
+    controller.command = "crossed-reused-pid"
+    assert operator.status(plan_path)["process_state"] == "pid_reused_or_crossed"
+    controller.command = request.expected_command
     controller.alive = False
     controller.locked = False
     with pytest.raises(ValueError, match="exact high-risk confirmation token"):
