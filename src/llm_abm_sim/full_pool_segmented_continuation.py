@@ -70,6 +70,37 @@ from .schemas import PeerContext, PlatformContext, ProviderLLMConfig
 FULL_POOL_SEGMENTED_LOGICAL_CAP = 109_200
 FULL_POOL_SEGMENTED_PHYSICAL_CAP = 120_120
 FULL_POOL_SEGMENTED_MAX_CONCURRENCY = 10
+SEGMENTED_CONCURRENCY_QUALIFICATION_FILE = "concurrency_qualification.json"
+SEGMENTED_CONCURRENCY_QUALIFICATION_SCHEMA = "full-pool-segmented-concurrency-qualification-v1"
+SEGMENTED_OPERATOR_ARTIFACT_ENVELOPE_SCHEMA = "full-pool-segmented-operator-artifact-envelope-v1"
+_SEGMENTED_QUALIFICATION_PAYLOAD_FIELDS = frozenset(
+    {
+        "schema_version",
+        "continuation_authorization_sha256",
+        "mode",
+        "status",
+        "pair_ids",
+        "lane_count",
+        "elapsed_seconds",
+        "actual_request_rate_per_second",
+        "physical_attempt_count",
+        "provider_response_count",
+        "successful_decision_count",
+        "error_count",
+        "terminal_status_counts",
+        "observed_model_counts",
+        "usage_complete_response_count",
+        "usage_missing_response_count",
+        "usage_malformed_response_count",
+        "input_tokens",
+        "output_tokens",
+        "total_tokens",
+        "cached_input_tokens",
+        "formal_remaining_pairs_consumed",
+        "provider_concurrency_reduction",
+        "production_deploy_eligible",
+    }
+)
 
 _SEGMENTED_IDENTITY_SCHEMA = "full-pool-segmented-continuation-identity-v1"
 _SEGMENTED_MANIFEST_SCHEMA = "full-pool-segmented-cutoff-manifest-v1"
@@ -149,6 +180,20 @@ class SegmentedQualificationWave(_FrozenModel):
     output_tokens: int = Field(ge=0)
     total_tokens: int = Field(ge=0)
     cached_input_tokens: int = Field(ge=0)
+
+
+class SegmentedQualificationArtifactRef(_FrozenModel):
+    """Immutable safe reference returned after the official first-wave qualification."""
+
+    path: Path
+    sha256: str
+
+    @field_validator("sha256")
+    @classmethod
+    def _sha256(cls, value: str) -> str:
+        if _SHA256_PATTERN.fullmatch(value) is None:
+            raise ValueError("qualification artifact hash must be lowercase SHA-256")
+        return value
 
 
 class SegmentedContinuationResult(_FrozenModel):
@@ -321,7 +366,10 @@ class FullPoolSegmentedContinuation:
         adapter_factory: Callable[[int], LLMDecisionAdapter],
         dataset_dir: str | Path | None = None,
         reconciliation_authorization: FullPoolReconciliationAuthorization | None = None,
-        first_wave_observer: Callable[[SegmentedQualificationWave], None] | None = None,
+        first_wave_observer: Callable[
+            [SegmentedQualificationWave], SegmentedQualificationArtifactRef | None
+        ]
+        | None = None,
         _fixture_decision_inputs: Mapping[str, DecisionInput] | None = None,
     ) -> SegmentedContinuationResult:
         if dataset_dir is None and _fixture_decision_inputs is not None:
@@ -360,7 +408,10 @@ class FullPoolSegmentedContinuation:
         decision_inputs: Mapping[str, DecisionInput],
         adapter_factory: Callable[[int], LLMDecisionAdapter],
         reconciliation_authorization: FullPoolReconciliationAuthorization | None = None,
-        first_wave_observer: Callable[[SegmentedQualificationWave], None] | None = None,
+        first_wave_observer: Callable[
+            [SegmentedQualificationWave], SegmentedQualificationArtifactRef | None
+        ]
+        | None = None,
     ) -> SegmentedContinuationResult:
         prefix = _freeze_v1_prefix(Path(prefix_workspace))
         if cast(int, prefix.active_batch["time_step"]) + 1 != prefix.expected_batch_count:
@@ -374,6 +425,11 @@ class FullPoolSegmentedContinuation:
             pair_id
             for pair_id in cast(Sequence[str], prefix.active_batch["ordered_pair_ids"])
             if pair_id not in prefix.terminal_by_pair_id
+        )
+        _require_full_first_qualification_wave(
+            active_pending_count=len(pending_pair_ids),
+            remaining_logical_count=len(pending_pair_ids),
+            first_wave_observer=first_wave_observer,
         )
         _validate_decision_inputs(prefix, pending_pair_ids, decision_inputs)
         cap = _reserve_total_caps(
@@ -610,7 +666,10 @@ class FullPoolSegmentedContinuation:
         dataset_dir: str | Path,
         adapter_factory: Callable[[int], LLMDecisionAdapter],
         reconciliation_authorization: FullPoolReconciliationAuthorization | None,
-        first_wave_observer: Callable[[SegmentedQualificationWave], None] | None,
+        first_wave_observer: Callable[
+            [SegmentedQualificationWave], SegmentedQualificationArtifactRef | None
+        ]
+        | None,
     ) -> SegmentedContinuationResult:
         return _run_complete_segmented(
             prefix_workspace=Path(prefix_workspace),
@@ -954,7 +1013,8 @@ def _run_complete_segmented(
     dataset_dir: Path,
     adapter_factory: Callable[[int], LLMDecisionAdapter],
     reconciliation_authorization: FullPoolReconciliationAuthorization | None,
-    first_wave_observer: Callable[[SegmentedQualificationWave], None] | None,
+    first_wave_observer: Callable[[SegmentedQualificationWave], SegmentedQualificationArtifactRef | None]
+    | None,
 ) -> SegmentedContinuationResult:
     prefix = _freeze_v1_prefix(prefix_workspace)
     continuation = continuation_workspace.expanduser().resolve(strict=False)
@@ -969,6 +1029,15 @@ def _run_complete_segmented(
     if prefix.attempt_prefix.logical_count > expected_logical:
         raise ValueError("v1 prefix logical count exceeds the complete schedule")
     remaining_logical = expected_logical - prefix.attempt_prefix.logical_count
+    active_pending_count = sum(
+        pair_id not in prefix.terminal_by_pair_id
+        for pair_id in cast(Sequence[str], prefix.active_batch["ordered_pair_ids"])
+    )
+    _require_full_first_qualification_wave(
+        active_pending_count=active_pending_count,
+        remaining_logical_count=remaining_logical,
+        first_wave_observer=first_wave_observer,
+    )
     cutoff_manifest = _complete_cutoff_manifest(
         prefix=prefix,
         continuation_id=continuation_token,
@@ -1048,6 +1117,7 @@ def _run_complete_segmented(
     )
     suffix_terminal_count = 0
     first_wave_observer_state = [first_wave_observer]
+    qualification_artifact_state: list[SegmentedQualificationArtifactRef | None] = [None]
     try:
         active_plans = _typed_active_plans(prefix, config=config, prepared=prepared)
         active_results: dict[str, _WorkerResult] = {
@@ -1068,6 +1138,7 @@ def _run_complete_segmented(
             physical_attempts=physical_attempts,
             maximum_attempts_per_dispatch=prefix.maximum_attempts_per_dispatch,
             first_wave_observer_state=first_wave_observer_state,
+            qualification_artifact_state=qualification_artifact_state,
         )
         if cap_stopped:
             return _persist_cap_stop(
@@ -1130,6 +1201,7 @@ def _run_complete_segmented(
                 physical_attempts=physical_attempts,
                 maximum_attempts_per_dispatch=prefix.maximum_attempts_per_dispatch,
                 first_wave_observer_state=first_wave_observer_state,
+                qualification_artifact_state=qualification_artifact_state,
             )
             if cap_stopped:
                 return _persist_cap_stop(
@@ -1193,6 +1265,7 @@ def _run_complete_segmented(
         physical_attempt_count=physical_attempts,
         cutoff_manifest_sha256=manifest_sha256,
         continuation_identity_hash=kernel_journal.identity_hash,
+        qualification_artifact=qualification_artifact_state[0],
         ledger=ledger,
     )
     status = {
@@ -1209,6 +1282,9 @@ def _run_complete_segmented(
         "terminal_rows_sha256": source_status["terminal_rows_sha256"],
         "source_root_relative_path": source_status["source_root_relative_path"],
         "source_manifest_sha256": source_manifest_sha256,
+        "concurrency_qualification_artifact_sha256": source_status[
+            "concurrency_qualification_artifact_sha256"
+        ],
         "production_deploy_eligible": False,
     }
     _atomic_write_json(continuation / _STATUS_FILE, status)
@@ -1337,7 +1413,10 @@ def _execute_typed_plans(
     provider_metadata: Mapping[str, object],
     physical_attempts: int,
     maximum_attempts_per_dispatch: int,
-    first_wave_observer_state: list[Callable[[SegmentedQualificationWave], None] | None],
+    first_wave_observer_state: list[
+        Callable[[SegmentedQualificationWave], SegmentedQualificationArtifactRef | None] | None
+    ],
+    qualification_artifact_state: list[SegmentedQualificationArtifactRef | None],
 ) -> tuple[dict[str, _WorkerResult], int, bool]:
     results: dict[str, _WorkerResult] = {}
     consumed_attempts = 0
@@ -1369,7 +1448,7 @@ def _execute_typed_plans(
         observer = first_wave_observer_state[0]
         if observer is not None:
             first_wave_observer_state[0] = None
-            observer(
+            qualification_path = observer(
                 _qualification_wave(
                     pair_ids=[plan.pair_id for plan in wave_plans],
                     results=wave,
@@ -1377,6 +1456,8 @@ def _execute_typed_plans(
                     elapsed_seconds=max(monotonic() - wave_started, 1e-9),
                 )
             )
+            if qualification_path is not None:
+                qualification_artifact_state[0] = qualification_path
         consumed_attempts += wave_physical_attempts
         for plan in wave_plans:
             results[plan.pair_id] = wave[plan.pair_id]
@@ -1680,6 +1761,74 @@ def _complete_cutoff_manifest(
     }
 
 
+def _validated_concurrency_qualification_bytes(
+    artifact: SegmentedQualificationArtifactRef,
+) -> tuple[bytes, dict[str, object]]:
+    path = artifact.path.expanduser().resolve(strict=True)
+    if artifact.path.is_symlink() or not path.is_file() or _sha256_file(path) != artifact.sha256:
+        raise ValueError("concurrency qualification artifact path or hash is crossed")
+    raw = path.read_bytes()
+    envelope = _mapping(json.loads(raw), "concurrency qualification envelope")
+    if (
+        set(envelope) != {"schema_version", "payload", "payload_sha256"}
+        or envelope.get("schema_version") != SEGMENTED_OPERATOR_ARTIFACT_ENVELOPE_SCHEMA
+    ):
+        raise ValueError("concurrency qualification envelope is unsupported")
+    payload = _mapping(envelope.get("payload"), "concurrency qualification payload")
+    if (
+        set(payload) != _SEGMENTED_QUALIFICATION_PAYLOAD_FIELDS
+        or envelope.get("payload_sha256") != _sha256_json(payload)
+        or payload.get("schema_version") != SEGMENTED_CONCURRENCY_QUALIFICATION_SCHEMA
+        or payload.get("mode") != "first-wave-formal-remaining-pairs"
+        or payload.get("status") != "qualified"
+        or payload.get("lane_count") != FULL_POOL_SEGMENTED_MAX_CONCURRENCY
+        or payload.get("physical_attempt_count") != FULL_POOL_SEGMENTED_MAX_CONCURRENCY
+        or payload.get("provider_response_count") != FULL_POOL_SEGMENTED_MAX_CONCURRENCY
+        or payload.get("successful_decision_count") != FULL_POOL_SEGMENTED_MAX_CONCURRENCY
+        or payload.get("error_count") != 0
+        or payload.get("terminal_status_counts") != {"succeeded": FULL_POOL_SEGMENTED_MAX_CONCURRENCY}
+        or payload.get("observed_model_counts")
+        != {FULL_POOL_FORMAL_REQUIRED_OBSERVED_MODEL: FULL_POOL_SEGMENTED_MAX_CONCURRENCY}
+        or payload.get("usage_complete_response_count") != FULL_POOL_SEGMENTED_MAX_CONCURRENCY
+        or payload.get("usage_missing_response_count") != 0
+        or payload.get("usage_malformed_response_count") != 0
+        or payload.get("formal_remaining_pairs_consumed") != FULL_POOL_SEGMENTED_MAX_CONCURRENCY
+        or payload.get("provider_concurrency_reduction") is not False
+        or payload.get("production_deploy_eligible") is not False
+    ):
+        raise ValueError("concurrency qualification facts do not close the ten-lane Formal contract")
+    pair_ids = _string_list(payload.get("pair_ids"), "qualification pair IDs")
+    if len(pair_ids) != FULL_POOL_SEGMENTED_MAX_CONCURRENCY or len(set(pair_ids)) != len(pair_ids):
+        raise ValueError("concurrency qualification pair IDs are not exact")
+    authorization_sha256 = _non_empty(
+        payload.get("continuation_authorization_sha256"), "qualification authorization hash"
+    )
+    if _SHA256_PATTERN.fullmatch(authorization_sha256) is None:
+        raise ValueError("concurrency qualification authorization hash is invalid")
+    elapsed = payload.get("elapsed_seconds")
+    rate = payload.get("actual_request_rate_per_second")
+    if (
+        isinstance(elapsed, bool)
+        or not isinstance(elapsed, (int, float))
+        or float(elapsed) <= 0.0
+        or isinstance(rate, bool)
+        or not isinstance(rate, (int, float))
+        or float(rate) <= 0.0
+    ):
+        raise ValueError("concurrency qualification timing evidence is invalid")
+    input_tokens = _strict_non_negative_int(payload.get("input_tokens"), "qualification input tokens")
+    output_tokens = _strict_non_negative_int(payload.get("output_tokens"), "qualification output tokens")
+    total_tokens = _strict_non_negative_int(payload.get("total_tokens"), "qualification total tokens")
+    cached_tokens = _strict_non_negative_int(
+        payload.get("cached_input_tokens"), "qualification cached input tokens"
+    )
+    if total_tokens != input_tokens + output_tokens or cached_tokens > input_tokens:
+        raise ValueError("concurrency qualification token accounting is crossed")
+    if raw != (_canonical_json(envelope) + "\n").encode("utf-8"):
+        raise ValueError("concurrency qualification artifact is not canonical JSON")
+    return raw, payload
+
+
 def _close_segmented_source_v2(
     *,
     continuation: Path,
@@ -1691,6 +1840,7 @@ def _close_segmented_source_v2(
     physical_attempt_count: int,
     cutoff_manifest_sha256: str,
     continuation_identity_hash: str,
+    qualification_artifact: SegmentedQualificationArtifactRef | None,
     ledger: _ContinuationLedger,
 ) -> tuple[Path, str, dict[str, object]]:
     source = continuation / "source-v2"
@@ -1702,8 +1852,24 @@ def _close_segmented_source_v2(
     pair_path = staging / "pair_rows.jsonl"
     terminal_path = staging / "terminal_rows.jsonl"
     step_path = staging / "steps.jsonl"
+    concurrency_qualification_sha256: str | None = None
+    if qualification_artifact is not None:
+        qualification_bytes, qualification_payload = _validated_concurrency_qualification_bytes(
+            qualification_artifact
+        )
+        qualification_path = staging / SEGMENTED_CONCURRENCY_QUALIFICATION_FILE
+        with qualification_path.open("xb") as qualification_handle:
+            qualification_handle.write(qualification_bytes)
+            qualification_handle.flush()
+            os.fsync(qualification_handle.fileno())
+        concurrency_qualification_sha256 = _sha256_file(qualification_path)
+        if concurrency_qualification_sha256 != qualification_artifact.sha256:
+            raise ValueError("copied concurrency qualification hash changed")
+    else:
+        qualification_payload = None
     prefix_terminal_ids = set(prefix.terminal_by_pair_id)
     pair_ids: set[str] = set()
+    ordered_pair_ids: list[str] = []
     terminal_ids: set[str] = set()
     terminal_pair_ids: set[str] = set()
     cumulative_feedback: set[str] = set()
@@ -1754,6 +1920,7 @@ def _close_segmented_source_v2(
                 if pair_id in pair_ids or position != expected_position:
                     raise ValueError("source-v2 pair identity or order is not canonical")
                 pair_ids.add(pair_id)
+                ordered_pair_ids.append(pair_id)
                 expected_position += 1
                 pair_handle.write(
                     _canonical_json(
@@ -1869,6 +2036,16 @@ def _close_segmented_source_v2(
         raise ValueError("source-v2 candidate or step denominator is incomplete")
     if pair_ids != terminal_pair_ids:
         raise ValueError("source-v2 pair and terminal identities are crossed")
+    if qualification_payload is not None:
+        qualification_pair_ids = _string_list(
+            qualification_payload.get("pair_ids"), "qualification pair IDs"
+        )
+        expected_qualification_pair_ids = ordered_pair_ids[
+            len(prefix.terminal_by_pair_id) : len(prefix.terminal_by_pair_id)
+            + FULL_POOL_SEGMENTED_MAX_CONCURRENCY
+        ]
+        if qualification_pair_ids != expected_qualification_pair_ids:
+            raise ValueError("concurrency qualification is crossed with the first suffix wave")
     if not invocations >= responses >= successes:
         raise ValueError("source-v2 Provider accounting invariant failed")
     migration_unknown_charge = physical_attempt_count - invocations
@@ -1892,10 +2069,10 @@ def _close_segmented_source_v2(
         "cached_input_usage": cached_input_usage if cached_reported else None,
         "migration_unknown_physical_charge": migration_unknown_charge,
     }
-    artifacts = [
-        _file_ref(staging, staging / name)
-        for name in ("candidate_rows.jsonl", "pair_rows.jsonl", "terminal_rows.jsonl", "steps.jsonl")
-    ]
+    artifact_names = ["candidate_rows.jsonl", "pair_rows.jsonl", "terminal_rows.jsonl", "steps.jsonl"]
+    if concurrency_qualification_sha256 is not None:
+        artifact_names.append(SEGMENTED_CONCURRENCY_QUALIFICATION_FILE)
+    artifacts = [_file_ref(staging, staging / name) for name in artifact_names]
     terminal_rows_sha256 = _sha256_file(terminal_path)
     complete_status = {
         "durable_prefix_terminal_count": len(prefix.terminal_by_pair_id),
@@ -1907,6 +2084,7 @@ def _close_segmented_source_v2(
         "terminal_rows_relative_path": "source-v2/terminal_rows.jsonl",
         "terminal_rows_sha256": terminal_rows_sha256,
         "source_root_relative_path": "source-v2",
+        "concurrency_qualification_artifact_sha256": concurrency_qualification_sha256,
         "production_deploy_eligible": False,
     }
     manifest = {
@@ -1925,6 +2103,7 @@ def _close_segmented_source_v2(
         "cutoff_manifest_sha256": cutoff_manifest_sha256,
         "continuation_identity_hash": continuation_identity_hash,
         "prefix_identity_hash": prefix.run_identity.get("identity_hash"),
+        "concurrency_qualification_artifact_sha256": concurrency_qualification_sha256,
         "max_concurrency": FULL_POOL_SEGMENTED_MAX_CONCURRENCY,
         "production_deploy_eligible": False,
     }
@@ -2091,6 +2270,14 @@ def _validated_complete_status_from_source(
         "terminal_rows.jsonl",
         "steps.jsonl",
     }
+    concurrency_qualification_sha256 = source_manifest.get("concurrency_qualification_artifact_sha256")
+    if concurrency_qualification_sha256 is not None:
+        if (
+            not isinstance(concurrency_qualification_sha256, str)
+            or _SHA256_PATTERN.fullmatch(concurrency_qualification_sha256) is None
+        ):
+            raise ValueError("source-v2 concurrency qualification hash is invalid")
+        expected_artifact_names.add(SEGMENTED_CONCURRENCY_QUALIFICATION_FILE)
     artifacts = _mapping_sequence(source_manifest.get("artifacts"), "source-v2 artifacts")
     artifact_by_path: dict[str, dict[str, object]] = {}
     for raw_ref in artifacts:
@@ -2106,6 +2293,13 @@ def _validated_complete_status_from_source(
         artifact_by_path[relative] = ref
     if set(artifact_by_path) != expected_artifact_names:
         raise ValueError("source-v2 artifact inventory is not exact")
+    if concurrency_qualification_sha256 is not None:
+        _validated_concurrency_qualification_bytes(
+            SegmentedQualificationArtifactRef(
+                path=source / SEGMENTED_CONCURRENCY_QUALIFICATION_FILE,
+                sha256=concurrency_qualification_sha256,
+            )
+        )
     source_inventory = _artifact_inventory(source)
     if set(source_inventory) != expected_artifact_names | {"manifest.json"}:
         raise ValueError("source-v2 contains unmanifested artifacts")
@@ -2190,6 +2384,7 @@ def _validated_complete_status_from_source(
         "terminal_rows_relative_path": "source-v2/terminal_rows.jsonl",
         "terminal_rows_sha256": artifact_by_path["terminal_rows.jsonl"]["sha256"],
         "source_root_relative_path": "source-v2",
+        "concurrency_qualification_artifact_sha256": concurrency_qualification_sha256,
         "production_deploy_eligible": False,
     }
     if complete_status != expected_complete_status:
@@ -2227,6 +2422,21 @@ def _reserve_dynamic_wave(
         wave_size=wave_size,
         reserved_physical_attempts=wave_size * maximum_attempts_per_dispatch,
     )
+
+
+def _require_full_first_qualification_wave(
+    *,
+    active_pending_count: int,
+    remaining_logical_count: int,
+    first_wave_observer: Callable[[SegmentedQualificationWave], SegmentedQualificationArtifactRef | None]
+    | None,
+) -> None:
+    if first_wave_observer is None:
+        return
+    if remaining_logical_count < FULL_POOL_SEGMENTED_MAX_CONCURRENCY:
+        raise ValueError("bounded concurrency qualification requires ten remaining pairs before Provider use")
+    if 0 < active_pending_count < FULL_POOL_SEGMENTED_MAX_CONCURRENCY:
+        raise ValueError("active cutoff cannot dispatch a short qualification wave")
 
 
 def _reserve_total_caps(
@@ -3338,6 +3548,7 @@ _SEGMENTED_SOURCE_MANIFEST_FIELDS = frozenset(
         "cutoff_manifest_sha256",
         "continuation_identity_hash",
         "prefix_identity_hash",
+        "concurrency_qualification_artifact_sha256",
         "max_concurrency",
         "production_deploy_eligible",
     }
@@ -3376,6 +3587,7 @@ _SEGMENTED_COMPLETE_STATUS_FIELDS = frozenset(
         "terminal_rows_relative_path",
         "terminal_rows_sha256",
         "source_root_relative_path",
+        "concurrency_qualification_artifact_sha256",
         "production_deploy_eligible",
     }
 )
@@ -3445,6 +3657,7 @@ class SegmentedFullPoolSourceFacts:
     formal_execution_contract_sha256: str | None
     authorization_artifact_sha256: str | None
     qualification_artifact_sha256: str | None
+    concurrency_qualification_artifact_sha256: str | None
     observed_model_evidence_sha256: str | None
     prompt_variant_id: str
     prompt_version: str
@@ -3966,6 +4179,24 @@ def _read_closed_segmented_full_pool_source(
     provider_failed = pair_scan.provider_failed
     serial_count = pair_scan.serial_count
     suffix_count = pair_scan.suffix_count
+    concurrency_qualification_sha256 = manifest.get("concurrency_qualification_artifact_sha256")
+    if isinstance(concurrency_qualification_sha256, str):
+        _, qualification_payload = _validated_concurrency_qualification_bytes(
+            SegmentedQualificationArtifactRef(
+                path=resolved / SEGMENTED_CONCURRENCY_QUALIFICATION_FILE,
+                sha256=concurrency_qualification_sha256,
+            )
+        )
+        qualification_pair_ids = _string_list(
+            qualification_payload.get("pair_ids"), "segmented qualification pair IDs"
+        )
+        if qualification_pair_ids != list(
+            pair_scan.ordered_pair_ids[
+                serial_count : serial_count + FULL_POOL_SEGMENTED_MAX_CONCURRENCY
+            ]
+        ):
+            raise ValueError("segmented qualification is crossed with the first suffix wave")
+    suffix_count = pair_scan.suffix_count
     reconciliation_retry_count = len(pair_scan.retry_pair_ids)
     terminal_accounting = pair_scan.accounting
     positive_users_by_batch = pair_scan.positive_users_by_batch
@@ -4067,6 +4298,9 @@ def _read_closed_segmented_full_pool_source(
         "terminal_rows_relative_path": "source-v2/terminal_rows.jsonl",
         "terminal_rows_sha256": artifact_hashes["terminal_rows.jsonl"],
         "source_root_relative_path": "source-v2",
+        "concurrency_qualification_artifact_sha256": manifest.get(
+            "concurrency_qualification_artifact_sha256"
+        ),
         "production_deploy_eligible": False,
     }
     if set(complete_status) != _SEGMENTED_COMPLETE_STATUS_FIELDS or complete_status != expected_complete_status:
@@ -4107,6 +4341,7 @@ def _read_closed_segmented_full_pool_source(
         "terminal_rows_sha256",
         "source_root_relative_path",
         "source_manifest_sha256",
+        "concurrency_qualification_artifact_sha256",
         "production_deploy_eligible",
     }
     if (
@@ -4115,6 +4350,8 @@ def _read_closed_segmented_full_pool_source(
         or continuation_status.get("lifecycle") != SegmentedContinuationStatus.COMPLETE.value
         or continuation_status.get("manifest_sha256") != cutoff_hash
         or continuation_status.get("source_manifest_sha256") != manifest_sha256
+        or continuation_status.get("concurrency_qualification_artifact_sha256")
+        != manifest.get("concurrency_qualification_artifact_sha256")
         or continuation_status.get("durable_prefix_terminal_count") != serial_count
         or continuation_status.get("concurrent_suffix_terminal_count") != suffix_count
         or continuation_status.get("logical_count") != logical
@@ -4155,6 +4392,9 @@ def _read_closed_segmented_full_pool_source(
         transport = "deterministic"
     if live_api_triggered:
         production_values = (
+            isinstance(manifest.get("concurrency_qualification_artifact_sha256"), str)
+            and manifest.get("concurrency_qualification_artifact_sha256")
+            == artifact_hashes.get(SEGMENTED_CONCURRENCY_QUALIFICATION_FILE),
             sample_size == FULL_POOL_PRODUCTION_USER_COUNT,
             expected_pairs == FULL_POOL_PRODUCTION_ELIGIBLE_PAIRS,
             horizon == FULL_POOL_PRODUCTION_HORIZON,
@@ -4207,6 +4447,9 @@ def _read_closed_segmented_full_pool_source(
         ),
         qualification_artifact_sha256=(
             formal_lineage.qualification_artifact_sha256 if formal_lineage is not None else None
+        ),
+        concurrency_qualification_artifact_sha256=cast(
+            str | None, manifest.get("concurrency_qualification_artifact_sha256")
         ),
         observed_model_evidence_sha256=(
             formal_lineage.observed_model_evidence_sha256 if formal_lineage is not None else None
@@ -4369,23 +4612,35 @@ def _validate_segmented_artifacts(
     source: Path,
     manifest: Mapping[str, object],
 ) -> dict[str, str]:
+    expected_artifacts: set[str] = set(_SEGMENTED_SOURCE_ARTIFACTS)
+    qualification_sha256 = manifest.get("concurrency_qualification_artifact_sha256")
+    if qualification_sha256 is not None:
+        if not isinstance(qualification_sha256, str) or _SHA256_PATTERN.fullmatch(qualification_sha256) is None:
+            raise ValueError("segmented concurrency qualification hash is invalid")
+        expected_artifacts.add(SEGMENTED_CONCURRENCY_QUALIFICATION_FILE)
     refs = _mapping_sequence(manifest.get("artifacts"), "segmented source-v2 artifacts")
     by_path: dict[str, Mapping[str, object]] = {}
     for ref in refs:
         relative = _non_empty(ref.get("relative_path"), "segmented artifact path")
-        if relative not in _SEGMENTED_SOURCE_ARTIFACTS or relative in by_path:
+        if relative not in expected_artifacts or relative in by_path:
             raise ValueError("segmented source-v2 artifact inventory is not exact")
         path = source / relative
         if path.is_symlink() or not path.is_file() or _file_ref(source, path) != ref:
             raise ValueError("segmented source-v2 artifact hash or byte length is crossed")
         by_path[relative] = ref
     inventory = _artifact_inventory(source)
-    if set(by_path) != set(_SEGMENTED_SOURCE_ARTIFACTS) or set(inventory) != {
-        *_SEGMENTED_SOURCE_ARTIFACTS,
-        "manifest.json",
-    }:
+    if set(by_path) != expected_artifacts or set(inventory) != expected_artifacts | {"manifest.json"}:
         raise ValueError("segmented source-v2 contains missing, extra, or unsafe artifacts")
-    return {name: cast(str, by_path[name]["sha256"]) for name in _SEGMENTED_SOURCE_ARTIFACTS}
+    if qualification_sha256 is not None:
+        if by_path[SEGMENTED_CONCURRENCY_QUALIFICATION_FILE].get("sha256") != qualification_sha256:
+            raise ValueError("segmented concurrency qualification manifest hash is crossed")
+        _validated_concurrency_qualification_bytes(
+            SegmentedQualificationArtifactRef(
+                path=source / SEGMENTED_CONCURRENCY_QUALIFICATION_FILE,
+                sha256=qualification_sha256,
+            )
+        )
+    return {name: cast(str, by_path[name]["sha256"]) for name in sorted(expected_artifacts)}
 
 
 def _read_segmented_cutoff(workspace: Path) -> tuple[dict[str, object], str]:
@@ -5180,6 +5435,7 @@ def _segmented_execution_document(facts: SegmentedFullPoolSourceFacts) -> dict[s
         "formal_execution_contract_sha256": facts.formal_execution_contract_sha256,
         "authorization_artifact_sha256": facts.authorization_artifact_sha256,
         "qualification_artifact_sha256": facts.qualification_artifact_sha256,
+        "concurrency_qualification_artifact_sha256": facts.concurrency_qualification_artifact_sha256,
         "observed_model_evidence_sha256": facts.observed_model_evidence_sha256,
         "prompt_variant_id": facts.prompt_variant_id,
         "prompt_version": facts.prompt_version,

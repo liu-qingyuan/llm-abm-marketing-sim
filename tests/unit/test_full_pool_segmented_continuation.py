@@ -23,6 +23,7 @@ from llm_abm_sim.full_pool_segmented_continuation import (
     FullPoolSegmentedContinuation,
     SegmentedContinuationStatus,
     SegmentedQualificationWave,
+    _require_full_first_qualification_wave,
     _reserve_total_caps,
     _validate_unique_terminal_rows,
 )
@@ -33,6 +34,28 @@ PREFIX = FIXTURES / "full_pool_segmented_v1_prefix"
 UNKNOWN_PREFIX = FIXTURES / "full_pool_segmented_v1_prefix_unknown"
 PROMPT_VERSION = "concurrent-primary-observed-v2"
 MODEL = "offline-segmented-fixture-v1"
+
+
+def test_short_first_qualification_wave_fails_before_provider_use() -> None:
+    def observer(_wave: SegmentedQualificationWave) -> None:
+        return None
+    with pytest.raises(ValueError, match="short qualification wave"):
+        _require_full_first_qualification_wave(
+            active_pending_count=9,
+            remaining_logical_count=100,
+            first_wave_observer=observer,
+        )
+    with pytest.raises(ValueError, match="ten remaining pairs"):
+        _require_full_first_qualification_wave(
+            active_pending_count=9,
+            remaining_logical_count=9,
+            first_wave_observer=observer,
+        )
+    _require_full_first_qualification_wave(
+        active_pending_count=10,
+        remaining_logical_count=10,
+        first_wave_observer=observer,
+    )
 
 
 def test_segmented_cap_reservation_includes_prefix_unknown_and_suffix_retry_windows() -> None:

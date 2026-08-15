@@ -18,8 +18,12 @@ from llm_abm_sim.concurrent_message_experiment import (
 from llm_abm_sim.decision import EngageDecision, LLMDecisionAdapter
 from llm_abm_sim.final_research import TARGET_VIDEO_ID
 from llm_abm_sim.full_pool_segmented_continuation import (
+    SEGMENTED_CONCURRENCY_QUALIFICATION_SCHEMA,
+    SEGMENTED_OPERATOR_ARTIFACT_ENVELOPE_SCHEMA,
     FullPoolSegmentedContinuation,
     SegmentedContinuationStatus,
+    SegmentedQualificationArtifactRef,
+    SegmentedQualificationWave,
     _reserve_dynamic_wave,
 )
 from llm_abm_sim.prompt_field_summary import CONCURRENT_MESSAGE_PRIMARY_PROMPT_VERSION
@@ -330,13 +334,19 @@ def _write_attempt_prefix(workspace: Path) -> None:
     (workspace / "full_pool_execution_status.json").write_text(_canonical(status), encoding="utf-8")
 
 
-def _mid_batch_prefix(tmp_path: Path) -> tuple[Path, Path, list[str]]:
+def _mid_batch_prefix(
+    tmp_path: Path,
+    *,
+    horizon: int = 3,
+    delivery_capacity: int = 3,
+    terminal_limit: int = 11,
+) -> tuple[Path, Path, list[str]]:
     dataset = _dataset(tmp_path)
     config = ConcurrentMessageExperimentConfig(
         dataset_dir=dataset,
         sample_size=7,
-        horizon=3,
-        delivery_capacity=3,
+        horizon=horizon,
+        delivery_capacity=delivery_capacity,
         configuration_profile="validation",
     )
     calls: list[str] = []
@@ -346,8 +356,8 @@ def _mid_batch_prefix(tmp_path: Path) -> tuple[Path, Path, list[str]]:
     def interrupt_after_second_batch_one_terminal(_evidence: Mapping[str, object]) -> None:
         nonlocal terminal_count
         terminal_count += 1
-        if terminal_count == 11:
-            raise RuntimeError("static cutoff after two Batch 1 terminals")
+        if terminal_count == terminal_limit:
+            raise RuntimeError("static cutoff at the requested terminal boundary")
 
     output = tmp_path / "old-v1-output"
     consumer = _PrimaryOnlyConcurrentRuntimeConsumer(
@@ -492,6 +502,97 @@ def test_complete_source_v2_recovers_missing_status_without_calls_and_rejects_ta
             adapter_factory=tripwire,
         )
     assert factory_called is False
+
+
+def test_source_v2_embeds_and_revalidates_exact_first_wave_qualification(tmp_path: Path) -> None:
+    prefix, _dataset_dir, _prefix_calls = _mid_batch_prefix(
+        tmp_path,
+        horizon=2,
+        delivery_capacity=4,
+        terminal_limit=2,
+    )
+    external_qualification = tmp_path / "qualification.json"
+
+    def qualify(wave: SegmentedQualificationWave) -> SegmentedQualificationArtifactRef:
+        payload = {
+            "schema_version": SEGMENTED_CONCURRENCY_QUALIFICATION_SCHEMA,
+            "continuation_authorization_sha256": "a" * 64,
+            "mode": "first-wave-formal-remaining-pairs",
+            "status": "qualified",
+            "pair_ids": list(wave.pair_ids),
+            "lane_count": 10,
+            "elapsed_seconds": 2.0,
+            "actual_request_rate_per_second": 5.0,
+            "physical_attempt_count": 10,
+            "provider_response_count": 10,
+            "successful_decision_count": 10,
+            "error_count": 0,
+            "terminal_status_counts": {"succeeded": 10},
+            "observed_model_counts": {"gpt-5.6-sol": 10},
+            "usage_complete_response_count": 10,
+            "usage_missing_response_count": 0,
+            "usage_malformed_response_count": 0,
+            "input_tokens": 100,
+            "output_tokens": 20,
+            "total_tokens": 120,
+            "cached_input_tokens": 0,
+            "formal_remaining_pairs_consumed": 10,
+            "provider_concurrency_reduction": False,
+            "production_deploy_eligible": False,
+        }
+        payload_sha256 = hashlib.sha256(
+            json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()
+        envelope = {
+            "schema_version": SEGMENTED_OPERATOR_ARTIFACT_ENVELOPE_SCHEMA,
+            "payload": payload,
+            "payload_sha256": payload_sha256,
+        }
+        external_qualification.write_text(
+            json.dumps(envelope, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n",
+            encoding="utf-8",
+        )
+        return SegmentedQualificationArtifactRef(
+            path=external_qualification,
+            sha256=hashlib.sha256(external_qualification.read_bytes()).hexdigest(),
+        )
+
+    result = FullPoolSegmentedContinuation().run(
+        prefix,
+        tmp_path / "qualified-continuation",
+        continuation_id="qualified-source-v2",
+        adapter_factory=lambda _lane_id: _LaneAdapter([]),
+        first_wave_observer=qualify,
+    )
+    assert result.source_root is not None
+    assert result.source_manifest_sha256 is not None
+    manifest = json.loads((result.source_root / "manifest.json").read_text(encoding="utf-8"))
+    qualification_hash = hashlib.sha256(external_qualification.read_bytes()).hexdigest()
+    assert manifest["concurrency_qualification_artifact_sha256"] == qualification_hash
+    copied = result.source_root / "concurrency_qualification.json"
+    assert copied.read_bytes() == external_qualification.read_bytes()
+    status_path = result.workspace_root / "segmented_continuation_status.json"
+    status_path.unlink()
+    recovered = FullPoolSegmentedContinuation().run(
+        prefix,
+        result.workspace_root,
+        continuation_id="qualified-source-v2",
+        adapter_factory=lambda _lane_id: (_ for _ in ()).throw(
+            AssertionError("qualified source recovery must not create Adapter lanes")
+        ),
+    )
+    assert recovered == result
+    status_path.unlink()
+    copied.write_bytes(copied.read_bytes() + b" ")
+    with pytest.raises(ValueError, match="artifact hash mismatch"):
+        FullPoolSegmentedContinuation().run(
+            prefix,
+            result.workspace_root,
+            continuation_id="qualified-source-v2",
+            adapter_factory=lambda _lane_id: (_ for _ in ()).throw(
+                AssertionError("qualification tamper must fail before Adapter creation")
+            ),
+        )
 
 
 def test_dynamic_wave_reservation_shrinks_near_physical_cap_and_stops_without_dispatch() -> None:

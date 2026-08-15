@@ -21,9 +21,13 @@ from .full_pool_segmented_continuation import (
     FULL_POOL_SEGMENTED_LOGICAL_CAP,
     FULL_POOL_SEGMENTED_MAX_CONCURRENCY,
     FULL_POOL_SEGMENTED_PHYSICAL_CAP,
+    SEGMENTED_CONCURRENCY_QUALIFICATION_FILE,
+    SEGMENTED_CONCURRENCY_QUALIFICATION_SCHEMA,
+    SEGMENTED_OPERATOR_ARTIFACT_ENVELOPE_SCHEMA,
     FullPoolReconciliationAuthorization,
     FullPoolSegmentedContinuation,
     SegmentedContinuationResult,
+    SegmentedQualificationArtifactRef,
     SegmentedQualificationWave,
     _freeze_v1_prefix,
     _replay_continuation_ledger,
@@ -51,8 +55,8 @@ _PREFLIGHT_SCHEMA = "full-pool-segmented-cutover-preflight-v1"
 _CUTOVER_SCHEMA = "full-pool-segmented-cutover-v1"
 _RECONCILIATION_SCHEMA = "full-pool-segmented-operator-reconciliation-v1"
 _CONTINUATION_AUTHORIZATION_SCHEMA = "full-pool-segmented-continuation-authorization-v1"
-_QUALIFICATION_SCHEMA = "full-pool-segmented-concurrency-qualification-v1"
-_ARTIFACT_ENVELOPE_SCHEMA = "full-pool-segmented-operator-artifact-envelope-v1"
+_QUALIFICATION_SCHEMA = SEGMENTED_CONCURRENCY_QUALIFICATION_SCHEMA
+_ARTIFACT_ENVELOPE_SCHEMA = SEGMENTED_OPERATOR_ARTIFACT_ENVELOPE_SCHEMA
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _CONTINUATION_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,159}$")
 _RUNTIME_JOURNAL = "concurrent_message_execution_journal.jsonl"
@@ -136,8 +140,22 @@ class CutoverPlanRequest(_FrozenModel):
     @field_validator("expected_command")
     @classmethod
     def _safe_command(cls, value: str) -> str:
-        if "\n" in value or "\r" in value:
-            raise ValueError("expected process command must be one line")
+        lowered = value.lower()
+        forbidden = (
+            "bearer ",
+            "api_key=",
+            "apikey=",
+            "access_token=",
+            "refresh_token=",
+            "authorization=",
+            "password=",
+            "secret=",
+            "--api-key",
+            "--access-token",
+            "--refresh-token",
+        )
+        if "\n" in value or "\r" in value or any(marker in lowered for marker in forbidden):
+            raise ValueError("expected process command must be one safe credential-free line")
         return value
 
     @field_validator("continuation_id")
@@ -452,8 +470,10 @@ class FullPoolSegmentedCutoverOperator:
             raise ValueError("exact high-risk confirmation token is required")
         self._validate_pidfile(request)
         self._wait_for_external_stop(request)
+        self._assert_external_stop_state(request)
         self._validate_static_facts(request, require_running=False)
         stable_inventory = self._wait_for_stable_workspace(request)
+        self._assert_external_stop_state(request)
         source_before = self.filesystem.inventory(request.prefix_workspace)
         if source_before != stable_inventory:
             raise ValueError("v1 workspace changed after the stable cutoff observation")
@@ -478,14 +498,14 @@ class FullPoolSegmentedCutoverOperator:
         ]
         reconciliation = self._reconcile_cross_ledgers(request.frozen_prefix_staging, request)
         self.filesystem.fsync_directory(request.frozen_prefix_staging)
+        self._assert_external_stop_state(request)
         source_after_reconciliation = self.filesystem.inventory(request.prefix_workspace)
+        self._assert_external_stop_state(request)
         if source_after_reconciliation != source_before:
             raise ValueError("original v1 workspace changed during freeze; cutover is rejected")
         if request.frozen_prefix_workspace.exists() or request.frozen_prefix_workspace.is_symlink():
             raise FileExistsError("frozen-prefix target already exists")
-        self.filesystem.replace(request.frozen_prefix_staging, request.frozen_prefix_workspace)
-
-        prefix = _freeze_v1_prefix(request.frozen_prefix_workspace)
+        prefix = _freeze_v1_prefix(request.frozen_prefix_staging)
         unknown_pair_ids = prefix.unknown_pair_ids
         if len(unknown_pair_ids) > 1:
             raise ValueError("cutover has more than one migration unknown; Provider calls remain zero")
@@ -496,7 +516,13 @@ class FullPoolSegmentedCutoverOperator:
         remaining_physical = request.physical_cap - physical_count - migration_charge
         if remaining_logical < len(unknown_pair_ids) or remaining_physical < 0:
             raise ValueError("cutover remaining caps do not close the 109200/120120 guard")
-        frozen_inventory = self.filesystem.inventory(request.frozen_prefix_workspace)
+        frozen_inventory = self.filesystem.inventory(request.frozen_prefix_staging)
+        self._assert_external_stop_state(request)
+        if self.filesystem.inventory(request.prefix_workspace) != source_before:
+            raise ValueError("original v1 workspace changed before the atomic frozen-prefix publish")
+        self.filesystem.replace(request.frozen_prefix_staging, request.frozen_prefix_workspace)
+        if self.filesystem.inventory(request.frozen_prefix_workspace) != frozen_inventory:
+            raise ValueError("published frozen-prefix inventory differs from validated staging")
         cutover_payload: dict[str, object] = {
             "schema_version": _CUTOVER_SCHEMA,
             "plan_sha256": plan_file_hash,
@@ -704,10 +730,13 @@ class FullPoolSegmentedCutoverOperator:
         *,
         client_factory: Callable[..., PiSubscriptionProviderClient] = PiSubscriptionProviderClient,
     ) -> SegmentedContinuationResult:
-        plan, _ = self._read_plan(plan_path)
+        plan, plan_file_hash = self._read_plan(plan_path)
         self._validate_implementation_artifacts(plan)
         request = CutoverPlanRequest.model_validate(_request_fields(plan))
-        authorization, authorization_hash = self._validate_run_artifacts(request)
+        authorization, authorization_hash = self._validate_run_artifacts(
+            request,
+            plan_file_hash=plan_file_hash,
+        )
         continuation_exists = request.continuation_workspace.exists() or request.continuation_workspace.is_symlink()
         self._validate_qualification_state(
             request,
@@ -848,6 +877,15 @@ class FullPoolSegmentedCutoverOperator:
                 raise TimeoutError("external stop did not release the exact PID and workspace lock")
             self.process_controller.sleep(min(request.stability_interval_seconds, 1.0))
 
+    def _assert_external_stop_state(self, request: CutoverPlanRequest) -> None:
+        lock_path = request.prefix_workspace / _LOCK_FILE
+        if self.process_controller.snapshot(request.expected_pid) is not None:
+            raise ValueError("expected v1 PID reappeared after the external stop")
+        if self.process_controller.lock_owner_pids(lock_path):
+            raise ValueError("v1 workspace lock regained an owner after the external stop")
+        if not self.process_controller.lock_is_released(lock_path):
+            raise ValueError("v1 workspace lock was reacquired after the external stop")
+
     def _wait_for_stable_workspace(self, request: CutoverPlanRequest) -> dict[str, dict[str, object]]:
         first = self.filesystem.inventory(request.prefix_workspace)
         self.process_controller.sleep(request.stability_interval_seconds)
@@ -875,33 +913,34 @@ class FullPoolSegmentedCutoverOperator:
             stripped = line.strip()
             if not stripped:
                 raise ValueError(f"{path.name} contains a blank checksum-chain record")
-            if not line.endswith(b"\n"):
+            terminated = line.endswith(b"\n")
+            try:
+                record = json.loads(stripped)
+            except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+                if index != len(lines) - 1 or terminated:
+                    raise ValueError(f"{path.name} is corrupt before its incomplete tail") from exc
+                truncated = True
+                break
+            if not isinstance(record, dict):
+                raise ValueError("JSONL record is not an object")
+            checksum = record.get("checksum")
+            body = {key: value for key, value in record.items() if key != "checksum"}
+            if (
+                record.get("schema_version") != expected_schema
+                or record.get(identity_field) != identity_value
+                or record.get("sequence") != sequence + 1
+                or record.get("previous_checksum") != previous
+                or not isinstance(checksum, str)
+                or _sha256_json(body) != checksum
+            ):
+                raise ValueError("JSONL checksum chain is crossed")
+            if not terminated:
                 if index != len(lines) - 1:
                     raise ValueError(f"{path.name} contains an unterminated middle record")
                 truncated = True
                 break
-            try:
-                record = json.loads(stripped)
-                if not isinstance(record, dict):
-                    raise ValueError("JSONL record is not an object")
-                checksum = record.get("checksum")
-                body = {key: value for key, value in record.items() if key != "checksum"}
-                if (
-                    record.get("schema_version") != expected_schema
-                    or record.get(identity_field) != identity_value
-                    or record.get("sequence") != sequence + 1
-                    or record.get("previous_checksum") != previous
-                    or not isinstance(checksum, str)
-                    or _sha256_json(body) != checksum
-                ):
-                    raise ValueError("JSONL checksum chain is crossed")
-            except (json.JSONDecodeError, UnicodeDecodeError, ValueError) as exc:
-                if index != len(lines) - 1 or line.endswith((b"\n", b"\r")):
-                    raise ValueError(f"{path.name} is corrupt before its incomplete tail") from exc
-                truncated = True
-                break
             sequence += 1
-            previous = cast(str, checksum)
+            previous = checksum
             accepted_length += len(line)
         if sequence == 0:
             raise ValueError(f"{path.name} has no complete checksum-chain record")
@@ -1115,7 +1154,13 @@ class FullPoolSegmentedCutoverOperator:
             raise ValueError(f"operator artifact hash or schema mismatch: {path}")
         return payload, self.filesystem.sha256_file(path)
 
-    def _validate_run_artifacts(self, request: CutoverPlanRequest) -> tuple[dict[str, object], str]:
+    def _validate_run_artifacts(
+        self,
+        request: CutoverPlanRequest,
+        *,
+        plan_file_hash: str,
+    ) -> tuple[dict[str, object], str]:
+        preflight, preflight_hash = self._read_artifact(request.preflight_artifact, _PREFLIGHT_SCHEMA)
         cutover, cutover_hash = self._read_artifact(request.cutover_artifact, _CUTOVER_SCHEMA)
         reconciliation, reconciliation_hash = self._read_artifact(
             request.reconciliation_artifact, _RECONCILIATION_SCHEMA
@@ -1124,17 +1169,93 @@ class FullPoolSegmentedCutoverOperator:
             request.continuation_authorization_artifact,
             _CONTINUATION_AUTHORIZATION_SCHEMA,
         )
+        expected_preflight = {
+            "plan_sha256": plan_file_hash,
+            "pid": request.expected_pid,
+            "command": request.expected_command,
+            "cwd": str(request.expected_cwd),
+            "lock_path": str(request.prefix_workspace / _LOCK_FILE),
+            "lock_owner_pids": [request.expected_pid],
+            "manual_stop_required": True,
+            "operator_will_send_signals": False,
+            "provider_calls": 0,
+            "production_deploy_eligible": False,
+        }
+        for field, expected in expected_preflight.items():
+            if preflight.get(field) != expected:
+                raise ValueError(f"preflight artifact {field} is crossed with the current plan")
+        expected_cutover = {
+            "plan_sha256": plan_file_hash,
+            "preflight_sha256": preflight_hash,
+            "manual_external_stop_verified": True,
+            "operator_sent_signals": False,
+            "pid": request.expected_pid,
+            "prefix_workspace": str(request.prefix_workspace),
+            "frozen_prefix_workspace": str(request.frozen_prefix_workspace),
+            "v1_run_identity_hash": request.expected_v1_run_identity_hash,
+            "v1_execution_contract_sha256": request.expected_execution_contract_sha256,
+            "implementation_commit": request.implementation_commit,
+            "dataset_hashes": request.dataset_hashes,
+            "provider_calls": 0,
+            "production_deploy_eligible": False,
+        }
+        for field, expected in expected_cutover.items():
+            if cutover.get(field) != expected:
+                raise ValueError(f"cutover artifact {field} is crossed with the current plan")
         if reconciliation.get("cutover_sha256") != cutover_hash:
             raise ValueError("reconciliation artifact is crossed with cutover")
-        if (
-            authorization.get("cutover_sha256") != cutover_hash
-            or authorization.get("reconciliation_sha256") != reconciliation_hash
-            or authorization.get("continuation_id") != request.continuation_id
-            or authorization.get("max_concurrency") != FULL_POOL_SEGMENTED_MAX_CONCURRENCY
-        ):
-            raise ValueError("continuation authorization artifact is crossed")
-        if len(_string_list(authorization.get("migration_unknown_pair_ids"), "unknown pairs")) > 1:
+        unknown = _string_list(authorization.get("migration_unknown_pair_ids"), "unknown pairs")
+        if len(unknown) > 1:
             raise ValueError("more than one migration unknown forbids Provider use")
+        migration_charge = 3 if unknown else 0
+        if (
+            reconciliation.get("unknown_count") != len(unknown)
+            or reconciliation.get("unknown_pair_ids") != unknown
+            or reconciliation.get("migration_unknown_physical_charge") != migration_charge
+            or reconciliation.get("silent_terminal_drop_count") != 0
+            or reconciliation.get("terminal_replay_count") != 0
+            or reconciliation.get("provider_calls") != 0
+            or reconciliation.get("production_deploy_eligible") is not False
+        ):
+            raise ValueError("reconciliation artifact facts are crossed")
+        prefix_logical = _strict_int(
+            reconciliation.get("accepted_logical_count"), "accepted prefix logical count"
+        )
+        prefix_physical = _strict_int(
+            reconciliation.get("accepted_physical_attempt_count"), "accepted prefix physical count"
+        )
+        expected_authorization = {
+            "authorization_reference": request.authorization_reference,
+            "issue_number": 205,
+            "plan_sha256": plan_file_hash,
+            "cutover_sha256": cutover_hash,
+            "reconciliation_sha256": reconciliation_hash,
+            "continuation_id": request.continuation_id,
+            "continuation_workspace": str(request.continuation_workspace),
+            "frozen_prefix_workspace": str(request.frozen_prefix_workspace),
+            "dataset_dir": str(request.dataset_dir),
+            "dataset_hashes": request.dataset_hashes,
+            "implementation_commit": request.implementation_commit,
+            "v1_output_identity": request.expected_v1_output_identity,
+            "v1_run_identity_hash": request.expected_v1_run_identity_hash,
+            "v1_execution_contract_sha256": request.expected_execution_contract_sha256,
+            "prefix_logical_count": prefix_logical,
+            "prefix_physical_attempt_count": prefix_physical,
+            "migration_unknown_pair_ids": unknown,
+            "migration_unknown_physical_charge": migration_charge,
+            "remaining_logical_cap": request.logical_cap - prefix_logical,
+            "remaining_physical_cap": request.physical_cap - prefix_physical - migration_charge,
+            "logical_cap": request.logical_cap,
+            "physical_cap": request.physical_cap,
+            "max_concurrency": request.max_concurrency,
+            "qualification_mode": "first-wave-formal-remaining-pairs",
+            "source_stop_boundary": "source-v2-only-no-report-release-v9",
+            "provider_calls": 0,
+            "production_deploy_eligible": False,
+        }
+        for field, expected in expected_authorization.items():
+            if authorization.get(field) != expected:
+                raise ValueError(f"continuation authorization {field} is crossed with the current plan")
         if self.filesystem.inventory(request.prefix_workspace) != _inventory_mapping(
             cutover.get("source_inventory_before_copy")
         ):
@@ -1174,6 +1295,19 @@ class FullPoolSegmentedCutoverOperator:
             or qualification.get("provider_concurrency_reduction") is not False
         ):
             raise ValueError("existing continuation qualification is failed or crossed")
+        qualification_hash = self.filesystem.sha256_file(path)
+        source_manifest = request.continuation_workspace / "source-v2/manifest.json"
+        if source_manifest.is_file():
+            manifest = _read_json(source_manifest)
+            copied_qualification = request.continuation_workspace / (
+                "source-v2/" + SEGMENTED_CONCURRENCY_QUALIFICATION_FILE
+            )
+            if (
+                manifest.get("concurrency_qualification_artifact_sha256") != qualification_hash
+                or not copied_qualification.is_file()
+                or self.filesystem.sha256_file(copied_qualification) != qualification_hash
+            ):
+                raise ValueError("source-v2 qualification lineage is crossed with the operator artifact")
 
     @staticmethod
     def _migration_authorization(
@@ -1282,7 +1416,7 @@ class _QualificationRecorder:
         self.filesystem = filesystem
         self.authorization_hash = continuation_authorization_sha256
 
-    def observe(self, wave: SegmentedQualificationWave) -> None:
+    def observe(self, wave: SegmentedQualificationWave) -> SegmentedQualificationArtifactRef:
         errors = wave.physical_attempt_count - wave.provider_response_count
         qualified = (
             len(wave.pair_ids) == FULL_POOL_SEGMENTED_MAX_CONCURRENCY
@@ -1327,6 +1461,10 @@ class _QualificationRecorder:
         )
         if not qualified:
             raise ValueError("ten-lane bounded qualification failed; concurrency will not be reduced")
+        return SegmentedQualificationArtifactRef(
+            path=self.path.resolve(strict=True),
+            sha256=self.filesystem.sha256_file(self.path),
+        )
 
     def record_unreconciled_failure(self, result: SegmentedContinuationResult | None) -> None:
         payload: dict[str, object] = {

@@ -2215,6 +2215,7 @@ def _validate_segmented_formal_release_facts(
         and segmented.formal_execution_contract_sha256 is not None
         and segmented.authorization_artifact_sha256 is not None
         and segmented.qualification_artifact_sha256 is not None
+        and segmented.concurrency_qualification_artifact_sha256 is not None
         and segmented.observed_model_evidence_sha256 is not None
         and all(
             _SHA256.fullmatch(value)
@@ -2222,6 +2223,7 @@ def _validate_segmented_formal_release_facts(
                 segmented.formal_execution_contract_sha256,
                 segmented.authorization_artifact_sha256,
                 segmented.qualification_artifact_sha256,
+                segmented.concurrency_qualification_artifact_sha256,
                 segmented.observed_model_evidence_sha256,
             )
         )

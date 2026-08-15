@@ -157,7 +157,7 @@ classDiagram
 ## Compatibility and ownership
 
 - The segmented validator owns source-v2 canonical row fields, per-response accounting, cutoff order, continuation ledger, identity, and artifact-hash knowledge.
-- Formal classification comes only from the persisted Full-Pool contract plus exact execution, authorization, qualification, observed-model, Provider-request, and canonical P0 evidence; the internal runtime `configuration_profile` is not an authority.
+- Formal classification comes only from the persisted Full-Pool contract plus exact execution, authorization, initial qualification, observed-model, Provider-request, canonical P0 evidence, and the embedded exact ten-lane concurrency qualification; the internal runtime `configuration_profile` is not an authority.
 - Report consumes the same closed-source Interface and only adds segmented method/lineage facts; it does not decide production eligibility.
 - Evidence re-closes candidate bytes and typed segmented facts; Validation/mock classifications remain non-production.
 - Release owns exact v9 eligibility, inventory, release identity, and promotion. v9 accepts no caller-supplied Formal facts and must pass a no-injection round trip; v8 fields and dispatch are not widened.

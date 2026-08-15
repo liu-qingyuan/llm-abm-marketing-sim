@@ -6,7 +6,7 @@
 
 `cutover` 先把原 workspace byte-for-byte 复制到显式 staging，保存 raw inventory，再只在副本处理末尾未完整 JSONL record。每项截断记录 original bytes/hash、accepted length/hash；中段 corruption 直接失败。runtime durable terminal 若领先 attempt-ledger 尾部，operator 只从同 pair 的 durable `variant_evidence` 导入 allowlisted accounting，并生成 reconciliation artifact；不得丢 terminal 或重调。started-without-terminal 最多一个，migration physical charge 固定为 3。冻结完成后由既有 `FullPoolSegmentedContinuation` 再验证 prefix。
 
-`run` 需要 `LLM_ABM_RUN_LIVE_LLM=1` 与 `LLM_ABM_RUN_FULL_POOL_SEGMENTED_CONTINUATION=1`，并先验证 cutover/reconciliation/authorization hash chain、原 workspace 不变、frozen inventory、dataset hashes、unknown 与 remaining caps。它逐字保持 Formal P0 `jinjiang-concurrent-message-primary-prompt-v1` 及其 canonical request contract，创建十个独立且 ready 的 `PiSubscriptionProviderClient` 和十个 Adapter；第一波十个正式 remaining pairs 同时作为 bounded qualification，记录 rate/error/model/usage。十 lane 不成立时失败关闭，不降低并发。最终只允许产生 `source-v2`，不实现 Report/Release v9、SSH 或部署。
+`run` 需要 `LLM_ABM_RUN_LIVE_LLM=1` 与 `LLM_ABM_RUN_FULL_POOL_SEGMENTED_CONTINUATION=1`，并逐字段重闭合 current plan→preflight→cutover→reconciliation→authorization、原 workspace 不变、frozen inventory、dataset hashes、unknown 与 remaining caps。它逐字保持 Formal P0 `jinjiang-concurrent-message-primary-prompt-v1` 及其 canonical request contract，创建十个独立且 ready 的 `PiSubscriptionProviderClient` 和十个 Adapter；不足十条的首波在创建 Adapter 前零调用拒绝。第一波十个正式 remaining pairs 同时作为 bounded qualification，记录 rate/error/model/usage；qualified artifact 的 bytes/hash及exact pair IDs会进入 `source-v2` inventory、manifest、status与v9 facts，replay和production promotion必须重新验证。十 lane 不成立时失败关闭，不降低并发。最终只允许产生 `source-v2`，不实现 Report/Release v9、SSH 或部署。
 
 ## 当前：架构 / 调用关系
 
@@ -186,6 +186,6 @@ classDiagram
 
 - Operator 没有 `terminate`、`kill` 或 process-group Interface；测试只使用 fake `ProcessController` 和临时 filesystem fixture。
 - `prepare`、`dry-run`、`cutover`、`status` 都不会创建 Provider client；只有 `run` 在双 env gate 与完整 artifact 验证后创建十 lane。
-- 原 v1 workspace 全程只读并在 copy/reconciliation 后重新核对 inventory；所有截断和 ledger import 只发生于副本。
+- 原 v1 workspace 全程只读；lock 只以 no-create/no-follow descriptor 探测，并在稳定检查、复制和 publish 前重复核验 PID absent、owner empty、flock released；所有截断和 ledger import 只发生于副本。
 - `status` 不读取 Git HEAD、credential、`.env`、raw Prompt、raw request/response 或 raw provider payload。
 - `source-v2` 是本切片终点；Report、Release v9、SSH 与部署不属于该 Module。

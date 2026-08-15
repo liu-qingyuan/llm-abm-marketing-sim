@@ -141,6 +141,14 @@ def _setup(
     return operator, controller, request, plan_path, prefix
 
 
+def test_cutover_plan_rejects_credential_shaped_process_commands(tmp_path: Path) -> None:
+    _operator, _controller, request, _plan_path, _prefix = _setup(tmp_path)
+    with pytest.raises(ValueError, match="credential-free"):
+        CutoverPlanRequest.model_validate(
+            {**request.model_dump(mode="json"), "expected_command": "worker --api-key=do-not-persist"}
+        )
+
+
 def test_system_lock_probe_never_creates_a_missing_lock(tmp_path: Path) -> None:
     missing = tmp_path / "missing.lock"
     with pytest.raises(RuntimeError, match="existing regular file"):
@@ -180,6 +188,26 @@ def test_tail_acceptance_discards_a_valid_but_unterminated_final_record(tmp_path
     assert accepted["truncated_bytes"] == len(second.encode())
 
 
+def test_tail_acceptance_rejects_a_parseable_but_crossed_unterminated_record(tmp_path: Path) -> None:
+    path = tmp_path / "crossed.jsonl"
+    body: dict[str, object] = {
+        "schema_version": "fixture-v1",
+        "sequence": 1,
+        "previous_checksum": None,
+        "identity": "a" * 64,
+    }
+    record = {**body, "checksum": "0" * 64}
+    path.write_text(json.dumps(record, sort_keys=True, separators=(",", ":")), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="checksum chain is crossed"):
+        FullPoolSegmentedCutoverOperator()._truncate_incomplete_jsonl_tail(
+            path,
+            expected_schema="fixture-v1",
+            identity_field="identity",
+            identity_value="a" * 64,
+        )
+
+
 def test_prepare_and_dry_run_require_exact_process_lock_and_confirmation_token(tmp_path: Path) -> None:
     operator, controller, request, plan_path, _prefix = _setup(tmp_path)
 
@@ -204,6 +232,31 @@ def test_prepare_and_dry_run_require_exact_process_lock_and_confirmation_token(t
     controller.locked = False
     with pytest.raises(ValueError, match="exact high-risk confirmation token"):
         operator.cutover(plan_path, confirmation_token=token + "-wrong")
+
+
+def test_cutover_rejects_pid_reappearance_after_copy_before_frozen_publish(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    operator, controller, request, plan_path, _prefix = _setup(tmp_path)
+    operator.prepare(plan_path, request)
+    preflight = operator.dry_run(plan_path)
+    controller.alive = False
+    controller.locked = False
+    copy_tree = operator.filesystem.copy_tree_exact
+
+    def copy_then_reappear(source: Path, target: Path) -> None:
+        copy_tree(source, target)
+        controller.alive = True
+
+    monkeypatch.setattr(operator.filesystem, "copy_tree_exact", copy_then_reappear)
+    with pytest.raises(ValueError, match="reappeared"):
+        operator.cutover(
+            plan_path,
+            confirmation_token=str(preflight["exact_confirmation_token"]),
+        )
+    assert not request.frozen_prefix_workspace.exists()
+    assert not request.continuation_authorization_artifact.exists()
 
 
 def _stop_and_cut_over(
@@ -276,6 +329,28 @@ def test_cutover_accepts_at_most_one_unknown_and_charges_full_three_attempt_wind
     assert reconciliation["terminal_replay_count"] == 0
 
 
+def test_run_artifact_chain_rejects_authorization_crossed_with_current_plan(tmp_path: Path) -> None:
+    operator, controller, request, plan_path, _prefix = _setup(tmp_path)
+    _stop_and_cut_over(operator, controller, request, plan_path)
+    _plan, plan_hash = operator._read_plan(plan_path)
+    operator._validate_run_artifacts(request, plan_file_hash=plan_hash)
+
+    envelope = _json(request.continuation_authorization_artifact)
+    payload = envelope["payload"]
+    assert isinstance(payload, dict)
+    payload["continuation_workspace"] = str(tmp_path / "crossed-continuation")
+    envelope["payload_sha256"] = hashlib.sha256(
+        json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    request.continuation_authorization_artifact.write_text(
+        json.dumps(envelope, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="continuation_workspace"):
+        operator._validate_run_artifacts(request, plan_file_hash=plan_hash)
+
+
 def test_cutover_rejects_two_runtime_unknowns_before_any_provider_boundary(tmp_path: Path) -> None:
     operator, controller, request, plan_path, prefix = _setup(tmp_path, fixture=UNKNOWN_PREFIX)
     journal_path = prefix / "concurrent_message_execution_journal.jsonl"
@@ -317,6 +392,7 @@ def test_cutover_rejects_two_runtime_unknowns_before_any_provider_boundary(tmp_p
     with pytest.raises(ValueError, match="more than one migration unknown"):
         operator.cutover(plan_path, confirmation_token=str(preflight["exact_confirmation_token"]))
 
+    assert not request.frozen_prefix_workspace.exists()
     assert not request.continuation_workspace.exists()
     assert not request.continuation_authorization_artifact.exists()
 
@@ -421,7 +497,7 @@ def test_qualification_artifact_binds_authorization_and_exact_ten_lane_wave(tmp_
         filesystem=LocalOperatorFilesystem(),
         continuation_authorization_sha256=authorization_hash,
     )
-    recorder.observe(
+    qualification_ref = recorder.observe(
         SegmentedQualificationWave(
             pair_ids=tuple(f"u{index}:message_1:2" for index in range(10)),
             elapsed_seconds=2.0,
@@ -440,6 +516,8 @@ def test_qualification_artifact_binds_authorization_and_exact_ten_lane_wave(tmp_
         )
     )
 
+    assert qualification_ref.path == request.qualification_artifact
+    assert qualification_ref.sha256 == _sha(request.qualification_artifact)
     FullPoolSegmentedCutoverOperator()._validate_qualification_state(
         request,
         continuation_exists=True,

@@ -288,6 +288,7 @@ def test_segmented_source_v2_validator_closes_rows_cutoff_identity_and_accountin
     assert closed.facts.logical_judgments == 21
     assert closed.facts.physical_attempts == 21
     assert closed.facts.migration_unknown_physical_charge == 0
+    assert closed.facts.concurrency_qualification_artifact_sha256 is None
     assert closed.facts.unknown_pair_count == 0
     assert closed.facts.reconciliation_retry_count == 0
     assert closed.facts.evidence_profile == "deterministic_validation_fixture"
@@ -668,6 +669,7 @@ def test_v9_promotes_and_validates_an_exact_local_release_with_typed_fixture_fac
         formal_execution_contract_sha256="1" * 64,
         authorization_artifact_sha256="2" * 64,
         qualification_artifact_sha256="3" * 64,
+        concurrency_qualification_artifact_sha256="5" * 64,
         observed_model_evidence_sha256="4" * 64,
         prompt_variant_id="P0",
         prompt_version="jinjiang-concurrent-message-primary-prompt-v1",
