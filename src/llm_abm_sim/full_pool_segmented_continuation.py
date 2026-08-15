@@ -8,8 +8,10 @@ import stat
 from collections import Counter, defaultdict
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from concurrent.futures import Future, ThreadPoolExecutor, as_completed
+from contextlib import nullcontext
 from dataclasses import dataclass
 from enum import Enum
+from io import StringIO
 from itertools import chain
 from pathlib import Path
 from tempfile import NamedTemporaryFile
@@ -2989,6 +2991,8 @@ def _replay_continuation_ledger(
     path: Path,
     *,
     expected_identity_hash: str,
+    snapshot_bytes: bytes | None = None,
+    allow_inflight_wave: bool = False,
 ) -> tuple[list[str], list[str], int, dict[str, object] | None]:
     sequence = 0
     previous_checksum: str | None = None
@@ -3003,7 +3007,15 @@ def _replay_continuation_ledger(
     source_anchor: dict[str, object] | None = None
     if not path.is_file():
         raise FileNotFoundError(f"continuation ledger is missing: {path}")
-    with path.open(encoding="utf-8") as handle:
+    if snapshot_bytes is None:
+        handle_context = path.open(encoding="utf-8")
+    else:
+        accepted_end = snapshot_bytes.rfind(b"\n")
+        if accepted_end < 0:
+            raise ValueError("continuation ledger has no complete snapshot record")
+        snapshot_text = snapshot_bytes[: accepted_end + 1].decode("utf-8")
+        handle_context = nullcontext(StringIO(snapshot_text))
+    with handle_context as handle:
         for line_number, line in enumerate(handle, start=1):
             raw = line.strip()
             if not raw:
@@ -3125,7 +3137,7 @@ def _replay_continuation_ledger(
                 raise ValueError("continuation ledger event type is unsupported")
             sequence += 1
             previous_checksum = checksum
-    if pending_wave_pair_ids is not None:
+    if pending_wave_pair_ids is not None and not allow_inflight_wave:
         raise ValueError("continuation wave reservation lacks durable accounting")
     return dispatched, durable, physical_attempts, source_anchor
 

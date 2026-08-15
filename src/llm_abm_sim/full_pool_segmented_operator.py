@@ -26,6 +26,7 @@ from .full_pool_segmented_continuation import (
     SegmentedContinuationResult,
     SegmentedQualificationWave,
     _freeze_v1_prefix,
+    _replay_continuation_ledger,
 )
 from .prompt_field_summary import CONCURRENT_MESSAGE_PRIMARY_PROMPT_VERSION
 from .providers.openai_compatible import OpenAICompatibleDecisionAdapter
@@ -643,6 +644,47 @@ class FullPoolSegmentedCutoverOperator:
                     "remaining_physical_cap": request.physical_cap - total_physical,
                 }
             )
+        elif request.continuation_workspace.is_dir():
+            authorization, _ = self._read_artifact(
+                request.continuation_authorization_artifact,
+                _CONTINUATION_AUTHORIZATION_SCHEMA,
+            )
+            identity = _read_json(request.continuation_workspace / "segmented_continuation_identity.json")
+            identity_hash = _non_empty(identity.get("identity_hash"), "continuation identity hash")
+            ledger_path = request.continuation_workspace / "segmented_continuation_ledger.jsonl"
+            dispatched, durable, suffix_physical, source_anchor = _replay_continuation_ledger(
+                ledger_path,
+                expected_identity_hash=identity_hash,
+                snapshot_bytes=ledger_path.read_bytes(),
+                allow_inflight_wave=True,
+            )
+            prefix_logical = _strict_int(
+                authorization.get("prefix_logical_count"), "prefix logical count"
+            )
+            prefix_physical = _strict_int(
+                authorization.get("prefix_physical_attempt_count"), "prefix physical count"
+            )
+            migration_charge = _strict_int(
+                authorization.get("migration_unknown_physical_charge"), "migration physical charge"
+            )
+            total_logical = prefix_logical + len(dispatched)
+            total_physical = prefix_physical + migration_charge + suffix_physical
+            durable_set = set(durable)
+            unknown = [pair_id for pair_id in dispatched if pair_id not in durable_set]
+            response.update(
+                {
+                    "suffix_logical_count": len(dispatched),
+                    "physical_attempt_count": total_physical,
+                    "unknown_pair_ids": unknown,
+                    "source_status": (
+                        "source-v2-prepared" if source_anchor is not None else "concurrent_suffix_running"
+                    ),
+                    "remaining_logical_cap": request.logical_cap - total_logical,
+                    "remaining_physical_cap": request.physical_cap - total_physical,
+                }
+            )
+        elif request.continuation_workspace.exists() or request.continuation_workspace.is_symlink():
+            response["source_status"] = "continuation-workspace-invalid"
         return response
 
     def run(

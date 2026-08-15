@@ -347,6 +347,64 @@ def test_status_is_read_only_and_reports_prefix_suffix_physical_unknown_and_sour
     assert {path: path.read_bytes() for path in tracked_before} == tracked_before
 
 
+def test_status_replays_a_read_only_inflight_suffix_ledger_without_waiting_for_final_status(
+    tmp_path: Path,
+) -> None:
+    operator, controller, request, plan_path, _prefix = _setup(tmp_path, fixture=UNKNOWN_PREFIX)
+    _stop_and_cut_over(operator, controller, request, plan_path)
+    continuation = request.continuation_workspace
+    continuation.mkdir()
+    identity_hash = "d" * 64
+    (continuation / "segmented_continuation_identity.json").write_text(
+        json.dumps({"identity_hash": identity_hash}, sort_keys=True, separators=(",", ":")),
+        encoding="utf-8",
+    )
+    ledger_path = continuation / "segmented_continuation_ledger.jsonl"
+    records: list[dict[str, object]] = []
+
+    def append(event_type: str, payload: dict[str, object]) -> None:
+        body: dict[str, object] = {
+            "schema_version": "full-pool-segmented-continuation-ledger-v1",
+            "sequence": len(records) + 1,
+            "previous_checksum": records[-1]["checksum"] if records else None,
+            "continuation_identity_hash": identity_hash,
+            "event_type": event_type,
+            "payload": payload,
+        }
+        checksum = hashlib.sha256(
+            json.dumps(body, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()
+        records.append({**body, "checksum": checksum})
+
+    pair_ids = ["u3:message_1:1", "u4:message_1:1"]
+    append("continuation_started", {"continuation_id": request.continuation_id})
+    append(
+        "suffix_wave_reserved",
+        {
+            "pair_ids": pair_ids,
+            "physical_reservation": 6,
+            "maximum_attempts_per_dispatch": 3,
+        },
+    )
+    for lane_id, pair_id in enumerate(pair_ids):
+        append("pair_dispatched", {"pair_id": pair_id, "lane_id": lane_id})
+    ledger_path.write_bytes(
+        "".join(json.dumps(row, sort_keys=True, separators=(",", ":")) + "\n" for row in records).encode()
+        + b'{"schema_version":'
+    )
+    ledger_before = ledger_path.read_bytes()
+
+    status = operator.status(plan_path)
+
+    assert status["suffix_logical_count"] == 2
+    assert status["physical_attempt_count"] == 6
+    assert status["unknown_pair_ids"] == pair_ids
+    assert status["source_status"] == "concurrent_suffix_running"
+    assert status["remaining_logical_cap"] == 109_195
+    assert status["remaining_physical_cap"] == 120_114
+    assert ledger_path.read_bytes() == ledger_before
+
+
 def test_qualification_artifact_binds_authorization_and_exact_ten_lane_wave(tmp_path: Path) -> None:
     _operator, _controller, request, _plan_path, _prefix = _setup(tmp_path)
     authorization_hash = "b" * 64
