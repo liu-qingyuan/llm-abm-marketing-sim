@@ -40,6 +40,8 @@ from .full_pool_segmented_continuation import (
     SegmentedFullPoolSourceFacts,
     _read_closed_segmented_full_pool_source,
 )
+from .prompt_contracts import CONCURRENT_ROBUSTNESS_PROMPT_REGISTRY
+from .prompt_field_summary import CONCURRENT_MESSAGE_PRIMARY_PROMPT_VERSION
 from .providers.pi_subscription import PI_SUBSCRIPTION_MODEL_ALIASES
 
 FORMAL_LOGICAL_JUDGMENTS = 28_800
@@ -2210,6 +2212,25 @@ def _validate_segmented_formal_release_facts(
         and segmented.serial_prefix_terminal_count + segmented.concurrent_suffix_terminal_count
         == FULL_POOL_PRODUCTION_ELIGIBLE_PAIRS
         and segmented.max_concurrency == 10
+        and segmented.formal_execution_contract_sha256 is not None
+        and segmented.authorization_artifact_sha256 is not None
+        and segmented.qualification_artifact_sha256 is not None
+        and segmented.observed_model_evidence_sha256 is not None
+        and all(
+            _SHA256.fullmatch(value)
+            for value in (
+                segmented.formal_execution_contract_sha256,
+                segmented.authorization_artifact_sha256,
+                segmented.qualification_artifact_sha256,
+                segmented.observed_model_evidence_sha256,
+            )
+        )
+        and segmented.prompt_variant_id == "P0"
+        and segmented.prompt_version == CONCURRENT_MESSAGE_PRIMARY_PROMPT_VERSION
+        and segmented.prompt_canonical_hash
+        == CONCURRENT_ROBUSTNESS_PROMPT_REGISTRY.resolve(
+            CONCURRENT_MESSAGE_PRIMARY_PROMPT_VERSION
+        ).canonical_hash
         and segmented.logical_judgments == FULL_POOL_FORMAL_LOGICAL_JUDGMENT_CAP
         and FULL_POOL_FORMAL_LOGICAL_JUDGMENT_CAP
         <= segmented.physical_attempts

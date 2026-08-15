@@ -5,7 +5,7 @@ import json
 import os
 import re
 import stat
-from collections import Counter
+from collections import Counter, defaultdict
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
@@ -48,7 +48,6 @@ from .full_pool_formal_experiment import (
     FULL_POOL_FORMAL_ADAPTER_IDENTITY,
     FULL_POOL_FORMAL_REQUESTED_MODEL,
     FULL_POOL_FORMAL_REQUIRED_OBSERVED_MODEL,
-    FULL_POOL_FORMAL_TRANSPORT,
     FULL_POOL_MESSAGE_IDS,
     FULL_POOL_PRODUCTION_CANDIDATE_ROWS,
     FULL_POOL_PRODUCTION_CAPACITY,
@@ -56,9 +55,12 @@ from .full_pool_formal_experiment import (
     FULL_POOL_PRODUCTION_FINAL_BATCH_PAIRS_PER_MESSAGE,
     FULL_POOL_PRODUCTION_HORIZON,
     FULL_POOL_PRODUCTION_USER_COUNT,
+    FullPoolExperimentContract,
     _ClosedFullPoolSource,
     _read_closed_full_pool_source,
 )
+from .prompt_contracts import CONCURRENT_ROBUSTNESS_PROMPT_REGISTRY
+from .prompt_field_summary import CONCURRENT_MESSAGE_PRIMARY_PROMPT_VERSION
 from .safe_serialization import safe_data
 from .schemas import PeerContext, PlatformContext, ProviderLLMConfig
 
@@ -2336,13 +2338,19 @@ def _freeze_v1_prefix(workspace_raw: Path) -> _FrozenPrefix:
     if prompt_contract.get("prompt_version") != prompt_version or provider_contract.get("prompt_version") != prompt_version:
         raise ValueError("v1 Prompt identity is crossed across run contracts")
     execution_contract = _mapping(run_identity.get("execution_contract"), "v1 execution contract")
-    request_contract = _mapping(execution_contract.get("request_contract"), "v1 request contract")
+    formal_execution_raw = execution_contract.get("formal_execution")
+    effective_execution = (
+        _mapping(formal_execution_raw, "v1 Formal execution contract")
+        if isinstance(formal_execution_raw, Mapping)
+        else execution_contract
+    )
+    request_contract = _mapping(effective_execution.get("request_contract"), "v1 request contract")
     max_retries = _strict_non_negative_int(request_contract.get("max_retries"), "v1 max_retries")
-    if execution_contract.get("logical_judgment_cap") != FULL_POOL_SEGMENTED_LOGICAL_CAP:
+    if effective_execution.get("logical_judgment_cap") != FULL_POOL_SEGMENTED_LOGICAL_CAP:
         raise ValueError("v1 logical cap is crossed")
-    if execution_contract.get("physical_attempt_cap") != FULL_POOL_SEGMENTED_PHYSICAL_CAP:
+    if effective_execution.get("physical_attempt_cap") != FULL_POOL_SEGMENTED_PHYSICAL_CAP:
         raise ValueError("v1 physical cap is crossed")
-    if execution_contract.get("worker_count") != 1:
+    if effective_execution.get("worker_count") != 1:
         raise ValueError("accepted v1 serial prefix must freeze worker_count=1")
 
     inventory_after = _artifact_inventory(workspace)
@@ -3045,6 +3053,148 @@ _SEGMENTED_SOURCE_ARTIFACTS = (
     "terminal_rows.jsonl",
     "steps.jsonl",
 )
+_FORMAL_RUN_CONTRACT_FILE = "full_pool_run_contract.json"
+_FORMAL_EXECUTION_CONTRACT_FILE = "formal_execution_contract.json"
+_SEGMENTED_CANDIDATE_FIELDS = frozenset(
+    {
+        "base_network_relevance",
+        "base_network_relevance_full_precision",
+        "campaign_engaged_neighbor_count",
+        "campaign_engaged_neighbor_signal",
+        "campaign_engaged_neighbor_signal_full_precision",
+        "historical_tag_affinity",
+        "is_seed",
+        "message_id",
+        "normalized_message_user_fit",
+        "normalized_message_user_fit_full_precision",
+        "personalized_delivery_score",
+        "personalized_delivery_score_full_precision",
+        "ranking_position",
+        "raw_message_user_fit",
+        "raw_message_user_fit_full_precision",
+        "selected",
+        "selection_reason",
+        "time_step",
+        "user_id",
+    }
+)
+_SEGMENTED_PAIR_FIELDS = frozenset(
+    {
+        "base_network_relevance",
+        "base_network_relevance_full_precision",
+        "campaign_engaged_neighbor_count",
+        "campaign_engaged_neighbor_signal",
+        "campaign_engaged_neighbor_signal_full_precision",
+        "campaign_feedback_committed",
+        "execution_segment",
+        "historical_tag_affinity",
+        "is_seed",
+        "message_id",
+        "message_title",
+        "normalized_message_user_fit",
+        "normalized_message_user_fit_full_precision",
+        "pair_id",
+        "pair_schedule_position",
+        "personalized_delivery_score",
+        "personalized_delivery_score_full_precision",
+        "primary_action",
+        "primary_confidence",
+        "primary_decision_source",
+        "primary_probability",
+        "primary_prompt_version",
+        "primary_provider_metadata",
+        "primary_reason",
+        "primary_status",
+        "primary_terminal_coverage",
+        "ranking_position",
+        "raw_message_user_fit",
+        "raw_message_user_fit_full_precision",
+        "selection_reason",
+        "time_step",
+        "user_id",
+    }
+)
+_SEGMENTED_TERMINAL_FIELDS = frozenset(
+    {
+        "action",
+        "cache_key",
+        "cached_input_usage",
+        "confidence",
+        "context_profile_payload",
+        "context_source_key",
+        "decision_source",
+        "decision_variant",
+        "engage",
+        "execution_segment",
+        "failure_type",
+        "input_usage",
+        "message_id",
+        "observed_model_counts",
+        "observed_model_malformed_response_count",
+        "observed_model_missing_response_count",
+        "output_usage",
+        "pair_id",
+        "pair_schedule_position",
+        "peer_context_payload",
+        "probability",
+        "prompt_field_inclusion",
+        "prompt_version",
+        "provider_metadata",
+        "provider_response_count",
+        "provider_status",
+        "reason",
+        "reconciliation_retry",
+        "request_invocations",
+        "successful_decision_count",
+        "terminal_row_id",
+        "terminal_status",
+        "time_step",
+        "total_usage",
+        "usage_complete",
+        "usage_complete_response_count",
+        "usage_malformed_response_count",
+        "usage_missing_response_count",
+        "user_id",
+    }
+)
+_SEGMENTED_STEP_FIELDS = frozenset(
+    {
+        "committed_primary_positive_user_ids",
+        "frozen_campaign_engaged_user_ids",
+        "message_summaries",
+        "time_step",
+    }
+)
+_SEGMENTED_MESSAGE_SUMMARY_FIELDS = frozenset(
+    {
+        "below_delivery_capacity",
+        "eligible_users",
+        "message_id",
+        "message_title",
+        "personalized_topup_user_ids",
+        "primary_positive_user_ids",
+        "primary_provider_failed_user_ids",
+        "ranked_candidates",
+        "seed_user_ids",
+        "selected_user_ids",
+        "selection_reason_counts",
+        "shadow_provider_failed_user_ids",
+    }
+)
+_CANDIDATE_PAIR_SHARED_FIELDS = frozenset(
+    _SEGMENTED_CANDIDATE_FIELDS
+    - {"selected"}
+)
+_FORBIDDEN_SOURCE_KEY_FRAGMENTS = (
+    "access_token",
+    "api_key_value",
+    "authorization_header",
+    "cookie",
+    "oauth_token",
+    "raw_prompt",
+    "raw_response",
+    "raw_provider_payload",
+)
 _SEGMENTED_SOURCE_MANIFEST_FIELDS = frozenset(
     {
         "schema_version",
@@ -3161,6 +3311,13 @@ class SegmentedFullPoolSourceFacts:
     continuation_identity_hash: str
     prefix_identity_hash: str
     contract_sha256: str
+    formal_execution_contract_sha256: str | None
+    authorization_artifact_sha256: str | None
+    qualification_artifact_sha256: str | None
+    observed_model_evidence_sha256: str | None
+    prompt_variant_id: str
+    prompt_version: str
+    prompt_canonical_hash: str
     configuration_profile: str
     evidence_profile: str
     provider_transport: str
@@ -3193,6 +3350,19 @@ class SegmentedFullPoolSourceFacts:
     artifact_hashes: Mapping[str, str]
     live_api_triggered: bool
     production_deploy_eligible: bool
+
+
+@dataclass(frozen=True)
+class _SegmentedFormalLineage:
+    contract: FullPoolExperimentContract
+    contract_sha256: str
+    execution_contract_sha256: str
+    authorization_artifact_sha256: str
+    qualification_artifact_sha256: str
+    observed_model_evidence_sha256: str
+    prompt_variant_id: str
+    prompt_version: str
+    prompt_canonical_hash: str
 
 
 @dataclass(frozen=True)
@@ -3230,6 +3400,37 @@ class _SegmentedBatchSlice:
     pair: _JsonlBatchRange
     terminal: _JsonlBatchRange
     step: Mapping[str, object]
+
+
+@dataclass(frozen=True)
+class _SegmentedCandidateScan:
+    ranges: tuple[_JsonlBatchRange, ...]
+    row_count: int
+    selected_rows: Mapping[tuple[str, str, int], Mapping[str, object]]
+    summary_by_batch_message: Mapping[tuple[int, str], Mapping[str, object]]
+
+
+@dataclass(frozen=True)
+class _SegmentedPairTerminalScan:
+    pair_ranges: tuple[_JsonlBatchRange, ...]
+    terminal_ranges: tuple[_JsonlBatchRange, ...]
+    pair_count: int
+    terminal_count: int
+    distinct_users: frozenset[str]
+    coverage: Mapping[str, int]
+    provider_failed: int
+    serial_count: int
+    suffix_count: int
+    retry_pair_ids: tuple[str, ...]
+    accounting: Mapping[str, object]
+    positive_users_by_batch: tuple[frozenset[str], ...]
+    ordered_pair_ids: tuple[str, ...]
+    ordered_terminal_ids: tuple[str, ...]
+    pair_ids_by_batch: tuple[tuple[str, ...], ...]
+    terminal_ids_by_batch: tuple[tuple[str, ...], ...]
+    selected_users_by_batch_message: Mapping[tuple[int, str], tuple[str, ...]]
+    failed_users_by_batch_message: Mapping[tuple[int, str], tuple[str, ...]]
+    positive_users_by_batch_message: Mapping[tuple[int, str], tuple[str, ...]]
 
 
 @dataclass(frozen=True)
@@ -3286,6 +3487,158 @@ def _read_closed_full_pool_source_versioned(
     return _read_closed_full_pool_source(source, manifest_sha256=manifest_sha256)
 
 
+def _read_segmented_formal_lineage(
+    *,
+    run_identity: Mapping[str, object],
+    formal_identity: Mapping[str, object],
+) -> _SegmentedFormalLineage | None:
+    runtime_contract = _mapping(
+        run_identity.get("execution_contract"), "segmented runtime execution contract"
+    )
+    formal_runtime_raw = runtime_contract.get("formal_execution")
+    if not isinstance(formal_runtime_raw, Mapping):
+        return None
+    formal_runtime = _mapping(formal_runtime_raw, "segmented runtime Formal contract")
+    qualification_safe = _mapping(
+        formal_runtime.get("qualification"), "segmented runtime qualification"
+    )
+    qualification_path_raw = qualification_safe.get("artifact_path")
+    if not isinstance(qualification_path_raw, str) or not qualification_path_raw:
+        return None
+    qualification_path = Path(qualification_path_raw).expanduser()
+    contract_path = qualification_path.parent / _FORMAL_RUN_CONTRACT_FILE
+    execution_path = qualification_path.parent / _FORMAL_EXECUTION_CONTRACT_FILE
+    if not contract_path.is_file() or not execution_path.is_file():
+        return None
+    _require_real_file(contract_path, "segmented Full-Pool Formal contract")
+    _require_real_file(execution_path, "segmented Formal execution contract")
+    contract_document = _read_json_object(contract_path)
+    try:
+        contract = FullPoolExperimentContract.model_validate(contract_document, strict=False)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("segmented Full-Pool Formal contract is invalid") from exc
+    if safe_data(contract.model_dump(mode="json")) != runtime_contract:
+        raise ValueError("segmented runtime identity is crossed with the persisted Formal contract")
+    contract_hash = _sha256_json(contract.model_dump(mode="json"))
+    execution = contract.formal_execution
+    if execution is None:
+        raise ValueError("segmented persisted contract omits Formal execution evidence")
+    execution_document = execution.model_dump(mode="json")
+    execution_hash = _sha256_json(execution_document)
+    if (
+        contract_hash != formal_identity.get("contract_sha256")
+        or execution_hash != formal_identity.get("execution_contract_sha256")
+        or _read_json_object(execution_path) != execution_document
+    ):
+        raise ValueError("segmented Formal contract or execution identity is crossed")
+
+    authorization = execution.authorization
+    qualification = execution.qualification
+    artifact_paths = (
+        authorization.artifact_path,
+        qualification.artifact_path,
+        qualification.observed_response_artifact_path,
+    )
+    for path, label in zip(
+        artifact_paths,
+        (
+            "segmented authorization artifact",
+            "segmented qualification artifact",
+            "segmented observed-model artifact",
+        ),
+        strict=True,
+    ):
+        _require_real_file(path, label)
+    if (
+        _sha256_file(authorization.artifact_path) != authorization.artifact_sha256
+        or _sha256_file(qualification.artifact_path) != qualification.artifact_sha256
+        or _sha256_file(qualification.observed_response_artifact_path)
+        != qualification.observed_response_sha256
+        or authorization.artifact_sha256
+        != formal_identity.get("authorization_artifact_sha256")
+        or qualification.artifact_sha256
+        != formal_identity.get("qualification_artifact_sha256")
+    ):
+        raise ValueError("segmented Formal authorization artifact hashes are crossed")
+    authorization_document = authorization.model_dump(mode="json")
+    for field in ("artifact_path", "artifact_sha256"):
+        authorization_document.pop(field)
+    if _read_json_object(authorization.artifact_path) != authorization_document:
+        raise ValueError("segmented Formal authorization artifact content is crossed")
+    qualification_document = qualification.model_dump(mode="json")
+    for field in ("artifact_path", "artifact_sha256", "observed_response_artifact_path"):
+        qualification_document.pop(field)
+    if _read_json_object(qualification.artifact_path) != qualification_document:
+        raise ValueError("segmented Formal qualification artifact content is crossed")
+    observed_document = _read_json_object(qualification.observed_response_artifact_path)
+    expected_observed = {
+        "schema_version": "full-pool-formal-observed-model-evidence-v1",
+        "evidence_kind": qualification.qualification_kind,
+        "output_identity": contract.output_identity,
+        "provider": execution.provider,
+        "transport": execution.transport,
+        "adapter_identity": execution.adapter_identity,
+        "requested_model": execution.requested_model,
+        "observed_model": execution.required_observed_model,
+        "account_binding": qualification.account_binding,
+        "qualified_at_utc": qualification.qualified_at_utc,
+        "usage_complete": True,
+        "raw_provider_payload_persisted": False,
+    }
+    if observed_document != expected_observed:
+        raise ValueError("segmented observed-model qualification evidence is crossed")
+
+    prompt = CONCURRENT_ROBUSTNESS_PROMPT_REGISTRY.resolve(
+        CONCURRENT_MESSAGE_PRIMARY_PROMPT_VERSION
+    )
+    prompt_document = _mapping(
+        json.loads(_canonical_json(prompt.audit_record())),
+        "canonical P0 Prompt audit",
+    )
+    prompt_contract = _mapping(run_identity.get("prompt_contract"), "segmented prompt contract")
+    if (
+        prompt_contract != {"primary": prompt_document}
+        or execution.prompt_version != prompt.prompt_version
+        or execution.prompt_canonical_hash != prompt.canonical_hash
+        or prompt_document.get("variant_id") != "P0"
+    ):
+        raise ValueError("segmented Formal source does not close canonical P0 Prompt evidence")
+    provider_by_variant = _mapping(
+        run_identity.get("provider_contract"), "segmented provider contract"
+    )
+    provider = _mapping(provider_by_variant.get("primary"), "segmented Primary provider contract")
+    external_transport = _mapping(
+        provider.get("external_transport"), "segmented external transport"
+    )
+    request_contract = execution.request_contract.model_dump(mode="json")
+    if (
+        provider.get("provider") != execution.provider
+        or provider.get("model") != execution.requested_model
+        or provider.get("requested_model") != execution.requested_model
+        or provider.get("prompt_version") != execution.prompt_version
+        or provider.get("wire_api") != execution.request_contract.wire_api
+        or provider.get("reasoning_effort") != execution.request_contract.reasoning_effort
+        or provider.get("max_output_tokens") != execution.request_contract.output_token_ceiling
+        or provider.get("timeout_seconds") != execution.request_contract.timeout_seconds
+        or provider.get("max_retries") != execution.request_contract.max_retries
+        or provider.get("request_contract") != request_contract
+        or external_transport.get("adapter_identity") != execution.adapter_identity
+        or external_transport.get("provider_transport") != execution.transport
+    ):
+        raise ValueError("segmented Formal Provider/request contract is crossed")
+    return _SegmentedFormalLineage(
+        contract=contract,
+        contract_sha256=contract_hash,
+        execution_contract_sha256=execution_hash,
+        authorization_artifact_sha256=authorization.artifact_sha256,
+        qualification_artifact_sha256=qualification.artifact_sha256,
+        observed_model_evidence_sha256=qualification.observed_response_sha256,
+        prompt_variant_id="P0",
+        prompt_version=prompt.prompt_version,
+        prompt_canonical_hash=prompt.canonical_hash,
+    )
+
+
 def _read_closed_segmented_full_pool_source(
     source_root: str | Path,
     *,
@@ -3330,16 +3683,102 @@ def _read_closed_segmented_full_pool_source(
         raise ValueError("segmented source-v2 cutoff or continuation identity is crossed")
 
     run_identity = _mapping(cutoff.get("v1_run_identity"), "segmented v1 run identity")
+    formal_identity = _mapping(
+        cutoff.get("v1_contract_identity"), "segmented v1 contract identity"
+    )
+    if formal_identity.get("schema_version") != _FULL_POOL_IDENTITY_SCHEMA:
+        raise ValueError("segmented v1 Formal identity schema is unsupported")
+    run_provider_by_variant = _mapping(
+        run_identity.get("provider_contract"), "segmented run Provider contract"
+    )
+    run_prompt_by_variant = _mapping(
+        run_identity.get("prompt_contract"), "segmented run Prompt contract"
+    )
+    if (
+        identity.get("provider_contract") != run_provider_by_variant.get("primary")
+        or identity.get("prompt_contract") != run_prompt_by_variant.get("primary")
+    ):
+        raise ValueError("segmented continuation Provider or Prompt identity is crossed")
+    formal_lineage = _read_segmented_formal_lineage(
+        run_identity=run_identity,
+        formal_identity=formal_identity,
+    )
     configuration = _mapping(run_identity.get("configuration"), "segmented v1 configuration")
     messages = _mapping_sequence(run_identity.get("messages"), "segmented v1 messages")
     message_ids = tuple(_non_empty(row.get("message_id"), "segmented message_id") for row in messages)
-    if message_ids != FULL_POOL_MESSAGE_IDS:
+    message_titles = {
+        _non_empty(row.get("message_id"), "segmented message_id"): _non_empty(
+            row.get("title"), "segmented message title"
+        )
+        for row in messages
+    }
+    if message_ids != FULL_POOL_MESSAGE_IDS or len(message_titles) != len(FULL_POOL_MESSAGE_IDS):
         raise ValueError("segmented source-v2 authoritative message topology is crossed")
     sample_size = _strict_non_negative_int(configuration.get("sample_size"), "segmented sample size")
     horizon = _strict_non_negative_int(configuration.get("horizon"), "segmented horizon")
     capacity = _strict_non_negative_int(
         configuration.get("delivery_capacity"), "segmented delivery capacity"
     )
+    runtime_execution = _mapping(
+        run_identity.get("execution_contract"), "segmented runtime execution contract"
+    )
+    formal_runtime_raw = runtime_execution.get("formal_execution")
+    effective_execution = (
+        _mapping(formal_runtime_raw, "segmented runtime Formal execution")
+        if isinstance(formal_runtime_raw, Mapping)
+        else runtime_execution
+    )
+    request_contract = _mapping(
+        effective_execution.get("request_contract"), "segmented request contract"
+    )
+    maximum_attempts = (
+        _strict_non_negative_int(request_contract.get("max_retries"), "segmented max retries")
+        + 1
+    )
+    prompt_primary = _mapping(
+        _mapping(run_identity.get("prompt_contract"), "segmented prompt contract").get(
+            "primary"
+        ),
+        "segmented Primary prompt contract",
+    )
+    prompt_variant_id = _non_empty(
+        prompt_primary.get("variant_id"), "segmented Prompt variant"
+    )
+    prompt_version = _non_empty(
+        prompt_primary.get("prompt_version"), "segmented Prompt version"
+    )
+    prompt_canonical_hash = _non_empty(
+        prompt_primary.get("canonical_hash"), "segmented Prompt canonical hash"
+    )
+    if formal_lineage is not None:
+        contract = formal_lineage.contract
+        execution = contract.formal_execution
+        if execution is None:
+            raise ValueError("segmented Formal lineage omits execution evidence")
+        expected_runtime = {
+            "sample_size": contract.eligible_user_count,
+            "horizon": contract.horizon,
+            "delivery_capacity": contract.per_message_capacity,
+            "primary_prompt_version": execution.prompt_version,
+        }
+        sample_fingerprints = _mapping(
+            run_identity.get("sample_data_fingerprints"),
+            "segmented sample data fingerprints",
+        )
+        if (
+            any(configuration.get(key) != value for key, value in expected_runtime.items())
+            or contract.message_ids != message_ids
+            or contract.dataset_dir.as_posix() != configuration.get("dataset_dir")
+            or sample_fingerprints.get("message_snapshot_hash")
+            != contract.message_snapshot_sha256
+        ):
+            raise ValueError("segmented runtime schedule or dataset is crossed with Formal contract")
+        profile = "production" if contract.profile == "production" else "validation"
+        prompt_variant_id = formal_lineage.prompt_variant_id
+        prompt_version = formal_lineage.prompt_version
+        prompt_canonical_hash = formal_lineage.prompt_canonical_hash
+    else:
+        profile = "validation"
     if horizon < 2 or capacity < 1 or not capacity * (horizon - 1) < sample_size <= capacity * horizon:
         raise ValueError("segmented source-v2 schedule is invalid")
     expected_pairs = sample_size * len(message_ids)
@@ -3347,9 +3786,6 @@ def _read_closed_segmented_full_pool_source(
         horizon * sample_size - capacity * horizon * (horizon - 1) // 2
     )
     final_capacity = sample_size - capacity * (horizon - 1)
-    profile = _non_empty(configuration.get("configuration_profile"), "segmented configuration profile")
-    if profile not in {"validation", "production"}:
-        raise ValueError("segmented source-v2 configuration profile is unsupported")
     if cutoff.get("expected_horizon") != horizon or cutoff.get("expected_logical_count") != expected_pairs:
         raise ValueError("segmented source-v2 cutoff denominator is crossed")
     if (
@@ -3358,42 +3794,54 @@ def _read_closed_segmented_full_pool_source(
         or cutoff.get("max_concurrency") != FULL_POOL_SEGMENTED_MAX_CONCURRENCY
         or cutoff.get("physical_reservation_policy") != "dynamic-next-wave-retry-window-v1"
         or cutoff.get("production_deploy_eligible") is not False
+        or maximum_attempts != 3
     ):
-        raise ValueError("segmented source-v2 cutoff caps or policy are crossed")
+        raise ValueError("segmented source-v2 cutoff caps, retry window, or policy are crossed")
 
-    candidate_ranges, candidate_count, selected_pairs = _scan_segmented_candidates(
+    candidate_scan = _scan_segmented_candidates(
         resolved / "candidate_rows.jsonl",
         message_ids=message_ids,
         horizon=horizon,
         sample_size=sample_size,
         capacity=capacity,
     )
-    (
-        pair_ranges,
-        terminal_ranges,
-        pair_count,
-        terminal_count,
-        distinct_users,
-        coverage,
-        provider_failed,
-        serial_count,
-        suffix_count,
-        reconciliation_retry_count,
-        terminal_accounting,
-        positive_users_by_batch,
-    ) = _scan_segmented_pairs_and_terminals(
+    pair_scan = _scan_segmented_pairs_and_terminals(
         resolved / "pair_rows.jsonl",
         resolved / "terminal_rows.jsonl",
         message_ids=message_ids,
         horizon=horizon,
         capacity=capacity,
         final_capacity=final_capacity,
-        selected_pairs=selected_pairs,
+        maximum_attempts=maximum_attempts,
+        prompt_version=prompt_version,
+        selected_rows=candidate_scan.selected_rows,
     )
     step_rows = _scan_segmented_steps(
         resolved / "steps.jsonl",
         horizon=horizon,
-        positive_users_by_batch=positive_users_by_batch,
+        message_ids=message_ids,
+        message_titles=message_titles,
+        candidate_summary=candidate_scan.summary_by_batch_message,
+        pair_scan=pair_scan,
+    )
+    candidate_ranges = candidate_scan.ranges
+    candidate_count = candidate_scan.row_count
+    pair_ranges = pair_scan.pair_ranges
+    terminal_ranges = pair_scan.terminal_ranges
+    pair_count = pair_scan.pair_count
+    terminal_count = pair_scan.terminal_count
+    distinct_users = pair_scan.distinct_users
+    coverage = pair_scan.coverage
+    provider_failed = pair_scan.provider_failed
+    serial_count = pair_scan.serial_count
+    suffix_count = pair_scan.suffix_count
+    reconciliation_retry_count = len(pair_scan.retry_pair_ids)
+    terminal_accounting = pair_scan.accounting
+    positive_users_by_batch = pair_scan.positive_users_by_batch
+    _validate_segmented_cutoff_order(
+        cutoff,
+        pair_scan=pair_scan,
+        step_rows=step_rows,
     )
 
     counts = _mapping(manifest.get("counts"), "segmented source-v2 counts")
@@ -3439,7 +3887,11 @@ def _read_closed_segmented_full_pool_source(
         raise ValueError("segmented serial prefix accounting is crossed")
     migration_charge, unknown_count = _validate_segmented_reconciliation(
         cutoff,
-        reconciliation_retry_count=reconciliation_retry_count,
+        retry_pair_ids=pair_scan.retry_pair_ids,
+        prefix_identity_hash=_non_empty(
+            identity.get("prefix_identity_hash"), "segmented prefix identity hash"
+        ),
+        maximum_attempts=maximum_attempts,
     )
     if (unknown_count == 0 and pending_physical != 0) or (
         unknown_count == 1 and pending_physical > 3
@@ -3488,15 +3940,88 @@ def _read_closed_segmented_full_pool_source(
     }
     if set(complete_status) != _SEGMENTED_COMPLETE_STATUS_FIELDS or complete_status != expected_complete_status:
         raise ValueError("segmented source-v2 complete status is crossed")
+    dispatched, durable, suffix_physical, source_anchor = _replay_continuation_ledger(
+        workspace / _LEDGER_FILE,
+        expected_identity_hash=_non_empty(
+            identity.get("identity_hash"), "segmented continuation identity hash"
+        ),
+    )
+    suffix_pair_ids = list(pair_scan.ordered_pair_ids[pair_scan.serial_count :])
+    serial_physical = _strict_non_negative_int(
+        terminal_accounting["serial_invocations"], "segmented serial physical attempts"
+    )
+    if (
+        dispatched != suffix_pair_ids
+        or durable != suffix_pair_ids
+        or suffix_physical != accounted_invocations - serial_physical
+        or source_anchor
+        != {
+            "source_manifest_sha256": manifest_sha256,
+            "complete_status": complete_status,
+        }
+    ):
+        raise ValueError("segmented continuation ledger is crossed with source-v2")
+    continuation_status = _read_json_object(workspace / _STATUS_FILE)
+    expected_status_fields = {
+        "schema_version",
+        "lifecycle",
+        "manifest_sha256",
+        "durable_prefix_terminal_count",
+        "concurrent_suffix_terminal_count",
+        "logical_count",
+        "physical_attempt_count",
+        "unknown_pair_ids",
+        "committed_feedback_user_ids",
+        "terminal_rows_relative_path",
+        "terminal_rows_sha256",
+        "source_root_relative_path",
+        "source_manifest_sha256",
+        "production_deploy_eligible",
+    }
+    if (
+        set(continuation_status) != expected_status_fields
+        or continuation_status.get("schema_version") != _SEGMENTED_STATUS_SCHEMA
+        or continuation_status.get("lifecycle") != SegmentedContinuationStatus.COMPLETE.value
+        or continuation_status.get("manifest_sha256") != cutoff_hash
+        or continuation_status.get("source_manifest_sha256") != manifest_sha256
+        or continuation_status.get("durable_prefix_terminal_count") != serial_count
+        or continuation_status.get("concurrent_suffix_terminal_count") != suffix_count
+        or continuation_status.get("logical_count") != logical
+        or continuation_status.get("physical_attempt_count") != physical
+        or continuation_status.get("unknown_pair_ids") != []
+        or continuation_status.get("committed_feedback_user_ids") != cumulative_feedback
+        or continuation_status.get("terminal_rows_sha256")
+        != artifact_hashes["terminal_rows.jsonl"]
+        or continuation_status.get("source_root_relative_path") != "source-v2"
+        or continuation_status.get("terminal_rows_relative_path")
+        != "source-v2/terminal_rows.jsonl"
+        or continuation_status.get("production_deploy_eligible") is not False
+    ):
+        raise ValueError("segmented continuation status is crossed with source-v2")
 
     provider_by_variant = _mapping(run_identity.get("provider_contract"), "segmented provider contract")
     provider = _mapping(provider_by_variant.get("primary"), "segmented Primary provider contract")
-    adapter_identity = _non_empty(provider.get("adapter"), "segmented adapter identity")
-    requested_model = _non_empty(provider.get("model"), "segmented requested model")
-    evidence_profile = "formal_live" if profile == "production" else "deterministic_validation_fixture"
-    live_api_triggered = profile == "production"
-    transport = FULL_POOL_FORMAL_TRANSPORT if live_api_triggered else "deterministic"
-    qualified_model = requested_model
+    formal_execution = (
+        formal_lineage.contract.formal_execution if formal_lineage is not None else None
+    )
+    live_api_triggered = bool(
+        formal_lineage is not None
+        and formal_lineage.contract.profile == "production"
+        and formal_execution is not None
+        and formal_execution.evidence_profile == "formal_live"
+    )
+    if formal_execution is not None:
+        adapter_identity = formal_execution.adapter_identity
+        requested_model = formal_execution.requested_model
+        qualified_model = formal_execution.required_observed_model
+        evidence_profile = formal_execution.evidence_profile
+        transport = formal_execution.transport
+    else:
+        adapter_identity = _non_empty(provider.get("adapter"), "segmented adapter identity")
+        requested_model = _non_empty(provider.get("model"), "segmented requested model")
+        qualified_model = requested_model
+        evidence_profile = "deterministic_validation_fixture"
+        transport = "deterministic"
     if live_api_triggered:
         production_values = (
             sample_size == FULL_POOL_PRODUCTION_USER_COUNT,
@@ -3507,6 +4032,8 @@ def _read_closed_segmented_full_pool_source(
             expected_candidates == FULL_POOL_PRODUCTION_CANDIDATE_ROWS,
             adapter_identity == FULL_POOL_FORMAL_ADAPTER_IDENTITY,
             requested_model == FULL_POOL_FORMAL_REQUESTED_MODEL,
+            qualified_model == FULL_POOL_FORMAL_REQUIRED_OBSERVED_MODEL,
+            prompt_variant_id == "P0",
             terminal_accounting["observed_model_counts"]
             == {FULL_POOL_FORMAL_REQUIRED_OBSERVED_MODEL: expected_pairs},
             terminal_accounting["responses"] == expected_pairs,
@@ -3518,11 +4045,13 @@ def _read_closed_segmented_full_pool_source(
         )
         if not all(production_values):
             raise ValueError("segmented production source-v2 is incomplete, mock, or non-Formal")
-        qualified_model = FULL_POOL_FORMAL_REQUIRED_OBSERVED_MODEL
 
-    formal_identity = _mapping(cutoff.get("v1_contract_identity"), "segmented v1 contract identity")
-    contract_sha256 = _non_empty(
-        formal_identity.get("contract_sha256"), "segmented v1 contract sha256"
+    contract_sha256 = (
+        formal_lineage.contract_sha256
+        if formal_lineage is not None
+        else _non_empty(
+            formal_identity.get("contract_sha256"), "segmented v1 contract sha256"
+        )
     )
     if _SHA256_PATTERN.fullmatch(contract_sha256) is None:
         raise ValueError("segmented v1 contract hash is invalid")
@@ -3539,6 +4068,21 @@ def _read_closed_segmented_full_pool_source(
         continuation_identity_hash=cast(str, identity["identity_hash"]),
         prefix_identity_hash=cast(str, identity["prefix_identity_hash"]),
         contract_sha256=contract_sha256,
+        formal_execution_contract_sha256=(
+            formal_lineage.execution_contract_sha256 if formal_lineage is not None else None
+        ),
+        authorization_artifact_sha256=(
+            formal_lineage.authorization_artifact_sha256 if formal_lineage is not None else None
+        ),
+        qualification_artifact_sha256=(
+            formal_lineage.qualification_artifact_sha256 if formal_lineage is not None else None
+        ),
+        observed_model_evidence_sha256=(
+            formal_lineage.observed_model_evidence_sha256 if formal_lineage is not None else None
+        ),
+        prompt_variant_id=prompt_variant_id,
+        prompt_version=prompt_version,
+        prompt_canonical_hash=prompt_canonical_hash,
         configuration_profile=profile,
         evidence_profile=evidence_profile,
         provider_transport=transport,
@@ -3800,9 +4344,44 @@ def _record_batch_range(
 
 def _json_line(payload: bytes, context: str) -> dict[str, object]:
     try:
-        return _mapping(json.loads(payload), context)
+        row = _mapping(json.loads(payload), context)
     except (UnicodeDecodeError, json.JSONDecodeError, TypeError, ValueError) as exc:
         raise ValueError(f"{context} is not one canonical JSON object") from exc
+    if payload != (_canonical_json(row) + "\n").encode("utf-8"):
+        raise ValueError(f"{context} is not canonical JSONL")
+    _validate_source_value_safe(row, context=context)
+    return row
+
+
+def _validate_source_value_safe(value: object, *, context: str) -> None:
+    if isinstance(value, Mapping):
+        for raw_key, nested in value.items():
+            key = str(raw_key).lower()
+            if any(fragment in key for fragment in _FORBIDDEN_SOURCE_KEY_FRAGMENTS):
+                raise ValueError(f"{context} contains a forbidden persisted field")
+            _validate_source_value_safe(nested, context=context)
+    elif isinstance(value, list):
+        for nested in value:
+            _validate_source_value_safe(nested, context=context)
+
+
+def _canonical_json_mapping_field(
+    row: Mapping[str, object],
+    field: str,
+    *,
+    context: str,
+) -> dict[str, object]:
+    value = row.get(field)
+    if not isinstance(value, str):
+        raise ValueError(f"{context} {field} must be canonical JSON text")
+    try:
+        parsed = _mapping(json.loads(value), f"{context} {field}")
+    except (json.JSONDecodeError, TypeError, ValueError) as exc:
+        raise ValueError(f"{context} {field} must be canonical JSON text") from exc
+    if value != _canonical_json(parsed):
+        raise ValueError(f"{context} {field} is not canonical JSON text")
+    _validate_source_value_safe(parsed, context=f"{context} {field}")
+    return parsed
 
 
 def _scan_segmented_candidates(
@@ -3812,43 +4391,112 @@ def _scan_segmented_candidates(
     horizon: int,
     sample_size: int,
     capacity: int,
-) -> tuple[tuple[_JsonlBatchRange, ...], int, set[tuple[str, str, int]]]:
+) -> _SegmentedCandidateScan:
     ranges: list[_JsonlBatchRange] = []
     counts: Counter[tuple[int, str]] = Counter()
-    selected: set[tuple[str, str, int]] = set()
+    selected: dict[tuple[str, str, int], Mapping[str, object]] = {}
+    seen_users: dict[tuple[int, str], set[str]] = defaultdict(set)
+    summary: dict[tuple[int, str], dict[str, object]] = {}
     row_count = 0
+    rows_in_batch = 0
+    current_time_step = -1
     with path.open("rb") as handle:
         while payload := handle.readline():
             start = handle.tell() - len(payload)
             row = _json_line(payload, "segmented candidate row")
+            if set(row) != _SEGMENTED_CANDIDATE_FIELDS:
+                raise ValueError("segmented candidate row fields are missing or extra")
             time_step = _strict_non_negative_int(row.get("time_step"), "candidate time_step")
             message_id = _non_empty(row.get("message_id"), "candidate message_id")
             user_id = _non_empty(row.get("user_id"), "candidate user_id")
             if time_step >= horizon or message_id not in message_ids:
                 raise ValueError("segmented candidate batch or message is crossed")
+            eligible = sample_size - capacity * time_step
+            if time_step != current_time_step:
+                if time_step != current_time_step + 1 or (
+                    current_time_step >= 0
+                    and rows_in_batch
+                    != (sample_size - capacity * current_time_step) * len(message_ids)
+                ):
+                    raise ValueError("segmented candidate batches are missing or out of order")
+                current_time_step = time_step
+                rows_in_batch = 0
+            expected_message_index = rows_in_batch // eligible
+            expected_ranking_position = rows_in_batch % eligible + 1
+            if (
+                expected_message_index >= len(message_ids)
+                or message_id != message_ids[expected_message_index]
+                or row.get("ranking_position") != expected_ranking_position
+                or user_id in seen_users[(time_step, message_id)]
+                or row.get("is_seed") not in {"true", "false"}
+            ):
+                raise ValueError("segmented candidate order, ranking, or user identity is crossed")
             _record_batch_range(
                 ranges,
                 time_step=time_step,
                 start=start,
                 end=handle.tell(),
             )
+            seen_users[(time_step, message_id)].add(user_id)
             counts[(time_step, message_id)] += 1
-            if row.get("selected") == "true":
-                key = (user_id, message_id, time_step)
-                if key in selected:
-                    raise ValueError("segmented candidate selection is duplicated")
-                selected.add(key)
-            elif row.get("selected") != "false":
-                raise ValueError("segmented candidate selected marker is invalid")
+            key = (user_id, message_id, time_step)
+            selected_marker = row.get("selected")
+            selection_reason = row.get("selection_reason")
+            if selected_marker == "true":
+                if key in selected or selection_reason not in {"seed_union", "personalized_top20"}:
+                    raise ValueError("segmented candidate selection is duplicated or unsupported")
+                selected[key] = row
+            elif selected_marker != "false" or selection_reason != "":
+                raise ValueError("segmented candidate selected marker or reason is invalid")
+            evidence = summary.setdefault(
+                (time_step, message_id),
+                {
+                    "eligible_users": eligible,
+                    "ranked_candidates": eligible,
+                    "below_delivery_capacity": max(0, eligible - capacity),
+                    "selected_user_ids": [],
+                    "seed_user_ids": [],
+                    "personalized_topup_user_ids": [],
+                    "selection_reason_counts": Counter(),
+                },
+            )
+            if selected_marker == "true":
+                cast(list[str], evidence["selected_user_ids"]).append(user_id)
+                if selection_reason == "seed_union":
+                    cast(list[str], evidence["seed_user_ids"]).append(user_id)
+                elif time_step == 0:
+                    cast(list[str], evidence["personalized_topup_user_ids"]).append(user_id)
+                cast(Counter[str], evidence["selection_reason_counts"])[
+                    cast(str, selection_reason)
+                ] += 1
+            rows_in_batch += 1
             row_count += 1
     if len(ranges) != horizon:
         raise ValueError("segmented candidate rows do not cover every batch")
+    normalized_summary: dict[tuple[int, str], Mapping[str, object]] = {}
     for time_step in range(horizon):
         expected = sample_size - capacity * time_step
+        expected_selected = min(capacity, expected)
         for message_id in message_ids:
-            if counts[(time_step, message_id)] != expected:
+            evidence = summary.get((time_step, message_id))
+            if (
+                counts[(time_step, message_id)] != expected
+                or evidence is None
+                or len(cast(list[str], evidence["selected_user_ids"])) != expected_selected
+            ):
                 raise ValueError("segmented candidate denominator is crossed by batch or message")
-    return tuple(ranges), row_count, selected
+            normalized_summary[(time_step, message_id)] = {
+                **evidence,
+                "selection_reason_counts": dict(
+                    sorted(cast(Counter[str], evidence["selection_reason_counts"]).items())
+                ),
+            }
+    return _SegmentedCandidateScan(
+        ranges=tuple(ranges),
+        row_count=row_count,
+        selected_rows=selected,
+        summary_by_batch_message=normalized_summary,
+    )
 
 
 def _terminal_int(row: Mapping[str, object], field: str) -> int:
@@ -3856,10 +4504,11 @@ def _terminal_int(row: Mapping[str, object], field: str) -> int:
 
 
 def _terminal_json_mapping(row: Mapping[str, object], field: str) -> dict[str, object]:
-    value = row.get(field)
-    if not isinstance(value, str):
-        raise ValueError(f"segmented terminal {field} must be canonical JSON text")
-    return _mapping(json.loads(value), f"segmented terminal {field}")
+    return _canonical_json_mapping_field(
+        row,
+        field,
+        context="segmented terminal",
+    )
 
 
 def _terminal_optional_usage(row: Mapping[str, object], field: str) -> int | None:
@@ -3885,21 +4534,10 @@ def _scan_segmented_pairs_and_terminals(
     horizon: int,
     capacity: int,
     final_capacity: int,
-    selected_pairs: set[tuple[str, str, int]],
-) -> tuple[
-    tuple[_JsonlBatchRange, ...],
-    tuple[_JsonlBatchRange, ...],
-    int,
-    int,
-    set[str],
-    dict[str, int],
-    int,
-    int,
-    int,
-    int,
-    dict[str, object],
-    tuple[frozenset[str], ...],
-]:
+    maximum_attempts: int,
+    prompt_version: str,
+    selected_rows: Mapping[tuple[str, str, int], Mapping[str, object]],
+) -> _SegmentedPairTerminalScan:
     pair_ranges: list[_JsonlBatchRange] = []
     terminal_ranges: list[_JsonlBatchRange] = []
     pair_ids: set[str] = set()
@@ -3909,11 +4547,18 @@ def _scan_segmented_pairs_and_terminals(
     coverage: Counter[str] = Counter()
     batch_message_counts: Counter[tuple[int, str]] = Counter()
     positive_users: list[set[str]] = [set() for _ in range(horizon)]
+    selected_users_by_batch_message: dict[tuple[int, str], list[str]] = defaultdict(list)
+    failed_users_by_batch_message: dict[tuple[int, str], list[str]] = defaultdict(list)
+    positive_users_by_batch_message: dict[tuple[int, str], set[str]] = defaultdict(set)
+    ordered_pair_ids: list[str] = []
+    ordered_terminal_ids: list[str] = []
+    pair_ids_by_batch: list[list[str]] = [[] for _ in range(horizon)]
+    terminal_ids_by_batch: list[list[str]] = [[] for _ in range(horizon)]
+    retry_pair_ids: list[str] = []
     expected_position = 0
     serial_count = 0
     suffix_count = 0
     suffix_seen = False
-    retries = 0
     provider_failed = 0
     invocations = 0
     serial_invocations = 0
@@ -3946,6 +4591,8 @@ def _scan_segmented_pairs_and_terminals(
             terminal_start = terminals.tell() - len(terminal_payload)
             pair = _json_line(pair_payload, "segmented pair row")
             terminal = _json_line(terminal_payload, "segmented terminal row")
+            if set(pair) != _SEGMENTED_PAIR_FIELDS or set(terminal) != _SEGMENTED_TERMINAL_FIELDS:
+                raise ValueError("segmented pair or terminal row fields are missing or extra")
             pair_id = _non_empty(pair.get("pair_id"), "segmented pair_id")
             terminal_pair_id = _non_empty(terminal.get("pair_id"), "segmented terminal pair_id")
             terminal_id = _non_empty(terminal.get("terminal_row_id"), "segmented terminal identity")
@@ -3962,17 +4609,61 @@ def _scan_segmented_pairs_and_terminals(
                 or position != expected_position
                 or time_step >= horizon
                 or message_id not in message_ids
-                or key not in selected_pairs
+                or key not in selected_rows
                 or key in observed_pair_keys
+                or pair_id != f"{user_id}:{message_id}:{time_step}"
+                or terminal_id != f"{pair_id}:primary"
             ):
                 raise ValueError("segmented pair identity, selection, or order is crossed")
             identity_fields = ("pair_schedule_position", "time_step", "message_id", "user_id")
+            selected_row = selected_rows[key]
+            expected_capacity = capacity if time_step < horizon - 1 else final_capacity
+            prior_pairs = min(time_step, horizon - 1) * capacity * len(message_ids)
+            expected_message_index = (position - prior_pairs) // expected_capacity
             if (
                 terminal_pair_id != pair_id
                 or terminal.get("decision_variant") != "primary"
                 or any(terminal.get(field) != pair.get(field) for field in identity_fields)
+                or any(
+                    pair.get(field) != selected_row.get(field)
+                    for field in _CANDIDATE_PAIR_SHARED_FIELDS
+                )
+                or expected_message_index >= len(message_ids)
+                or message_id != message_ids[expected_message_index]
             ):
-                raise ValueError("segmented pair and terminal identities are crossed")
+                raise ValueError("segmented pair, candidate, terminal, or message order is crossed")
+            crossed_terminal_fields = {
+                "primary_action": "action",
+                "primary_confidence": "confidence",
+                "primary_decision_source": "decision_source",
+                "primary_probability": "probability",
+                "primary_prompt_version": "prompt_version",
+                "primary_provider_metadata": "provider_metadata",
+                "primary_reason": "reason",
+                "primary_status": "terminal_status",
+            }
+            if (
+                pair.get("primary_terminal_coverage") != "true"
+                or any(
+                    pair.get(pair_field) != terminal.get(terminal_field)
+                    for pair_field, terminal_field in crossed_terminal_fields.items()
+                )
+                or terminal.get("prompt_version") != prompt_version
+                or terminal.get("context_source_key") != f"{pair_id}:primary"
+                or _SHA256_PATTERN.fullmatch(
+                    _non_empty(terminal.get("cache_key"), "segmented terminal cache key")
+                )
+                is None
+            ):
+                raise ValueError("segmented pair and terminal Decision evidence is crossed")
+            for row, field, context in (
+                (pair, "primary_provider_metadata", "segmented pair"),
+                (terminal, "provider_metadata", "segmented terminal"),
+                (terminal, "context_profile_payload", "segmented terminal"),
+                (terminal, "peer_context_payload", "segmented terminal"),
+                (terminal, "prompt_field_inclusion", "segmented terminal"),
+            ):
+                _canonical_json_mapping_field(row, field, context=context)
             pair_segment = pair.get("execution_segment")
             terminal_segment = terminal.get("execution_segment")
             if pair_segment != terminal_segment or pair_segment not in {
@@ -3990,62 +4681,93 @@ def _scan_segmented_pairs_and_terminals(
             retry = terminal.get("reconciliation_retry")
             if not isinstance(retry, bool) or (retry and pair_segment != "concurrent_suffix"):
                 raise ValueError("segmented reconciliation retry marker is crossed")
-            retries += int(retry)
+            if retry:
+                retry_pair_ids.append(pair_id)
             status = terminal.get("terminal_status")
             action = terminal.get("action")
+            engage = terminal.get("engage")
             positive = status == "succeeded" and action in CONCURRENT_MESSAGE_POSITIVE_ACTIONS
-            if pair.get("campaign_feedback_committed") != ("true" if positive else "false"):
-                raise ValueError("segmented pair feedback marker is crossed with its terminal")
+            if (
+                pair.get("campaign_feedback_committed") != ("true" if positive else "false")
+                or engage not in {"true", "false"}
+                or (engage == "false") != (action == "ignore")
+            ):
+                raise ValueError("segmented Decision action or feedback marker is crossed")
             if positive:
                 positive_users[time_step].add(user_id)
+                positive_users_by_batch_message[(time_step, message_id)].add(user_id)
             if status == "provider_failed":
                 provider_failed += 1
+                failed_users_by_batch_message[(time_step, message_id)].append(user_id)
             elif status != "succeeded":
                 raise ValueError("segmented terminal status is unsupported")
             requests = _terminal_int(terminal, "request_invocations")
             response_count = _terminal_int(terminal, "provider_response_count")
             success_count = _terminal_int(terminal, "successful_decision_count")
-            if not requests >= response_count >= success_count or success_count not in {0, 1}:
+            if (
+                not 1 <= requests <= maximum_attempts
+                or not requests >= response_count >= success_count
+                or success_count not in {0, 1}
+                or (status == "succeeded") != (success_count == 1)
+            ):
                 raise ValueError("segmented terminal Provider accounting invariant failed")
+            observed_counts = {
+                model: _strict_non_negative_int(count, "segmented observed-model count")
+                for model, count in _terminal_json_mapping(
+                    terminal, "observed_model_counts"
+                ).items()
+            }
+            missing_count = _terminal_int(terminal, "observed_model_missing_response_count")
+            malformed_count = _terminal_int(
+                terminal, "observed_model_malformed_response_count"
+            )
+            if sum(observed_counts.values()) + missing_count + malformed_count != response_count:
+                raise ValueError("segmented observed-model evidence does not cover each response")
+            complete_count = _terminal_int(terminal, "usage_complete_response_count")
+            missing_usage_count = _terminal_int(terminal, "usage_missing_response_count")
+            malformed_usage_count = _terminal_int(
+                terminal, "usage_malformed_response_count"
+            )
+            if complete_count + missing_usage_count + malformed_usage_count != response_count:
+                raise ValueError("segmented usage evidence does not cover each response")
+            usage_complete = terminal.get("usage_complete")
+            if usage_complete not in {"true", "false"} or (
+                usage_complete == "true"
+            ) != (response_count > 0 and complete_count == response_count):
+                raise ValueError("segmented terminal usage_complete marker is crossed")
+            input_value = _terminal_optional_usage(terminal, "input_usage")
+            output_value = _terminal_optional_usage(terminal, "output_usage")
+            total_value = _terminal_optional_usage(terminal, "total_usage")
+            cached = _terminal_optional_usage(terminal, "cached_input_usage")
+            if usage_complete == "true":
+                if None in {input_value, output_value, total_value, cached}:
+                    raise ValueError("segmented complete usage omits token evidence")
+                assert input_value is not None and output_value is not None
+                assert total_value is not None and cached is not None
+                if total_value != input_value + output_value or cached > input_value:
+                    raise ValueError("segmented token usage totals are crossed")
+                usage_complete_attempts += 1
+                input_usage += input_value
+                output_usage += output_value
+                total_usage += total_value
+                cached_input_usage += cached
+                cached_reported = True
+            else:
+                if any(value is not None for value in (input_value, output_value, total_value, cached)):
+                    raise ValueError("segmented incomplete usage exposes partial token totals")
+                if requests:
+                    usage_incomplete_attempts += 1
             invocations += requests
             if pair_segment == "serial_prefix":
                 serial_invocations += requests
             responses += response_count
             successful += success_count
-            for model, count in _terminal_json_mapping(terminal, "observed_model_counts").items():
-                observed_models[model] += _strict_non_negative_int(
-                    count, "segmented observed-model count"
-                )
-            observed_missing += _terminal_int(
-                terminal, "observed_model_missing_response_count"
-            )
-            observed_malformed += _terminal_int(
-                terminal, "observed_model_malformed_response_count"
-            )
-            usage_complete_responses += _terminal_int(
-                terminal, "usage_complete_response_count"
-            )
-            usage_missing_responses += _terminal_int(
-                terminal, "usage_missing_response_count"
-            )
-            usage_malformed_responses += _terminal_int(
-                terminal, "usage_malformed_response_count"
-            )
-            usage_complete = terminal.get("usage_complete")
-            if usage_complete == "true":
-                usage_complete_attempts += 1
-                input_usage += cast(int, _terminal_optional_usage(terminal, "input_usage"))
-                output_usage += cast(int, _terminal_optional_usage(terminal, "output_usage"))
-                total_usage += cast(int, _terminal_optional_usage(terminal, "total_usage"))
-            elif usage_complete == "false":
-                if requests:
-                    usage_incomplete_attempts += 1
-            else:
-                raise ValueError("segmented terminal usage_complete marker is invalid")
-            cached = _terminal_optional_usage(terminal, "cached_input_usage")
-            if cached is not None:
-                cached_input_usage += cached
-                cached_reported = True
+            observed_models.update(observed_counts)
+            observed_missing += missing_count
+            observed_malformed += malformed_count
+            usage_complete_responses += complete_count
+            usage_missing_responses += missing_usage_count
+            usage_malformed_responses += malformed_usage_count
             _record_batch_range(
                 pair_ranges,
                 time_step=time_step,
@@ -4060,6 +4782,11 @@ def _scan_segmented_pairs_and_terminals(
             )
             pair_ids.add(pair_id)
             terminal_ids.add(terminal_id)
+            ordered_pair_ids.append(pair_id)
+            ordered_terminal_ids.append(terminal_id)
+            pair_ids_by_batch[time_step].append(pair_id)
+            terminal_ids_by_batch[time_step].append(terminal_id)
+            selected_users_by_batch_message[(time_step, message_id)].append(user_id)
             observed_pair_keys.add(key)
             distinct_users.add(user_id)
             coverage[user_id] += 1
@@ -4067,7 +4794,11 @@ def _scan_segmented_pairs_and_terminals(
             expected_position += 1
             pair_count += 1
             terminal_count += 1
-    if observed_pair_keys != selected_pairs or len(pair_ranges) != horizon or len(terminal_ranges) != horizon:
+    if (
+        observed_pair_keys != set(selected_rows)
+        or len(pair_ranges) != horizon
+        or len(terminal_ranges) != horizon
+    ):
         raise ValueError("segmented selected candidate and terminal topology is incomplete")
     for time_step in range(horizon):
         expected = capacity if time_step < horizon - 1 else final_capacity
@@ -4092,19 +4823,32 @@ def _scan_segmented_pairs_and_terminals(
         "total_usage": total_usage if usage_complete_attempts else None,
         "cached_input_usage": cached_input_usage if cached_reported else None,
     }
-    return (
-        tuple(pair_ranges),
-        tuple(terminal_ranges),
-        pair_count,
-        terminal_count,
-        distinct_users,
-        dict(coverage),
-        provider_failed,
-        serial_count,
-        suffix_count,
-        retries,
-        accounting,
-        tuple(frozenset(users) for users in positive_users),
+    return _SegmentedPairTerminalScan(
+        pair_ranges=tuple(pair_ranges),
+        terminal_ranges=tuple(terminal_ranges),
+        pair_count=pair_count,
+        terminal_count=terminal_count,
+        distinct_users=frozenset(distinct_users),
+        coverage=dict(coverage),
+        provider_failed=provider_failed,
+        serial_count=serial_count,
+        suffix_count=suffix_count,
+        retry_pair_ids=tuple(retry_pair_ids),
+        accounting=accounting,
+        positive_users_by_batch=tuple(frozenset(users) for users in positive_users),
+        ordered_pair_ids=tuple(ordered_pair_ids),
+        ordered_terminal_ids=tuple(ordered_terminal_ids),
+        pair_ids_by_batch=tuple(tuple(rows) for rows in pair_ids_by_batch),
+        terminal_ids_by_batch=tuple(tuple(rows) for rows in terminal_ids_by_batch),
+        selected_users_by_batch_message={
+            key: tuple(value) for key, value in selected_users_by_batch_message.items()
+        },
+        failed_users_by_batch_message={
+            key: tuple(sorted(value)) for key, value in failed_users_by_batch_message.items()
+        },
+        positive_users_by_batch_message={
+            key: tuple(sorted(value)) for key, value in positive_users_by_batch_message.items()
+        },
     )
 
 
@@ -4112,13 +4856,18 @@ def _scan_segmented_steps(
     path: Path,
     *,
     horizon: int,
-    positive_users_by_batch: Sequence[frozenset[str]],
+    message_ids: Sequence[str],
+    message_titles: Mapping[str, str],
+    candidate_summary: Mapping[tuple[int, str], Mapping[str, object]],
+    pair_scan: _SegmentedPairTerminalScan,
 ) -> tuple[dict[str, object], ...]:
     rows: list[dict[str, object]] = []
     cumulative: set[str] = set()
     with path.open("rb") as handle:
         while payload := handle.readline():
             row = _json_line(payload, "segmented step row")
+            if set(row) != _SEGMENTED_STEP_FIELDS:
+                raise ValueError("segmented step row fields are missing or extra")
             time_step = _strict_non_negative_int(row.get("time_step"), "segmented step time_step")
             if time_step != len(rows) or time_step >= horizon:
                 raise ValueError("segmented step rows are missing, extra, or out of order")
@@ -4128,8 +4877,37 @@ def _scan_segmented_steps(
             committed = _string_list(
                 row.get("committed_primary_positive_user_ids"), "segmented committed feedback"
             )
-            if frozen != sorted(cumulative) or committed != sorted(positive_users_by_batch[time_step]):
+            if (
+                frozen != sorted(cumulative)
+                or committed != sorted(pair_scan.positive_users_by_batch[time_step])
+            ):
                 raise ValueError("segmented feedback barrier or committed users are crossed")
+            summaries = _mapping_sequence(
+                row.get("message_summaries"), "segmented message summaries"
+            )
+            if len(summaries) != len(message_ids):
+                raise ValueError("segmented message summary denominator is crossed")
+            for message_id, summary in zip(message_ids, summaries, strict=True):
+                if set(summary) != _SEGMENTED_MESSAGE_SUMMARY_FIELDS:
+                    raise ValueError("segmented message summary fields are missing or extra")
+                candidate = candidate_summary[(time_step, message_id)]
+                expected = {
+                    **candidate,
+                    "message_id": message_id,
+                    "message_title": message_titles[message_id],
+                    "selected_user_ids": list(
+                        pair_scan.selected_users_by_batch_message[(time_step, message_id)]
+                    ),
+                    "primary_positive_user_ids": list(
+                        pair_scan.positive_users_by_batch_message.get((time_step, message_id), ())
+                    ),
+                    "primary_provider_failed_user_ids": list(
+                        pair_scan.failed_users_by_batch_message.get((time_step, message_id), ())
+                    ),
+                    "shadow_provider_failed_user_ids": [],
+                }
+                if summary != expected:
+                    raise ValueError("segmented message summary is crossed with source rows")
             cumulative.update(committed)
             rows.append(row)
     if len(rows) != horizon:
@@ -4137,10 +4915,98 @@ def _scan_segmented_steps(
     return tuple(rows)
 
 
+def _validate_segmented_cutoff_order(
+    cutoff: Mapping[str, object],
+    *,
+    pair_scan: _SegmentedPairTerminalScan,
+    step_rows: Sequence[Mapping[str, object]],
+) -> None:
+    committed = _mapping_sequence(
+        cutoff.get("committed_batches"), "segmented committed cutoff batches"
+    )
+    active = _mapping(cutoff.get("active_batch"), "segmented active cutoff batch")
+    committed_pair_ids: list[str] = []
+    committed_terminal_ids: list[str] = []
+    for time_step, batch in enumerate(committed):
+        if (
+            set(batch)
+            != {
+                "time_step",
+                "batch_snapshot_hash",
+                "spool_ref",
+                "ordered_pair_ids",
+                "ordered_terminal_ids",
+                "frozen_feedback_user_ids",
+                "committed_feedback_user_ids",
+            }
+            or batch.get("time_step") != time_step
+            or _string_list(batch.get("ordered_pair_ids"), "cutoff committed pair IDs")
+            != list(pair_scan.pair_ids_by_batch[time_step])
+            or _string_list(
+                batch.get("ordered_terminal_ids"), "cutoff committed terminal IDs"
+            )
+            != list(pair_scan.terminal_ids_by_batch[time_step])
+            or _string_list(
+                batch.get("frozen_feedback_user_ids"), "cutoff committed frozen feedback"
+            )
+            != _string_list(
+                step_rows[time_step].get("frozen_campaign_engaged_user_ids"),
+                "source committed frozen feedback",
+            )
+            or _string_list(
+                batch.get("committed_feedback_user_ids"),
+                "cutoff committed positive feedback",
+            )
+            != _string_list(
+                step_rows[time_step].get("committed_primary_positive_user_ids"),
+                "source committed positive feedback",
+            )
+        ):
+            raise ValueError("segmented committed cutoff batch is crossed with source rows")
+        committed_pair_ids.extend(pair_scan.pair_ids_by_batch[time_step])
+        committed_terminal_ids.extend(pair_scan.terminal_ids_by_batch[time_step])
+    active_time_step = len(committed)
+    if (
+        set(active)
+        != {
+            "time_step",
+            "batch_snapshot_hash",
+            "snapshot_ref",
+            "ordered_pair_ids",
+            "ordered_terminal_ids",
+            "frozen_feedback_user_ids",
+        }
+        or active.get("time_step") != active_time_step
+        or active_time_step >= len(pair_scan.pair_ids_by_batch)
+        or _string_list(active.get("ordered_pair_ids"), "cutoff active pair IDs")
+        != list(pair_scan.pair_ids_by_batch[active_time_step])
+        or _string_list(active.get("frozen_feedback_user_ids"), "cutoff active frozen feedback")
+        != _string_list(
+            step_rows[active_time_step].get("frozen_campaign_engaged_user_ids"),
+            "source active frozen feedback",
+        )
+    ):
+        raise ValueError("segmented active cutoff batch is crossed with source rows")
+    active_terminal_ids = _string_list(
+        active.get("ordered_terminal_ids"), "cutoff active terminal IDs"
+    )
+    serial_terminal_ids = list(pair_scan.ordered_terminal_ids[: pair_scan.serial_count])
+    if (
+        committed_terminal_ids + active_terminal_ids != serial_terminal_ids
+        or _string_list(cutoff.get("ordered_prefix_terminal_ids"), "cutoff terminal IDs")
+        != serial_terminal_ids
+        or _string_list(cutoff.get("ordered_prefix_pair_ids"), "cutoff pair IDs")
+        != committed_pair_ids + list(pair_scan.pair_ids_by_batch[active_time_step])
+    ):
+        raise ValueError("segmented cutoff pair or terminal order is crossed")
+
+
 def _validate_segmented_reconciliation(
     cutoff: Mapping[str, object],
     *,
-    reconciliation_retry_count: int,
+    retry_pair_ids: Sequence[str],
+    prefix_identity_hash: str,
+    maximum_attempts: int,
 ) -> tuple[int, int]:
     unknown_ids = _string_list(cutoff.get("unknown_pair_ids"), "segmented migration unknowns")
     unknown_count = _strict_non_negative_int(
@@ -4151,24 +5017,24 @@ def _validate_segmented_reconciliation(
     if unknown_count != len(unknown_ids) or unknown_count not in {0, 1}:
         raise ValueError("segmented migration unknown denominator is crossed")
     if unknown_count == 0:
-        if authorization is not None or authorization_hash is not None or reconciliation_retry_count != 0:
+        if authorization is not None or authorization_hash is not None or retry_pair_ids:
             raise ValueError("segmented reconciliation appears without a migration unknown")
         return 0, 0
     document = _mapping(authorization, "segmented reconciliation authorization")
+    try:
+        parsed = FullPoolReconciliationAuthorization.model_validate(document)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("segmented reconciliation authorization is invalid") from exc
     if (
-        document.get("schema_version") != _RECONCILIATION_SCHEMA
-        or document.get("unknown_pair_id") != unknown_ids[0]
-        or document.get("retry_authorized") is not True
-        or authorization_hash != _sha256_json(document)
-        or reconciliation_retry_count != 1
+        parsed.prefix_run_identity_hash != prefix_identity_hash
+        or parsed.unknown_pair_id != unknown_ids[0]
+        or parsed.retry_authorized is not True
+        or authorization_hash != _sha256_json(parsed.model_dump(mode="json"))
+        or list(retry_pair_ids) != unknown_ids
+        or parsed.physical_attempt_charge != maximum_attempts
     ):
         raise ValueError("segmented reconciliation authorization or retry identity is crossed")
-    charge = _strict_non_negative_int(
-        document.get("physical_attempt_charge"), "segmented migration physical charge"
-    )
-    if charge not in {1, 2, 3}:
-        raise ValueError("segmented migration physical charge is invalid")
-    return charge, unknown_count
+    return parsed.physical_attempt_charge, unknown_count
 
 
 def _segmented_execution_document(facts: SegmentedFullPoolSourceFacts) -> dict[str, object]:
@@ -4180,6 +5046,13 @@ def _segmented_execution_document(facts: SegmentedFullPoolSourceFacts) -> dict[s
         "cutoff_manifest_sha256": facts.cutoff_manifest_sha256,
         "continuation_identity_hash": facts.continuation_identity_hash,
         "prefix_identity_hash": facts.prefix_identity_hash,
+        "formal_execution_contract_sha256": facts.formal_execution_contract_sha256,
+        "authorization_artifact_sha256": facts.authorization_artifact_sha256,
+        "qualification_artifact_sha256": facts.qualification_artifact_sha256,
+        "observed_model_evidence_sha256": facts.observed_model_evidence_sha256,
+        "prompt_variant_id": facts.prompt_variant_id,
+        "prompt_version": facts.prompt_version,
+        "prompt_canonical_hash": facts.prompt_canonical_hash,
         "unknown_pair_count": facts.unknown_pair_count,
         "reconciliation_retry_count": facts.reconciliation_retry_count,
         "migration_unknown_physical_charge": facts.migration_unknown_physical_charge,
@@ -4281,6 +5154,14 @@ def _require_real_directory(path: Path, context: str) -> None:
     mode = path.stat(follow_symlinks=False).st_mode
     if not stat.S_ISDIR(mode):
         raise ValueError(f"{context} must be a real directory")
+
+
+def _require_real_file(path_raw: Path, label: str) -> Path:
+    absolute = Path(os.path.abspath(path_raw.expanduser()))
+    resolved = path_raw.expanduser().resolve(strict=True)
+    if absolute != resolved or path_raw.is_symlink() or not resolved.is_file():
+        raise ValueError(f"{label} must be one explicit real file")
+    return resolved
 
 
 def _read_json_object(path: Path) -> dict[str, object]:

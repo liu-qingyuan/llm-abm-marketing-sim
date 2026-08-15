@@ -167,6 +167,13 @@ _SEGMENTED_SOURCE_FACT_FIELDS = frozenset(
         "cutoff_manifest_sha256",
         "continuation_identity_hash",
         "prefix_identity_hash",
+        "formal_execution_contract_sha256",
+        "authorization_artifact_sha256",
+        "qualification_artifact_sha256",
+        "observed_model_evidence_sha256",
+        "prompt_variant_id",
+        "prompt_version",
+        "prompt_canonical_hash",
         "execution_topology",
         "serial_prefix_terminal_count",
         "concurrent_suffix_terminal_count",
@@ -449,7 +456,6 @@ def promote_concurrent_robustness_release(
     full_pool_manifest_sha256: str | None = None,
     implementation_commit: str | None = None,
     _closed_full_pool_formal_facts: FullPoolFormalReleaseFacts | None = None,
-    _closed_segmented_source_facts: SegmentedFullPoolSourceFacts | None = None,
 ) -> ConcurrentRobustnessProductionRelease:
     """Dispatch one explicit legacy or Full-Pool promotion through the sole Release Seam."""
     full_pool_values = (
@@ -457,7 +463,6 @@ def promote_concurrent_robustness_release(
         full_pool_manifest_sha256,
         implementation_commit,
         _closed_full_pool_formal_facts,
-        _closed_segmented_source_facts,
     )
     if any(value is not None for value in full_pool_values):
         if (
@@ -482,6 +487,10 @@ def promote_concurrent_robustness_release(
                 "Full-Pool source manifest cannot be version-dispatched"
             ) from exc
         if source_schema == "full-pool-segmented-source-v2":
+            if _closed_full_pool_formal_facts is not None:
+                raise ConcurrentRobustnessReleaseError(
+                    "v9 production promotion cannot accept injected Formal facts"
+                )
             return _promote_full_pool_v9_release(
                 repo_root=repo_root,
                 full_pool_source_root=full_pool_source_root,
@@ -494,12 +503,6 @@ def promote_concurrent_robustness_release(
                 release_contract_path=release_contract_path,
                 release_id=release_id,
                 implementation_commit=implementation_commit,
-                closed_formal_facts=_closed_full_pool_formal_facts,
-                closed_segmented_facts=_closed_segmented_source_facts,
-            )
-        if _closed_segmented_source_facts is not None:
-            raise ConcurrentRobustnessReleaseError(
-                "segmented typed facts cannot be supplied to v8 promotion"
             )
         return _promote_full_pool_v8_release(
             repo_root=repo_root,
@@ -879,6 +882,13 @@ def _v9_segmented_fact_document(
         "cutoff_manifest_sha256": facts.cutoff_manifest_sha256,
         "continuation_identity_hash": facts.continuation_identity_hash,
         "prefix_identity_hash": facts.prefix_identity_hash,
+        "formal_execution_contract_sha256": facts.formal_execution_contract_sha256,
+        "authorization_artifact_sha256": facts.authorization_artifact_sha256,
+        "qualification_artifact_sha256": facts.qualification_artifact_sha256,
+        "observed_model_evidence_sha256": facts.observed_model_evidence_sha256,
+        "prompt_variant_id": facts.prompt_variant_id,
+        "prompt_version": facts.prompt_version,
+        "prompt_canonical_hash": facts.prompt_canonical_hash,
         "execution_topology": "serial_prefix_then_concurrent_suffix",
         "serial_prefix_terminal_count": facts.serial_prefix_terminal_count,
         "concurrent_suffix_terminal_count": facts.concurrent_suffix_terminal_count,
@@ -1593,8 +1603,6 @@ def _promote_full_pool_v9_release(
     release_contract_path: str | Path,
     release_id: str,
     implementation_commit: str,
-    closed_formal_facts: FullPoolFormalReleaseFacts | None,
-    closed_segmented_facts: SegmentedFullPoolSourceFacts | None,
 ) -> ConcurrentRobustnessProductionRelease:
     root = _real_directory(Path(repo_root), "repository root")
     full_pool = _repo_directory(root, Path(full_pool_source_root), "segmented Full-Pool source-v2")
@@ -1637,8 +1645,6 @@ def _promote_full_pool_v9_release(
             historical_study_root=historical_study,
             candidate_dir=candidate,
             implementation_commit=implementation_commit,
-            formal_facts=closed_formal_facts,
-            segmented_facts=closed_segmented_facts,
         )
     except ConcurrentRobustnessEvidenceError as exc:
         raise ConcurrentRobustnessReleaseError(str(exc)) from exc
@@ -1771,6 +1777,17 @@ def _promote_full_pool_v9_release(
             or _physical_snapshot_identity(final_hashes) != snapshot_identity
         ):
             raise ConcurrentRobustnessReleaseError("v9 physical snapshot drifted after publication")
+        round_trip = _validate_full_pool_v9_production_release(
+            repo_root=root,
+            contract_document=contract_document,
+            source_dir=destination,
+        )
+        if (
+            round_trip.get("production_deploy_eligible") is not True
+            or round_trip.get("report_sha256")
+            != final_hashes[CONCURRENT_MESSAGE_REPORT_HTML]
+        ):
+            raise ConcurrentRobustnessReleaseError("v9 standalone round-trip facts are crossed")
         _assert_v8_input_snapshots(snapshots)
     except Exception:
         if staging.exists():

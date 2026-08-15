@@ -16,6 +16,17 @@ from llm_abm_sim.full_pool_segmented_continuation import (
     FullPoolSegmentedContinuation,
     SegmentedContinuationStatus,
     _read_closed_segmented_full_pool_source,
+    _read_segmented_formal_lineage,
+    _scan_segmented_candidates,
+    _scan_segmented_pairs_and_terminals,
+    _validate_segmented_cutoff_order,
+    _validate_segmented_reconciliation,
+)
+from llm_abm_sim.safe_serialization import safe_data
+from tests.integration.test_full_pool_formal_experiment import (
+    _formal_execution_contract,
+    _production_contract,
+    _write_contract_artifact,
 )
 from tests.integration.test_full_pool_presentation_bundle import _historical_candidate
 from tests.integration.test_full_pool_segmented_multibatch import (
@@ -176,6 +187,86 @@ def _mid_batch_unknown_prefix(tmp_path: Path, *, pending_attempts: int) -> tuple
     return prefix, unknown_pair_id
 
 
+def test_segmented_formal_lineage_recloses_contract_authorization_qualification_and_p0(
+    tmp_path: Path,
+) -> None:
+    base = _production_contract(tmp_path / "dataset")
+    source_root = tmp_path / base.output_identity
+    execution = _formal_execution_contract(
+        base,
+        source_root,
+        evidence_profile="formal_live",
+        active_logical_cap=109_200,
+        active_physical_cap=120_120,
+    )
+    contract = type(base).model_validate(
+        {**base.model_dump(mode="json"), "formal_execution": execution.model_dump(mode="json")},
+        strict=False,
+    )
+    qualification_root = execution.qualification.artifact_path.parent
+    _write_contract_artifact(
+        qualification_root / "full_pool_run_contract.json",
+        contract.model_dump(mode="json"),
+    )
+    _write_contract_artifact(
+        qualification_root / "formal_execution_contract.json",
+        execution.model_dump(mode="json"),
+    )
+    prompt = evidence_module.CONCURRENT_ROBUSTNESS_PROMPT_REGISTRY.resolve(
+        "jinjiang-concurrent-message-primary-prompt-v1"
+    )
+    request = execution.request_contract.model_dump(mode="json")
+    run_identity = {
+        "execution_contract": safe_data(contract.model_dump(mode="json")),
+        "prompt_contract": {"primary": json.loads(json.dumps(prompt.audit_record()))},
+        "provider_contract": {
+            "primary": {
+                "provider": execution.provider,
+                "model": execution.requested_model,
+                "requested_model": execution.requested_model,
+                "prompt_version": execution.prompt_version,
+                "wire_api": execution.request_contract.wire_api,
+                "reasoning_effort": execution.request_contract.reasoning_effort,
+                "max_output_tokens": execution.request_contract.output_token_ceiling,
+                "timeout_seconds": execution.request_contract.timeout_seconds,
+                "max_retries": execution.request_contract.max_retries,
+                "request_contract": request,
+                "external_transport": {
+                    "adapter_identity": execution.adapter_identity,
+                    "provider_transport": execution.transport,
+                },
+            }
+        },
+    }
+    formal_identity = {
+        "contract_sha256": hashlib.sha256(
+            _canonical(contract.model_dump(mode="json")).encode()
+        ).hexdigest(),
+        "execution_contract_sha256": hashlib.sha256(
+            _canonical(execution.model_dump(mode="json")).encode()
+        ).hexdigest(),
+        "authorization_artifact_sha256": execution.authorization.artifact_sha256,
+        "qualification_artifact_sha256": execution.qualification.artifact_sha256,
+    }
+
+    lineage = _read_segmented_formal_lineage(
+        run_identity=run_identity,
+        formal_identity=formal_identity,
+    )
+
+    assert lineage is not None
+    assert lineage.contract.profile == "production"
+    assert lineage.prompt_variant_id == "P0"
+    assert lineage.prompt_canonical_hash == prompt.canonical_hash
+    crossed = json.loads(json.dumps(run_identity))
+    crossed["prompt_contract"]["primary"]["variant_id"] = "P1"
+    with pytest.raises(ValueError, match="canonical P0"):
+        _read_segmented_formal_lineage(
+            run_identity=crossed,
+            formal_identity=formal_identity,
+        )
+
+
 def test_segmented_source_v2_validator_closes_rows_cutoff_identity_and_accounting(
     tmp_path: Path,
 ) -> None:
@@ -243,6 +334,121 @@ def test_segmented_source_v2_preserves_pending_unknown_invocations_and_separate_
     assert closed.facts.migration_unknown_physical_charge == 3
     assert closed.facts.unknown_pair_count == 1
     assert closed.facts.reconciliation_retry_count == 1
+
+
+def test_segmented_source_v2_deep_scanners_reject_extra_fields_response_drift_and_cutoff_reorder(
+    tmp_path: Path,
+) -> None:
+    source, _manifest_sha256 = _source(tmp_path)
+    candidate_scan = _scan_segmented_candidates(
+        source / "candidate_rows.jsonl",
+        message_ids=("message_1", "message_2", "message_3"),
+        horizon=3,
+        sample_size=7,
+        capacity=3,
+    )
+
+    candidate_rows = [json.loads(line) for line in (source / "candidate_rows.jsonl").read_text().splitlines()]
+    candidate_rows[0]["access_token"] = "forbidden"
+    _rewrite_jsonl(source / "candidate_rows.jsonl", candidate_rows)
+    with pytest.raises(ValueError, match="forbidden|missing or extra"):
+        _scan_segmented_candidates(
+            source / "candidate_rows.jsonl",
+            message_ids=("message_1", "message_2", "message_3"),
+            horizon=3,
+            sample_size=7,
+            capacity=3,
+        )
+    candidate_rows[0].pop("access_token")
+    _rewrite_jsonl(source / "candidate_rows.jsonl", candidate_rows)
+
+    terminal_path = source / "terminal_rows.jsonl"
+    terminal_rows = [json.loads(line) for line in terminal_path.read_text().splitlines()]
+    terminal_rows[0]["request_invocations"] = 4
+    _rewrite_jsonl(terminal_path, terminal_rows)
+    with pytest.raises(ValueError, match="Provider accounting"):
+        _scan_segmented_pairs_and_terminals(
+            source / "pair_rows.jsonl",
+            terminal_path,
+            message_ids=("message_1", "message_2", "message_3"),
+            horizon=3,
+            capacity=3,
+            final_capacity=1,
+            maximum_attempts=3,
+            prompt_version="jinjiang-concurrent-message-primary-prompt-v1",
+            selected_rows=candidate_scan.selected_rows,
+        )
+    terminal_rows[0]["request_invocations"] = 1
+    terminal_rows[0]["observed_model_counts"] = json.dumps(
+        {"offline-segmented-multibatch-v1": 2}, separators=(",", ":"), sort_keys=True
+    )
+    _rewrite_jsonl(terminal_path, terminal_rows)
+    with pytest.raises(ValueError, match="observed-model evidence"):
+        _scan_segmented_pairs_and_terminals(
+            source / "pair_rows.jsonl",
+            terminal_path,
+            message_ids=("message_1", "message_2", "message_3"),
+            horizon=3,
+            capacity=3,
+            final_capacity=1,
+            maximum_attempts=3,
+            prompt_version="jinjiang-concurrent-message-primary-prompt-v1",
+            selected_rows=candidate_scan.selected_rows,
+        )
+
+    terminal_rows[0]["observed_model_counts"] = json.dumps(
+        {"offline-segmented-multibatch-v1": 1}, separators=(",", ":"), sort_keys=True
+    )
+    _rewrite_jsonl(terminal_path, terminal_rows)
+    pair_scan = _scan_segmented_pairs_and_terminals(
+        source / "pair_rows.jsonl",
+        terminal_path,
+        message_ids=("message_1", "message_2", "message_3"),
+        horizon=3,
+        capacity=3,
+        final_capacity=1,
+        maximum_attempts=3,
+        prompt_version="jinjiang-concurrent-message-primary-prompt-v1",
+        selected_rows=candidate_scan.selected_rows,
+    )
+    steps = [json.loads(line) for line in (source / "steps.jsonl").read_text().splitlines()]
+    cutoff_path = source.parent / "cutoff_manifest.json"
+    cutoff = json.loads(cutoff_path.read_text())["manifest"]
+    cutoff["ordered_prefix_pair_ids"][0] = "crossed:message_1:0"
+    with pytest.raises(ValueError, match="cutoff pair or terminal order"):
+        _validate_segmented_cutoff_order(cutoff, pair_scan=pair_scan, step_rows=steps)
+
+
+def test_segmented_reconciliation_binds_exact_unknown_pair_and_full_retry_window() -> None:
+    authorization = FullPoolReconciliationAuthorization(
+        prefix_run_identity_hash="a" * 64,
+        unknown_pair_id="u1:message_1:1",
+        authorization_reference="fixture://one-unknown",
+        physical_attempt_charge=3,
+        retry_authorized=True,
+    ).model_dump(mode="json")
+    cutoff = {
+        "unknown_pair_ids": ["u1:message_1:1"],
+        "unknown_count": 1,
+        "reconciliation_authorization": authorization,
+        "reconciliation_authorization_sha256": hashlib.sha256(
+            _canonical(authorization).encode()
+        ).hexdigest(),
+    }
+    with pytest.raises(ValueError, match="retry identity"):
+        _validate_segmented_reconciliation(
+            cutoff,
+            retry_pair_ids=("u2:message_1:1",),
+            prefix_identity_hash="a" * 64,
+            maximum_attempts=3,
+        )
+    with pytest.raises(ValueError, match="retry identity"):
+        _validate_segmented_reconciliation(
+            cutoff,
+            retry_pair_ids=("u1:message_1:1",),
+            prefix_identity_hash="b" * 64,
+            maximum_attempts=3,
+        )
 
 
 @pytest.mark.parametrize(
@@ -459,6 +665,17 @@ def test_v9_promotes_and_validates_an_exact_local_release_with_typed_fixture_fac
         adapter_identity=evidence_module.FULL_POOL_FORMAL_ADAPTER_IDENTITY,
         requested_model=evidence_module.FULL_POOL_FORMAL_REQUESTED_MODEL,
         qualified_observed_model=evidence_module.FULL_POOL_FORMAL_REQUIRED_OBSERVED_MODEL,
+        formal_execution_contract_sha256="1" * 64,
+        authorization_artifact_sha256="2" * 64,
+        qualification_artifact_sha256="3" * 64,
+        observed_model_evidence_sha256="4" * 64,
+        prompt_variant_id="P0",
+        prompt_version="jinjiang-concurrent-message-primary-prompt-v1",
+        prompt_canonical_hash=(
+            evidence_module.CONCURRENT_ROBUSTNESS_PROMPT_REGISTRY.resolve(
+                "jinjiang-concurrent-message-primary-prompt-v1"
+            ).canonical_hash
+        ),
         distinct_users=36_400,
         eligible_pairs=109_200,
         exposures=109_200,
@@ -497,6 +714,16 @@ def test_v9_promotes_and_validates_an_exact_local_release_with_typed_fixture_fac
         historical_study_cell_count=16,
         historical_study_logical_judgments=28_800,
     )
+    injected = evidence_module.SegmentedFullPoolProductionEvidenceFacts(
+        closure=closure,
+        formal=formal,
+        segmented=segmented,
+    )
+    monkeypatch.setattr(
+        release_module._evidence,
+        "validate_segmented_full_pool_production_evidence",
+        lambda **_kwargs: injected,
+    )
     destination = tmp_path / "production-v9"
     contract_path = tmp_path / "release-contract-v9.json"
     promoted = release_module.promote_concurrent_robustness_release(
@@ -513,8 +740,6 @@ def test_v9_promotes_and_validates_an_exact_local_release_with_typed_fixture_fac
         full_pool_source_root=source,
         full_pool_manifest_sha256=manifest_sha256,
         implementation_commit="abcdef0",
-        _closed_full_pool_formal_facts=formal,
-        _closed_segmented_source_facts=segmented,
     )
     contract = json.loads(contract_path.read_text(encoding="utf-8"))
     assert promoted.source_dir == destination.resolve()
@@ -528,16 +753,6 @@ def test_v9_promotes_and_validates_an_exact_local_release_with_typed_fixture_fac
         destination / "report.html"
     ).read_text(encoding="utf-8")
 
-    injected = evidence_module.SegmentedFullPoolProductionEvidenceFacts(
-        closure=closure,
-        formal=formal,
-        segmented=segmented,
-    )
-    monkeypatch.setattr(
-        release_module._evidence,
-        "validate_segmented_full_pool_production_evidence",
-        lambda **_kwargs: injected,
-    )
     validated = release_module.validate_concurrent_robustness_production_release(
         repo_root=tmp_path,
         contract_document=contract,
