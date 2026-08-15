@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Explicit freeze-after-external-stop operator for Issue #205 segmented continuation.
 
-This command never sends a signal. ``dry-run`` emits the exact manual-stop instruction
-and confirmation token; ``cutover`` accepts only an already stopped PID with a released
-workspace lock. ``run`` is separately protected by two live environment gates.
+This command never sends a signal. ``dry-run`` emits either the exact manual-stop
+instruction or an audited already-stopped precondition plus a confirmation token;
+``cutover`` accepts only an absent PID with a released workspace lock. ``run`` is
+separately protected by two live environment gates.
 """
 
 from __future__ import annotations
@@ -42,6 +43,11 @@ def _parser() -> argparse.ArgumentParser:
         prepare.add_argument(f"--{name}", type=Path, required=True)
     prepare.add_argument("--expected-pid", type=int, required=True)
     prepare.add_argument("--expected-command", required=True)
+    prepare.add_argument(
+        "--process-precondition",
+        choices=("running_external_stop", "already_stopped"),
+        default="running_external_stop",
+    )
     prepare.add_argument("--expected-v1-output-identity", required=True)
     prepare.add_argument("--expected-v1-operational-root", required=True)
     prepare.add_argument("--expected-v1-source-root", required=True)
@@ -96,6 +102,7 @@ def _prepare_request(arguments: argparse.Namespace) -> CutoverPlanRequest:
         expected_pid=arguments.expected_pid,
         expected_command=arguments.expected_command,
         expected_cwd=arguments.expected_cwd,
+        process_precondition=arguments.process_precondition,
         expected_v1_output_identity=arguments.expected_v1_output_identity,
         expected_v1_operational_root=arguments.expected_v1_operational_root,
         expected_v1_source_root=arguments.expected_v1_source_root,

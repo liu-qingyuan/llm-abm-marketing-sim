@@ -141,6 +141,29 @@ def _setup(
     return operator, controller, request, plan_path, prefix
 
 
+def test_already_stopped_plan_requires_absent_pid_and_released_lock_then_cuts_over(tmp_path: Path) -> None:
+    operator, controller, request, plan_path, _prefix = _setup(tmp_path)
+    stopped_request = request.model_copy(update={"process_precondition": "already_stopped"})
+    with pytest.raises(ValueError, match="reappeared"):
+        operator.prepare(plan_path, stopped_request)
+
+    controller.alive = False
+    controller.locked = False
+    prepared = operator.prepare(plan_path, stopped_request)
+    preflight = operator.dry_run(plan_path)
+    assert prepared["process_precondition"] == "already_stopped"
+    assert preflight["manual_stop_required"] is False
+    assert preflight["lock_owner_pids"] == []
+    assert "already absent" in str(preflight["manual_stop_instruction"])
+
+    authorization = operator.cutover(
+        plan_path,
+        confirmation_token=str(preflight["exact_confirmation_token"]),
+    )
+    assert authorization["provider_calls"] == 0
+    assert stopped_request.frozen_prefix_workspace.is_dir()
+
+
 def test_cutover_plan_rejects_credential_shaped_process_commands(tmp_path: Path) -> None:
     _operator, _controller, request, _plan_path, _prefix = _setup(tmp_path)
     with pytest.raises(ValueError, match="credential-free"):

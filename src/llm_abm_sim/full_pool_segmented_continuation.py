@@ -2929,7 +2929,9 @@ def _build_lanes(
             client_ids.add(id(client))
         if _adapter_prompt_version(adapter) != prefix.prompt_version:
             raise ValueError("lane Adapter Prompt version is crossed with the v1 prefix")
-        if _adapter_safe_metadata(adapter, ProviderLLMConfig()) != prefix.provider_contract:
+        if _canonical_json(_adapter_safe_metadata(adapter, ProviderLLMConfig())) != _canonical_json(
+            prefix.provider_contract
+        ):
             raise ValueError("lane Adapter provider/model/request metadata is crossed with the v1 prefix")
         if _adapter_external_request_invocations(adapter) != 0:
             raise ValueError("lane Adapter must have zero prior external request invocations")

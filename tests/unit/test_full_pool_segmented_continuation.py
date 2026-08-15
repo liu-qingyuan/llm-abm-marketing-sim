@@ -5,6 +5,7 @@ import json
 import shutil
 import threading
 import time
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -23,6 +24,8 @@ from llm_abm_sim.full_pool_segmented_continuation import (
     FullPoolSegmentedContinuation,
     SegmentedContinuationStatus,
     SegmentedQualificationWave,
+    _build_lanes,
+    _freeze_v1_prefix,
     _require_full_first_qualification_wave,
     _reserve_total_caps,
     _validate_unique_terminal_rows,
@@ -56,6 +59,23 @@ def test_short_first_qualification_wave_fails_before_provider_use() -> None:
         remaining_logical_count=10,
         first_wave_observer=observer,
     )
+
+
+def test_lane_metadata_compares_canonical_json_representations() -> None:
+    prefix = replace(
+        _freeze_v1_prefix(PREFIX),
+        provider_contract={"request_contract": {"omitted_parameters": ["temperature", "top_p", "seed"]}},
+    )
+    state = _LaneState()
+
+    def factory(lane_id: int) -> LLMDecisionAdapter:
+        adapter = _OfflineLaneAdapter(lane_id, state)
+        adapter.safe_metadata = {
+            "request_contract": {"omitted_parameters": ("temperature", "top_p", "seed")}
+        }
+        return adapter
+
+    assert len(_build_lanes(prefix, factory)) == FULL_POOL_SEGMENTED_MAX_CONCURRENCY
 
 
 def test_segmented_cap_reservation_includes_prefix_unknown_and_suffix_retry_windows() -> None:

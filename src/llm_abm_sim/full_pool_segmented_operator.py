@@ -11,7 +11,7 @@ import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
-from typing import Protocol, cast
+from typing import Literal, Protocol, cast
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -83,6 +83,7 @@ class CutoverPlanRequest(_FrozenModel):
     expected_pid: int = Field(gt=1)
     expected_command: str = Field(min_length=1, max_length=1000)
     expected_cwd: Path
+    process_precondition: Literal["running_external_stop", "already_stopped"] = "running_external_stop"
     expected_v1_output_identity: str = Field(min_length=1, max_length=200)
     expected_v1_operational_root: str = Field(min_length=1, max_length=1000)
     expected_v1_source_root: str = Field(min_length=1, max_length=1000)
@@ -390,7 +391,7 @@ class LocalOperatorFilesystem:
 
 
 class FullPoolSegmentedCutoverOperator:
-    """Auditable prepare/freeze/run Module with a mandatory external manual stop."""
+    """Auditable prepare/freeze/run Module for externally stopped v1 workspaces."""
 
     def __init__(
         self,
@@ -414,7 +415,10 @@ class FullPoolSegmentedCutoverOperator:
         )
         if any(target == root or target.is_relative_to(root) for root in forbidden_roots):
             raise ValueError("cutover plan must stay outside data and runtime roots")
-        facts = self._validate_static_facts(request, require_running=True)
+        require_running = request.process_precondition == "running_external_stop"
+        facts = self._validate_static_facts(request, require_running=require_running)
+        if not require_running:
+            self._assert_external_stop_state(request)
         payload: dict[str, object] = {
             "schema_version": _PLAN_SCHEMA,
             "plan_path": str(target),
@@ -433,7 +437,10 @@ class FullPoolSegmentedCutoverOperator:
         plan, plan_file_hash = self._read_plan(plan_path)
         self._validate_implementation_artifacts(plan)
         request = CutoverPlanRequest.model_validate(_request_fields(plan))
-        facts = self._validate_static_facts(request, require_running=True)
+        require_running = request.process_precondition == "running_external_stop"
+        facts = self._validate_static_facts(request, require_running=require_running)
+        if not require_running:
+            self._assert_external_stop_state(request)
         token = _confirmation_token(request, _sha256_json(plan))
         payload: dict[str, object] = {
             "schema_version": _PREFLIGHT_SCHEMA,
@@ -443,12 +450,14 @@ class FullPoolSegmentedCutoverOperator:
             "command": request.expected_command,
             "cwd": str(request.expected_cwd),
             "lock_path": str(request.prefix_workspace / _LOCK_FILE),
-            "lock_owner_pids": [request.expected_pid],
+            "lock_owner_pids": [request.expected_pid] if require_running else [],
             "validated_v1_facts": facts,
-            "manual_stop_required": True,
+            "manual_stop_required": require_running,
             "manual_stop_instruction": (
                 f"Externally stop exactly PID {request.expected_pid}; do not signal a process group. "
                 "Then invoke cutover with the exact confirmation token."
+                if require_running
+                else "The exact PID is already absent and the lock is released; invoke cutover with the exact confirmation token."
             ),
             "exact_confirmation_token": token,
             "operator_will_send_signals": False,
@@ -1590,7 +1599,7 @@ def _append_checksum_record(path: Path, records: list[dict[str, object]], body: 
 
 def _request_fields(plan: Mapping[str, object]) -> dict[str, object]:
     fields = CutoverPlanRequest.model_fields
-    return {key: plan[key] for key in fields}
+    return {key: plan[key] for key in fields if key in plan}
 
 
 def _confirmation_token(request: CutoverPlanRequest, plan_payload_hash: str) -> str:
