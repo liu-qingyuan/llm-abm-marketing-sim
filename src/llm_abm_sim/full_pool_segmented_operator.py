@@ -401,6 +401,7 @@ class FullPoolSegmentedCutoverOperator:
             "schema_version": _PLAN_SCHEMA,
             "plan_path": str(target),
             **request.model_dump(mode="json"),
+            "loaded_repository_commit": self._repository_commit(),
             "implementation_artifacts": self._implementation_artifacts(),
             "validated_v1_facts": facts,
             "automatic_signal_policy": "forbidden-freeze-after-external-stop-v1",
@@ -1048,6 +1049,21 @@ class FullPoolSegmentedCutoverOperator:
             "accepted_physical_attempt_count": ledger_state["physical_attempt_count"],
         }
 
+    @staticmethod
+    def _repository_commit() -> str:
+        repository = Path(__file__).resolve().parents[2]
+        process = subprocess.run(
+            ["git", "-C", str(repository), "rev-parse", "HEAD"],
+            check=True,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+        )
+        commit = process.stdout.strip()
+        if re.fullmatch(r"[0-9a-f]{40}", commit) is None:
+            raise ValueError("loaded repository commit is not an exact Git identity")
+        return commit
+
     def _implementation_artifacts(self) -> dict[str, str]:
         repository = Path(__file__).resolve().parents[2]
         paths = {
@@ -1063,6 +1079,8 @@ class FullPoolSegmentedCutoverOperator:
         return artifacts
 
     def _validate_implementation_artifacts(self, plan: Mapping[str, object]) -> None:
+        if plan.get("loaded_repository_commit") != self._repository_commit():
+            raise ValueError("loaded repository commit differs from the prepared operator commit")
         expected = _mapping(plan.get("implementation_artifacts"), "implementation artifacts")
         if expected != self._implementation_artifacts():
             raise ValueError("loaded operator/source bytes differ from the prepared implementation artifacts")

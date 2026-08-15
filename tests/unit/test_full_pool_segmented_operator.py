@@ -187,6 +187,8 @@ def test_prepare_and_dry_run_require_exact_process_lock_and_confirmation_token(t
     preflight = operator.dry_run(plan_path)
 
     assert plan["implementation_commit"] == SEGMENTED_IMPLEMENTATION_COMMIT
+    assert isinstance(plan["loaded_repository_commit"], str)
+    assert len(plan["loaded_repository_commit"]) == 40
     implementation_artifacts = plan["implementation_artifacts"]
     assert isinstance(implementation_artifacts, dict)
     assert set(implementation_artifacts) == {"operator_module", "continuation_module", "operator_cli"}
