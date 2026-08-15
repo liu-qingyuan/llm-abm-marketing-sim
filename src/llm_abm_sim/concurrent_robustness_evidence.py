@@ -36,6 +36,10 @@ from .full_pool_formal_experiment import (
     FullPoolExperimentError,
     _read_closed_full_pool_source,
 )
+from .full_pool_segmented_continuation import (
+    SegmentedFullPoolSourceFacts,
+    _read_closed_segmented_full_pool_source,
+)
 from .providers.pi_subscription import PI_SUBSCRIPTION_MODEL_ALIASES
 
 FORMAL_LOGICAL_JUDGMENTS = 28_800
@@ -267,6 +271,15 @@ class FullPoolFormalReleaseFacts:
 class FullPoolProductionEvidenceFacts:
     closure: FullPoolPresentationClosureFacts
     formal: FullPoolFormalReleaseFacts
+
+
+@dataclass(frozen=True)
+class SegmentedFullPoolProductionEvidenceFacts:
+    """v9 evidence keeps v8-compatible historical facts plus exact source-v2 facts."""
+
+    closure: FullPoolPresentationClosureFacts
+    formal: FullPoolFormalReleaseFacts
+    segmented: SegmentedFullPoolSourceFacts
 
 
 @dataclass(frozen=True)
@@ -2081,6 +2094,275 @@ def validate_full_pool_production_evidence(
         )
     _validate_full_pool_formal_release_facts(selected_facts, closure=closure)
     return FullPoolProductionEvidenceFacts(closure=closure, formal=selected_facts)
+
+
+def _segmented_formal_release_facts(
+    closure: FullPoolPresentationClosureFacts,
+    segmented: SegmentedFullPoolSourceFacts,
+) -> FullPoolFormalReleaseFacts:
+    historical = _mapping(
+        closure.source_lineage.get("historical_formal"),
+        "historical Formal lineage",
+    )
+    historical_counts = _mapping(historical.get("counts"), "historical Formal counts")
+    study_manifest = ConcurrentRobustnessManifest.model_validate_json(
+        (closure.robustness_study_path / "study_manifest.json").read_bytes()
+    )
+    cell_evidence = _CellEvidenceDocument.model_validate(
+        _json_object(closure.robustness_study_path / "prompt_model_cell_evidence.json")
+    )
+    dynamic = study_manifest.dynamic_execution
+    return FullPoolFormalReleaseFacts(
+        full_pool_source_path=segmented.source_root,
+        full_pool_source_schema_version=segmented.source_schema_version,
+        full_pool_source_identity=segmented.source_identity,
+        full_pool_source_manifest_sha256=segmented.source_manifest_sha256,
+        full_pool_source_hash=segmented.source_hash,
+        full_pool_contract_sha256=segmented.contract_sha256,
+        evidence_profile=segmented.evidence_profile,
+        provider_transport=segmented.provider_transport,
+        adapter_identity=segmented.adapter_identity,
+        requested_model=segmented.requested_model,
+        qualified_observed_model=segmented.qualified_observed_model,
+        distinct_users=segmented.distinct_users,
+        eligible_pairs=segmented.eligible_pairs,
+        exposures=segmented.exposures,
+        primary_terminals=segmented.primary_terminals,
+        committed_batches=segmented.committed_batches,
+        candidate_ranking_rows=segmented.candidate_ranking_rows,
+        campaign_exposure_coverage=3,
+        provider_failed_terminals=segmented.provider_failed_terminals,
+        logical_judgments=segmented.logical_judgments,
+        physical_attempts=segmented.physical_attempts,
+        physical_attempt_cap=segmented.physical_attempt_cap,
+        provider_responses=segmented.provider_responses,
+        successful_decisions=segmented.successful_decisions,
+        external_request_invocations=segmented.external_request_invocations,
+        observed_model_counts=segmented.observed_model_counts,
+        usage_complete_response_count=segmented.usage_complete_response_count,
+        usage_missing_response_count=segmented.usage_missing_response_count,
+        usage_malformed_response_count=segmented.usage_malformed_response_count,
+        subscription_billed_cost_usd=0.0,
+        live_api_triggered=segmented.live_api_triggered,
+        source_production_deploy_eligible=segmented.production_deploy_eligible,
+        historical_formal_path=closure.historical_formal_path,
+        historical_formal_source_id=closure.historical_formal_source_id,
+        historical_formal_manifest_sha256=closure.historical_formal_manifest_sha256,
+        historical_formal_source_kind=_string(
+            historical.get("source_kind"), "historical Formal source kind"
+        ),
+        historical_formal_users=_strict_int(
+            historical_counts.get("distinct_users"), "historical Formal users"
+        ),
+        historical_formal_exposures=_strict_int(
+            historical_counts.get("exposures"), "historical Formal exposures"
+        ),
+        historical_primary_terminals=_strict_int(
+            historical_counts.get("primary_terminals"), "historical Primary terminals"
+        ),
+        historical_shadow_terminals=_strict_int(
+            historical_counts.get("shadow_terminals"), "historical Shadow terminals"
+        ),
+        historical_trace_rows=_strict_int(
+            historical_counts.get("trace_rows"), "historical trace rows"
+        ),
+        historical_study_path=closure.robustness_study_path,
+        historical_study_manifest_sha256=closure.robustness_study_manifest_sha256,
+        historical_study_root_identity_sha256=closure.robustness_study_root_identity_sha256,
+        historical_study_profile=dynamic.profile if dynamic is not None else "",
+        historical_study_evidence_profile=cell_evidence.evidence_profile,
+        historical_study_cell_count=cell_evidence.cell_count,
+        historical_study_logical_judgments=cell_evidence.logical_judgment_count,
+    )
+
+
+def _validate_segmented_formal_release_facts(
+    segmented: SegmentedFullPoolSourceFacts,
+    formal: FullPoolFormalReleaseFacts,
+    *,
+    closure: FullPoolPresentationClosureFacts,
+) -> None:
+    source_lineage = _mapping(
+        closure.source_lineage.get("full_pool"),
+        "segmented Full-Pool source lineage",
+    )
+    exact_segmented = (
+        segmented.source_root == closure.full_pool_source_path
+        and segmented.source_schema_version == "full-pool-segmented-source-v2"
+        and segmented.source_schema_version == closure.full_pool_source_schema_version
+        and segmented.source_identity == closure.full_pool_source_identity
+        and segmented.source_manifest_sha256 == closure.full_pool_source_manifest_sha256
+        and segmented.source_hash == closure.full_pool_source_hash
+        and segmented.contract_sha256 == source_lineage.get("contract_sha256")
+        and segmented.configuration_profile == "production"
+        and segmented.evidence_profile == "formal_live"
+        and segmented.provider_transport == FULL_POOL_FORMAL_TRANSPORT
+        and segmented.adapter_identity == FULL_POOL_FORMAL_ADAPTER_IDENTITY
+        and segmented.requested_model == FULL_POOL_FORMAL_REQUESTED_MODEL
+        and segmented.qualified_observed_model == FULL_POOL_FORMAL_REQUIRED_OBSERVED_MODEL
+        and segmented.distinct_users == FULL_POOL_PRODUCTION_USER_COUNT
+        and segmented.eligible_pairs == FULL_POOL_PRODUCTION_ELIGIBLE_PAIRS
+        and segmented.exposures == FULL_POOL_PRODUCTION_ELIGIBLE_PAIRS
+        and segmented.primary_terminals == FULL_POOL_PRODUCTION_ELIGIBLE_PAIRS
+        and segmented.committed_batches == FULL_POOL_PRODUCTION_HORIZON
+        and segmented.candidate_ranking_rows == FULL_POOL_PRODUCTION_CANDIDATE_ROWS
+        and segmented.provider_failed_terminals == 0
+        and segmented.serial_prefix_terminal_count + segmented.concurrent_suffix_terminal_count
+        == FULL_POOL_PRODUCTION_ELIGIBLE_PAIRS
+        and segmented.max_concurrency == 10
+        and segmented.logical_judgments == FULL_POOL_FORMAL_LOGICAL_JUDGMENT_CAP
+        and FULL_POOL_FORMAL_LOGICAL_JUDGMENT_CAP
+        <= segmented.physical_attempts
+        <= FULL_POOL_FORMAL_PHYSICAL_ATTEMPT_CAP
+        and segmented.physical_attempt_cap == FULL_POOL_FORMAL_PHYSICAL_ATTEMPT_CAP
+        and segmented.provider_responses == FULL_POOL_FORMAL_LOGICAL_JUDGMENT_CAP
+        and segmented.successful_decisions == FULL_POOL_FORMAL_LOGICAL_JUDGMENT_CAP
+        and segmented.external_request_invocations
+        == segmented.physical_attempts - segmented.migration_unknown_physical_charge
+        and dict(segmented.observed_model_counts)
+        == {FULL_POOL_FORMAL_REQUIRED_OBSERVED_MODEL: FULL_POOL_FORMAL_LOGICAL_JUDGMENT_CAP}
+        and segmented.usage_complete_response_count == FULL_POOL_FORMAL_LOGICAL_JUDGMENT_CAP
+        and segmented.usage_missing_response_count == 0
+        and segmented.usage_malformed_response_count == 0
+        and segmented.unknown_pair_count in {0, 1}
+        and segmented.reconciliation_retry_count == segmented.unknown_pair_count
+        and segmented.migration_unknown_physical_charge
+        == (3 if segmented.unknown_pair_count else 0)
+        and segmented.live_api_triggered is True
+        and segmented.production_deploy_eligible is False
+        and len(segmented.artifact_hashes) == 4
+        and all(_SHA256.fullmatch(value) for value in segmented.artifact_hashes.values())
+    )
+    mirrored_source = (
+        formal.full_pool_source_path == segmented.source_root
+        and formal.full_pool_source_schema_version == segmented.source_schema_version
+        and formal.full_pool_source_identity == segmented.source_identity
+        and formal.full_pool_source_manifest_sha256 == segmented.source_manifest_sha256
+        and formal.full_pool_source_hash == segmented.source_hash
+        and formal.full_pool_contract_sha256 == segmented.contract_sha256
+        and formal.evidence_profile == segmented.evidence_profile
+        and formal.provider_transport == segmented.provider_transport
+        and formal.adapter_identity == segmented.adapter_identity
+        and formal.requested_model == segmented.requested_model
+        and formal.qualified_observed_model == segmented.qualified_observed_model
+        and formal.distinct_users == segmented.distinct_users
+        and formal.eligible_pairs == segmented.eligible_pairs
+        and formal.exposures == segmented.exposures
+        and formal.primary_terminals == segmented.primary_terminals
+        and formal.committed_batches == segmented.committed_batches
+        and formal.candidate_ranking_rows == segmented.candidate_ranking_rows
+        and formal.provider_failed_terminals == segmented.provider_failed_terminals
+        and formal.logical_judgments == segmented.logical_judgments
+        and formal.physical_attempts == segmented.physical_attempts
+        and formal.physical_attempt_cap == segmented.physical_attempt_cap
+        and formal.provider_responses == segmented.provider_responses
+        and formal.successful_decisions == segmented.successful_decisions
+        and formal.external_request_invocations == segmented.external_request_invocations
+        and dict(formal.observed_model_counts) == dict(segmented.observed_model_counts)
+        and formal.usage_complete_response_count == segmented.usage_complete_response_count
+        and formal.usage_missing_response_count == segmented.usage_missing_response_count
+        and formal.usage_malformed_response_count == segmented.usage_malformed_response_count
+        and formal.subscription_billed_cost_usd == 0.0
+        and formal.live_api_triggered is True
+        and formal.source_production_deploy_eligible is False
+    )
+    exact_historical = (
+        formal.historical_formal_path == closure.historical_formal_path
+        and formal.historical_formal_source_id == closure.historical_formal_source_id
+        and formal.historical_formal_manifest_sha256 == closure.historical_formal_manifest_sha256
+        and formal.historical_formal_source_kind == "formal"
+        and formal.historical_formal_users == 1_000
+        and formal.historical_formal_exposures == 1_800
+        and formal.historical_primary_terminals == 1_800
+        and formal.historical_shadow_terminals == 1_800
+        and formal.historical_trace_rows == 1_800
+        and formal.historical_study_path == closure.robustness_study_path
+        and formal.historical_study_manifest_sha256 == closure.robustness_study_manifest_sha256
+        and formal.historical_study_root_identity_sha256
+        == closure.robustness_study_root_identity_sha256
+        and formal.historical_study_profile == "formal_live"
+        and formal.historical_study_evidence_profile == "formal_live"
+        and formal.historical_study_cell_count == 16
+        and formal.historical_study_logical_judgments == FORMAL_LOGICAL_JUDGMENTS
+    )
+    if not exact_segmented or not mirrored_source or not exact_historical:
+        raise ConcurrentRobustnessEvidenceError(
+            "segmented Full-Pool Formal production facts are incomplete, crossed, or non-live"
+        )
+
+
+def validate_segmented_full_pool_production_evidence(
+    *,
+    repo_root: str | Path,
+    closure_path: str | Path,
+    full_pool_source_root: str | Path,
+    full_pool_manifest_sha256: str,
+    historical_formal_root: str | Path,
+    historical_study_root: str | Path,
+    candidate_dir: str | Path,
+    implementation_commit: str,
+    formal_facts: FullPoolFormalReleaseFacts | None = None,
+    segmented_facts: SegmentedFullPoolSourceFacts | None = None,
+) -> SegmentedFullPoolProductionEvidenceFacts:
+    """Close v9 lineages; injected typed facts are reserved for deterministic tests."""
+    root = _real_directory(Path(repo_root), "repository root")
+    closure_file = _repo_file(root, Path(closure_path), "Full-Pool presentation closure")
+    closure_document = _json_object(closure_file)
+    bundle = _repo_directory(
+        root,
+        Path(
+            _canonical_document_path(
+                closure_document.get("presentation_bundle_directory"),
+                "Full-Pool presentation bundle directory",
+            )
+        ),
+        "Full-Pool presentation bundle",
+    )
+    closure = validate_full_pool_presentation_closure(
+        repo_root=root,
+        closure_path=closure_file,
+        full_pool_source_root=full_pool_source_root,
+        full_pool_manifest_sha256=full_pool_manifest_sha256,
+        historical_formal_root=historical_formal_root,
+        historical_study_root=historical_study_root,
+        presentation_bundle_dir=bundle,
+        candidate_dir=candidate_dir,
+    )
+    if not _COMMIT.fullmatch(implementation_commit) or closure.implementation_commit != implementation_commit:
+        raise ConcurrentRobustnessEvidenceError(
+            "segmented Full-Pool production implementation commit is crossed"
+        )
+    selected_segmented = (
+        _read_closed_segmented_full_pool_source(
+            closure.full_pool_source_path,
+            manifest_sha256=closure.full_pool_source_manifest_sha256,
+        ).facts
+        if segmented_facts is None
+        else segmented_facts
+    )
+    if not isinstance(selected_segmented, SegmentedFullPoolSourceFacts):
+        raise ConcurrentRobustnessEvidenceError(
+            "segmented Full-Pool source facts must use the typed Evidence contract"
+        )
+    selected_formal = (
+        _segmented_formal_release_facts(closure, selected_segmented)
+        if formal_facts is None
+        else formal_facts
+    )
+    if not isinstance(selected_formal, FullPoolFormalReleaseFacts):
+        raise ConcurrentRobustnessEvidenceError(
+            "segmented Full-Pool Formal facts must use the typed Evidence contract"
+        )
+    _validate_segmented_formal_release_facts(
+        selected_segmented,
+        selected_formal,
+        closure=closure,
+    )
+    return SegmentedFullPoolProductionEvidenceFacts(
+        closure=closure,
+        formal=selected_formal,
+        segmented=selected_segmented,
+    )
 
 
 def _mapping(value: object, label: str) -> dict[str, Any]:

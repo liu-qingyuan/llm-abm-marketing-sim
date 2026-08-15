@@ -1627,6 +1627,24 @@ def _validate_v8(
         raise ReleaseValidationError(f"invalid v8 Full-Pool release: {exc}") from exc
 
 
+def _validate_v9(
+    *,
+    repo_root: Path,
+    contract_document: dict[str, object],
+    source_dir: Path,
+    snapshot_dir: Path | None = None,
+) -> dict[str, object]:
+    try:
+        return validate_concurrent_robustness_production_release(
+            repo_root=repo_root,
+            contract_document=contract_document,
+            source_dir=source_dir,
+            snapshot_dir=snapshot_dir,
+        )
+    except (ConcurrentRobustnessReleaseError, OSError, ValidationError) as exc:
+        raise ReleaseValidationError(f"invalid v9 segmented Full-Pool release: {exc}") from exc
+
+
 def _load_and_validate_release(
     *,
     repo_root: Path,

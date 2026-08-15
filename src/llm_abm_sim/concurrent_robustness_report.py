@@ -32,7 +32,9 @@ from .concurrent_message_report import (
 from .full_pool_formal_experiment import (
     FullPoolExperimentError,
     _ClosedFullPoolSource,
-    _read_closed_full_pool_source,
+)
+from .full_pool_segmented_continuation import (
+    _read_closed_full_pool_source_versioned as _read_closed_full_pool_source,
 )
 from .full_pool_presentation import (
     _FULL_POOL_MASTER,
@@ -1772,7 +1774,8 @@ def _validate_full_pool_production_stage_facts(
     )
     if (
         not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,159}", stage_facts.release_id)
-        or stage_facts.release_contract_schema != "abm-report-release-contract-v8"
+        or stage_facts.release_contract_schema
+        not in {"abm-report-release-contract-v8", "abm-report-release-contract-v9"}
         or stage_facts.canonical_endpoint != "https://abm.q1ngyuan.top/"
         or stage_facts.production_evidence_schema
         != "full-pool-production-release-evidence-v1"
@@ -2052,6 +2055,12 @@ def _full_pool_candidate_source_lineage(inputs: _FullPoolCandidateInputs) -> dic
         "source_production_deploy_eligible": source.manifest.get("production_deploy_eligible"),
         "evidence_scope": ["full_pool_main_experiment", "primary_only"],
     }
+    segmented_execution = source.manifest.get("segmented_execution")
+    if segmented_execution is not None:
+        full_pool["segmented_execution"] = _mapping(
+            segmented_execution,
+            "segmented Full-Pool execution lineage",
+        )
 
     projection = inputs.projection
     formal = projection.formal

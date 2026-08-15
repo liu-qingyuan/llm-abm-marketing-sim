@@ -731,6 +731,46 @@ def _render_full_pool_main(
         source.aggregates.get("evidence_profile"),
         "Full-Pool evidence profile",
     )
+    segmented_lineage = ""
+    raw_segmented = source.manifest.get("segmented_execution")
+    if raw_segmented is not None:
+        segmented = _strict_mapping(raw_segmented, "segmented execution lineage")
+        prefix_terminals = _strict_int(
+            segmented.get("serial_prefix_terminal_count"),
+            "segmented serial prefix terminals",
+        )
+        suffix_terminals = _strict_int(
+            segmented.get("concurrent_suffix_terminal_count"),
+            "segmented concurrent suffix terminals",
+        )
+        max_concurrency = _strict_int(segmented.get("max_concurrency"), "segmented max concurrency")
+        unknown_count = _strict_int(segmented.get("unknown_pair_count"), "segmented unknown count")
+        reconciliation_count = _strict_int(
+            segmented.get("reconciliation_retry_count"),
+            "segmented reconciliation count",
+        )
+        total_physical = _strict_int(
+            segmented.get("total_physical_attempts"),
+            "segmented total physical attempts",
+        )
+        cutoff_hash = _non_empty_string(
+            segmented.get("cutoff_manifest_sha256"),
+            "segmented cutoff hash",
+        )
+        if max_concurrency != 10 or not _SHA256_PATTERN.fullmatch(cutoff_hash):
+            raise _FullPoolPresentationError("segmented execution topology or cutoff hash is crossed")
+        segmented_lineage = (
+            '<aside class="full-pool-segmented-lineage" data-testid="full-pool-segmented-lineage">'
+            '<strong>serial prefix → max_concurrency10 suffix</strong>'
+            '<p>串行前缀在静态 cutoff 后切换为最多 10 路并发后缀；'
+            'unknown 与 reconciliation 独立核算。</p>'
+            '<p>After the static cutoff, the serial prefix continues as a '
+            'max-concurrency-10 suffix; unknown and reconciliation charges remain explicit.</p>'
+            f'<code>prefix-terminals={prefix_terminals} suffix-terminals={suffix_terminals} '
+            f'unknown={unknown_count} reconciliation={reconciliation_count} '
+            f'total-physical={total_physical} cutoff-sha256={cutoff_hash}</code>'
+            '</aside>'
+        )
 
     target_facts = "".join(
         (
@@ -862,9 +902,16 @@ def _render_full_pool_main(
     batch_options = "".join(
         f'<option value="{time_step}">{time_step + 1:02d}</option>' for time_step in range(source.contract.horizon)
     )
-    source_downloads = "".join(
-        f'<li><a class="full-pool-download-link" href="{_FULL_POOL_SOURCE_DIR}/{html.escape(relative_path, quote=True)}" download>{html.escape(relative_path)}</a></li>'
-        for relative_path in (
+    source_artifacts = (
+        (
+            "manifest.json",
+            "candidate_rows.jsonl",
+            "pair_rows.jsonl",
+            "terminal_rows.jsonl",
+            "steps.jsonl",
+        )
+        if source.manifest.get("source_schema_version") == "full-pool-segmented-source-v2"
+        else (
             "manifest.json",
             "contract.json",
             "schema.json",
@@ -874,6 +921,10 @@ def _render_full_pool_main(
             "pair_rows.jsonl",
             "terminal_rows.jsonl",
         )
+    )
+    source_downloads = "".join(
+        f'<li><a class="full-pool-download-link" href="{_FULL_POOL_SOURCE_DIR}/{html.escape(relative_path, quote=True)}" download>{html.escape(relative_path)}</a></li>'
+        for relative_path in source_artifacts
     )
     mechanism = _mechanism_html(catalog)
     main = f"""
@@ -910,6 +961,7 @@ def _render_full_pool_main(
     <article><h3>{_i18n(catalog, "scope.actual")}</h3><dl>{actual_facts}</dl></article>
   </div>
   <code class="full-pool-source-facts">actual-users={actual_users} actual-primary-terminals={actual_terminals} source-schema={html.escape(str(source.manifest.get("source_schema_version")))} requested-model={html.escape(requested_model)} evidence-profile={html.escape(evidence_profile)} production_deploy_eligible=false</code>
+  {segmented_lineage}
   <aside class="full-pool-claim-boundary" data-testid="full-pool-claim-boundary">
     {_i18n(catalog, "claims.title", tag="h3")}
     <ul><li>{_i18n(catalog, "claims.order")}</li><li>{_i18n(catalog, "claims.change")}</li><li>{_i18n(catalog, "claims.limit")}</li></ul>
