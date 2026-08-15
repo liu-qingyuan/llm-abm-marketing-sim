@@ -1455,6 +1455,7 @@ class _ConcurrentRuntimeKernel:
         neighbors_by_user: Mapping[str, set[str]],
         journal: ConcurrentExecutionJournal,
         terminal_variants: tuple[str, ...],
+        spool_base_time_step: int = 0,
     ) -> None:
         if terminal_variants not in {self._PAIRED_TERMINALS, self._PRIMARY_ONLY_TERMINALS}:
             raise ValueError("concurrent runtime terminal contract is unsupported")
@@ -1470,6 +1471,7 @@ class _ConcurrentRuntimeKernel:
             identity_hash=journal.identity_hash,
             terminal_variants=terminal_variants,
             recover_prepared=not journal.read_only,
+            base_time_step=spool_base_time_step,
         )
 
     @classmethod
@@ -1500,6 +1502,7 @@ class _ConcurrentRuntimeKernel:
         base_network_by_user: Mapping[str, float],
         neighbors_by_user: Mapping[str, set[str]],
         journal: ConcurrentExecutionJournal,
+        spool_base_time_step: int = 0,
     ) -> _ConcurrentRuntimeKernel:
         return cls(
             config=config,
@@ -1508,6 +1511,7 @@ class _ConcurrentRuntimeKernel:
             neighbors_by_user=neighbors_by_user,
             journal=journal,
             terminal_variants=cls._PRIMARY_ONLY_TERMINALS,
+            spool_base_time_step=spool_base_time_step,
         )
 
     @property

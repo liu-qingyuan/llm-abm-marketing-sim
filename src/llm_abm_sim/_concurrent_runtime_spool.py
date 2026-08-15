@@ -70,6 +70,7 @@ class _ConcurrentRuntimeBatchSpool:
         identity_hash: str,
         terminal_variants: tuple[str, ...],
         recover_prepared: bool = False,
+        base_time_step: int = 0,
     ) -> None:
         self.workspace_dir = Path(workspace_dir)
         self.spool_dir = self.workspace_dir / _CONCURRENT_RUNTIME_BATCH_SPOOL_DIR
@@ -79,6 +80,9 @@ class _ConcurrentRuntimeBatchSpool:
             raise ValueError("runtime spool terminal contract is unsupported")
         self.terminal_variants = terminal_variants
         self.recover_prepared = recover_prepared
+        if isinstance(base_time_step, bool) or not isinstance(base_time_step, int) or base_time_step < 0:
+            raise ValueError("runtime spool base_time_step must be a non-negative integer")
+        self.base_time_step = base_time_step
         _require_real_directory(self.workspace_dir, "runtime workspace")
         if self.spool_dir.exists() or self.spool_dir.is_symlink():
             _require_real_directory(self.spool_dir, "runtime batch spool")
@@ -124,7 +128,7 @@ class _ConcurrentRuntimeBatchSpool:
         chunk = self._decode_chunk(content, expected_time_step=time_step, expected_snapshot_hash=snapshot_hash)
         digest = hashlib.sha256(content).hexdigest()
         final_paths, pending_paths = _chunk_inventory(self.spool_dir)
-        if set(final_paths) != set(range(time_step)):
+        if set(final_paths) != set(range(self.base_time_step, time_step)):
             raise ValueError("runtime batch spool chunks are missing, extra, or non-contiguous before prepare")
         if set(pending_paths) - {time_step}:
             raise ValueError("runtime batch spool contains an extra prepared chunk")
@@ -203,17 +207,26 @@ class _ConcurrentRuntimeBatchSpool:
                     self.publish_prepared(ref)
 
         final_paths, pending_paths = _chunk_inventory(self.spool_dir)
-        expected_time_steps = set(range(len(journal_commits)))
+        expected_time_steps = set(
+            range(self.base_time_step, self.base_time_step + len(journal_commits))
+        )
         if set(final_paths) != expected_time_steps:
             missing = sorted(expected_time_steps - set(final_paths))
             extra = sorted(set(final_paths) - expected_time_steps)
             raise ValueError(f"runtime batch spool chunk inventory mismatch: missing={missing}, extra={extra}")
         active_time_step = _active_snapshot_time_step(replay)
-        allowed_pending = {active_time_step} if active_time_step == len(journal_commits) else set()
+        allowed_pending = (
+            {active_time_step}
+            if active_time_step == self.base_time_step + len(journal_commits)
+            else set()
+        )
         if set(pending_paths) - allowed_pending:
             raise ValueError("runtime batch spool contains an extra prepared chunk")
 
-        for expected_time_step, journal_commit in enumerate(journal_commits):
+        for expected_time_step, journal_commit in enumerate(
+            journal_commits,
+            start=self.base_time_step,
+        ):
             ref = journal_commit.ref
             path, _ = self._ref_paths(ref, expected_time_step=expected_time_step)
             _require_regular_file(path, f"runtime batch spool chunk {expected_time_step}")
@@ -283,7 +296,7 @@ class _ConcurrentRuntimeBatchSpool:
             record = _mapping(record_raw, "runtime replay record")
             if record.get("record_type") != "event" or record.get("event_type") != "batch_committed":
                 continue
-            expected_time_step = len(commits)
+            expected_time_step = self.base_time_step + len(commits)
             event_identity = _mapping(record.get("event_identity"), "batch_committed event identity")
             payload = _mapping(record.get("payload"), "batch_committed payload")
             ref = _mapping(payload.get("batch_spool_chunk"), "batch_committed spool reference")
