@@ -160,6 +160,8 @@ def test_already_stopped_plan_requires_absent_pid_and_released_lock_then_cuts_ov
         plan_path,
         confirmation_token=str(preflight["exact_confirmation_token"]),
     )
+    _plan, plan_hash = operator._read_plan(plan_path)
+    operator._validate_run_artifacts(stopped_request, plan_file_hash=plan_hash)
     assert authorization["provider_calls"] == 0
     assert stopped_request.frozen_prefix_workspace.is_dir()
 

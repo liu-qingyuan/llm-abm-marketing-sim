@@ -1178,14 +1178,15 @@ class FullPoolSegmentedCutoverOperator:
             request.continuation_authorization_artifact,
             _CONTINUATION_AUTHORIZATION_SCHEMA,
         )
+        require_running = request.process_precondition == "running_external_stop"
         expected_preflight = {
             "plan_sha256": plan_file_hash,
             "pid": request.expected_pid,
             "command": request.expected_command,
             "cwd": str(request.expected_cwd),
             "lock_path": str(request.prefix_workspace / _LOCK_FILE),
-            "lock_owner_pids": [request.expected_pid],
-            "manual_stop_required": True,
+            "lock_owner_pids": [request.expected_pid] if require_running else [],
+            "manual_stop_required": require_running,
             "operator_will_send_signals": False,
             "provider_calls": 0,
             "production_deploy_eligible": False,
