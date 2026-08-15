@@ -8,7 +8,7 @@ package-internal `FullPoolSegmentedContinuation` 是唯一高层 Interface。调
 
 Module 在任何 Adapter 调用前完整验证 v1 journal、snapshot、spool 和 attempt-ledger 接受前缀，生成 exact-field、SHA-256 bound cutoff manifest。v1 prefix 只读且不复制回写；新 identity、ledger、status 和 canonical terminal rows 只写入 continuation workspace。
 
-suffix 固定十条 lane。每条 lane 持有独立 Adapter；worker 只执行既有 Primary Decision Interface 并返回结果。唯一 coordinator 预留 cap、记录 dispatch、缓冲乱序完成，并按 canonical pair schedule 写 terminal evidence。完整 active batch 到达 terminal 后，coordinator 才去重并提交 succeeded Primary `like/comment/share` feedback。
+suffix 固定十条 lane。每条 lane 持有独立 Adapter；worker 只执行既有 Primary Decision Interface 并返回结果。唯一 coordinator 预留 cap、记录 dispatch、缓冲乱序完成，并按 canonical pair schedule 写 terminal evidence。可选 `first_wave_observer` 只接收第一波正式 suffix pairs 的安全聚合 rate/error/model/usage evidence；observer 失败时在任何后续 wave 前停止，已 durable terminals 不重调。完整 active batch 到达 terminal 后，coordinator 才去重并提交 succeeded Primary `like/comment/share` feedback。
 
 总 logical cap 固定 109,200，总 physical cap 固定 120,120。logical denominator 在 cutoff 时闭合；physical retry window 只为下一波最多十个 dispatch 动态预留。每波先冻结各 lane 的 request/external counter baseline，等待全部 futures settle，再用单条 `wave_accounting` 原子记录 per-lane delta 与 actual total；terminal evidence 不重复计入 physical total。临近 cap 时 wave 缩小；不足一个完整 retry window 时返回 resumable cap stop。durable terminal pair 永不再次传给 Adapter。suffix 若留下 started-without-terminal pairs，status 关闭为 `reconciliation_required`，logical progress 覆盖全部 dispatched reservations，后续调用不自动重放。v1 migration unknown 的授权 charge 必须精确等于完整 retry window，并覆盖 attempt-ledger 中已 durable 的 pending attempts。
 
@@ -160,7 +160,7 @@ classDiagram
 ```mermaid
 classDiagram
     class FullPoolSegmentedContinuation {
-      +run(prefix_workspace, continuation_workspace, continuation_id, dataset_dir, adapter_factory, reconciliation_authorization) SegmentedContinuationResult
+      +run(prefix_workspace, continuation_workspace, continuation_id, dataset_dir, adapter_factory, reconciliation_authorization, first_wave_observer) SegmentedContinuationResult
       -runDynamicWaves()
       -closeSourceV2()
     }
@@ -168,6 +168,12 @@ classDiagram
       +unknown_pair_id
       +physical_attempt_charge
       +authorization_reference
+    }
+    class SegmentedQualificationWave {
+      +pair_ids
+      +elapsed_seconds
+      +physical_attempt_count
+      +model_and_usage_aggregates
     }
     class SegmentedContinuationResult {
       +status
@@ -206,6 +212,7 @@ classDiagram
     FullPoolSegmentedContinuation --> _SegmentedKernelJournal
     _SegmentedKernelJournal --> _ConcurrentRuntimeKernel
     FullPoolSegmentedContinuation ..> _WorkerResult
+    FullPoolSegmentedContinuation ..> SegmentedQualificationWave
     FullPoolSegmentedContinuation ..> FullPoolReconciliationAuthorization
     FullPoolSegmentedContinuation --> SegmentedContinuationResult
 ```

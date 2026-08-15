@@ -25,6 +25,8 @@
 - [Architecture 总览](architecture/README.md)
 - [ABM Runtime 与仿真流程](architecture/abm-runtime.md)
 - [Concurrent Message Competition Experiment](architecture/concurrent-message-competition-experiment.md)
+- [Full-Pool Segmented Continuation Runtime](architecture/full-pool-segmented-continuation.md)
+- [Full-Pool Segmented Continuation Operator](architecture/full-pool-segmented-continuation-operator.md)
 - [锦江用户数据结构](architecture/jinjiang-user-profile-data-structure.md)
 - [TikHub / Douyin 数据收集架构](architecture/douyin-data-collection-architecture.md)
 - [Retention Audit](architecture/retention-audit.md)

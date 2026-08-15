@@ -22,6 +22,7 @@ from llm_abm_sim.full_pool_segmented_continuation import (
     FullPoolReconciliationAuthorization,
     FullPoolSegmentedContinuation,
     SegmentedContinuationStatus,
+    SegmentedQualificationWave,
     _reserve_total_caps,
     _validate_unique_terminal_rows,
 )
@@ -461,6 +462,33 @@ def test_segmented_suffix_unknown_fails_closed_and_existing_workspace_never_repl
     assert replay == first
     assert replay_factory_called is False
     assert (workspace / "segmented_continuation_ledger.jsonl").read_bytes() == ledger_before
+
+
+def test_segmented_first_wave_observer_receives_official_ten_pair_usage_once(tmp_path: Path) -> None:
+    state = _LaneState()
+    observed: list[SegmentedQualificationWave] = []
+
+    result = FullPoolSegmentedContinuation().run(
+        PREFIX,
+        tmp_path / "qualified-first-wave",
+        continuation_id="qualified-first-wave-v1",
+        _fixture_decision_inputs=_inputs(),
+        adapter_factory=_factory(state),
+        first_wave_observer=observed.append,
+    )
+
+    assert result.status is SegmentedContinuationStatus.COMPLETE
+    assert len(observed) == 1
+    wave = observed[0]
+    assert wave.pair_ids == tuple(f"u{number}:message_1:1" for number in range(3, 13))
+    assert wave.physical_attempt_count == 10
+    assert wave.provider_response_count == 10
+    assert wave.successful_decision_count == 10
+    assert wave.terminal_status_counts == {"succeeded": 10}
+    assert wave.observed_model_counts == {MODEL: 10}
+    assert wave.usage_complete_response_count == 0
+    assert wave.usage_missing_response_count == 10
+    assert wave.total_tokens == 0
 
 
 def test_segmented_terminal_validator_rejects_duplicate_pair_or_terminal_identity() -> None:

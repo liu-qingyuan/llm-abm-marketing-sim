@@ -13,6 +13,7 @@ from enum import Enum
 from itertools import chain
 from pathlib import Path
 from tempfile import NamedTemporaryFile
+from time import monotonic
 from typing import Literal, cast
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -127,6 +128,25 @@ class FullPoolReconciliationAuthorization(_FrozenModel):
         ):
             raise ValueError("reconciliation authorization reference must not contain credential material")
         return value
+
+
+class SegmentedQualificationWave(_FrozenModel):
+    """Safe aggregate for validating the first official ten-lane suffix wave."""
+
+    pair_ids: tuple[str, ...]
+    elapsed_seconds: float = Field(gt=0.0)
+    physical_attempt_count: int = Field(ge=0)
+    provider_response_count: int = Field(ge=0)
+    successful_decision_count: int = Field(ge=0)
+    terminal_status_counts: dict[str, int]
+    observed_model_counts: dict[str, int]
+    usage_complete_response_count: int = Field(ge=0)
+    usage_missing_response_count: int = Field(ge=0)
+    usage_malformed_response_count: int = Field(ge=0)
+    input_tokens: int = Field(ge=0)
+    output_tokens: int = Field(ge=0)
+    total_tokens: int = Field(ge=0)
+    cached_input_tokens: int = Field(ge=0)
 
 
 class SegmentedContinuationResult(_FrozenModel):
@@ -299,6 +319,7 @@ class FullPoolSegmentedContinuation:
         adapter_factory: Callable[[int], LLMDecisionAdapter],
         dataset_dir: str | Path | None = None,
         reconciliation_authorization: FullPoolReconciliationAuthorization | None = None,
+        first_wave_observer: Callable[[SegmentedQualificationWave], None] | None = None,
         _fixture_decision_inputs: Mapping[str, DecisionInput] | None = None,
     ) -> SegmentedContinuationResult:
         if dataset_dir is None and _fixture_decision_inputs is not None:
@@ -309,6 +330,7 @@ class FullPoolSegmentedContinuation:
                 decision_inputs=_fixture_decision_inputs,
                 adapter_factory=adapter_factory,
                 reconciliation_authorization=reconciliation_authorization,
+                first_wave_observer=first_wave_observer,
             )
         if _fixture_decision_inputs is not None:
             raise ValueError("complete segmented continuation derives DecisionInput from frozen batch plans")
@@ -324,6 +346,7 @@ class FullPoolSegmentedContinuation:
             dataset_dir=resolved_dataset_dir,
             adapter_factory=adapter_factory,
             reconciliation_authorization=reconciliation_authorization,
+            first_wave_observer=first_wave_observer,
         )
 
     def _run_final_fixture(
@@ -335,6 +358,7 @@ class FullPoolSegmentedContinuation:
         decision_inputs: Mapping[str, DecisionInput],
         adapter_factory: Callable[[int], LLMDecisionAdapter],
         reconciliation_authorization: FullPoolReconciliationAuthorization | None = None,
+        first_wave_observer: Callable[[SegmentedQualificationWave], None] | None = None,
     ) -> SegmentedContinuationResult:
         prefix = _freeze_v1_prefix(Path(prefix_workspace))
         if cast(int, prefix.active_batch["time_step"]) + 1 != prefix.expected_batch_count:
@@ -445,6 +469,7 @@ class FullPoolSegmentedContinuation:
                         "maximum_attempts_per_dispatch": prefix.maximum_attempts_per_dispatch,
                     },
                 )
+                wave_started = monotonic()
                 wave, wave_physical_attempts = self._run_wave(
                     prefix=prefix,
                     wave_pair_ids=wave_pair_ids,
@@ -452,6 +477,17 @@ class FullPoolSegmentedContinuation:
                     adapters=adapters,
                     ledger=ledger,
                 )
+                if first_wave_observer is not None:
+                    observer = first_wave_observer
+                    first_wave_observer = None
+                    observer(
+                        _qualification_wave(
+                            pair_ids=wave_pair_ids,
+                            results=wave,
+                            physical_attempt_count=wave_physical_attempts,
+                            elapsed_seconds=max(monotonic() - wave_started, 1e-9),
+                        )
+                    )
                 suffix_physical_attempts += wave_physical_attempts
                 for pair_id in wave_pair_ids:
                     suffix_results[pair_id] = wave[pair_id]
@@ -572,6 +608,7 @@ class FullPoolSegmentedContinuation:
         dataset_dir: str | Path,
         adapter_factory: Callable[[int], LLMDecisionAdapter],
         reconciliation_authorization: FullPoolReconciliationAuthorization | None,
+        first_wave_observer: Callable[[SegmentedQualificationWave], None] | None,
     ) -> SegmentedContinuationResult:
         return _run_complete_segmented(
             prefix_workspace=Path(prefix_workspace),
@@ -580,6 +617,7 @@ class FullPoolSegmentedContinuation:
             dataset_dir=Path(dataset_dir),
             adapter_factory=adapter_factory,
             reconciliation_authorization=reconciliation_authorization,
+            first_wave_observer=first_wave_observer,
         )
 
     @staticmethod
@@ -914,6 +952,7 @@ def _run_complete_segmented(
     dataset_dir: Path,
     adapter_factory: Callable[[int], LLMDecisionAdapter],
     reconciliation_authorization: FullPoolReconciliationAuthorization | None,
+    first_wave_observer: Callable[[SegmentedQualificationWave], None] | None,
 ) -> SegmentedContinuationResult:
     prefix = _freeze_v1_prefix(prefix_workspace)
     continuation = continuation_workspace.expanduser().resolve(strict=False)
@@ -1006,6 +1045,7 @@ def _run_complete_segmented(
         else 0
     )
     suffix_terminal_count = 0
+    first_wave_observer_state = [first_wave_observer]
     try:
         active_plans = _typed_active_plans(prefix, config=config, prepared=prepared)
         active_results: dict[str, _WorkerResult] = {
@@ -1025,6 +1065,7 @@ def _run_complete_segmented(
             provider_metadata=prefix.provider_contract,
             physical_attempts=physical_attempts,
             maximum_attempts_per_dispatch=prefix.maximum_attempts_per_dispatch,
+            first_wave_observer_state=first_wave_observer_state,
         )
         if cap_stopped:
             return _persist_cap_stop(
@@ -1086,6 +1127,7 @@ def _run_complete_segmented(
                 provider_metadata=prefix.provider_contract,
                 physical_attempts=physical_attempts,
                 maximum_attempts_per_dispatch=prefix.maximum_attempts_per_dispatch,
+                first_wave_observer_state=first_wave_observer_state,
             )
             if cap_stopped:
                 return _persist_cap_stop(
@@ -1293,6 +1335,7 @@ def _execute_typed_plans(
     provider_metadata: Mapping[str, object],
     physical_attempts: int,
     maximum_attempts_per_dispatch: int,
+    first_wave_observer_state: list[Callable[[SegmentedQualificationWave], None] | None],
 ) -> tuple[dict[str, _WorkerResult], int, bool]:
     results: dict[str, _WorkerResult] = {}
     consumed_attempts = 0
@@ -1314,12 +1357,24 @@ def _execute_typed_plans(
                 "maximum_attempts_per_dispatch": maximum_attempts_per_dispatch,
             },
         )
+        wave_started = monotonic()
         wave, wave_physical_attempts = _run_typed_wave(
             plans=wave_plans,
             adapters=adapters,
             ledger=ledger,
             provider_metadata=provider_metadata,
         )
+        observer = first_wave_observer_state[0]
+        if observer is not None:
+            first_wave_observer_state[0] = None
+            observer(
+                _qualification_wave(
+                    pair_ids=[plan.pair_id for plan in wave_plans],
+                    results=wave,
+                    physical_attempt_count=wave_physical_attempts,
+                    elapsed_seconds=max(monotonic() - wave_started, 1e-9),
+                )
+            )
         consumed_attempts += wave_physical_attempts
         for plan in wave_plans:
             results[plan.pair_id] = wave[plan.pair_id]
@@ -1380,6 +1435,70 @@ def _run_typed_wave(
         )
         drained[pair_id] = item
     return drained, wave_physical_attempts
+
+
+def _qualification_wave(
+    *,
+    pair_ids: Sequence[str],
+    results: Mapping[str, _WorkerResult],
+    physical_attempt_count: int,
+    elapsed_seconds: float,
+) -> SegmentedQualificationWave:
+    terminal_status_counts: Counter[str] = Counter()
+    observed_model_counts: Counter[str] = Counter()
+    provider_responses = 0
+    successful_decisions = 0
+    usage_complete_responses = 0
+    usage_missing_responses = 0
+    usage_malformed_responses = 0
+    input_tokens = 0
+    output_tokens = 0
+    total_tokens = 0
+    cached_input_tokens = 0
+    for pair_id in pair_ids:
+        result = results[pair_id]
+        terminal_status_counts[_non_empty(result.terminal_row.get("terminal_status"), "terminal status")] += 1
+        evidence = result.variant_evidence
+        provider_responses += _strict_non_negative_int(
+            evidence.get("provider_response_count"), "qualification provider responses"
+        )
+        successful_decisions += _strict_non_negative_int(
+            evidence.get("successful_decision_count"), "qualification successful decisions"
+        )
+        for model, count in _mapping(evidence.get("observed_model_counts"), "qualification models").items():
+            observed_model_counts[model] += _strict_non_negative_int(count, "qualification model count")
+        usage_complete_responses += _strict_non_negative_int(
+            evidence.get("usage_complete_response_count"), "qualification complete usage responses"
+        )
+        usage_missing_responses += _strict_non_negative_int(
+            evidence.get("usage_missing_response_count"), "qualification missing usage responses"
+        )
+        usage_malformed_responses += _strict_non_negative_int(
+            evidence.get("usage_malformed_response_count"), "qualification malformed usage responses"
+        )
+        if evidence.get("usage_complete") is True:
+            input_tokens += _strict_non_negative_int(evidence.get("input_usage"), "qualification input usage")
+            output_tokens += _strict_non_negative_int(evidence.get("output_usage"), "qualification output usage")
+            total_tokens += _strict_non_negative_int(evidence.get("total_usage"), "qualification total usage")
+            cached_input_tokens += _strict_non_negative_int(
+                evidence.get("cached_input_usage"), "qualification cached input usage"
+            )
+    return SegmentedQualificationWave(
+        pair_ids=tuple(pair_ids),
+        elapsed_seconds=elapsed_seconds,
+        physical_attempt_count=physical_attempt_count,
+        provider_response_count=provider_responses,
+        successful_decision_count=successful_decisions,
+        terminal_status_counts=dict(sorted(terminal_status_counts.items())),
+        observed_model_counts=dict(sorted(observed_model_counts.items())),
+        usage_complete_response_count=usage_complete_responses,
+        usage_missing_response_count=usage_missing_responses,
+        usage_malformed_response_count=usage_malformed_responses,
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+        total_tokens=total_tokens,
+        cached_input_tokens=cached_input_tokens,
+    )
 
 
 def _execute_typed_pair(
