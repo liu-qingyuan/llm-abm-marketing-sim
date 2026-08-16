@@ -57,10 +57,18 @@ def _rewrite_ledger(path: Path, mutate: Any) -> None:
 class _FailingLaneAdapter(_LaneAdapter):
     external_request_invocations = 0
 
-    def __init__(self, lane_id: int, calls: list[str], *, fail_lane_id: int = 7) -> None:
+    def __init__(
+        self,
+        lane_id: int,
+        calls: list[str],
+        *,
+        fail_lane_id: int = 7,
+        fail_time_step: int = 1,
+    ) -> None:
         super().__init__(calls)
         self.lane_id = lane_id
         self.fail_lane_id = fail_lane_id
+        self.fail_time_step = fail_time_step
         self.external_request_invocations = 0
 
     def decide(
@@ -73,7 +81,7 @@ class _FailingLaneAdapter(_LaneAdapter):
     ) -> EngageDecision:
         self.external_request_invocations += 1
         decision = super().decide(post, profile, peer_context, platform_context, time_step)
-        if time_step == 1 and self.lane_id == self.fail_lane_id:
+        if time_step == self.fail_time_step and self.lane_id == self.fail_lane_id:
             raise ProviderResponseProvenanceUnknown("offline injected recovery fixture gap")
         return decision
 
@@ -127,12 +135,14 @@ def _failed_run(
     delivery_capacity: int = 4,
     sample_size: int = 7,
     fail_lane_id: int = 7,
+    fail_time_step: int = 1,
+    prefix_terminal_limit: int = 1,
 ) -> tuple[SegmentedRecoveryPlanRequest, dict[str, Any]]:
     prefix, dataset, _ = _mid_batch_prefix(
         tmp_path / "fixture",
         horizon=3,
         delivery_capacity=delivery_capacity,
-        terminal_limit=1,
+        terminal_limit=prefix_terminal_limit,
         sample_size=sample_size,
     )
     runtime = json.loads((prefix / "concurrent_message_execution_run_identity.json").read_text())
@@ -210,6 +220,7 @@ def _failed_run(
             lane_id,
             calls,
             fail_lane_id=fail_lane_id,
+            fail_time_step=fail_time_step,
         ),
         first_wave_observer=qualify,
     )
@@ -227,6 +238,11 @@ def _failed_run(
         expected_identity_hash=str(identity["identity_hash"]),
     )
     status_path = request.continuation_workspace / "segmented_continuation_status.json"
+    accounted_wave_count = sum(
+        json.loads(line).get("event_type") == "wave_accounting"
+        for line in ledger_path.read_text(encoding="utf-8").splitlines()
+        if line
+    )
     audit = {
         "schema_version": "full-pool-segmented-reconciliation-required-audit-v1",
         "recorded_at": "2026-08-15T12:19:34+00:00",
@@ -246,7 +262,7 @@ def _failed_run(
         "unknown_pair_ids": list(result.unknown_pair_ids),
         "zero_terminal_evidence_count": 1,
         "canonical_drain_blocked_following_pair_count": 1,
-        "accounted_wave_count": 3,
+        "accounted_wave_count": accounted_wave_count,
         "accounted_suffix_physical_attempts": suffix_physical,
         "continuation_ledger_bytes": ledger_path.stat().st_size,
         "continuation_ledger_sha256": _sha(ledger_path),

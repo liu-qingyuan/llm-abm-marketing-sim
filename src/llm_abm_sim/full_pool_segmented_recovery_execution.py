@@ -599,10 +599,13 @@ class FullPoolSegmentedRecovery:
         if [chunk.time_step for chunk in historical_chunks] != list(range(len(historical_chunks))):
             raise ValueError("recovery historical batch chunks are missing, extra, or out of order")
 
-        snapshot_document_by_time_step = _snapshot_documents(prefix.runtime_replay)
-        snapshot_document_by_time_step.update(
-            _snapshot_documents(failed_ledger.kernel_replay)
-        )
+        prefix_full_replay = ConcurrentExecutionJournal.open_existing(prefix.workspace).replay()
+        snapshot_document_by_time_step = _snapshot_documents(prefix_full_replay)
+        for time_step, document in _snapshot_documents(failed_ledger.kernel_replay).items():
+            prefix_document = snapshot_document_by_time_step.get(time_step)
+            if prefix_document is not None and prefix_document != document:
+                raise ValueError("prefix and failed continuation snapshots overlap with different bytes")
+            snapshot_document_by_time_step[time_step] = document
         active_time_step = len(historical_chunks)
         active_snapshot_document = snapshot_document_by_time_step.get(active_time_step)
         if active_snapshot_document is None:

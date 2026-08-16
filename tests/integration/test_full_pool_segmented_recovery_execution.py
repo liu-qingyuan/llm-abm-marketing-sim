@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 from datetime import datetime, timezone
@@ -9,6 +10,7 @@ from typing import Any
 import pytest
 
 import llm_abm_sim.full_pool_segmented_continuation as continuation_module
+import llm_abm_sim.full_pool_segmented_recovery_execution as recovery_execution_module
 from llm_abm_sim.decision import EngageDecision, ProviderResponseProvenanceUnknown
 from llm_abm_sim.full_pool_segmented_continuation import (
     SegmentedRecoveryAccountingFacts,
@@ -89,13 +91,20 @@ def _write_authorization(
 def _prepared_recovery(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    *,
+    delivery_capacity: int = 5,
+    fail_time_step: int = 1,
+    prefix_terminal_limit: int = 1,
+    sample_size: int = 10,
 ) -> tuple[SegmentedRecoveryExecutionRequest, dict[str, Any]]:
     plan_request, failed = _failed_run(
         tmp_path,
         monkeypatch,
-        delivery_capacity=5,
-        sample_size=10,
+        delivery_capacity=delivery_capacity,
+        sample_size=sample_size,
         fail_lane_id=8,
+        fail_time_step=fail_time_step,
+        prefix_terminal_limit=prefix_terminal_limit,
     )
     plan_result = FullPoolSegmentedRecoveryPreflight().prepare(plan_request)
     recovery_workspace = tmp_path / "recovered-continuation"
@@ -335,6 +344,83 @@ def test_recovers_only_two_unresolved_pairs_and_closes_lineage_bound_source_v2(
     )
     assert replay == result
     assert replay_factory_calls == []
+
+
+def test_recovery_imports_committed_prefix_snapshot_before_suffix(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    request, failed = _prepared_recovery(
+        tmp_path,
+        monkeypatch,
+        delivery_capacity=10,
+        fail_time_step=2,
+        prefix_terminal_limit=31,
+        sample_size=30,
+    )
+    factory_calls: list[int] = []
+    calls: list[str] = []
+
+    result = FullPoolSegmentedRecovery(now=_clock).run(
+        request,
+        adapter_factory=lambda lane_id: factory_calls.append(lane_id)
+        or _LaneAdapter(calls),
+    )
+
+    assert result.status == "complete"
+    assert result.logical_count == 90
+    assert result.imported_durable_terminal_count == 68
+    assert result.recovered_pair_ids == tuple(failed["result"].unknown_pair_ids)
+    assert factory_calls == list(range(10))
+    assert calls[:2] == list(failed["result"].unknown_pair_ids)
+    assert len(calls) == 22
+    assert result.source_root is not None
+    assert [row["time_step"] for row in _read_jsonl(result.source_root / "steps.jsonl")] == [
+        0,
+        1,
+        2,
+    ]
+
+
+def test_recovery_rejects_different_prefix_and_suffix_snapshot_overlap_before_adapter(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    request, _failed = _prepared_recovery(
+        tmp_path,
+        monkeypatch,
+        delivery_capacity=10,
+        fail_time_step=2,
+        prefix_terminal_limit=31,
+        sample_size=30,
+    )
+    original = recovery_execution_module._snapshot_documents
+    prefix_documents: dict[int, dict[str, object]] = {}
+
+    def crossed(replay: Any) -> dict[int, dict[str, object]]:
+        documents = original(replay)
+        if not prefix_documents:
+            prefix_documents.update(copy.deepcopy(documents))
+            return documents
+        overlap_time_step = max(prefix_documents)
+        documents[overlap_time_step] = {
+            **prefix_documents[overlap_time_step],
+            "snapshot_type": "crossed-offline-snapshot",
+        }
+        return documents
+
+    monkeypatch.setattr(recovery_execution_module, "_snapshot_documents", crossed)
+    factory_calls: list[int] = []
+
+    with pytest.raises(ValueError, match="snapshots overlap with different bytes"):
+        FullPoolSegmentedRecovery(now=_clock).run(
+            request,
+            adapter_factory=lambda lane_id: factory_calls.append(lane_id)
+            or _LaneAdapter([]),
+        )
+
+    assert factory_calls == []
+    assert not request.recovery_workspace.exists()
 
 
 @pytest.mark.parametrize(
