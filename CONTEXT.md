@@ -148,6 +148,22 @@ processed 数据中可用于构建历史信号的视频集合。对于单目标�
 
 通过显式 Live Provider Gate 为 Full-Pool 30-Batch Run 生成 fresh Primary Decisions 的 Formal experiment。它是下一版 additive report 的主要运行证据，并使用独立 run、candidate 和 release lineage，immutable v7 保持不变。
 
+### Durable Pair Settlement
+
+Full-Pool segmented runtime 中把每个已派发 pair 独立归约为 terminal、typed provenance unknown 或 `implementation_failed` 的持久化机制。completion order 只决定 settlement capture 顺序；canonical pair order 只决定完整 batch 的 ABM commit。一个 pair 的未知来源或实现失败不能抹掉同波 sibling 已形成的安全 evidence。
+
+### Automated Recovery Policy
+
+为 typed provenance unknown 提供 create-once、hash-bound、无需逐次人工批准的有界恢复合同。Policy 对同一 pair 最多消费一个 reconciliation slot，并在 Provider 调用前持久化 slot 与完整 retry-window reservation；它不承诺 Provider exactly-once，也不能从 issue label、latest directory 或未持久化状态推定执行参数。
+
+### Automation Exhausted
+
+Automated Recovery Policy 的 nondeployable 终止状态。second unknown、reconciliation dispatch 后缺少 settlement、slot 重复消费、policy/workspace identity drift 或 cap 不足都会进入该状态；unknown 不产生 terminal，所在 batch 不提交，也不能生成 source、Report candidate 或 Release 输入。
+
+### Segmented Source-v3
+
+完整 automated nested recovery 的 additive persisted source。它在 109,200 logical terminals、30 batch barriers、settlement v2、automated policy 与 original/first/second recovery lineage 全部闭合后原子生成，并分栏保留 historical physical、uncertainty、retry、reconciliation 与 continuation accounting。它不改写 source-v2 或 Release v9，也不因 Validation/mock rehearsal 自动获得 production deploy eligibility。
+
 ### Full-Pool Mechanism Master
 
 为 Full-Pool Formal Main Experiment 新增的单张端到端 Mermaid 总图，文件名为 `full-pool-mechanism.mmd`。它只表达全池分母、30-batch delivery、Primary-only Decision 和 feedback 主路径；现有五张主机制图、`real-batch-mechanism.mmd` 与 Prompt–Model factorial 保持原字节，不复制另一套分图。

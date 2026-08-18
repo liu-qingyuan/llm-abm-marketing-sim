@@ -243,6 +243,16 @@ versioned source reader 现在 exact 区分普通 segmented source-v2 与 recove
 
 Report candidate、Evidence closure 与 Release v9 复用同一 typed recovery lineage/accounting 投影。v9 recovery contract 在安装后重新读取 persisted source 并逐字段 round-trip；Validation/mock/rule-based source 仍保持 `production_deploy_eligible=false`，不能通过 promotion、standalone validator 或 deployment preflight。v8、历史 sources、immutable v7 与旧七张 Mermaid masters 保持原合同和原 bytes。
 
+## Automated nested recovery 与 source-v3
+
+package-internal `FullPoolSegmentedAutomatedRecovery.run/status` 消费显式 nested-plan path/hash、recovery identity 与独立 workspace。Module 在 Adapter factory 前重放 parent recovery lineage、stopped-workspace inventory、24 个 committed batches、active snapshot、90,061 条 durable terminals、七个有序 retry IDs、Provider/request contract 与 caps；调用方不传 human authorization，也不协调 Future、policy event 或 source closure。
+
+workspace 先 create once 持久化 hash-bound `AutomatedRecoveryPolicy`。Policy ledger 为每个 typed unknown 最多原子消费一个 reconciliation slot，并在 Provider 调用前保守预留完整三次 retry window；reconciliation 使用 `DurablePairSettlement` 的独立 per-pair journal，不改写 main typed-unknown settlement，也不重放 sibling。second unknown、slot dispatch 后无 settlement、重复 slot、policy/workspace drift、cap 不足或 `implementation_failed` 都 fail closed；只有 terminal-complete wave 才按 canonical 顺序进入 kernel 与 full-batch barrier。
+
+七个 retry 的 logical charge 固定为 0；historical physical、21 次 uncertainty charge、retry actual、reconciliation actual 与 fresh continuation actual 分栏累计。same-identity replay 从 policy ledger、main settlement journal、per-pair reconciliation journals、kernel ledger 与 spool 恢复；已 captured pair 不再进入 Adapter。完整 closure 必须同时满足 109,200 logical terminals、30 committed batches、ten isolated lanes、109,200/120,120 caps 与完整 nested lineage。
+
+成功 closure 通过独立 staging 原子生成 additive `source-v3`，复制 frozen nested plan、automated policy/ledger、settlement v2 与 reconciliation journals，并保留 original run、first recovery、second recovery 和分栏 accounting。`automation_exhausted`、`implementation_failed`、incomplete 或 Validation/mock 结果不产生 source-v3，且始终 `production_deploy_eligible=false`；source-v2、recovery v1 与 Release v9 的 schema、reader 和 artifact bytes 不变。source-v3 persisted consumer、Release v10、结果表与部署仍由后续 Module 拥有。
+
 ## 局部边界与后续 seam
 
-Source Module 负责从任意单一 active cutoff 连续运行到 horizon 并关闭完整 source-v2；recovery-preflight 只准备 nondeployable 计划，recovery consumer 只消费外部 persisted authorization。Report/Evidence/Release 只读取已关闭 source-v2，不读取运行中 workspace；这些 Module 都不创建 live authorization，也不执行 Provider、SSH 或 canonical deployment。
+Source Module 负责从任意单一 active cutoff 连续运行到 horizon 并关闭完整 source-v2；automated nested recovery 只关闭 additive、nondeployable source-v3。preflight、manual recovery、source-v2 与 v9 保持冻结；Report/Evidence/Release 只读取各自明确版本的已关闭 source，不读取运行中 workspace。这些 Module 都不创建 live authorization，也不执行 Provider、SSH 或 canonical deployment。
