@@ -225,7 +225,7 @@ def test_required_evidence_and_weekly_navigation_remain() -> None:
 
     weekly_text = _read(DOCS_ROOT / "weekly" / "README.md")
     assert "不覆盖 current Architecture" in weekly_text
-    assert len(list((DOCS_ROOT / "weekly").glob("*.md"))) == 8
+    assert len(list((DOCS_ROOT / "weekly").glob("*.md"))) == 9
 
 
 def test_references_reading_order_and_root_navigation_contract() -> None:

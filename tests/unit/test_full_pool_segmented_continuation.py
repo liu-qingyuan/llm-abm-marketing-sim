@@ -11,10 +11,12 @@ from typing import Any
 
 import pytest
 
+import llm_abm_sim.durable_pair_settlement as settlement_module
 from llm_abm_sim.decision import (
     DecisionInput,
     EngageDecision,
     LLMDecisionAdapter,
+    ProviderDecisionError,
     ProviderResponseProvenanceUnknown,
 )
 from llm_abm_sim.full_pool_segmented_continuation import (
@@ -24,6 +26,7 @@ from llm_abm_sim.full_pool_segmented_continuation import (
     FullPoolSegmentedContinuation,
     SegmentedContinuationStatus,
     SegmentedQualificationWave,
+    SegmentedSettlementResult,
     _build_lanes,
     _freeze_v1_prefix,
     _require_full_first_qualification_wave,
@@ -181,6 +184,68 @@ class _OfflineLaneAdapter(LLMDecisionAdapter):
         finally:
             with self.state.lock:
                 self.state.active -= 1
+
+
+class _ImplementationFailureLaneAdapter(_OfflineLaneAdapter):
+    def __init__(self, lane_id: int, state: _LaneState, *, failed_pair_id: str) -> None:
+        super().__init__(lane_id, state)
+        self.failed_pair_id = failed_pair_id
+
+    def decide(
+        self,
+        post: PostContent,
+        profile: UserProfile,
+        peer_context: PeerContext,
+        platform_context: PlatformContext | None = None,
+        time_step: int = 0,
+    ) -> EngageDecision:
+        decision = super().decide(post, profile, peer_context, platform_context, time_step)
+        pair_id = f"{profile.user_id}:message_1:1"
+        if pair_id == self.failed_pair_id:
+            raise RuntimeError("raw implementation detail must not persist")
+        return decision
+
+
+class _OrdinaryRetryLaneAdapter(_OfflineLaneAdapter):
+    def __init__(
+        self,
+        lane_id: int,
+        state: _LaneState,
+        *,
+        target_pair_id: str,
+        exhausted: bool,
+    ) -> None:
+        super().__init__(lane_id, state)
+        self.target_pair_id = target_pair_id
+        self.exhausted = exhausted
+        self.logical_decide_calls = 0
+
+    def decide(
+        self,
+        post: PostContent,
+        profile: UserProfile,
+        peer_context: PeerContext,
+        platform_context: PlatformContext | None = None,
+        time_step: int = 0,
+    ) -> EngageDecision:
+        pair_id = f"{profile.user_id}:message_1:1"
+        self.logical_decide_calls += 1
+        if pair_id != self.target_pair_id:
+            return super().decide(post, profile, peer_context, platform_context, time_step)
+        with self.state.lock:
+            self.request_invocations += 3
+            self.state.calls.append((self.lane_id, pair_id))
+        if self.exhausted:
+            raise ProviderDecisionError(TimeoutError("ordinary timeout exhausted in Adapter"))
+        return EngageDecision(
+            engage=False,
+            probability=0.1,
+            reason="ordinary retry succeeded inside Adapter",
+            confidence=0.9,
+            action="ignore",
+            decision_source="offline_segmented_fixture",
+            provider_metadata={"model": MODEL},
+        )
 
 
 def _inputs(*, first_user: int = 3) -> dict[str, DecisionInput]:
@@ -458,28 +523,53 @@ def test_segmented_migration_unknown_requires_exact_authorization_and_is_explici
     assert envelope["manifest"]["caps"]["reserved_physical_total"] == 36
 
 
+@pytest.mark.parametrize(
+    ("crash_pair_id", "expected_frontier"),
+    [
+        ("u3:message_1:1", ()),
+        ("u7:message_1:1", tuple(f"u{number}:message_1:1" for number in range(3, 7))),
+        ("u12:message_1:1", tuple(f"u{number}:message_1:1" for number in range(3, 12))),
+    ],
+)
 def test_segmented_suffix_unknown_fails_closed_and_existing_workspace_never_replays(
     tmp_path: Path,
+    crash_pair_id: str,
+    expected_frontier: tuple[str, ...],
 ) -> None:
-    state = _LaneState(crash_pair_id="u3:message_1:1")
+    state = _LaneState(crash_pair_id=crash_pair_id)
     workspace = tmp_path / "crashed"
+    continuation_id = f"suffix-crash-{crash_pair_id.split(':', 1)[0]}-v2"
     first = FullPoolSegmentedContinuation().run(
         PREFIX,
         workspace,
-        continuation_id="suffix-crash-v1",
+        continuation_id=continuation_id,
         _fixture_decision_inputs=_inputs(),
         adapter_factory=_factory(state),
     )
 
+    assert isinstance(first, SegmentedSettlementResult)
     assert first.status is SegmentedContinuationStatus.RECONCILIATION_REQUIRED
-    assert first.concurrent_suffix_terminal_count == 0
+    assert first.concurrent_suffix_terminal_count == 9
     assert first.logical_count == 13
     assert first.physical_attempt_count == 13
-    assert first.unknown_pair_ids == tuple(f"u{number}:message_1:1" for number in range(3, 13))
-    assert first.unknown_pair_ids[1:] == tuple(
-        f"u{number}:message_1:1" for number in range(4, 13)
-    )
+    assert first.unknown_pair_ids == (crash_pair_id,)
+    assert first.canonical_terminal_frontier_pair_ids == expected_frontier
     assert len(state.calls) == 10
+    settlement = _jsonl(workspace / "durable_pair_settlement_v2.jsonl")
+    assert [row["event_type"] for row in settlement] == [
+        "wave_reserved",
+        *(["pair_dispatched"] * 10),
+        *(["pair_settled"] * 10),
+        "wave_closed",
+    ]
+    settled = [row["payload"] for row in settlement if row["event_type"] == "pair_settled"]
+    assert {row["pair_id"] for row in settled if row["outcome"]["kind"] == "terminal"} == {
+        f"u{number}:message_1:1" for number in range(3, 13)
+    } - {crash_pair_id}
+    assert [row["pair_id"] for row in settled if row["outcome"]["kind"] == "provenance_unknown"] == [
+        crash_pair_id
+    ]
+    assert all("offline injected unknown provenance" not in json.dumps(row) for row in settlement)
     ledger = _jsonl(workspace / "segmented_continuation_ledger.jsonl")
     wave_accounting = [row for row in ledger if row["event_type"] == "wave_accounting"]
     assert len(wave_accounting) == 1
@@ -498,13 +588,200 @@ def test_segmented_suffix_unknown_fails_closed_and_existing_workspace_never_repl
     replay = FullPoolSegmentedContinuation().run(
         PREFIX,
         workspace,
-        continuation_id="suffix-crash-v1",
+        continuation_id=continuation_id,
         _fixture_decision_inputs=_inputs(),
         adapter_factory=tripwire,
     )
     assert replay == first
     assert replay_factory_called is False
     assert (workspace / "segmented_continuation_ledger.jsonl").read_bytes() == ledger_before
+
+
+def test_same_identity_replay_seals_dispatch_without_settlement_without_adapter_calls(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state = _LaneState()
+    workspace = tmp_path / "dispatch-crash"
+    real_append = settlement_module._append_jsonl
+
+    def crash_after_dispatch(path: Path, payload: dict[str, object]) -> None:
+        real_append(path, payload)
+        if payload.get("event_type") == "pair_dispatched":
+            raise RuntimeError("offline process crash after durable dispatch")
+
+    monkeypatch.setattr(settlement_module, "_append_jsonl", crash_after_dispatch)
+    with pytest.raises(ValueError, match="reservation lacks durable accounting"):
+        FullPoolSegmentedContinuation().run(
+            PREFIX,
+            workspace,
+            continuation_id="dispatch-crash-v2",
+            _fixture_decision_inputs=_inputs(),
+            adapter_factory=_factory(state),
+        )
+    assert state.calls == []
+
+    monkeypatch.setattr(settlement_module, "_append_jsonl", real_append)
+    factory_called = False
+
+    def tripwire(_lane_id: int) -> LLMDecisionAdapter:
+        nonlocal factory_called
+        factory_called = True
+        raise AssertionError("same-identity dispatch replay must not create Adapters")
+
+    replay = FullPoolSegmentedContinuation().run(
+        PREFIX,
+        workspace,
+        continuation_id="dispatch-crash-v2",
+        _fixture_decision_inputs=_inputs(),
+        adapter_factory=tripwire,
+    )
+
+    assert factory_called is False
+    assert isinstance(replay, SegmentedSettlementResult)
+    assert replay.status is SegmentedContinuationStatus.RECONCILIATION_REQUIRED
+    assert replay.unknown_pair_ids == ("u3:message_1:1",)
+    assert replay.concurrent_suffix_terminal_count == 0
+    assert replay.logical_count == 4
+    assert replay.physical_attempt_count == 6
+    assert replay.canonical_terminal_frontier_pair_ids == ()
+
+
+def test_wave_closure_crash_replays_captured_terminals_without_adapter_calls(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class SimulatedProcessCrash(BaseException):
+        pass
+
+    state = _LaneState()
+    workspace = tmp_path / "wave-closure-crash"
+    real_append = settlement_module._append_jsonl
+
+    def crash_after_wave_closure(path: Path, payload: dict[str, object]) -> None:
+        real_append(path, payload)
+        if payload.get("event_type") == "wave_closed":
+            raise SimulatedProcessCrash
+
+    monkeypatch.setattr(settlement_module, "_append_jsonl", crash_after_wave_closure)
+    with pytest.raises(SimulatedProcessCrash):
+        FullPoolSegmentedContinuation().run(
+            PREFIX,
+            workspace,
+            continuation_id="wave-closure-crash-v2",
+            _fixture_decision_inputs=_inputs(),
+            adapter_factory=_factory(state),
+        )
+    assert len(state.calls) == 10
+    assert not (workspace / "segmented_continuation_status.json").exists()
+    settlement_before = (workspace / "durable_pair_settlement_v2.jsonl").read_bytes()
+
+    monkeypatch.setattr(settlement_module, "_append_jsonl", real_append)
+    factory_called = False
+
+    def tripwire(_lane_id: int) -> LLMDecisionAdapter:
+        nonlocal factory_called
+        factory_called = True
+        raise AssertionError("captured terminal replay must not create Adapters")
+
+    replay = FullPoolSegmentedContinuation().run(
+        PREFIX,
+        workspace,
+        continuation_id="wave-closure-crash-v2",
+        _fixture_decision_inputs=_inputs(),
+        adapter_factory=tripwire,
+    )
+
+    assert factory_called is False
+    assert isinstance(replay, SegmentedSettlementResult)
+    assert replay.status is SegmentedContinuationStatus.RESUMABLE
+    assert replay.commit_pending is True
+    assert replay.concurrent_suffix_terminal_count == 10
+    assert replay.unknown_pair_ids == ()
+    assert replay.implementation_failed_pair_ids == ()
+    assert replay.canonical_terminal_frontier_pair_ids == tuple(
+        f"u{number}:message_1:1" for number in range(3, 13)
+    )
+    assert replay.logical_count == replay.physical_attempt_count == 13
+    assert replay.terminal_rows_path is None
+    assert replay.source_root is None
+    assert (workspace / "durable_pair_settlement_v2.jsonl").read_bytes() == settlement_before
+
+
+def test_implementation_failure_keeps_siblings_but_cannot_close_batch_or_source(
+    tmp_path: Path,
+) -> None:
+    state = _LaneState()
+    failed_pair_id = "u7:message_1:1"
+    workspace = tmp_path / "implementation-failed"
+    result = FullPoolSegmentedContinuation().run(
+        PREFIX,
+        workspace,
+        continuation_id="implementation-failed-v2",
+        _fixture_decision_inputs=_inputs(),
+        adapter_factory=lambda lane_id: _ImplementationFailureLaneAdapter(
+            lane_id,
+            state,
+            failed_pair_id=failed_pair_id,
+        ),
+    )
+
+    assert isinstance(result, SegmentedSettlementResult)
+    assert result.status is SegmentedContinuationStatus.RECONCILIATION_REQUIRED
+    assert result.concurrent_suffix_terminal_count == 9
+    assert result.unknown_pair_ids == ()
+    assert result.implementation_failed_pair_ids == (failed_pair_id,)
+    assert result.terminal_rows_path is None
+    assert result.source_root is None
+    assert len(state.calls) == 10
+    ledger = _jsonl(workspace / "segmented_continuation_ledger.jsonl")
+    assert not [row for row in ledger if row["event_type"] == "batch_committed"]
+    settlement_bytes = (workspace / "durable_pair_settlement_v2.jsonl").read_bytes()
+    assert b"raw implementation detail" not in settlement_bytes
+
+
+@pytest.mark.parametrize("exhausted", [False, True])
+def test_ordinary_retry_policy_stays_inside_one_adapter_dispatch(
+    tmp_path: Path,
+    exhausted: bool,
+) -> None:
+    state = _LaneState()
+    adapters: list[_OrdinaryRetryLaneAdapter] = []
+    target_pair_id = "u3:message_1:1"
+
+    def factory(lane_id: int) -> LLMDecisionAdapter:
+        adapter = _OrdinaryRetryLaneAdapter(
+            lane_id,
+            state,
+            target_pair_id=target_pair_id,
+            exhausted=exhausted,
+        )
+        adapters.append(adapter)
+        return adapter
+
+    result = FullPoolSegmentedContinuation().run(
+        PREFIX,
+        tmp_path / f"ordinary-retry-{exhausted}",
+        continuation_id=f"ordinary-retry-{exhausted}-v2",
+        _fixture_decision_inputs=_inputs(),
+        adapter_factory=factory,
+    )
+
+    assert result.status is SegmentedContinuationStatus.COMPLETE
+    assert result.physical_attempt_count == 15
+    assert sum(adapter.logical_decide_calls for adapter in adapters) == 10
+    assert sum(adapter.request_invocations for adapter in adapters) == 12
+    rows = _jsonl(result.terminal_rows_path or Path("missing"))
+    target = next(row for row in rows if row["pair_id"] == target_pair_id)
+    assert target["terminal_status"] == ("provider_failed" if exhausted else "succeeded")
+    settlement = _jsonl(result.workspace_root / "durable_pair_settlement_v2.jsonl")
+    settled = next(
+        row["payload"]
+        for row in settlement
+        if row["event_type"] == "pair_settled" and row["payload"]["pair_id"] == target_pair_id
+    )
+    assert settled["outcome"]["kind"] == "terminal"
+    assert settled["accounting"]["actual_physical_attempts"] == 3
 
 
 def test_segmented_first_wave_observer_receives_official_ten_pair_usage_once(tmp_path: Path) -> None:

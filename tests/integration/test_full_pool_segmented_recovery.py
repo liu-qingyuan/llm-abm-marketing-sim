@@ -13,6 +13,7 @@ from llm_abm_sim.full_pool_segmented_continuation import (
     SEGMENTED_CONCURRENCY_QUALIFICATION_SCHEMA,
     SEGMENTED_OPERATOR_ARTIFACT_ENVELOPE_SCHEMA,
     FullPoolSegmentedContinuation,
+    SegmentedContinuationResult,
     SegmentedQualificationArtifactRef,
     SegmentedQualificationWave,
     _replay_continuation_ledger,
@@ -225,10 +226,7 @@ def _failed_run(
         first_wave_observer=qualify,
     )
     assert result.status.value == "reconciliation_required"
-    assert len(result.unknown_pair_ids) == 2
-    result_path = artifact_root / "continuation-result.json"
-    result_path.write_text(_canonical(result.model_dump(mode="json")) + "\n", encoding="utf-8")
-
+    assert len(result.unknown_pair_ids) == 1
     identity = json.loads(
         (request.continuation_workspace / "segmented_continuation_identity.json").read_text()
     )
@@ -237,7 +235,45 @@ def _failed_run(
         ledger_path,
         expected_identity_hash=str(identity["identity_hash"]),
     )
+    legacy_unknown_pair_ids = tuple(
+        pair_id for pair_id in dispatched if pair_id not in set(durable)
+    )
+    assert len(legacy_unknown_pair_ids) == 2
     status_path = request.continuation_workspace / "segmented_continuation_status.json"
+    legacy_status = {
+        "schema_version": "full-pool-segmented-continuation-status-v1",
+        "lifecycle": "reconciliation_required",
+        "manifest_sha256": result.manifest_sha256,
+        "durable_prefix_terminal_count": result.durable_prefix_terminal_count,
+        "concurrent_suffix_terminal_count": len(durable),
+        "committed_feedback_user_ids": [],
+        "unknown_pair_ids": list(legacy_unknown_pair_ids),
+        "logical_count": result.logical_count,
+        "physical_attempt_count": result.physical_attempt_count,
+        "terminal_rows_relative_path": None,
+        "terminal_rows_sha256": None,
+        "production_deploy_eligible": False,
+    }
+    status_path.write_text(_canonical(legacy_status), encoding="utf-8")
+    (request.continuation_workspace / "durable_pair_settlement_v2.jsonl").unlink()
+    result = SegmentedContinuationResult(
+        status=result.status,
+        workspace_root=result.workspace_root,
+        manifest_sha256=result.manifest_sha256,
+        terminal_rows_path=None,
+        source_root=None,
+        source_manifest_sha256=None,
+        durable_prefix_terminal_count=result.durable_prefix_terminal_count,
+        concurrent_suffix_terminal_count=len(durable),
+        committed_feedback_user_ids=(),
+        unknown_pair_ids=legacy_unknown_pair_ids,
+        logical_count=result.logical_count,
+        physical_attempt_count=result.physical_attempt_count,
+        production_deploy_eligible=False,
+    )
+    result_path = artifact_root / "continuation-result.json"
+    result_path.write_text(_canonical(result.model_dump(mode="json")) + "\n", encoding="utf-8")
+
     accounted_wave_count = sum(
         json.loads(line).get("event_type") == "wave_accounting"
         for line in ledger_path.read_text(encoding="utf-8").splitlines()

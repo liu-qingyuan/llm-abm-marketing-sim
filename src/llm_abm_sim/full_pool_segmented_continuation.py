@@ -46,6 +46,16 @@ from .concurrent_message_experiment import (
     _VariantDecisionContext,
 )
 from .decision import DecisionInput, LLMDecisionAdapter
+from .durable_pair_settlement import (
+    DURABLE_PAIR_SETTLEMENT_JOURNAL_FILE,
+    DURABLE_PAIR_SETTLEMENT_SCHEMA,
+    DurablePairDispatch,
+    DurablePairSettlement,
+    DurableSettlementReplay,
+)
+from .durable_pair_settlement import (
+    DurablePairTerminal as _WorkerResult,
+)
 from .final_research import _adapter_safe_metadata
 from .full_pool_formal_experiment import (
     FULL_POOL_FORMAL_ADAPTER_IDENTITY,
@@ -107,6 +117,7 @@ _SEGMENTED_MANIFEST_SCHEMA = "full-pool-segmented-cutoff-manifest-v1"
 _SEGMENTED_MANIFEST_ENVELOPE_SCHEMA = "full-pool-segmented-cutoff-envelope-v1"
 _SEGMENTED_LEDGER_SCHEMA = "full-pool-segmented-continuation-ledger-v1"
 _SEGMENTED_STATUS_SCHEMA = "full-pool-segmented-continuation-status-v1"
+_SEGMENTED_SETTLEMENT_STATUS_SCHEMA = "full-pool-segmented-continuation-status-v2"
 _RECONCILIATION_SCHEMA = "full-pool-segmented-reconciliation-authorization-v1"
 
 _IDENTITY_FILE = "segmented_continuation_identity.json"
@@ -228,6 +239,14 @@ class SegmentedContinuationResult(_FrozenModel):
         return self
 
 
+class SegmentedSettlementResult(SegmentedContinuationResult):
+    """Additive v2 result for a typed per-pair settlement stop."""
+
+    implementation_failed_pair_ids: tuple[str, ...]
+    canonical_terminal_frontier_pair_ids: tuple[str, ...]
+    commit_pending: bool
+
+
 @dataclass(frozen=True)
 class _CapReservation:
     suffix_logical_reservation: int
@@ -240,6 +259,14 @@ class _CapReservation:
 class _DynamicWaveReservation:
     wave_size: int
     reserved_physical_attempts: int
+
+
+@dataclass(frozen=True)
+class _SettledPlanExecution:
+    results: dict[str, _WorkerResult]
+    physical_attempt_charge: int
+    cap_stopped: bool
+    settlement_stopped: bool
 
 
 @dataclass(frozen=True)
@@ -304,13 +331,6 @@ class _FrozenPrefix:
     provider_contract: dict[str, object]
     prompt_contract: dict[str, object]
     maximum_attempts_per_dispatch: int
-
-
-@dataclass(frozen=True)
-class _WorkerResult:
-    pair_id: str
-    terminal_row: dict[str, object]
-    variant_evidence: dict[str, object]
 
 
 @dataclass(frozen=True)
@@ -508,47 +528,69 @@ class FullPoolSegmentedContinuation:
         assert adapters is not None
         suffix_results: dict[str, _WorkerResult] = {}
         suffix_physical_attempts = 0
+        settlement = DurablePairSettlement(
+            continuation,
+            settlement_identity_hash=cast(str, identity["identity_hash"]),
+            maximum_attempts_per_dispatch=prefix.maximum_attempts_per_dispatch,
+            max_concurrency=FULL_POOL_SEGMENTED_MAX_CONCURRENCY,
+            legacy_event_sink=ledger.append,
+        )
         try:
             for wave_start in range(0, len(pending_pair_ids), FULL_POOL_SEGMENTED_MAX_CONCURRENCY):
                 wave_pair_ids = pending_pair_ids[
                     wave_start : wave_start + FULL_POOL_SEGMENTED_MAX_CONCURRENCY
                 ]
-                ledger.append(
-                    "suffix_wave_reserved",
-                    {
-                        "wave_index": wave_start // FULL_POOL_SEGMENTED_MAX_CONCURRENCY,
-                        "pair_ids": list(wave_pair_ids),
-                        "logical_reservation": sum(
-                            pair_id not in prefix.unknown_pair_ids for pair_id in wave_pair_ids
+                dispatches = tuple(
+                    DurablePairDispatch(
+                        pair_id=pair_id,
+                        plan_identity={
+                            **prefix.plan_by_pair_id[pair_id],
+                            "decision_input_cache_key": decision_inputs[pair_id].cache_key(),
+                        },
+                        execute=lambda adapter, pair_id=pair_id: _execute_pair(
+                            pair_id=pair_id,
+                            plan=prefix.plan_by_pair_id[pair_id],
+                            decision_input=decision_inputs[pair_id],
+                            adapter=adapter,
+                            provider_metadata=prefix.provider_contract,
                         ),
-                        "physical_reservation": (
-                            len(wave_pair_ids) * prefix.maximum_attempts_per_dispatch
-                        ),
-                        "maximum_attempts_per_dispatch": prefix.maximum_attempts_per_dispatch,
-                    },
+                    )
+                    for pair_id in wave_pair_ids
                 )
                 wave_started = monotonic()
-                wave, wave_physical_attempts = self._run_wave(
-                    prefix=prefix,
-                    wave_pair_ids=wave_pair_ids,
-                    decision_inputs=decision_inputs,
-                    adapters=adapters,
-                    ledger=ledger,
+                wave = settlement.settle_wave(
+                    dispatches,
+                    adapters,
+                    physical_reservation=(
+                        len(wave_pair_ids) * prefix.maximum_attempts_per_dispatch
+                    ),
                 )
+                suffix_physical_attempts += wave.physical_attempt_charge
+                suffix_results.update(wave.terminal_results)
+                if not wave.all_pairs_terminal:
+                    return _persist_settlement_result(
+                        continuation=continuation,
+                        manifest_sha256=manifest_sha256,
+                        prefix=prefix,
+                        replay=settlement.replay(),
+                        migration_physical_charge=(
+                            reconciliation_authorization.physical_attempt_charge
+                            if reconciliation_authorization is not None
+                            and prefix.unknown_pair_ids
+                            else 0
+                        ),
+                    )
                 if first_wave_observer is not None:
                     observer = first_wave_observer
                     first_wave_observer = None
                     observer(
                         _qualification_wave(
                             pair_ids=wave_pair_ids,
-                            results=wave,
-                            physical_attempt_count=wave_physical_attempts,
+                            results=wave.terminal_results,
+                            physical_attempt_count=wave.actual_physical_attempts,
                             elapsed_seconds=max(monotonic() - wave_started, 1e-9),
                         )
                     )
-                suffix_physical_attempts += wave_physical_attempts
-                for pair_id in wave_pair_ids:
-                    suffix_results[pair_id] = wave[pair_id]
         except Exception:
             dispatched, durable, accounted_suffix_attempts, _ = _replay_continuation_ledger(
                 continuation / _LEDGER_FILE,
@@ -1099,6 +1141,13 @@ def _run_complete_segmented(
             physical_attempt_count=prefix.attempt_prefix.physical_attempt_count,
         )
     assert adapters is not None
+    settlement = DurablePairSettlement(
+        continuation,
+        settlement_identity_hash=cast(str, identity["identity_hash"]),
+        maximum_attempts_per_dispatch=prefix.maximum_attempts_per_dispatch,
+        max_concurrency=FULL_POOL_SEGMENTED_MAX_CONCURRENCY,
+        legacy_event_sink=ledger.append,
+    )
 
     active_time_step = cast(int, prefix.active_batch["time_step"])
     kernel_journal = _SegmentedKernelJournal(
@@ -1115,11 +1164,12 @@ def _run_complete_segmented(
         terminal_variants=("primary",),
         base_time_step=active_time_step,
     )
-    physical_attempts = prefix.attempt_prefix.physical_attempt_count + (
+    migration_physical_charge = (
         reconciliation_authorization.physical_attempt_charge
         if reconciliation_authorization is not None and prefix.unknown_pair_ids
         else 0
     )
+    physical_attempts = prefix.attempt_prefix.physical_attempt_count + migration_physical_charge
     suffix_terminal_count = 0
     first_wave_observer_state = [first_wave_observer]
     qualification_artifact_state: list[SegmentedQualificationArtifactRef | None] = [None]
@@ -1135,28 +1185,40 @@ def _run_complete_segmented(
             if pair_id in prefix.terminal_by_pair_id
         }
         active_pending = [plan for plan in active_plans if plan.pair_id not in active_results]
-        active_wave_results, active_attempts, cap_stopped = _execute_typed_plans(
+        active_execution = _execute_settled_plans(
             plans=active_pending,
             adapters=adapters,
-            ledger=ledger,
+            settlement=settlement,
             provider_metadata=prefix.provider_contract,
             physical_attempts=physical_attempts,
             maximum_attempts_per_dispatch=prefix.maximum_attempts_per_dispatch,
             first_wave_observer_state=first_wave_observer_state,
             qualification_artifact_state=qualification_artifact_state,
         )
-        if cap_stopped:
+        if active_execution.settlement_stopped:
+            return _persist_settlement_result(
+                continuation=continuation,
+                manifest_sha256=manifest_sha256,
+                prefix=prefix,
+                replay=settlement.replay(),
+                migration_physical_charge=migration_physical_charge,
+            )
+        if active_execution.cap_stopped:
             return _persist_cap_stop(
                 continuation=continuation,
                 manifest_sha256=manifest_sha256,
                 prefix=prefix,
-                suffix_terminal_count=len(active_wave_results),
-                logical_count=prefix.attempt_prefix.logical_count + len(active_wave_results),
-                physical_attempt_count=physical_attempts + active_attempts,
+                suffix_terminal_count=len(active_execution.results),
+                logical_count=(
+                    prefix.attempt_prefix.logical_count + len(active_execution.results)
+                ),
+                physical_attempt_count=(
+                    physical_attempts + active_execution.physical_attempt_charge
+                ),
             )
-        physical_attempts += active_attempts
-        suffix_terminal_count += len(active_wave_results)
-        active_results.update(active_wave_results)
+        physical_attempts += active_execution.physical_attempt_charge
+        suffix_terminal_count += len(active_execution.results)
+        active_results.update(active_execution.results)
         if set(active_results) != {plan.pair_id for plan in active_plans}:
             raise ValueError("active segmented batch did not close every terminal")
         active_commit = _commit_cutoff_active_batch(
@@ -1198,29 +1260,45 @@ def _run_complete_segmented(
         while state.next_time_step < config.horizon:
             kernel.plan_batch()
             plans = kernel.pending_plans()
-            wave_results, batch_attempts, cap_stopped = _execute_typed_plans(
+            batch_execution = _execute_settled_plans(
                 plans=plans,
                 adapters=adapters,
-                ledger=ledger,
+                settlement=settlement,
                 provider_metadata=prefix.provider_contract,
                 physical_attempts=physical_attempts,
                 maximum_attempts_per_dispatch=prefix.maximum_attempts_per_dispatch,
                 first_wave_observer_state=first_wave_observer_state,
                 qualification_artifact_state=qualification_artifact_state,
             )
-            if cap_stopped:
+            if batch_execution.settlement_stopped:
+                return _persist_settlement_result(
+                    continuation=continuation,
+                    manifest_sha256=manifest_sha256,
+                    prefix=prefix,
+                    replay=settlement.replay(),
+                    migration_physical_charge=migration_physical_charge,
+                )
+            if batch_execution.cap_stopped:
                 return _persist_cap_stop(
                     continuation=continuation,
                     manifest_sha256=manifest_sha256,
                     prefix=prefix,
-                    suffix_terminal_count=suffix_terminal_count + len(wave_results),
-                    logical_count=prefix.attempt_prefix.logical_count + suffix_terminal_count + len(wave_results),
-                    physical_attempt_count=physical_attempts + batch_attempts,
+                    suffix_terminal_count=(
+                        suffix_terminal_count + len(batch_execution.results)
+                    ),
+                    logical_count=(
+                        prefix.attempt_prefix.logical_count
+                        + suffix_terminal_count
+                        + len(batch_execution.results)
+                    ),
+                    physical_attempt_count=(
+                        physical_attempts + batch_execution.physical_attempt_charge
+                    ),
                 )
-            physical_attempts += batch_attempts
-            suffix_terminal_count += len(wave_results)
+            physical_attempts += batch_execution.physical_attempt_charge
+            suffix_terminal_count += len(batch_execution.results)
             for plan in plans:
-                result = wave_results[plan.pair_id]
+                result = batch_execution.results[plan.pair_id]
                 kernel.start_pair(plan)
                 kernel.register_terminal(
                     plan=plan,
@@ -1408,6 +1486,100 @@ def _typed_active_plans(
             )
         )
     return plans
+
+
+def _execute_settled_plans(
+    *,
+    plans: Sequence[_PairExecutionPlan],
+    adapters: Sequence[LLMDecisionAdapter],
+    settlement: DurablePairSettlement,
+    provider_metadata: Mapping[str, object],
+    physical_attempts: int,
+    maximum_attempts_per_dispatch: int,
+    first_wave_observer_state: list[
+        Callable[[SegmentedQualificationWave], SegmentedQualificationArtifactRef | None] | None
+    ],
+    qualification_artifact_state: list[SegmentedQualificationArtifactRef | None],
+) -> _SettledPlanExecution:
+    results: dict[str, _WorkerResult] = {}
+    consumed_charge = 0
+    cursor = 0
+    while cursor < len(plans):
+        reservation = _reserve_dynamic_wave(
+            remaining_pair_count=len(plans) - cursor,
+            physical_attempts=physical_attempts + consumed_charge,
+            maximum_attempts_per_dispatch=maximum_attempts_per_dispatch,
+        )
+        if reservation.wave_size == 0:
+            return _SettledPlanExecution(results, consumed_charge, True, False)
+        wave_plans = plans[cursor : cursor + reservation.wave_size]
+        dispatches = tuple(
+            DurablePairDispatch(
+                pair_id=plan.pair_id,
+                plan_identity=_typed_settlement_plan_identity(plan),
+                execute=lambda adapter, plan=plan: _execute_typed_pair(
+                    plan=plan,
+                    adapter=adapter,
+                    provider_metadata=provider_metadata,
+                ),
+            )
+            for plan in wave_plans
+        )
+        wave_started = monotonic()
+        wave = settlement.settle_wave(
+            dispatches,
+            adapters,
+            physical_reservation=reservation.reserved_physical_attempts,
+        )
+        consumed_charge += wave.physical_attempt_charge
+        results.update(wave.terminal_results)
+        if not wave.all_pairs_terminal:
+            return _SettledPlanExecution(results, consumed_charge, False, True)
+        observer = first_wave_observer_state[0]
+        if observer is not None:
+            first_wave_observer_state[0] = None
+            qualification_path = observer(
+                _qualification_wave(
+                    pair_ids=[plan.pair_id for plan in wave_plans],
+                    results=wave.terminal_results,
+                    physical_attempt_count=wave.actual_physical_attempts,
+                    elapsed_seconds=max(monotonic() - wave_started, 1e-9),
+                )
+            )
+            if qualification_path is not None:
+                qualification_artifact_state[0] = qualification_path
+        cursor += reservation.wave_size
+    return _SettledPlanExecution(results, consumed_charge, False, False)
+
+
+def _typed_settlement_plan_identity(plan: _PairExecutionPlan) -> dict[str, object]:
+    score = plan.score
+    return {
+        "pair_id": plan.pair_id,
+        "pair_schedule_position": plan.pair_schedule_position,
+        "time_step": plan.time_step,
+        "message_id": plan.message.message_id,
+        "user_id": plan.user.user_id,
+        "ranking_position": plan.ranking_position,
+        "selection_reason": plan.selection_reason,
+        "score": {
+            "base_network_relevance": score.base_network_relevance,
+            "engaged_neighbor_count": score.engaged_neighbor_count,
+            "engaged_neighbor_signal": score.engaged_neighbor_signal,
+            "raw_message_user_fit": score.raw_message_user_fit,
+            "normalized_message_user_fit": score.normalized_message_user_fit,
+            "personalized_delivery_score": score.personalized_delivery_score,
+            "base_network_relevance_full_precision": score.base_network_relevance_full_precision,
+            "engaged_neighbor_signal_full_precision": score.engaged_neighbor_signal_full_precision,
+            "raw_message_user_fit_full_precision": score.raw_message_user_fit_full_precision,
+            "normalized_message_user_fit_full_precision": (
+                score.normalized_message_user_fit_full_precision
+            ),
+            "personalized_delivery_score_full_precision": (
+                score.personalized_delivery_score_full_precision
+            ),
+        },
+    }
 
 
 def _execute_typed_plans(
@@ -1627,8 +1799,8 @@ def _commit_cutoff_active_batch(
     journal: _SegmentedKernelJournal,
 ) -> dict[str, object]:
     active_pair_ids = [plan.pair_id for plan in plans]
-    terminal_rows = [results[pair_id].terminal_row for pair_id in active_pair_ids]
-    evidence_rows = [results[pair_id].variant_evidence for pair_id in active_pair_ids]
+    terminal_rows = [dict(results[pair_id].terminal_row) for pair_id in active_pair_ids]
+    evidence_rows = [dict(results[pair_id].variant_evidence) for pair_id in active_pair_ids]
     positive_users = sorted(
         {
             str(row["user_id"])
@@ -2237,14 +2409,51 @@ def _load_complete_existing(
     if envelope.get("manifest") != expected_manifest or envelope.get("manifest_sha256") != manifest_sha256:
         raise ValueError("existing complete cutoff manifest is crossed")
     identity_hash = _non_empty(expected_identity.get("identity_hash"), "continuation identity hash")
+    status_path = continuation / _STATUS_FILE
+    status: dict[str, object] | None = None
+    if status_path.exists() or status_path.is_symlink():
+        status = _read_json_object(status_path)
+        if status.get("schema_version") == _SEGMENTED_SETTLEMENT_STATUS_SCHEMA:
+            return _validate_existing_settlement_status(
+                continuation=continuation,
+                prefix=prefix,
+                status=status,
+                expected_identity_hash=identity_hash,
+                expected_manifest=expected_manifest,
+                expected_manifest_sha256=manifest_sha256,
+            )
+    elif (continuation / DURABLE_PAIR_SETTLEMENT_JOURNAL_FILE).is_file():
+        settlement = DurablePairSettlement(
+            continuation,
+            settlement_identity_hash=identity_hash,
+            maximum_attempts_per_dispatch=prefix.maximum_attempts_per_dispatch,
+            max_concurrency=FULL_POOL_SEGMENTED_MAX_CONCURRENCY,
+        )
+        settlement_replay = settlement.replay(seal_inflight=True)
+        if settlement_replay.waves and not (continuation / "source-v2").is_dir():
+            authorization_raw = expected_manifest.get("reconciliation_authorization")
+            migration_charge = (
+                0
+                if authorization_raw is None
+                else _strict_non_negative_int(
+                    _mapping(authorization_raw, "reconciliation authorization").get(
+                        "physical_attempt_charge"
+                    ),
+                    "reconciliation physical charge",
+                )
+            )
+            return _persist_settlement_result(
+                continuation=continuation,
+                manifest_sha256=manifest_sha256,
+                prefix=prefix,
+                replay=settlement_replay,
+                migration_physical_charge=migration_charge,
+            )
     dispatched, durable, wave_physical_attempts, source_anchor = _replay_continuation_ledger(
         continuation / _LEDGER_FILE,
         expected_identity_hash=identity_hash,
     )
-    status_path = continuation / _STATUS_FILE
-    if status_path.exists() or status_path.is_symlink():
-        status = _read_json_object(status_path)
-    else:
+    if status is None:
         status = _validated_complete_status_from_source(
             continuation=continuation,
             prefix=prefix,
@@ -3156,11 +3365,50 @@ def _load_existing_result(
     if _sha256_json(envelope.get("manifest")) != expected_manifest_sha256:
         raise ValueError("cutoff manifest hash mismatch")
     identity_hash = _non_empty(expected_identity.get("identity_hash"), "continuation identity hash")
+    status_path = continuation / _STATUS_FILE
+    if status_path.is_file():
+        status = _read_json_object(status_path)
+        if status.get("schema_version") == _SEGMENTED_SETTLEMENT_STATUS_SCHEMA:
+            return _validate_existing_settlement_status(
+                continuation=continuation,
+                prefix=prefix,
+                status=status,
+                expected_identity_hash=identity_hash,
+                expected_manifest=expected_manifest,
+                expected_manifest_sha256=expected_manifest_sha256,
+            )
+    elif (continuation / DURABLE_PAIR_SETTLEMENT_JOURNAL_FILE).is_file():
+        settlement = DurablePairSettlement(
+            continuation,
+            settlement_identity_hash=identity_hash,
+            maximum_attempts_per_dispatch=prefix.maximum_attempts_per_dispatch,
+            max_concurrency=FULL_POOL_SEGMENTED_MAX_CONCURRENCY,
+        )
+        settlement_replay = settlement.replay(seal_inflight=True)
+        if settlement_replay.waves and not (continuation / "source-v2").is_dir():
+            authorization_raw = expected_manifest.get("reconciliation_authorization")
+            migration_charge = (
+                0
+                if authorization_raw is None
+                else _strict_non_negative_int(
+                    _mapping(authorization_raw, "reconciliation authorization").get(
+                        "physical_attempt_charge"
+                    ),
+                    "reconciliation physical charge",
+                )
+            )
+            return _persist_settlement_result(
+                continuation=continuation,
+                manifest_sha256=expected_manifest_sha256,
+                prefix=prefix,
+                replay=settlement_replay,
+                migration_physical_charge=migration_charge,
+            )
     dispatched, durable, wave_physical_attempts, _ = _replay_continuation_ledger(
         continuation / _LEDGER_FILE,
         expected_identity_hash=identity_hash,
     )
-    status = _read_json_object(continuation / _STATUS_FILE)
+    status = _read_json_object(status_path)
     if status.get("schema_version") != _SEGMENTED_STATUS_SCHEMA:
         raise ValueError("continuation status schema is unsupported")
     if status.get("manifest_sha256") != expected_manifest_sha256:
@@ -3210,6 +3458,151 @@ def _load_existing_result(
     return _result_from_status(continuation, status)
 
 
+def _validate_existing_settlement_status(
+    *,
+    continuation: Path,
+    prefix: _FrozenPrefix,
+    status: Mapping[str, object],
+    expected_identity_hash: str,
+    expected_manifest: Mapping[str, object],
+    expected_manifest_sha256: str,
+) -> SegmentedContinuationResult:
+    if status.get("manifest_sha256") != expected_manifest_sha256:
+        raise ValueError("settlement status is crossed with the cutoff manifest")
+    settlement = DurablePairSettlement(
+        continuation,
+        settlement_identity_hash=expected_identity_hash,
+        maximum_attempts_per_dispatch=prefix.maximum_attempts_per_dispatch,
+        max_concurrency=FULL_POOL_SEGMENTED_MAX_CONCURRENCY,
+    )
+    replay = settlement.replay()
+    if not replay.waves or any(not wave.closed for wave in replay.waves):
+        raise ValueError("settlement status cannot reference an inflight wave")
+    journal_ref = _mapping(status.get("settlement_journal"), "settlement journal reference")
+    expected_ref = {
+        "schema_version": DURABLE_PAIR_SETTLEMENT_SCHEMA,
+        "relative_path": DURABLE_PAIR_SETTLEMENT_JOURNAL_FILE,
+        "sha256": _sha256_file(continuation / DURABLE_PAIR_SETTLEMENT_JOURNAL_FILE),
+    }
+    if journal_ref != expected_ref:
+        raise ValueError("settlement status journal reference is crossed")
+    authorization_raw = expected_manifest.get("reconciliation_authorization")
+    migration_charge = (
+        0
+        if authorization_raw is None
+        else _strict_non_negative_int(
+            _mapping(authorization_raw, "reconciliation authorization").get(
+                "physical_attempt_charge"
+            ),
+            "reconciliation physical charge",
+        )
+    )
+    expected_frontier = _settlement_canonical_frontier(replay)
+    commit_pending = _settlement_commit_pending(replay)
+    expected = {
+        "durable_prefix_terminal_count": len(prefix.terminal_by_pair_id),
+        "concurrent_suffix_terminal_count": len(replay.terminal_results),
+        "committed_feedback_user_ids": [],
+        "unknown_pair_ids": list(replay.unknown_pair_ids),
+        "implementation_failed_pair_ids": list(replay.implementation_failed_pair_ids),
+        "canonical_terminal_frontier_pair_ids": expected_frontier,
+        "commit_pending": commit_pending,
+        "logical_count": prefix.attempt_prefix.logical_count + len(replay.dispatched_pair_ids),
+        "physical_attempt_count": (
+            prefix.attempt_prefix.physical_attempt_count
+            + migration_charge
+            + replay.physical_attempt_charge
+        ),
+        "settlement_actual_physical_attempt_count": replay.actual_physical_attempts,
+        "settlement_uncertain_physical_attempt_count": replay.uncertain_physical_attempts,
+        "terminal_rows_relative_path": None,
+        "terminal_rows_sha256": None,
+        "production_deploy_eligible": False,
+    }
+    expected_lifecycle = (
+        SegmentedContinuationStatus.RESUMABLE.value
+        if commit_pending
+        else SegmentedContinuationStatus.RECONCILIATION_REQUIRED.value
+    )
+    if status.get("lifecycle") != expected_lifecycle:
+        raise ValueError("settlement status lifecycle is crossed with durable outcomes")
+    for field_name, expected_value in expected.items():
+        if status.get(field_name) != expected_value:
+            raise ValueError(f"settlement status {field_name} is crossed with durable replay")
+    if set(status) != {
+        "schema_version",
+        "lifecycle",
+        "manifest_sha256",
+        *expected,
+        "settlement_journal",
+    }:
+        raise ValueError("settlement status fields are not exact")
+    _assert_prefix_unchanged(prefix)
+    return _result_from_status(continuation, status)
+
+
+def _settlement_canonical_frontier(replay: DurableSettlementReplay) -> list[str]:
+    frontier: list[str] = []
+    for wave in replay.waves:
+        frontier.extend(wave.canonical_terminal_frontier_pair_ids)
+        if len(wave.canonical_terminal_frontier_pair_ids) != len(wave.canonical_pair_ids):
+            break
+    return frontier
+
+
+def _settlement_commit_pending(replay: DurableSettlementReplay) -> bool:
+    return bool(replay.waves) and all(
+        wave.closed and wave.all_pairs_terminal for wave in replay.waves
+    )
+
+
+def _persist_settlement_result(
+    *,
+    continuation: Path,
+    manifest_sha256: str,
+    prefix: _FrozenPrefix,
+    replay: DurableSettlementReplay,
+    migration_physical_charge: int,
+) -> SegmentedContinuationResult:
+    canonical_frontier = _settlement_canonical_frontier(replay)
+    commit_pending = _settlement_commit_pending(replay)
+    status = {
+        "schema_version": _SEGMENTED_SETTLEMENT_STATUS_SCHEMA,
+        "lifecycle": (
+            SegmentedContinuationStatus.RESUMABLE.value
+            if commit_pending
+            else SegmentedContinuationStatus.RECONCILIATION_REQUIRED.value
+        ),
+        "manifest_sha256": manifest_sha256,
+        "durable_prefix_terminal_count": len(prefix.terminal_by_pair_id),
+        "concurrent_suffix_terminal_count": len(replay.terminal_results),
+        "committed_feedback_user_ids": [],
+        "unknown_pair_ids": list(replay.unknown_pair_ids),
+        "implementation_failed_pair_ids": list(replay.implementation_failed_pair_ids),
+        "canonical_terminal_frontier_pair_ids": canonical_frontier,
+        "commit_pending": commit_pending,
+        "logical_count": prefix.attempt_prefix.logical_count + len(replay.dispatched_pair_ids),
+        "physical_attempt_count": (
+            prefix.attempt_prefix.physical_attempt_count
+            + migration_physical_charge
+            + replay.physical_attempt_charge
+        ),
+        "settlement_actual_physical_attempt_count": replay.actual_physical_attempts,
+        "settlement_uncertain_physical_attempt_count": replay.uncertain_physical_attempts,
+        "settlement_journal": {
+            "schema_version": DURABLE_PAIR_SETTLEMENT_SCHEMA,
+            "relative_path": DURABLE_PAIR_SETTLEMENT_JOURNAL_FILE,
+            "sha256": _sha256_file(continuation / DURABLE_PAIR_SETTLEMENT_JOURNAL_FILE),
+        },
+        "terminal_rows_relative_path": None,
+        "terminal_rows_sha256": None,
+        "production_deploy_eligible": False,
+    }
+    _atomic_write_json(continuation / _STATUS_FILE, status)
+    _assert_prefix_unchanged(prefix)
+    return _result_from_status(continuation, status)
+
+
 def _persist_reconciliation_result(
     *,
     continuation: Path,
@@ -3241,33 +3634,55 @@ def _persist_reconciliation_result(
 
 def _result_from_status(continuation: Path, status: Mapping[str, object]) -> SegmentedContinuationResult:
     rows_relative = status.get("terminal_rows_relative_path")
-    return SegmentedContinuationResult(
-        status=SegmentedContinuationStatus(cast(str, status["lifecycle"])),
-        workspace_root=continuation,
-        manifest_sha256=cast(str, status["manifest_sha256"]),
-        terminal_rows_path=(continuation / cast(str, rows_relative) if isinstance(rows_relative, str) else None),
-        source_root=(
+    common = {
+        "status": SegmentedContinuationStatus(cast(str, status["lifecycle"])),
+        "workspace_root": continuation,
+        "manifest_sha256": cast(str, status["manifest_sha256"]),
+        "terminal_rows_path": (
+            continuation / cast(str, rows_relative) if isinstance(rows_relative, str) else None
+        ),
+        "source_root": (
             continuation / cast(str, status["source_root_relative_path"])
             if isinstance(status.get("source_root_relative_path"), str)
             else None
         ),
-        source_manifest_sha256=cast(str | None, status.get("source_manifest_sha256")),
-        durable_prefix_terminal_count=_strict_non_negative_int(
+        "source_manifest_sha256": cast(str | None, status.get("source_manifest_sha256")),
+        "durable_prefix_terminal_count": _strict_non_negative_int(
             status.get("durable_prefix_terminal_count"), "prefix terminal count"
         ),
-        concurrent_suffix_terminal_count=_strict_non_negative_int(
+        "concurrent_suffix_terminal_count": _strict_non_negative_int(
             status.get("concurrent_suffix_terminal_count"), "suffix terminal count"
         ),
-        committed_feedback_user_ids=tuple(
+        "committed_feedback_user_ids": tuple(
             _string_list(status.get("committed_feedback_user_ids"), "committed feedback users")
         ),
-        unknown_pair_ids=tuple(_string_list(status.get("unknown_pair_ids"), "unknown pair IDs")),
-        logical_count=_strict_non_negative_int(status.get("logical_count"), "logical count"),
-        physical_attempt_count=_strict_non_negative_int(
+        "unknown_pair_ids": tuple(
+            _string_list(status.get("unknown_pair_ids"), "unknown pair IDs")
+        ),
+        "logical_count": _strict_non_negative_int(status.get("logical_count"), "logical count"),
+        "physical_attempt_count": _strict_non_negative_int(
             status.get("physical_attempt_count"), "physical attempt count"
         ),
-        production_deploy_eligible=False,
-    )
+        "production_deploy_eligible": False,
+    }
+    if status.get("schema_version") == _SEGMENTED_SETTLEMENT_STATUS_SCHEMA:
+        return SegmentedSettlementResult(
+            **common,
+            implementation_failed_pair_ids=tuple(
+                _string_list(
+                    status.get("implementation_failed_pair_ids"),
+                    "implementation-failed pair IDs",
+                )
+            ),
+            canonical_terminal_frontier_pair_ids=tuple(
+                _string_list(
+                    status.get("canonical_terminal_frontier_pair_ids"),
+                    "canonical terminal frontier pair IDs",
+                )
+            ),
+            commit_pending=cast(bool, status.get("commit_pending")),
+        )
+    return SegmentedContinuationResult(**common)
 
 
 def _replay_continuation_ledger(

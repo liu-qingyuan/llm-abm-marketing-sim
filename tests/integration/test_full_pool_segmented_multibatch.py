@@ -15,7 +15,11 @@ from llm_abm_sim.concurrent_message_experiment import (
     ConcurrentMessageExperimentConfig,
     _PrimaryOnlyConcurrentRuntimeConsumer,
 )
-from llm_abm_sim.decision import EngageDecision, LLMDecisionAdapter
+from llm_abm_sim.decision import (
+    EngageDecision,
+    LLMDecisionAdapter,
+    ProviderResponseProvenanceUnknown,
+)
 from llm_abm_sim.final_research import TARGET_VIDEO_ID
 from llm_abm_sim.full_pool_segmented_continuation import (
     SEGMENTED_CONCURRENCY_QUALIFICATION_SCHEMA,
@@ -230,6 +234,26 @@ class _LaneAdapter(_PrefixAdapter):
             return decision.model_copy(
                 update={"engage": True, "probability": 0.9, "action": "share"}
             )
+        return decision
+
+
+class _UnknownLaneAdapter(_LaneAdapter):
+    def __init__(self, calls: list[str], unknown_pair_id: str) -> None:
+        super().__init__(calls)
+        self.unknown_pair_id = unknown_pair_id
+
+    def decide(
+        self,
+        post: PostContent,
+        profile: UserProfile,
+        peer_context: PeerContext,
+        platform_context: PlatformContext | None = None,
+        time_step: int = 0,
+    ) -> EngageDecision:
+        decision = super().decide(post, profile, peer_context, platform_context, time_step)
+        pair_id = f"{profile.user_id}:{post.post_id}:{time_step}"
+        if pair_id == self.unknown_pair_id:
+            raise ProviderResponseProvenanceUnknown("offline multibatch unknown provenance")
         return decision
 
 
@@ -460,6 +484,67 @@ def test_multibatch_continuation_finishes_active_batch_plans_batch_two_and_close
     )
     assert replay == result
     assert factory_called is False
+
+
+def test_multibatch_unknown_stops_new_waves_but_keeps_dispatched_siblings(
+    tmp_path: Path,
+) -> None:
+    prefix, _dataset_dir, _prefix_calls = _mid_batch_prefix(tmp_path)
+    replay = ConcurrentExecutionJournal.open_existing(prefix).replay()
+    prefix_terminal_ids = {
+        record["payload"]["pair_id"]
+        for record in replay["records"]
+        if record.get("event_type") == "variant_terminal"
+    }
+    active_snapshot = next(
+        record for record in reversed(replay["records"]) if record.get("record_type") == "snapshot"
+    )
+    active_pair_ids = [
+        plan["pair_id"]
+        for message in active_snapshot["snapshot_document"]["payload"]["messages"]
+        for plan in message["selected_pair_plans"]
+    ]
+    active_pending = [pair_id for pair_id in active_pair_ids if pair_id not in prefix_terminal_ids]
+    unknown_pair_id = active_pending[0]
+    suffix_calls: list[str] = []
+    workspace = tmp_path / "unknown-continuation"
+
+    result = FullPoolSegmentedContinuation().run(
+        prefix,
+        workspace,
+        continuation_id="multibatch-one-unknown-v2",
+        adapter_factory=lambda _lane_id: _UnknownLaneAdapter(suffix_calls, unknown_pair_id),
+    )
+
+    assert result.status is SegmentedContinuationStatus.RECONCILIATION_REQUIRED
+    assert result.unknown_pair_ids == (unknown_pair_id,)
+    assert result.concurrent_suffix_terminal_count == len(active_pending) - 1
+    assert set(suffix_calls) == set(active_pending)
+    assert len(suffix_calls) == len(active_pending)
+    assert result.logical_count == len(prefix_terminal_ids) + len(active_pending)
+    assert result.physical_attempt_count == result.logical_count
+    ledger = _read_jsonl(workspace / "segmented_continuation_ledger.jsonl")
+    assert not [record for record in ledger if record["event_type"] == "kernel_batch_committed"]
+    settlement = _read_jsonl(workspace / "durable_pair_settlement_v2.jsonl")
+    assert sum(record["event_type"] == "wave_reserved" for record in settlement) == 1
+    assert sum(record["event_type"] == "pair_settled" for record in settlement) == len(active_pending)
+    settlement_before = (workspace / "durable_pair_settlement_v2.jsonl").read_bytes()
+    factory_called = False
+
+    def tripwire(_lane_id: int) -> LLMDecisionAdapter:
+        nonlocal factory_called
+        factory_called = True
+        raise AssertionError("settled multibatch workspace must replay without Adapters")
+
+    reopened = FullPoolSegmentedContinuation().run(
+        prefix,
+        workspace,
+        continuation_id="multibatch-one-unknown-v2",
+        adapter_factory=tripwire,
+    )
+    assert reopened == result
+    assert factory_called is False
+    assert (workspace / "durable_pair_settlement_v2.jsonl").read_bytes() == settlement_before
 
 
 def test_complete_source_v2_recovers_missing_status_without_calls_and_rejects_tamper(
