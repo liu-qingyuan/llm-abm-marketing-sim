@@ -12,7 +12,7 @@ from collections import Counter, defaultdict
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
-from typing import cast
+from typing import Any, cast
 
 from .concurrent_message_experiment import CONCURRENT_MESSAGE_POSITIVE_ACTIONS
 from .concurrent_message_mechanism_presentation import _MECHANISM_PRESENTATION
@@ -24,6 +24,14 @@ from .full_pool_formal_experiment import (
     FULL_POOL_PRODUCTION_HORIZON,
     FULL_POOL_PRODUCTION_USER_COUNT,
     _ClosedFullPoolSource,
+)
+from .full_pool_source_v3 import (
+    FULL_POOL_RESULT_CSV,
+    FULL_POOL_RESULT_LINEAGE_MARKDOWN,
+    FULL_POOL_SOURCE_V3_SCHEMA,
+    AutomatedFullPoolSourceFacts,
+    FullPoolResultProjection,
+    compose_full_pool_result_projection,
 )
 
 _TRACE_INDEX_SCHEMA = "full-pool-trace-index-v1"
@@ -700,6 +708,7 @@ def _render_full_pool_main(
     trace: _TraceProjection,
     *,
     index_sha256: str,
+    result_projection: FullPoolResultProjection | None = None,
 ) -> tuple[str, dict[str, dict[str, str]]]:
     catalog = _full_pool_catalog()
     counts = _strict_mapping(source.aggregates.get("counts"), "Full-Pool counts")
@@ -903,16 +912,22 @@ def _render_full_pool_main(
     batch_options = "".join(
         f'<option value="{time_step}">{time_step + 1:02d}</option>' for time_step in range(source.contract.horizon)
     )
-    source_artifacts = (
-        (
+    source_schema = source.manifest.get("source_schema_version")
+    if source_schema == FULL_POOL_SOURCE_V3_SCHEMA:
+        facts = getattr(source, "facts", None)
+        if not isinstance(facts, AutomatedFullPoolSourceFacts):
+            raise _FullPoolPresentationError("source-v3 presentation lacks typed persisted facts")
+        source_artifacts = ("manifest.json", *tuple(sorted(facts.artifact_hashes)))
+    elif source_schema == "full-pool-segmented-source-v2":
+        source_artifacts = (
             "manifest.json",
             "candidate_rows.jsonl",
             "pair_rows.jsonl",
             "terminal_rows.jsonl",
             "steps.jsonl",
         )
-        if source.manifest.get("source_schema_version") == "full-pool-segmented-source-v2"
-        else (
+    else:
+        source_artifacts = (
             "manifest.json",
             "contract.json",
             "schema.json",
@@ -922,10 +937,12 @@ def _render_full_pool_main(
             "pair_rows.jsonl",
             "terminal_rows.jsonl",
         )
-    )
     source_downloads = "".join(
         f'<li><a class="full-pool-download-link" href="{_FULL_POOL_SOURCE_DIR}/{html.escape(relative_path, quote=True)}" download>{html.escape(relative_path)}</a></li>'
         for relative_path in source_artifacts
+    )
+    result_projection_html = (
+        result_projection.html_fragment if result_projection is not None else ""
     )
     mechanism = _mechanism_html(catalog)
     main = f"""
@@ -983,6 +1000,7 @@ def _render_full_pool_main(
     <th>{_i18n(catalog, "response.decision_rate")}</th>
   </tr></thead><tbody>{message_rows}</tbody></table></div>
 </section>
+{result_projection_html}
 <section id="full-pool-provider" class="full-pool-section" data-testid="full-pool-provider-accounting">
   {_i18n(catalog, "provider.title", tag="h2")}
   {_i18n(catalog, "provider.copy", tag="p")}
@@ -1134,6 +1152,18 @@ def compose_full_pool_presentation_bundle(
     try:
         _copy_tree_exact(source.root, staging / _FULL_POOL_SOURCE_DIR)
         _copy_tree_exact(historical_candidate, staging / _HISTORICAL_DIR)
+        result_projection: FullPoolResultProjection | None = None
+        if source.manifest.get("source_schema_version") == FULL_POOL_SOURCE_V3_SCHEMA:
+            result_projection = compose_full_pool_result_projection(
+                cast(Any, source),
+                historical_artifact_hashes=historical_inventory,
+            )
+            (staging / result_projection.csv_filename).write_bytes(
+                result_projection.csv_bytes
+            )
+            (staging / result_projection.lineage_filename).write_bytes(
+                result_projection.lineage_bytes
+            )
         master = _MECHANISM_PRESENTATION.build_full_pool_master().mermaid_artifacts[0]
         if master.filename != _FULL_POOL_MASTER:
             raise _FullPoolPresentationError("Full-Pool mechanism filename is crossed")
@@ -1151,6 +1181,7 @@ def compose_full_pool_presentation_bundle(
             source,
             trace,
             index_sha256=trace.index_sha256,
+            result_projection=result_projection,
         )
         report_html = _compose_html(
             historical_html_path.read_bytes(),
@@ -1186,8 +1217,30 @@ def validate_full_pool_presentation_bundle(
     historical_copy = root / _HISTORICAL_DIR
     if _file_hashes(source_copy) != _file_hashes(source.root):
         raise _FullPoolPresentationError("Full-Pool source copy differs from closed source")
-    if _file_hashes(historical_copy) != _file_hashes(historical):
+    historical_hashes = _file_hashes(historical)
+    if _file_hashes(historical_copy) != historical_hashes:
         raise _FullPoolPresentationError("historical presentation copy differs from its approved candidate")
+    result_projection: FullPoolResultProjection | None = None
+    if source.manifest.get("source_schema_version") == FULL_POOL_SOURCE_V3_SCHEMA:
+        result_projection = compose_full_pool_result_projection(
+            cast(Any, source),
+            historical_artifact_hashes=historical_hashes,
+        )
+        for relative_path, expected in (
+            (result_projection.csv_filename, result_projection.csv_bytes),
+            (result_projection.lineage_filename, result_projection.lineage_bytes),
+        ):
+            path = root / relative_path
+            _require_regular_file(path, relative_path)
+            if path.read_bytes() != expected:
+                raise _FullPoolPresentationError(
+                    "source-v3 result delivery is malformed, non-canonical, or crossed"
+                )
+    elif any(
+        (root / relative_path).exists() or (root / relative_path).is_symlink()
+        for relative_path in (FULL_POOL_RESULT_CSV, FULL_POOL_RESULT_LINEAGE_MARKDOWN)
+    ):
+        raise _FullPoolPresentationError("historical Full-Pool bundle contains source-v3 delivery")
     trace = _trace_projection(
         source,
         partition_sink=lambda relative_path, payload: _compare_partition(root, relative_path, payload),
@@ -1241,6 +1294,16 @@ def validate_full_pool_presentation_bundle(
         report = report_payload.decode("utf-8")
     except UnicodeDecodeError as exc:
         raise _FullPoolPresentationError("report.html is not UTF-8") from exc
+    result_markers = (
+        (
+            'data-testid="full-pool-segment-results"',
+            'data-testid="full-pool-segment-table"',
+            f'href="{FULL_POOL_RESULT_CSV}"',
+            f'href="{FULL_POOL_RESULT_LINEAGE_MARKDOWN}"',
+        )
+        if result_projection is not None
+        else ()
+    )
     required_markers = (
         'data-testid="full-pool-presentation"',
         'data-production-deploy-eligible="false"',
@@ -1258,6 +1321,7 @@ def validate_full_pool_presentation_bundle(
         f'data-full-pool-trace-index-sha256="{trace.index_sha256}"',
         "production_deploy_eligible=false",
         _TRACE_INDEX_SCHEMA,
+        *result_markers,
     )
     if (
         any(marker not in report for marker in required_markers)
@@ -1288,24 +1352,45 @@ def validate_full_pool_presentation_bundle(
         raise _FullPoolPresentationError(
             "report.html embeds Full-Pool terminal rows instead of lazy-loading partitions"
         )
-    for relative_path in expected_mermaid_paths | {
-        _TRACE_INDEX_PATH,
+    source_download_paths = {
         f"{_FULL_POOL_SOURCE_DIR}/manifest.json",
         f"{_FULL_POOL_SOURCE_DIR}/candidate_rows.jsonl",
         f"{_FULL_POOL_SOURCE_DIR}/pair_rows.jsonl",
         f"{_FULL_POOL_SOURCE_DIR}/terminal_rows.jsonl",
-    }:
+    }
+    facts = getattr(source, "facts", None)
+    if isinstance(facts, AutomatedFullPoolSourceFacts):
+        source_download_paths.update(
+            f"{_FULL_POOL_SOURCE_DIR}/{relative_path}"
+            for relative_path in facts.artifact_hashes
+        )
+    result_download_paths = (
+        {FULL_POOL_RESULT_CSV, FULL_POOL_RESULT_LINEAGE_MARKDOWN}
+        if result_projection is not None
+        else set()
+    )
+    for relative_path in (
+        expected_mermaid_paths
+        | {_TRACE_INDEX_PATH}
+        | source_download_paths
+        | result_download_paths
+    ):
         if f'href="{relative_path}"' not in report and relative_path != f"{_HISTORICAL_DIR}/report.html":
             raise _FullPoolPresentationError(f"Full-Pool report is missing a required download href: {relative_path}")
 
     root_entries = {path.name for path in root.iterdir()}
-    if root_entries != {
+    expected_root_entries = {
         "report.html",
         _FULL_POOL_MASTER,
         _FULL_POOL_SOURCE_DIR,
         _HISTORICAL_DIR,
         "trace",
-    }:
+    }
+    if result_projection is not None:
+        expected_root_entries.update(
+            {FULL_POOL_RESULT_CSV, FULL_POOL_RESULT_LINEAGE_MARKDOWN}
+        )
+    if root_entries != expected_root_entries:
         raise _FullPoolPresentationError(
             "Full-Pool bundle root contains a payload, manifest, closure, release contract, or extra artifact"
         )

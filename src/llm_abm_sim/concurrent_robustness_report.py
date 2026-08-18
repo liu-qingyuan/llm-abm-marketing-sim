@@ -52,6 +52,11 @@ from .full_pool_presentation import (
 from .full_pool_segmented_continuation import (
     _read_closed_full_pool_source_versioned as _read_closed_full_pool_source,
 )
+from .full_pool_source_v3 import (
+    FULL_POOL_RESULT_CSV,
+    FULL_POOL_RESULT_LINEAGE_MARKDOWN,
+    FULL_POOL_SOURCE_V3_SCHEMA,
+)
 from .prompt_contracts import CONCURRENT_ROBUSTNESS_PROMPT_REGISTRY
 
 if TYPE_CHECKING:
@@ -1153,7 +1158,7 @@ class _ReportPresentationInterface:
             segmented_formal_source = (
                 live_formal_evidence
                 and source.manifest.get("source_schema_version")
-                == "full-pool-segmented-source-v2"
+                in {"full-pool-segmented-source-v2", FULL_POOL_SOURCE_V3_SCHEMA}
                 and source.manifest.get("production_deploy_eligible") is False
                 and source.aggregates.get("production_deploy_eligible") is False
             )
@@ -1795,7 +1800,11 @@ def _validate_full_pool_production_stage_facts(
     if (
         not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,159}", stage_facts.release_id)
         or stage_facts.release_contract_schema
-        not in {"abm-report-release-contract-v8", "abm-report-release-contract-v9"}
+        not in {
+            "abm-report-release-contract-v8",
+            "abm-report-release-contract-v9",
+            "abm-report-release-contract-v10",
+        }
         or stage_facts.canonical_endpoint != "https://abm.q1ngyuan.top/"
         or stage_facts.production_evidence_schema
         != "full-pool-production-release-evidence-v1"
@@ -2081,6 +2090,12 @@ def _full_pool_candidate_source_lineage(inputs: _FullPoolCandidateInputs) -> dic
             segmented_execution,
             "segmented Full-Pool execution lineage",
         )
+    nested_recovery = source.manifest.get("nested_recovery")
+    if nested_recovery is not None:
+        full_pool["nested_recovery"] = _mapping(
+            nested_recovery,
+            "nested Full-Pool recovery lineage",
+        )
 
     projection = inputs.projection
     formal = projection.formal
@@ -2199,6 +2214,15 @@ def _full_pool_approved_downloads(inputs: _FullPoolCandidateInputs) -> dict[str,
         historical_payload.get("downloads"),
         "historical approved downloads",
     )
+    source_v3_downloads = (
+        {
+            "full_pool_segment_results_csv": FULL_POOL_RESULT_CSV,
+            "full_pool_segment_lineage_markdown": FULL_POOL_RESULT_LINEAGE_MARKDOWN,
+        }
+        if inputs.source.manifest.get("source_schema_version")
+        == FULL_POOL_SOURCE_V3_SCHEMA
+        else {}
+    )
     downloads = {
         "full_pool_trace_index": _TRACE_INDEX_PATH,
         "full_pool_mechanism_mermaid": _FULL_POOL_MASTER,
@@ -2206,6 +2230,7 @@ def _full_pool_approved_downloads(inputs: _FullPoolCandidateInputs) -> dict[str,
         "full_pool_candidate_rows": f"{_FULL_POOL_SOURCE_DIR}/candidate_rows.jsonl",
         "full_pool_pair_rows": f"{_FULL_POOL_SOURCE_DIR}/pair_rows.jsonl",
         "full_pool_terminal_rows": f"{_FULL_POOL_SOURCE_DIR}/terminal_rows.jsonl",
+        **source_v3_downloads,
         **{
             f"historical_{key}": f"{_HISTORICAL_DIR}/{relative_path}"
             for key, relative_path in historical_downloads.items()

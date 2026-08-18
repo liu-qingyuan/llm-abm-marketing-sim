@@ -1645,6 +1645,26 @@ def _validate_v9(
         raise ReleaseValidationError(f"invalid v9 segmented Full-Pool release: {exc}") from exc
 
 
+def _validate_v10(
+    *,
+    repo_root: Path,
+    contract_document: dict[str, object],
+    source_dir: Path,
+    snapshot_dir: Path | None = None,
+) -> dict[str, object]:
+    try:
+        return validate_concurrent_robustness_production_release(
+            repo_root=repo_root,
+            contract_document=contract_document,
+            source_dir=source_dir,
+            snapshot_dir=snapshot_dir,
+        )
+    except (ConcurrentRobustnessReleaseError, OSError, ValidationError) as exc:
+        raise ReleaseValidationError(
+            f"invalid v10 automated nested Full-Pool release: {exc}"
+        ) from exc
+
+
 def _load_and_validate_release(
     *,
     repo_root: Path,
@@ -1724,6 +1744,14 @@ def _load_and_validate_release(
             source_dir=source_dir,
             snapshot_dir=snapshot_dir,
         )
+    elif schema_version == "abm-report-release-contract-v10":
+        _safe_contract_file(repo_root, contract_path)
+        result = _validate_v10(
+            repo_root=repo_root,
+            contract_document=contract,
+            source_dir=source_dir,
+            snapshot_dir=snapshot_dir,
+        )
     else:
         raise ReleaseValidationError(f"unsupported release contract schema_version: {schema_version!r}")
     return result, contract_file, contract
@@ -1754,6 +1782,7 @@ _DEPLOYMENT_REPORT_KINDS = {
     "abm-report-release-contract-v7": "concurrent-robustness",
     "abm-report-release-contract-v8": "full-pool",
     "abm-report-release-contract-v9": "full-pool",
+    "abm-report-release-contract-v10": "full-pool",
 }
 _DEPLOYMENT_RELEASE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,159}$")
 _DEPLOYMENT_DOMAIN = re.compile(r"^[A-Za-z0-9.-]+$")
@@ -1845,6 +1874,7 @@ def _build_deployment_facts(
         "abm-report-release-contract-v7",
         "abm-report-release-contract-v8",
         "abm-report-release-contract-v9",
+        "abm-report-release-contract-v10",
     }:
         if manifest.get("release_id") != deployment_release_id:
             raise ReleaseValidationError("deployment manifest release id is crossed")
@@ -1875,17 +1905,20 @@ def _require_formal_production(result: dict[str, object]) -> None:
     if schema_version in {
         "abm-report-release-contract-v8",
         "abm-report-release-contract-v9",
+        "abm-report-release-contract-v10",
     }:
-        expected_purpose = (
-            "full_pool_segmented_formal_research"
-            if schema_version == "abm-report-release-contract-v9"
-            else "full_pool_formal_research"
-        )
-        expected_status = (
-            "persisted_full_pool_segmented_formal_run"
-            if schema_version == "abm-report-release-contract-v9"
-            else "persisted_full_pool_formal_run"
-        )
+        expected_purpose = {
+            "abm-report-release-contract-v8": "full_pool_formal_research",
+            "abm-report-release-contract-v9": "full_pool_segmented_formal_research",
+            "abm-report-release-contract-v10": "full_pool_automated_nested_formal_research",
+        }[str(schema_version)]
+        expected_status = {
+            "abm-report-release-contract-v8": "persisted_full_pool_formal_run",
+            "abm-report-release-contract-v9": "persisted_full_pool_segmented_formal_run",
+            "abm-report-release-contract-v10": (
+                "persisted_full_pool_automated_nested_formal_run"
+            ),
+        }[str(schema_version)]
         schema_profile_valid = (
             result.get("release_purpose") == expected_purpose
             and result.get("sampling_status") == expected_status
@@ -1912,7 +1945,7 @@ def _require_formal_production(result: dict[str, object]) -> None:
         or result.get("production_deploy_eligible") is not True
     ):
         raise ReleaseValidationError(
-            "formal production deployment requires abm-report-release-contract-v2 through v9 "
+            "formal production deployment requires abm-report-release-contract-v2 through v10 "
             "with matching deploy-eligible persisted live-provider Formal research evidence"
         )
 
@@ -1930,7 +1963,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--require-formal-production",
         action="store_true",
-        help="Reject validated evidence unless it is a deploy-eligible v2-v9 Formal research release",
+        help="Reject validated evidence unless it is a deploy-eligible v2-v10 Formal research release",
     )
     parser.add_argument(
         "--deployment-facts-output",

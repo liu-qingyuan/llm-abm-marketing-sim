@@ -9,7 +9,7 @@ import tempfile
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
-from typing import Any
+from typing import Any, cast
 
 from .concurrent_message_mechanism_presentation import _MECHANISM_PRESENTATION
 from .concurrent_message_report import CONCURRENT_MESSAGE_ARTIFACT_MANIFEST_JSON
@@ -20,6 +20,11 @@ from .concurrent_robustness_study import (
     _dynamic_root,
     _validate_cell_evidence_contract,
     _validate_completed_dynamic_root,
+)
+from .full_pool_automation import (
+    AUTOMATION_EXECUTION_RECEIPT_FILE,
+    AutomationExecutionManifestFacts,
+    validate_automation_execution_manifest,
 )
 from .full_pool_formal_experiment import (
     FULL_POOL_FORMAL_ADAPTER_IDENTITY,
@@ -39,6 +44,14 @@ from .full_pool_formal_experiment import (
 from .full_pool_segmented_continuation import (
     SegmentedFullPoolSourceFacts,
     _read_closed_segmented_full_pool_source,
+)
+from .full_pool_source_v3 import (
+    FULL_POOL_RESULT_CSV,
+    FULL_POOL_RESULT_LINEAGE_MARKDOWN,
+    FULL_POOL_SOURCE_V3_SCHEMA,
+    AutomatedFullPoolSourceFacts,
+    _read_closed_automated_full_pool_source,
+    compose_full_pool_result_projection,
 )
 from .prompt_contracts import CONCURRENT_ROBUSTNESS_PROMPT_REGISTRY
 from .prompt_field_summary import CONCURRENT_MESSAGE_PRIMARY_PROMPT_VERSION
@@ -282,6 +295,17 @@ class SegmentedFullPoolProductionEvidenceFacts:
     closure: FullPoolPresentationClosureFacts
     formal: FullPoolFormalReleaseFacts
     segmented: SegmentedFullPoolSourceFacts
+
+
+@dataclass(frozen=True)
+class NestedFullPoolProductionEvidenceFacts:
+    """v10 evidence re-closes source-v3, execution manifest, and result delivery."""
+
+    closure: FullPoolPresentationClosureFacts
+    formal: FullPoolFormalReleaseFacts
+    automated: AutomatedFullPoolSourceFacts
+    execution_manifest: AutomationExecutionManifestFacts
+    result_projection: Mapping[str, object]
 
 
 @dataclass(frozen=True)
@@ -2479,6 +2503,334 @@ def validate_segmented_full_pool_production_evidence(
         closure=closure,
         formal=selected_formal,
         segmented=selected_segmented,
+    )
+
+
+def _validate_execution_manifest_source_binding(
+    *,
+    automated: AutomatedFullPoolSourceFacts,
+    manifest: AutomationExecutionManifestFacts,
+) -> None:
+    outputs = _mapping(manifest.payload.get("output_paths"), "automation output paths")
+    receipt_path = Path(
+        _string(outputs.get("execution_receipt"), "automation execution receipt path")
+    )
+    if (
+        receipt_path.name
+        != f"{manifest.manifest_path.name}.{AUTOMATION_EXECUTION_RECEIPT_FILE}"
+        or receipt_path.is_symlink()
+        or not receipt_path.is_file()
+    ):
+        raise ConcurrentRobustnessEvidenceError(
+            "source-v3 is not closed by one exact automation execution receipt"
+        )
+    receipt = _json_object(receipt_path)
+    expected_receipt = {
+        "schema_version": "full-pool-automation-execution-receipt-v1",
+        "manifest_path": str(manifest.manifest_path),
+        "manifest_sha256": manifest.manifest_sha256,
+        "manifest_identity_sha256": manifest.manifest_identity_sha256,
+        "implementation_commit": manifest.implementation_commit,
+        "provider_calls_before_dispatch": 0,
+        "production_deploy_eligible": False,
+    }
+    policy_implementation = _mapping(
+        automated.policy_payload.get("implementation"),
+        "source-v3 policy implementation",
+    )
+    if (
+        receipt != expected_receipt
+        or manifest.recovery_workspace != automated.workspace_root
+        or manifest.nested_recovery_plan_sha256
+        != automated.nested_recovery_lineage.get("nested_recovery_plan_sha256")
+        or manifest.ordered_retry_pair_ids != automated.ordered_retry_pair_ids
+        or manifest.implementation_commit != automated.implementation_commit
+        or policy_implementation.get("repository_commit")
+        != manifest.implementation_commit
+        or manifest.provider_transport != automated.provider_transport
+        or manifest.requested_model != automated.requested_model
+        or manifest.prompt_variant_id != automated.prompt_variant_id
+        or manifest.configured_max_concurrency != 10
+        or manifest.logical_cap != automated.logical_judgments
+        or manifest.physical_cap != automated.physical_attempt_cap
+        or manifest.subscription_billed_cost_usd != 0.0
+        or manifest.provider_calls_during_composition != 0
+        or manifest.production_deploy_eligible is not False
+    ):
+        raise ConcurrentRobustnessEvidenceError(
+            "source-v3 and automation execution manifest identities are crossed"
+        )
+
+
+def _validate_nested_formal_release_facts(
+    automated: AutomatedFullPoolSourceFacts,
+    formal: FullPoolFormalReleaseFacts,
+    *,
+    closure: FullPoolPresentationClosureFacts,
+    execution_manifest: AutomationExecutionManifestFacts,
+    result_projection: Mapping[str, object],
+) -> None:
+    _validate_execution_manifest_source_binding(
+        automated=automated,
+        manifest=execution_manifest,
+    )
+    source_lineage = _mapping(
+        closure.source_lineage.get("full_pool"),
+        "source-v3 Full-Pool source lineage",
+    )
+    exact_source = (
+        automated.source_root == closure.full_pool_source_path
+        and automated.source_schema_version == FULL_POOL_SOURCE_V3_SCHEMA
+        and automated.source_schema_version == closure.full_pool_source_schema_version
+        and automated.source_identity == closure.full_pool_source_identity
+        and automated.source_manifest_sha256
+        == closure.full_pool_source_manifest_sha256
+        and automated.source_hash == closure.full_pool_source_hash
+        and automated.contract_sha256 == source_lineage.get("contract_sha256")
+        and automated.configuration_profile == "production"
+        and automated.evidence_profile == "formal_live"
+        and automated.provider_transport == FULL_POOL_FORMAL_TRANSPORT
+        and automated.adapter_identity == FULL_POOL_FORMAL_ADAPTER_IDENTITY
+        and automated.requested_model == FULL_POOL_FORMAL_REQUESTED_MODEL
+        and automated.qualified_observed_model
+        == FULL_POOL_FORMAL_REQUIRED_OBSERVED_MODEL
+        and automated.prompt_variant_id == "P0"
+        and automated.prompt_version == CONCURRENT_MESSAGE_PRIMARY_PROMPT_VERSION
+        and automated.prompt_canonical_hash
+        == CONCURRENT_ROBUSTNESS_PROMPT_REGISTRY.resolve(
+            CONCURRENT_MESSAGE_PRIMARY_PROMPT_VERSION
+        ).canonical_hash
+        and automated.distinct_users == FULL_POOL_PRODUCTION_USER_COUNT
+        and automated.eligible_pairs == FULL_POOL_PRODUCTION_ELIGIBLE_PAIRS
+        and automated.exposures == FULL_POOL_PRODUCTION_ELIGIBLE_PAIRS
+        and automated.primary_terminals == FULL_POOL_PRODUCTION_ELIGIBLE_PAIRS
+        and automated.committed_batches == FULL_POOL_PRODUCTION_HORIZON
+        and automated.candidate_ranking_rows == FULL_POOL_PRODUCTION_CANDIDATE_ROWS
+        and automated.provider_failed_terminals == 0
+        and automated.logical_judgments == FULL_POOL_FORMAL_LOGICAL_JUDGMENT_CAP
+        and FULL_POOL_FORMAL_LOGICAL_JUDGMENT_CAP
+        <= automated.physical_attempts
+        <= FULL_POOL_FORMAL_PHYSICAL_ATTEMPT_CAP
+        and automated.physical_attempt_cap == FULL_POOL_FORMAL_PHYSICAL_ATTEMPT_CAP
+        and automated.provider_responses == FULL_POOL_FORMAL_LOGICAL_JUDGMENT_CAP
+        and automated.successful_decisions == FULL_POOL_FORMAL_LOGICAL_JUDGMENT_CAP
+        and automated.external_request_invocations
+        == automated.physical_attempts
+        - automated.historical_uncertainty_physical_charge
+        - automated.new_uncertainty_physical_charge
+        and dict(automated.observed_model_counts)
+        == {FULL_POOL_FORMAL_REQUIRED_OBSERVED_MODEL: FULL_POOL_FORMAL_LOGICAL_JUDGMENT_CAP}
+        and automated.usage_complete_response_count
+        == FULL_POOL_FORMAL_LOGICAL_JUDGMENT_CAP
+        and automated.usage_missing_response_count == 0
+        and automated.usage_malformed_response_count == 0
+        and automated.imported_durable_terminal_count == 90_061
+        and automated.historical_logical_count == 90_068
+        and automated.fresh_logical_count == 19_132
+        and automated.historical_physical_attempts == 90_891
+        and automated.historical_uncertainty_physical_charge == 21
+        and 7 <= automated.retry_physical_attempts <= 21
+        and 0 <= automated.reconciliation_physical_attempts <= 57
+        and 19_132 <= automated.continuation_physical_attempts <= 57_396
+        and len(automated.ordered_retry_pair_ids) == 7
+        and automated.settlement_dispatched_pair_count
+        == 7 + automated.fresh_logical_count
+        and automated.settlement_terminal_pair_count
+        + len(automated.settlement_unknown_pair_ids)
+        == automated.settlement_dispatched_pair_count
+        and automated.live_api_triggered is True
+        and automated.production_deploy_eligible is False
+    )
+    mirrored_source = (
+        formal.full_pool_source_path == automated.source_root
+        and formal.full_pool_source_schema_version == automated.source_schema_version
+        and formal.full_pool_source_identity == automated.source_identity
+        and formal.full_pool_source_manifest_sha256 == automated.source_manifest_sha256
+        and formal.full_pool_source_hash == automated.source_hash
+        and formal.full_pool_contract_sha256 == automated.contract_sha256
+        and formal.evidence_profile == automated.evidence_profile
+        and formal.provider_transport == automated.provider_transport
+        and formal.adapter_identity == automated.adapter_identity
+        and formal.requested_model == automated.requested_model
+        and formal.qualified_observed_model == automated.qualified_observed_model
+        and formal.distinct_users == automated.distinct_users
+        and formal.eligible_pairs == automated.eligible_pairs
+        and formal.exposures == automated.exposures
+        and formal.primary_terminals == automated.primary_terminals
+        and formal.committed_batches == automated.committed_batches
+        and formal.candidate_ranking_rows == automated.candidate_ranking_rows
+        and formal.provider_failed_terminals == automated.provider_failed_terminals
+        and formal.logical_judgments == automated.logical_judgments
+        and formal.physical_attempts == automated.physical_attempts
+        and formal.physical_attempt_cap == automated.physical_attempt_cap
+        and formal.provider_responses == automated.provider_responses
+        and formal.successful_decisions == automated.successful_decisions
+        and formal.external_request_invocations == automated.external_request_invocations
+        and dict(formal.observed_model_counts) == dict(automated.observed_model_counts)
+        and formal.usage_complete_response_count
+        == automated.usage_complete_response_count
+        and formal.usage_missing_response_count == automated.usage_missing_response_count
+        and formal.usage_malformed_response_count
+        == automated.usage_malformed_response_count
+        and formal.subscription_billed_cost_usd == 0.0
+        and formal.live_api_triggered is True
+        and formal.source_production_deploy_eligible is False
+    )
+    exact_historical = (
+        formal.historical_formal_path == closure.historical_formal_path
+        and formal.historical_formal_source_id == closure.historical_formal_source_id
+        and formal.historical_formal_manifest_sha256
+        == closure.historical_formal_manifest_sha256
+        and formal.historical_formal_source_kind == "formal"
+        and formal.historical_formal_users == 1_000
+        and formal.historical_formal_exposures == 1_800
+        and formal.historical_primary_terminals == 1_800
+        and formal.historical_shadow_terminals == 1_800
+        and formal.historical_trace_rows == 1_800
+        and formal.historical_study_path == closure.robustness_study_path
+        and formal.historical_study_manifest_sha256
+        == closure.robustness_study_manifest_sha256
+        and formal.historical_study_root_identity_sha256
+        == closure.robustness_study_root_identity_sha256
+        and formal.historical_study_profile == "formal_live"
+        and formal.historical_study_evidence_profile == "formal_live"
+        and formal.historical_study_cell_count == 16
+        and formal.historical_study_logical_judgments == FORMAL_LOGICAL_JUDGMENTS
+    )
+    projection_exact = (
+        result_projection.get("schema_version")
+        == "full-pool-segment-result-projection-v1"
+        and result_projection.get("row_count") == 9
+        and result_projection.get("total_exposure")
+        == FULL_POOL_PRODUCTION_ELIGIBLE_PAIRS
+        and result_projection.get("segment_denominators")
+        == {"S1": 15_616, "S2": 15_070, "S3": 5_714}
+        and all(
+            _SHA256.fullmatch(_string(result_projection.get(field), field))
+            for field in ("rows_sha256", "csv_sha256", "lineage_sha256")
+        )
+    )
+    if (
+        not exact_source
+        or not mirrored_source
+        or not exact_historical
+        or not projection_exact
+        or closure.implementation_commit != execution_manifest.implementation_commit
+        or automated.implementation_commit != execution_manifest.implementation_commit
+    ):
+        raise ConcurrentRobustnessEvidenceError(
+            "source-v3 Formal production facts are incomplete, crossed, Validation, or non-live"
+        )
+
+
+def validate_nested_full_pool_production_evidence(
+    *,
+    repo_root: str | Path,
+    closure_path: str | Path,
+    full_pool_source_root: str | Path,
+    full_pool_manifest_sha256: str,
+    historical_formal_root: str | Path,
+    historical_study_root: str | Path,
+    candidate_dir: str | Path,
+    automation_execution_manifest_path: str | Path,
+    implementation_commit: str,
+) -> NestedFullPoolProductionEvidenceFacts:
+    """Close v10 only from persisted source-v3, manifest, report, and historical bytes."""
+    root = _real_directory(Path(repo_root), "repository root")
+    closure_file = _repo_file(root, Path(closure_path), "source-v3 presentation closure")
+    closure_document = _json_object(closure_file)
+    bundle = _repo_directory(
+        root,
+        Path(
+            _canonical_document_path(
+                closure_document.get("presentation_bundle_directory"),
+                "source-v3 presentation bundle directory",
+            )
+        ),
+        "source-v3 presentation bundle",
+    )
+    closure = validate_full_pool_presentation_closure(
+        repo_root=root,
+        closure_path=closure_file,
+        full_pool_source_root=full_pool_source_root,
+        full_pool_manifest_sha256=full_pool_manifest_sha256,
+        historical_formal_root=historical_formal_root,
+        historical_study_root=historical_study_root,
+        presentation_bundle_dir=bundle,
+        candidate_dir=candidate_dir,
+    )
+    if (
+        not _COMMIT.fullmatch(implementation_commit)
+        or closure.implementation_commit != implementation_commit
+    ):
+        raise ConcurrentRobustnessEvidenceError(
+            "source-v3 production implementation commit is crossed"
+        )
+    try:
+        closed_source = _read_closed_automated_full_pool_source(
+            closure.full_pool_source_path,
+            manifest_sha256=closure.full_pool_source_manifest_sha256,
+        )
+        execution_manifest = validate_automation_execution_manifest(
+            automation_execution_manifest_path
+        )
+    except (FileNotFoundError, OSError, TypeError, ValueError) as exc:
+        raise ConcurrentRobustnessEvidenceError(
+            "source-v3 or automation execution manifest failed persisted closure"
+        ) from exc
+    automated = closed_source.facts
+    formal = _segmented_formal_release_facts(
+        closure,
+        cast(SegmentedFullPoolSourceFacts, automated),
+    )
+    historical_copy = closure.presentation_bundle_path / "historical-1000"
+    projection = compose_full_pool_result_projection(
+        closed_source,
+        historical_artifact_hashes=_flat_file_hashes(historical_copy),
+    )
+    csv_path = closure.presentation_bundle_path / FULL_POOL_RESULT_CSV
+    lineage_path = closure.presentation_bundle_path / FULL_POOL_RESULT_LINEAGE_MARKDOWN
+    segment_denominators = {
+        f"S{index}": projection.segment_denominators[f"class_{index}"]
+        for index in (1, 2, 3)
+    }
+    projection_facts: dict[str, object] = {
+        "schema_version": projection.schema_version,
+        "row_count": len(projection.rows),
+        "rows_sha256": projection.rows_sha256,
+        "csv_sha256": projection.csv_sha256,
+        "lineage_sha256": projection.lineage_sha256,
+        "segment_denominators": segment_denominators,
+        "total_exposure": projection.total_exposure,
+    }
+    if (
+        csv_path.is_symlink()
+        or not csv_path.is_file()
+        or lineage_path.is_symlink()
+        or not lineage_path.is_file()
+        or _sha256_file(csv_path) != projection.csv_sha256
+        or _sha256_file(lineage_path) != projection.lineage_sha256
+        or closure.approved_downloads.get("full_pool_segment_results_csv")
+        != FULL_POOL_RESULT_CSV
+        or closure.approved_downloads.get("full_pool_segment_lineage_markdown")
+        != FULL_POOL_RESULT_LINEAGE_MARKDOWN
+    ):
+        raise ConcurrentRobustnessEvidenceError(
+            "source-v3 CSV or Markdown result projection is crossed"
+        )
+    _validate_nested_formal_release_facts(
+        automated,
+        formal,
+        closure=closure,
+        execution_manifest=execution_manifest,
+        result_projection=projection_facts,
+    )
+    return NestedFullPoolProductionEvidenceFacts(
+        closure=closure,
+        formal=formal,
+        automated=automated,
+        execution_manifest=execution_manifest,
+        result_projection=projection_facts,
     )
 
 

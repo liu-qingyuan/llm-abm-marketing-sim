@@ -16,7 +16,7 @@ from itertools import chain
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 from time import monotonic
-from typing import Literal, cast
+from typing import TYPE_CHECKING, Literal, cast
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -76,6 +76,9 @@ from .prompt_contracts import CONCURRENT_ROBUSTNESS_PROMPT_REGISTRY
 from .prompt_field_summary import CONCURRENT_MESSAGE_PRIMARY_PROMPT_VERSION
 from .safe_serialization import safe_data
 from .schemas import PeerContext, PlatformContext, ProviderLLMConfig
+
+if TYPE_CHECKING:
+    from .full_pool_source_v3 import _ClosedAutomatedFullPoolSource
 
 FULL_POOL_SEGMENTED_LOGICAL_CAP = 109_200
 FULL_POOL_SEGMENTED_PHYSICAL_CAP = 120_120
@@ -4483,8 +4486,8 @@ def _read_closed_full_pool_source_versioned(
     source_root: str | Path,
     *,
     manifest_sha256: str,
-) -> _ClosedFullPoolSource | _ClosedSegmentedFullPoolSource:
-    """Dispatch exact source-v1/v2 readers without widening either source contract."""
+) -> _ClosedFullPoolSource | _ClosedSegmentedFullPoolSource | _ClosedAutomatedFullPoolSource:
+    """Dispatch exact source-v1/v2/v3 readers without widening historical contracts."""
     source = Path(source_root).expanduser()
     try:
         schema_version = _read_json_object(source / "manifest.json").get("schema_version")
@@ -4492,6 +4495,13 @@ def _read_closed_full_pool_source_versioned(
         schema_version = None
     if schema_version == _SEGMENTED_SOURCE_SCHEMA:
         return _read_closed_segmented_full_pool_source(
+            source,
+            manifest_sha256=manifest_sha256,
+        )
+    if schema_version == "full-pool-segmented-source-v3":
+        from .full_pool_source_v3 import _read_closed_automated_full_pool_source
+
+        return _read_closed_automated_full_pool_source(
             source,
             manifest_sha256=manifest_sha256,
         )
@@ -5924,6 +5934,9 @@ def _scan_segmented_candidates(
     horizon: int,
     sample_size: int,
     capacity: int,
+    allowed_selection_reasons: frozenset[str] = frozenset(
+        {"seed_union", "personalized_top20"}
+    ),
 ) -> _SegmentedCandidateScan:
     ranges: list[_JsonlBatchRange] = []
     counts: Counter[tuple[int, str]] = Counter()
@@ -5976,7 +5989,7 @@ def _scan_segmented_candidates(
             selected_marker = row.get("selected")
             selection_reason = row.get("selection_reason")
             if selected_marker == "true":
-                if key in selected or selection_reason not in {"seed_union", "personalized_top20"}:
+                if key in selected or selection_reason not in allowed_selection_reasons:
                     raise ValueError("segmented candidate selection is duplicated or unsupported")
                 selected[key] = row
             elif selected_marker != "false" or selection_reason != "":
@@ -6086,6 +6099,7 @@ def _scan_segmented_pairs_and_terminals(
     maximum_attempts: int,
     prompt_version: str,
     selected_rows: Mapping[tuple[str, str, int], Mapping[str, object]],
+    allow_provider_failed_empty_decision: bool = False,
 ) -> _SegmentedPairTerminalScan:
     pair_ranges: list[_JsonlBatchRange] = []
     terminal_ranges: list[_JsonlBatchRange] = []
@@ -6236,10 +6250,21 @@ def _scan_segmented_pairs_and_terminals(
             action = terminal.get("action")
             engage = terminal.get("engage")
             positive = status == "succeeded" and action in CONCURRENT_MESSAGE_POSITIVE_ACTIONS
+            provider_failed_empty = (
+                allow_provider_failed_empty_decision
+                and status == "provider_failed"
+                and engage == ""
+                and action == ""
+            )
             if (
                 pair.get("campaign_feedback_committed") != ("true" if positive else "false")
-                or engage not in {"true", "false"}
-                or (engage == "false") != (action == "ignore")
+                or (
+                    not provider_failed_empty
+                    and (
+                        engage not in {"true", "false"}
+                        or (engage == "false") != (action == "ignore")
+                    )
+                )
             ):
                 raise ValueError("segmented Decision action or feedback marker is crossed")
             if positive:

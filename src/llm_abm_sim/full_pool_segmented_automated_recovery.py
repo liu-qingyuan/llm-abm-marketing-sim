@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import csv
 import hashlib
+import io
 import json
 import os
 import re
@@ -66,6 +68,7 @@ AUTOMATED_RECOVERY_IDENTITY_FILE = "automated_recovery_identity.json"
 AUTOMATED_RECOVERY_POLICY_FILE = "automated_recovery_policy.json"
 AUTOMATED_RECOVERY_POLICY_LEDGER_FILE = "automated_recovery_policy_ledger.jsonl"
 AUTOMATED_RECOVERY_STATUS_FILE = "automated_recovery_status.json"
+SOURCE_V3_MEMBERSHIP_FILE = "latent-v1-membership.csv"
 
 _AUTOMATED_IDENTITY_SCHEMA = "full-pool-segmented-automated-recovery-identity-v3"
 _AUTOMATED_POLICY_SCHEMA = "full-pool-segmented-automated-recovery-policy-v3"
@@ -1804,6 +1807,38 @@ class _SourceV3LedgerProjection:
         self.prepared = dict(payload)
 
 
+def _source_v3_membership_bytes(inputs: _ValidatedAutomatedInputs) -> bytes:
+    source = Path(inputs.parent_inputs.config.dataset_dir) / "users.csv"
+    if source.is_symlink() or not source.is_file():
+        raise ValueError("source-v3 latent membership origin is missing or unsafe")
+    expected_user_ids = tuple(inputs.parent_inputs.prepared.cohort.sample_user_ids)
+    membership: dict[str, str] = {}
+    with source.open(encoding="utf-8-sig", newline="") as handle:
+        reader = csv.DictReader(handle)
+        if reader.fieldnames is None or not {"user_id", "latent_class"}.issubset(
+            reader.fieldnames
+        ):
+            raise ValueError("source-v3 latent membership columns are incomplete")
+        for row in reader:
+            user_id = row.get("user_id", "")
+            latent_class = row.get("latent_class", "")
+            if (
+                not user_id
+                or user_id in membership
+                or latent_class not in {"class_1", "class_2", "class_3"}
+            ):
+                raise ValueError("source-v3 latent membership is invalid or duplicated")
+            membership[user_id] = latent_class
+    if set(membership) != set(expected_user_ids):
+        raise ValueError("source-v3 latent membership differs from the frozen user set")
+    output = io.StringIO(newline="")
+    writer = csv.writer(output, lineterminator="\n")
+    writer.writerow(("user_id", "latent_class"))
+    for user_id in sorted(expected_user_ids):
+        writer.writerow((user_id, membership[user_id]))
+    return output.getvalue().encode("utf-8")
+
+
 class _SourceV3Closure:
     def close(
         self,
@@ -1899,6 +1934,8 @@ class _SourceV3Closure:
             )
         for name, source in copied.items():
             _copy_file_durable(source, staging / name)
+        membership_path = staging / SOURCE_V3_MEMBERSHIP_FILE
+        _write_bytes_durable(membership_path, _source_v3_membership_bytes(inputs))
         manifest_path = staging / "manifest.json"
         manifest = _read_json(manifest_path)
         complete_status = _mapping(manifest.get("complete_status"), "source-v3 complete status")
@@ -1944,6 +1981,7 @@ class _SourceV3Closure:
         manifest["recovery_accounting"] = dict(accounting)
         existing_artifacts = _mapping_sequence(manifest.get("artifacts"), "source-v3 artifacts")
         existing_artifacts.extend(_artifact_ref(staging, staging / name) for name in copied)
+        existing_artifacts.append(_artifact_ref(staging, membership_path))
         manifest["artifacts"] = existing_artifacts
         _replace_json(manifest_path, manifest)
         manifest_sha256 = _sha256_file(manifest_path)
@@ -2889,6 +2927,14 @@ def _string_list(value: object, context: str) -> list[str]:
     if len(result) != len(set(result)):
         raise ValueError(f"{context} contains duplicates")
     return result
+
+
+def _write_bytes_durable(path: Path, payload: bytes) -> None:
+    with path.open("xb") as handle:
+        handle.write(payload)
+        handle.flush()
+        os.fsync(handle.fileno())
+    _fsync_directory(path.parent)
 
 
 def _copy_file_durable(source: Path, target: Path) -> None:

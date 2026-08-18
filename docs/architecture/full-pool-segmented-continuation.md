@@ -1,6 +1,6 @@
 # Full-Pool Segmented Continuation Runtime
 
-本 note 描述 segmented source runtime、显式 recovery，以及 source-v2 到 Report/Evidence/Release v9 的离线 persisted projection。它不改变 Full-Pool v1 contract，不提供 live authorization，不执行 Provider、SSH 或 canonical deployment，也不声明 production recovery/cutover 已完成。
+本 note 描述 segmented source runtime、显式与自动 recovery、source-v2 到 Report/Evidence/Release v9 的冻结 projection，以及 source-v3 到结果交付与 Release v10 的 additive persisted contract。它不改变 Full-Pool v1 或 v9 contract；Module 本身不授予 live authorization，也不执行 SSH 或 canonical deployment。
 
 ## Module 与 Interface
 
@@ -251,8 +251,20 @@ workspace 先 create once 持久化 hash-bound `AutomatedRecoveryPolicy`。Polic
 
 七个 retry 的 logical charge 固定为 0；historical physical、21 次 uncertainty charge、retry actual、reconciliation actual 与 fresh continuation actual 分栏累计。same-identity replay 从 policy ledger、main settlement journal、per-pair reconciliation journals、kernel ledger 与 spool 恢复；已 captured pair 不再进入 Adapter。完整 closure 必须同时满足 109,200 logical terminals、30 committed batches、ten isolated lanes、109,200/120,120 caps 与完整 nested lineage。
 
-成功 closure 通过独立 staging 原子生成 additive `source-v3`，复制 frozen nested plan、automated policy/ledger、settlement v2 与 reconciliation journals，并保留 original run、first recovery、second recovery 和分栏 accounting。`automation_exhausted`、`implementation_failed`、incomplete 或 Validation/mock 结果不产生 source-v3，且始终 `production_deploy_eligible=false`；source-v2、recovery v1 与 Release v9 的 schema、reader 和 artifact bytes 不变。source-v3 persisted consumer、Release v10、结果表与部署仍由后续 Module 拥有。
+成功 closure 通过独立 staging 原子生成 additive `source-v3`，复制 frozen nested plan、automated policy/ledger、settlement v2 与 reconciliation journals，并保留 original run、first recovery、second recovery 和分栏 accounting。`automation_exhausted`、`implementation_failed` 或 incomplete 结果不产生 source-v3；Validation/mock source-v3 即使 denominator 完整也始终 nondeployable。source-v2、recovery v1 与 Release v9 的 schema、reader 和 artifact bytes 不变。
+
+## Source-v3 persisted consumer 与结果交付
+
+package-internal source version dispatcher 对 `full-pool-segmented-source-v3` 只路由 `SourceV3Consumer`。调用方只提供显式 source path 与 manifest SHA-256；Consumer 从 persisted nested plan、parent artifact refs、workspace identity/status、automated policy/ledger、main/reconciliation settlement journals 和 terminal/batch bytes重闭合 original、first recovery、second recovery、terminal mapping、model/usage 与 logical/physical accounting。Implementation commit 和 Module hashes从绑定 Git blob验证，而不是由调用方注入 Formal facts。
+
+`FullPoolResultProjection` 从同一 closed source 的 terminal rows 按 `user_id` 连接 source-bound `users.csv` latent-v1 membership，一次生成固定列与 Segment → Message → Run 顺序的九行 aggregation。`Exposure` 包含 `ignore`；like/comment/share 只统计 `terminal_status=succeeded` 的对应 action。HTML fragment、UTF-8 `full-pool-segment-results.csv` 和 `full-pool-segment-lineage.md` 共用同一 rows identity，并作为 Report candidate 的稳定 downloads；36,400-user source 必须精确闭合 15,616 / 15,070 / 5,714 三个 segment denominators和109,200总 Exposure。
+
+Evidence v10只从 source-v3、execution receipt、automation manifest、Report closure和冻结历史 artifacts重建 typed facts。Release dispatcher 对 source-v3 只接受 `abm-report-release-contract-v10`，并绑定 nested lineage、policy、settlement v2、result projection、execution manifest和 physical snapshot；v9 reader/validator继续只接受 source-v2。Validation/mock、incomplete、`implementation_failed`或`automation_exhausted`不能进入 production evidence。合法 Formal v10随后继续使用既有 immutable release、candidate health、snapshot、atomic `current` switch、rollback与逐 artifact public hash合同。
+
+## Create-once automation execution manifest
+
+`AutomationExecutionManifest` 在执行前 create once，精确绑定 implementation commit、受影响 Module hashes、nested plan/hash、七个有序 pair/terminal mappings、绝对输出 paths、Pi `openai-codex`、`gpt-5.6-sol`、P0、Responses/low/256/30s/2-retry、十条隔离 lanes、109,200/120,120 caps、USD 0 billing和 bounded stop conditions。`FullPoolAutomationOperator` 不扫描 latest；它在创建 Adapter 前验证 manifest、Git/Module bytes、workspace identity、live gates、Provider/model与caps，Adapter metadata不一致时在第一次 decision 前停止。execution receipt在 dispatch 前持久化并防止 manifest被另一个 identity重复消费。
 
 ## 局部边界与后续 seam
 
-Source Module 负责从任意单一 active cutoff 连续运行到 horizon 并关闭完整 source-v2；automated nested recovery 只关闭 additive、nondeployable source-v3。preflight、manual recovery、source-v2 与 v9 保持冻结；Report/Evidence/Release 只读取各自明确版本的已关闭 source，不读取运行中 workspace。这些 Module 都不创建 live authorization，也不执行 Provider、SSH 或 canonical deployment。
+Source Module 负责从单一 active cutoff 连续运行到 horizon并关闭完整 source-v2；automated nested recovery关闭 additive source-v3；Consumer/Projection/Evidence/Release各自只读取明确版本的已关闭 persisted artifacts。preflight、manual recovery、source-v2与v9保持冻结。Manifest和operator表达可执行身份但不自行授予 live authorization；测试、candidate composition和release validation均为零 Provider call，也不执行SSH、upload、promotion或canonical deployment。

@@ -164,6 +164,18 @@ Automated Recovery Policy 的 nondeployable 终止状态。second unknown、reco
 
 完整 automated nested recovery 的 additive persisted source。它在 109,200 logical terminals、30 batch barriers、settlement v2、automated policy 与 original/first/second recovery lineage 全部闭合后原子生成，并分栏保留 historical physical、uncertainty、retry、reconciliation 与 continuation accounting。它不改写 source-v2 或 Release v9，也不因 Validation/mock rehearsal 自动获得 production deploy eligibility。
 
+### Automation Execution Manifest
+
+在 automated nested recovery 启动前 create once 的执行身份合同。它精确绑定 implementation commit 与 Module hashes、nested plan、七个 retry mappings、绝对 paths、Provider/model/P0 request contract、十 lanes、logical/physical caps、USD 0 billing和自动停止规则；operator只能消费 exact manifest，不从 latest directory、issue label或测试 fixture推定执行参数。
+
+### Full-Pool Segment Result Projection
+
+从 closed Segmented Source-v3 terminal rows 按 `user_id` 连接冻结 latent-v1 membership 后形成的九格同源投影。固定列为 `Run | Message | Segment | Total Likes | Total Comments | Total Shares | Exposure`，按 Segment → Message → Run 排序；Exposure包含`ignore`，互动列只统计成功 terminal 的对应 action。Canonical HTML、UTF-8 CSV与Markdown lineage/data dictionary共享同一 rows identity。
+
+### Release v10
+
+只接受 exact manifest-driven Formal Source-v3 的 additive production release contract。它显式绑定 original/first/second recovery、automated policy、settlement v2、aggregate accounting与结果 projection；Release v9继续只表达source-v2。Validation/mock、incomplete、`implementation_failed`和`automation_exhausted`证据均不可晋升。
+
 ### Full-Pool Mechanism Master
 
 为 Full-Pool Formal Main Experiment 新增的单张端到端 Mermaid 总图，文件名为 `full-pool-mechanism.mmd`。它只表达全池分母、30-batch delivery、Primary-only Decision 和 feedback 主路径；现有五张主机制图、`real-batch-mechanism.mmd` 与 Prompt–Model factorial 保持原字节，不复制另一套分图。

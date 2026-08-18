@@ -32,27 +32,40 @@ function generateFullPoolFixture(outputDir: string): FullPoolFixture {
 set -euo pipefail
 . .venv/bin/activate
 export PYTHONPATH="$PWD/src:$PWD"
-python - <<'PY'
+mkdir -p ${JSON.stringify(root)}
+cat > ${JSON.stringify(path.join(root, 'compose_source_v3_fixture_test.py'))} <<'PY'
 from pathlib import Path
+import pytest
 from llm_abm_sim import concurrent_robustness_report as report
-from tests.integration.test_full_pool_presentation_bundle import (
-    _full_pool_source,
-    _historical_candidate,
+from llm_abm_sim.full_pool_segmented_automated_recovery import FullPoolSegmentedAutomatedRecovery
+from tests.integration.test_full_pool_presentation_bundle import _historical_candidate
+from tests.integration.test_full_pool_segmented_automated_recovery import (
+    _LaneAdapter,
+    _automated_request,
 )
 
-root = Path(${JSON.stringify(root)}).resolve()
-root.mkdir(parents=True, exist_ok=True)
-source, manifest_sha256 = _full_pool_source(root / 'full-pool')
-formal, study, historical = _historical_candidate(root / 'historical')
-report._REPORT_PRESENTATION.compose_full_pool_presentation_bundle(
-    full_pool_source_root=source,
-    full_pool_manifest_sha256=manifest_sha256,
-    historical_formal_root=formal,
-    historical_study_root=study,
-    historical_candidate_dir=historical,
-    destination_dir=root / 'bundle',
-)
-PY`;
+
+def test_compose_source_v3_fixture(monkeypatch: pytest.MonkeyPatch) -> None:
+    root = Path(${JSON.stringify(root)}).resolve()
+    request = _automated_request(root / 'automated-inputs', monkeypatch, logical_cap=90)
+    result = FullPoolSegmentedAutomatedRecovery().run(
+        request,
+        adapter_factory=lambda _lane_id: _LaneAdapter([]),
+    )
+    assert result.source_root is not None
+    assert result.source_manifest_sha256 is not None
+    formal, study, historical = _historical_candidate(root / 'historical')
+    report._REPORT_PRESENTATION.compose_full_pool_presentation_bundle(
+        full_pool_source_root=result.source_root,
+        full_pool_manifest_sha256=result.source_manifest_sha256,
+        historical_formal_root=formal,
+        historical_study_root=study,
+        historical_candidate_dir=historical,
+        destination_dir=root / 'bundle',
+    )
+PY
+pytest -q ${JSON.stringify(path.join(root, 'compose_source_v3_fixture_test.py'))}
+rm -f ${JSON.stringify(path.join(root, 'compose_source_v3_fixture_test.py'))}`;
   execFileSync('bash', ['-lc', command], { stdio: 'inherit' });
   const bundleDir = path.join(root, 'bundle');
   const index = JSON.parse(
@@ -82,7 +95,7 @@ async function serveFixture(bundleDir: string): Promise<{ baseURL: string; serve
   const port = await availablePort();
   const baseURL = `http://127.0.0.1:${port}`;
   const server = spawn(
-    'python',
+    path.join(process.cwd(), '.venv', 'bin', 'python'),
     ['-m', 'http.server', String(port), '--bind', '127.0.0.1', '--directory', bundleDir],
     { stdio: ['ignore', 'ignore', 'pipe'] },
   );
@@ -162,6 +175,39 @@ test('Full-Pool report is bilingual, responsive, lazy, filterable, and keyboard 
     await expect(page.getByTestId('full-pool-mechanism-section').locator('[data-mechanism-node-id]')).toHaveCount(8);
     await expect(page.getByTestId('full-pool-mechanism-section').locator('[data-mechanism-edge-id]')).toHaveCount(8);
     await expect(page.getByTestId('full-pool-mechanism-section')).toContainText('Primary-only');
+    const segmentTable = page.getByTestId('full-pool-segment-table');
+    await expect(segmentTable).toBeVisible();
+    await expect(segmentTable.locator('thead th')).toHaveText([
+      'Run',
+      'Message',
+      'Segment',
+      'Total Likes',
+      'Total Comments',
+      'Total Shares',
+      'Exposure',
+    ]);
+    const segmentRows = segmentTable.locator('tbody tr');
+    await expect(segmentRows).toHaveCount(9);
+    expect(
+      await segmentRows.evaluateAll((rows) =>
+        rows.map((row) => {
+          const cells = [...row.querySelectorAll('td')].map((cell) => cell.textContent ?? '');
+          return `${cells[2]}:${cells[1]}:${cells[0]}`;
+        }),
+      ),
+    ).toEqual([
+      'S1:M1:1', 'S1:M2:1', 'S1:M3:1',
+      'S2:M1:1', 'S2:M2:1', 'S2:M3:1',
+      'S3:M1:1', 'S3:M2:1', 'S3:M3:1',
+    ]);
+    const resultCsv = await request.get(`${baseURL}/full-pool-segment-results.csv`);
+    expect(resultCsv.status()).toBe(200);
+    expect(await resultCsv.text()).toContain(
+      'Run,Message,Segment,Total Likes,Total Comments,Total Shares,Exposure',
+    );
+    const resultLineage = await request.get(`${baseURL}/full-pool-segment-lineage.md`);
+    expect(resultLineage.status()).toBe(200);
+    expect(await resultLineage.text()).toContain('population and model both change');
 
     const traceState = page.getByTestId('full-pool-trace-state');
     await expect(traceState).toHaveAttribute('data-trace-state', 'ready');
@@ -262,6 +308,7 @@ test('Full-Pool report is bilingual, responsive, lazy, filterable, and keyboard 
     await expectNoHorizontalOverflow(page);
     await expect(page.getByTestId('full-pool-run-evidence')).toBeVisible();
     await expect(page.getByTestId('full-pool-trace-reader')).toBeVisible();
+    await expect(page.getByTestId('full-pool-segment-results')).toBeVisible();
     const mobileColumns = await page.locator('.full-pool-scope-grid').evaluate(
       (element) => getComputedStyle(element).gridTemplateColumns.split(' ').length,
     );
