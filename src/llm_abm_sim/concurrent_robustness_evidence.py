@@ -35,6 +35,7 @@ from .full_pool_formal_experiment import (
     FULL_POOL_FORMAL_SOURCE_SCHEMA,
     FULL_POOL_FORMAL_TRANSPORT,
     FULL_POOL_PRODUCTION_CANDIDATE_ROWS,
+    FULL_POOL_PRODUCTION_CAPACITY,
     FULL_POOL_PRODUCTION_ELIGIBLE_PAIRS,
     FULL_POOL_PRODUCTION_HORIZON,
     FULL_POOL_PRODUCTION_USER_COUNT,
@@ -2996,6 +2997,8 @@ def _validate_strict_formal_release_facts(
         and execution.replay_request.max_concurrency == 10
         and execution.replay_request.config.sample_size == FULL_POOL_PRODUCTION_USER_COUNT
         and execution.replay_request.config.horizon == FULL_POOL_PRODUCTION_HORIZON
+        and execution.replay_request.config.delivery_capacity
+        == FULL_POOL_PRODUCTION_CAPACITY
         and execution.replay_request.config.configuration_profile == "production"
         and execution.provider_calls_during_composition == 0
         and execution.production_deploy_eligible is False

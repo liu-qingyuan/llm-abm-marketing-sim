@@ -82,6 +82,9 @@ CONCURRENT_MESSAGE_HOLDOUT_VIDEO_ID = TARGET_VIDEO_ID
 CONCURRENT_MESSAGE_PRODUCTION_SAMPLE_SIZE = 1000
 CONCURRENT_MESSAGE_PRODUCTION_HORIZON = 30
 CONCURRENT_MESSAGE_PRODUCTION_DELIVERY_CAPACITY = 20
+CONCURRENT_MESSAGE_FULL_POOL_PRODUCTION_SAMPLE_SIZE = 36_400
+CONCURRENT_MESSAGE_FULL_POOL_PRODUCTION_HORIZON = 30
+CONCURRENT_MESSAGE_FULL_POOL_PRODUCTION_DELIVERY_CAPACITY = 1_214
 CONCURRENT_MESSAGE_FORMAL_PROVIDER = "openai_compatible"
 CONCURRENT_MESSAGE_FORMAL_WIRE_API = "responses"
 CONCURRENT_MESSAGE_FORMAL_REQUESTED_MODEL = "gpt-5.4-mini"
@@ -355,6 +358,38 @@ def authoritative_message_definitions() -> tuple[ExperimentalMessageDefinition, 
     )
 
 
+def _validate_concurrent_message_production_topology(
+    *,
+    sample_size: int,
+    horizon: int,
+    delivery_capacity: int,
+) -> None:
+    """Accept only the two additive production experiment topologies."""
+    if sample_size not in {
+        CONCURRENT_MESSAGE_PRODUCTION_SAMPLE_SIZE,
+        CONCURRENT_MESSAGE_FULL_POOL_PRODUCTION_SAMPLE_SIZE,
+    }:
+        raise ValueError(
+            "production sample_size must be 1000 or 36400"
+        )
+    approved = {
+        (
+            CONCURRENT_MESSAGE_PRODUCTION_SAMPLE_SIZE,
+            CONCURRENT_MESSAGE_PRODUCTION_HORIZON,
+            CONCURRENT_MESSAGE_PRODUCTION_DELIVERY_CAPACITY,
+        ),
+        (
+            CONCURRENT_MESSAGE_FULL_POOL_PRODUCTION_SAMPLE_SIZE,
+            CONCURRENT_MESSAGE_FULL_POOL_PRODUCTION_HORIZON,
+            CONCURRENT_MESSAGE_FULL_POOL_PRODUCTION_DELIVERY_CAPACITY,
+        ),
+    }
+    if (sample_size, horizon, delivery_capacity) not in approved:
+        raise ValueError(
+            "production topology must be exactly 1000/30/20 or 36400/30/1214"
+        )
+
+
 class ConcurrentMessageExperimentConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -420,14 +455,11 @@ class ConcurrentMessageExperimentConfig(BaseModel):
             raise ValueError("messages must exactly match the authoritative three-message contract")
 
         if self.configuration_profile == "production":
-            if self.sample_size != CONCURRENT_MESSAGE_PRODUCTION_SAMPLE_SIZE:
-                raise ValueError(f"production sample_size must be {CONCURRENT_MESSAGE_PRODUCTION_SAMPLE_SIZE}")
-            if self.horizon != CONCURRENT_MESSAGE_PRODUCTION_HORIZON:
-                raise ValueError(f"production horizon must be {CONCURRENT_MESSAGE_PRODUCTION_HORIZON}")
-            if self.delivery_capacity != CONCURRENT_MESSAGE_PRODUCTION_DELIVERY_CAPACITY:
-                raise ValueError(
-                    f"production delivery_capacity must be {CONCURRENT_MESSAGE_PRODUCTION_DELIVERY_CAPACITY}"
-                )
+            _validate_concurrent_message_production_topology(
+                sample_size=self.sample_size,
+                horizon=self.horizon,
+                delivery_capacity=self.delivery_capacity,
+            )
             if [message.model_dump(mode="json") for message in self.messages] != [
                 message.model_dump(mode="json") for message in authoritative_message_definitions()
             ]:

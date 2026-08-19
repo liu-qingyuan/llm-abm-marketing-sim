@@ -6,6 +6,7 @@ from llm_abm_sim.concurrent_message_experiment import (
     ExperimentalMessageDefinition,
     _message_user_fit_components,
     _rank_message_candidates,
+    _validate_concurrent_message_production_topology,
 )
 from llm_abm_sim.final_research import ResearchUser
 from llm_abm_sim.schemas import ValueDimensions
@@ -78,6 +79,39 @@ def test_message_user_fit_rejects_zero_norm_inputs(
 ) -> None:
     with pytest.raises(ValueError, match=expected):
         _message_user_fit_components(message, user)
+
+
+@pytest.mark.parametrize(
+    ("sample_size", "horizon", "delivery_capacity"),
+    [(1_000, 30, 20), (36_400, 30, 1_214)],
+)
+def test_production_topology_accepts_historical_and_full_pool_contracts(
+    sample_size: int,
+    horizon: int,
+    delivery_capacity: int,
+) -> None:
+    _validate_concurrent_message_production_topology(
+        sample_size=sample_size,
+        horizon=horizon,
+        delivery_capacity=delivery_capacity,
+    )
+
+
+@pytest.mark.parametrize(
+    ("sample_size", "horizon", "delivery_capacity"),
+    [(30, 30, 20), (1_000, 29, 20), (36_400, 30, 20), (1_000, 30, 1_214)],
+)
+def test_production_topology_rejects_mixed_or_partial_contracts(
+    sample_size: int,
+    horizon: int,
+    delivery_capacity: int,
+) -> None:
+    with pytest.raises(ValueError, match="production.*topology|production sample_size"):
+        _validate_concurrent_message_production_topology(
+            sample_size=sample_size,
+            horizon=horizon,
+            delivery_capacity=delivery_capacity,
+        )
 
 
 def test_rank_message_candidates_uses_score_before_user_id_tiebreak() -> None:

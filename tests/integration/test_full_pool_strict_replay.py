@@ -1428,7 +1428,7 @@ def test_full_scale_zero_provider_rehearsal_closes_production_topology(
                 sample_size=36_400,
                 horizon=30,
                 delivery_capacity=1_214,
-                configuration_profile="validation",
+                configuration_profile="production",
             ),
             workspace=root / "strict-full-scale-replay",
             replay_id="offline-strict-full-scale-v1",
@@ -1464,6 +1464,7 @@ def test_full_scale_zero_provider_rehearsal_closes_production_topology(
         manifest = json.loads(
             (result.source_root / "manifest.json").read_text(encoding="utf-8")
         )
+        assert manifest["profile"] == "production"
         assert manifest["production_topology"] is True
         assert manifest["counts"] == {
             "candidate_rows": 1_691_730,

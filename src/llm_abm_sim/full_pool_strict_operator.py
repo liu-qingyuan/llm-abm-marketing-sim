@@ -12,7 +12,12 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from .concurrent_message_experiment import ConcurrentMessageExperimentConfig
+from .concurrent_message_experiment import (
+    CONCURRENT_MESSAGE_FULL_POOL_PRODUCTION_DELIVERY_CAPACITY,
+    CONCURRENT_MESSAGE_FULL_POOL_PRODUCTION_HORIZON,
+    CONCURRENT_MESSAGE_FULL_POOL_PRODUCTION_SAMPLE_SIZE,
+    ConcurrentMessageExperimentConfig,
+)
 from .decision import LLMDecisionAdapter
 from .full_pool_strict_replay import (
     StrictFreshOperatorExecutionReference,
@@ -1030,6 +1035,17 @@ class StrictFreshAutomationOperator:
             manifest_path,
             require_current_implementation=True,
         )
+        config = facts.replay_request.config
+        if facts.replay_request.logical_cap == 109_200 and (
+            config.configuration_profile != "production"
+            or config.sample_size != CONCURRENT_MESSAGE_FULL_POOL_PRODUCTION_SAMPLE_SIZE
+            or config.horizon != CONCURRENT_MESSAGE_FULL_POOL_PRODUCTION_HORIZON
+            or config.delivery_capacity
+            != CONCURRENT_MESSAGE_FULL_POOL_PRODUCTION_DELIVERY_CAPACITY
+        ):
+            raise ValueError(
+                "strict fresh full-scale live execution requires the exact production profile and topology"
+            )
         provider = _mapping(facts.payload.get("provider_contract"), "manifest Provider")
         billing = _mapping(facts.payload.get("billing_contract"), "manifest billing")
         if (

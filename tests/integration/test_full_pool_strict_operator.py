@@ -14,6 +14,7 @@ from typing import Any, cast
 import pytest
 
 import llm_abm_sim.full_pool_source_v4 as source_v4_module
+import llm_abm_sim.full_pool_strict_operator as strict_operator_module
 import llm_abm_sim.full_pool_strict_replay as strict_module
 from llm_abm_sim.concurrent_message_experiment import ConcurrentMessageExperimentConfig
 from llm_abm_sim.decision import EngageDecision
@@ -212,6 +213,46 @@ def test_fresh_execution_manifest_is_create_once_and_binds_exact_inputs(
 
     with pytest.raises(FileExistsError, match="create once"):
         create_strict_fresh_execution_manifest(request)
+
+
+def test_full_pool_production_manifest_is_constructible_and_preflightable(
+    tmp_path: Path,
+) -> None:
+    request = _manifest_request(tmp_path)
+    dataset = _dataset(tmp_path / "full-pool", user_count=36_400)
+    config = ConcurrentMessageExperimentConfig(
+        dataset_dir=dataset,
+        sample_size=36_400,
+        horizon=30,
+        delivery_capacity=1_214,
+        configuration_profile="production",
+    )
+    request = replace(
+        request,
+        replay_request=replace(
+            request.replay_request,
+            config=config,
+            logical_cap=109_200,
+        ),
+    )
+
+    path = create_strict_fresh_execution_manifest(request)
+    facts = StrictFreshAutomationOperator().preflight(
+        path,
+        gates=StrictFreshLiveGates(
+            explicit_live_authorization=True,
+            external_requests_allowed=True,
+            credentials_available=True,
+            provider_transport="openai-codex",
+            requested_model="gpt-5.6-sol",
+            subscription_billed_cost_usd=0.0,
+        ),
+    )
+
+    assert facts.replay_request.config.configuration_profile == "production"
+    assert facts.replay_request.config.sample_size == 36_400
+    assert facts.replay_request.logical_cap == 109_200
+    assert not request.operator_workspace.exists()
 
 
 def test_dirty_bound_implementation_is_rejected_before_adapter_factory(
@@ -907,7 +948,7 @@ def test_full_scale_same_manifest_operator_and_consumer_close_zero_call_projecti
             sample_size=36_400,
             horizon=30,
             delivery_capacity=1_214,
-            configuration_profile="validation",
+            configuration_profile="production",
         ),
         workspace=operator_workspace / "runtime",
         replay_id="offline-strict-operator-full-scale-v1",
@@ -982,6 +1023,49 @@ def test_full_scale_same_manifest_operator_and_consumer_close_zero_call_projecti
     assert replay.source.facts.logical_pairs == 109_200
     assert replay.projection is not None
     assert replay.projection.rows_sha256 == result.projection.rows_sha256
+
+
+def test_full_scale_validation_profile_is_rejected_by_live_preflight(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    request = _manifest_request(tmp_path)
+    path = create_strict_fresh_execution_manifest(request)
+    facts = validate_strict_fresh_execution_manifest(path)
+    validation_config = facts.replay_request.config.model_copy(
+        update={
+            "sample_size": 36_400,
+            "horizon": 30,
+            "delivery_capacity": 1_214,
+            "configuration_profile": "validation",
+        }
+    )
+    crossed_facts = replace(
+        facts,
+        replay_request=replace(
+            facts.replay_request,
+            config=validation_config,
+            logical_cap=109_200,
+        ),
+    )
+    monkeypatch.setattr(
+        strict_operator_module,
+        "validate_strict_fresh_execution_manifest",
+        lambda *_args, **_kwargs: crossed_facts,
+    )
+
+    with pytest.raises(ValueError, match="production profile|production topology"):
+        StrictFreshAutomationOperator().preflight(
+            path,
+            gates=StrictFreshLiveGates(
+                explicit_live_authorization=True,
+                external_requests_allowed=True,
+                credentials_available=True,
+                provider_transport="openai-codex",
+                requested_model="gpt-5.6-sol",
+                subscription_billed_cost_usd=0.0,
+            ),
+        )
 
 
 def test_strict_runtime_accepts_production_live_lane_pool_metadata(

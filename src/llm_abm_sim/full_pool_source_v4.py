@@ -18,7 +18,12 @@ from .concurrent_execution_journal import (
     CONCURRENT_MESSAGE_EXECUTION_STATUS_JSON,
     ConcurrentExecutionJournal,
 )
-from .concurrent_message_experiment import authoritative_message_definitions
+from .concurrent_message_experiment import (
+    CONCURRENT_MESSAGE_FULL_POOL_PRODUCTION_DELIVERY_CAPACITY,
+    CONCURRENT_MESSAGE_FULL_POOL_PRODUCTION_HORIZON,
+    CONCURRENT_MESSAGE_FULL_POOL_PRODUCTION_SAMPLE_SIZE,
+    authoritative_message_definitions,
+)
 from .durable_pair_settlement import (
     DURABLE_PAIR_SETTLEMENT_JOURNAL_FILE,
     DurablePairOutcomeKind,
@@ -766,9 +771,16 @@ def read_closed_strict_full_pool_source(
     membership = _read_membership(source / "latent-membership.csv", users)
     denominators = dict(Counter(membership.values()))
     production_topology = (
-        len(users) == 36_400
+        len(users) == CONCURRENT_MESSAGE_FULL_POOL_PRODUCTION_SAMPLE_SIZE
         and len(pair_ids) == 109_200
-        and spool_counts["committed_batches"] == 30
+        and spool_counts["committed_batches"]
+        == CONCURRENT_MESSAGE_FULL_POOL_PRODUCTION_HORIZON
+        and runtime_configuration.get("sample_size")
+        == CONCURRENT_MESSAGE_FULL_POOL_PRODUCTION_SAMPLE_SIZE
+        and runtime_configuration.get("horizon")
+        == CONCURRENT_MESSAGE_FULL_POOL_PRODUCTION_HORIZON
+        and runtime_configuration.get("delivery_capacity")
+        == CONCURRENT_MESSAGE_FULL_POOL_PRODUCTION_DELIVERY_CAPACITY
         and request.get("logical_cap") == 109_200
         and request.get("physical_cap") == 120_120
         and request.get("max_concurrency") == 10

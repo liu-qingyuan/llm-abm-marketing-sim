@@ -24,6 +24,7 @@ from .concurrent_execution_journal import (
     _build_primary_only_concurrent_execution_run_identity,
 )
 from .concurrent_message_experiment import (
+    CONCURRENT_MESSAGE_FULL_POOL_PRODUCTION_DELIVERY_CAPACITY,
     ConcurrentMessageExperimentConfig,
     _ConcurrentRuntimeKernel,
     _ConcurrentRuntimeKernelState,
@@ -2376,6 +2377,8 @@ def _source_v4_expected_manifest(
     production_topology = (
         request.config.sample_size == 36_400
         and request.config.horizon == 30
+        and request.config.delivery_capacity
+        == CONCURRENT_MESSAGE_FULL_POOL_PRODUCTION_DELIVERY_CAPACITY
         and request.logical_cap == 109_200
         and request.physical_cap == 120_120
         and request.max_concurrency == 10
