@@ -1,16 +1,25 @@
 from __future__ import annotations
 
+import csv
 import hashlib
+import io
 import json
 import os
 import re
+import shutil
+from collections import Counter
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import Enum
 from pathlib import Path, PurePosixPath
 from typing import cast
 
+from ._concurrent_runtime_spool import _ConcurrentRuntimeBatchSpool
 from .concurrent_execution_journal import (
+    CONCURRENT_MESSAGE_EXECUTION_JOURNAL_JSONL,
+    CONCURRENT_MESSAGE_EXECUTION_RUN_IDENTITY_JSON,
+    CONCURRENT_MESSAGE_EXECUTION_SNAPSHOTS_DIR,
+    CONCURRENT_MESSAGE_EXECUTION_STATUS_JSON,
     ConcurrentExecutionJournal,
     _build_primary_only_concurrent_execution_run_identity,
 )
@@ -30,6 +39,7 @@ from .durable_pair_settlement import (
     DurablePairOutcomeKind,
     DurablePairSettlement,
     DurablePairTerminal,
+    DurableSettlementReplay,
     DurableWaveSettlement,
 )
 from .final_research import FORMAL_RUN_STATUS, VALIDATION_RUN_STATUS
@@ -52,11 +62,34 @@ from .safe_serialization import safe_data
 STRICT_PAIR_POLICY_FILE = "strict_pair_policy.json"
 STRICT_PAIR_POLICY_LEDGER_FILE = "strict_pair_policy_ledger.jsonl"
 STRICT_FRESH_REPLAY_STATUS_FILE = "strict_fresh_replay_status.json"
+STRICT_SOURCE_V4_DIR = "source-v4"
+FULL_POOL_SOURCE_V4_SCHEMA = "full-pool-segmented-source-v4"
 
 _STRICT_POLICY_SCHEMA = "full-pool-strict-pair-policy-v1"
 _STRICT_POLICY_LEDGER_SCHEMA = "full-pool-strict-pair-policy-ledger-v1"
-_STRICT_STATUS_SCHEMA = "full-pool-strict-fresh-replay-status-v1"
+_STRICT_STATUS_SCHEMA = "full-pool-strict-fresh-replay-status-v2"
 _STRICT_EXECUTION_SCHEMA = "full-pool-strict-fresh-replay-execution-v1"
+_SOURCE_V4_MANIFEST_FIELDS = frozenset(
+    {
+        "schema_version",
+        "source_identity",
+        "replay_id",
+        "profile",
+        "production_topology",
+        "counts",
+        "provider_accounting",
+        "physical_accounting",
+        "fresh_lineage",
+        "runtime_lineage",
+        "strict_policy",
+        "settlement_v2",
+        "row_hashes",
+        "provider_contract_sha256",
+        "source_hash",
+        "production_deploy_eligible",
+        "artifacts",
+    }
+)
 _REPLAY_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,159}$")
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 
@@ -70,6 +103,30 @@ class StrictFreshReplayStatus(str, Enum):
 
 
 @dataclass(frozen=True)
+class StrictRejectedHistoryReference:
+    """Hash-bound rejected source-v3 lineage that can never supply runtime state."""
+
+    source_root: Path
+    manifest_sha256: str
+    rejection_reason: str
+
+    def __post_init__(self) -> None:
+        root = self.source_root.expanduser().resolve(strict=True)
+        if root.is_symlink() or not root.is_dir():
+            raise ValueError("strict rejected history must be one real source directory")
+        manifest = root / "manifest.json"
+        if manifest.is_symlink() or not manifest.is_file():
+            raise ValueError("strict rejected history manifest is missing or unsafe")
+        digest = _digest(self.manifest_sha256, "rejected source-v3 manifest hash")
+        if _sha256_file(manifest) != digest:
+            raise ValueError("strict rejected history manifest differs from its frozen hash")
+        if self.rejection_reason != "validation_mixed_provider_evidence":
+            raise ValueError("strict rejected history reason is not the mixed-evidence rejection")
+        object.__setattr__(self, "source_root", root)
+        object.__setattr__(self, "manifest_sha256", digest)
+
+
+@dataclass(frozen=True)
 class StrictFreshReplayRequest:
     """Frozen inputs for a fresh strict trajectory; no historical terminal can be imported."""
 
@@ -77,6 +134,7 @@ class StrictFreshReplayRequest:
     workspace: Path
     replay_id: str
     provider_contract: Mapping[str, object]
+    rejected_history: StrictRejectedHistoryReference
     seed_top_k_per_proxy: int
     logical_cap: int
     physical_cap: int = FULL_POOL_FORMAL_PHYSICAL_ATTEMPT_CAP
@@ -95,6 +153,16 @@ class StrictFreshReplayRequest:
             or dataset.is_relative_to(workspace)
         ):
             raise ValueError("strict replay workspace must be independent from its dataset")
+        rejected_root = self.rejected_history.source_root
+        if (
+            workspace == rejected_root
+            or workspace.is_relative_to(rejected_root)
+            or rejected_root.is_relative_to(workspace)
+            or dataset == rejected_root
+            or dataset.is_relative_to(rejected_root)
+            or rejected_root.is_relative_to(dataset)
+        ):
+            raise ValueError("strict replay rejected history must remain read-only and independent")
         expected_provider_contract = strict_formal_provider_contract()
         if _canonical_json(self.provider_contract) != _canonical_json(expected_provider_contract):
             raise ValueError("strict replay Provider/request contract is not the frozen P0 contract")
@@ -135,6 +203,8 @@ class StrictFreshReplayResult:
     active_physical_reservations: int
     committed_feedback_user_ids: tuple[str, ...]
     strict_stop_pair_ids: tuple[str, ...]
+    source_root: Path | None = None
+    source_manifest_sha256: str | None = None
     production_deploy_eligible: bool = False
 
 
@@ -179,6 +249,30 @@ class _PhysicalAccounting:
     @property
     def charged(self) -> int:
         return self.actual + self.uncertain
+
+
+@dataclass
+class _StrictSettlementProgress:
+    waves: list[DurableWaveSettlement]
+    outcomes: dict[str, DurablePairOutcome]
+    wave_index_by_pair: dict[str, int]
+    logical_count: int
+    accounting: _PhysicalAccounting
+    external_request_invocations: int
+
+
+@dataclass(frozen=True)
+class _StrictSourceV4Reference:
+    root: Path
+    manifest_sha256: str
+
+
+@dataclass(frozen=True)
+class _StrictSourceV4Evidence:
+    counts: Mapping[str, int]
+    provider_accounting: Mapping[str, object]
+    row_hashes: Mapping[str, str]
+    source_eligible: bool
 
 
 class StrictPairPolicy:
@@ -564,6 +658,7 @@ class StrictFullPoolFormalReplay:
         *,
         adapter_factory: Callable[[int], LLMDecisionAdapter],
     ) -> StrictFreshReplayResult:
+        _validate_rejected_history_reference(request.rejected_history)
         prepared = _prepare_full_pool_concurrent_runtime_inputs(
             request.config,
             seed_top_k_per_proxy=request.seed_top_k_per_proxy,
@@ -599,7 +694,12 @@ class StrictFullPoolFormalReplay:
                 maximum_attempts_per_dispatch=request.maximum_attempts_per_dispatch,
                 max_concurrency=request.max_concurrency,
             )
-            settlement.replay(seal_inflight=True)
+            main_replay = settlement.replay(seal_inflight=True)
+            progress = _strict_settlement_progress(
+                request=request,
+                policy=policy,
+                main=main_replay,
+            )
             state = _ConcurrentRuntimeKernelState(
                 cohort=prepared.cohort,
                 exposed_by_message={message.message_id: set() for message in request.config.messages},
@@ -620,16 +720,16 @@ class StrictFullPoolFormalReplay:
 
             terminal = policy.replay()
             if terminal.terminal_event_type is not None:
-                result = _build_result(
+                return _finalize_strict_result(
                     request=request,
                     identity_hash=cast(str, identity["identity_hash"]),
+                    sample_user_ids=prepared.cohort.sample_user_ids,
                     policy=policy,
                     settlement=settlement,
+                    progress=progress,
                     journal=journal,
                     state=state,
                 )
-                _write_status(request.workspace, result)
-                return result
 
             adapters: list[LLMDecisionAdapter] | None = None
 
@@ -648,45 +748,85 @@ class StrictFullPoolFormalReplay:
                     plans=pending,
                     settlement=settlement,
                     policy=policy,
+                    progress=progress,
                     adapters=lanes,
                 )
                 if final_results is None:
-                    result = _build_result(
+                    return _finalize_strict_result(
                         request=request,
                         identity_hash=cast(str, identity["identity_hash"]),
+                        sample_user_ids=prepared.cohort.sample_user_ids,
                         policy=policy,
                         settlement=settlement,
+                        progress=progress,
                         journal=journal,
                         state=state,
                     )
-                    _write_status(request.workspace, result)
-                    return result
                 _register_final_results(kernel, pending, final_results)
                 kernel.commit_primary_batch()
 
-            accounting = _physical_accounting(
-                request=request,
-                policy=policy,
-                settlement=settlement,
-                seal_inflight=True,
-            )
+            accounting = progress.accounting
             policy.complete(
-                logical_count=len(settlement.replay().dispatched_pair_ids),
+                logical_count=progress.logical_count,
                 committed_batch_count=state.next_time_step,
                 charged_physical_attempts=accounting.charged,
             )
-            result = _build_result(
+            return _finalize_strict_result(
                 request=request,
                 identity_hash=cast(str, identity["identity_hash"]),
+                sample_user_ids=prepared.cohort.sample_user_ids,
                 policy=policy,
                 settlement=settlement,
+                progress=progress,
                 journal=journal,
                 state=state,
             )
-            _write_status(request.workspace, result)
-            return result
         finally:
             journal.close()
+
+
+def _finalize_strict_result(
+    *,
+    request: StrictFreshReplayRequest,
+    identity_hash: str,
+    sample_user_ids: Sequence[str],
+    policy: StrictPairPolicy,
+    settlement: DurablePairSettlement,
+    progress: _StrictSettlementProgress,
+    journal: ConcurrentExecutionJournal,
+    state: _ConcurrentRuntimeKernelState,
+) -> StrictFreshReplayResult:
+    result = _build_result(
+        request=request,
+        identity_hash=identity_hash,
+        policy=policy,
+        progress=progress,
+        journal=journal,
+        state=state,
+    )
+    source = request.workspace / STRICT_SOURCE_V4_DIR
+    staging = request.workspace / ".source-v4.staging"
+    if result.status is StrictFreshReplayStatus.COMPLETE:
+        source_ref = _close_or_validate_source_v4(
+            request=request,
+            identity_hash=identity_hash,
+            sample_user_ids=sample_user_ids,
+            result=result,
+            policy=policy,
+            settlement=settlement,
+            progress=progress,
+            journal=journal,
+        )
+        if source_ref is not None:
+            result = replace(
+                result,
+                source_root=source_ref.root,
+                source_manifest_sha256=source_ref.manifest_sha256,
+            )
+    elif any(path.exists() or path.is_symlink() for path in (source, staging)):
+        raise ValueError("strict-stopped replay cannot expose source-v4 bytes")
+    _write_status(request.workspace, result)
+    return result
 
 
 def strict_formal_provider_contract() -> dict[str, object]:
@@ -750,7 +890,7 @@ def _strict_run_identity(
         CONCURRENT_MESSAGE_PRIMARY_PROMPT_VERSION
     )
     identity = _build_primary_only_concurrent_execution_run_identity(
-        output_target=request.workspace.with_name(f"{request.workspace.name}-source-v4"),
+        output_target=request.workspace / STRICT_SOURCE_V4_DIR,
         operational_workspace=request.workspace,
         configuration_snapshot=configuration,
         message_snapshot=[message.model_dump(mode="json") for message in request.config.messages],
@@ -768,6 +908,17 @@ def _strict_run_identity(
             "max_concurrency": request.max_concurrency,
             "fresh_no_cache": True,
             "maximum_reconciliations_per_pair": 1,
+            "fresh_initial_positions": {
+                "batch": 0,
+                "logical": 0,
+                "physical": 0,
+                "pair_schedule": 0,
+            },
+            "rejected_history": {
+                "source_root": str(request.rejected_history.source_root),
+                "manifest_sha256": request.rejected_history.manifest_sha256,
+                "rejection_reason": request.rejected_history.rejection_reason,
+            },
         },
     )
     return _mapping(json.loads(_canonical_json(identity)), "strict run identity")
@@ -832,33 +983,53 @@ def _settle_strict_batch(
     plans: Sequence[_PairExecutionPlan],
     settlement: DurablePairSettlement,
     policy: StrictPairPolicy,
+    progress: _StrictSettlementProgress,
     adapters: Callable[[], Sequence[LLMDecisionAdapter]],
 ) -> dict[str, DurablePairTerminal] | None:
+    if policy.replay().terminal_event_type is not None:
+        return None
     plan_by_id = {plan.pair_id: plan for plan in plans}
     results: dict[str, DurablePairTerminal] = {}
+    outcomes = progress.outcomes
+    wave_index_by_pair = progress.wave_index_by_pair
+    logical_count = progress.logical_count
+    accounting = progress.accounting
     cursor = 0
     while cursor < len(plans):
-        policy_replay = policy.replay()
-        if policy_replay.terminal_event_type is not None:
-            return None
-        replay = settlement.replay(seal_inflight=True)
-        outcomes = {
-            outcome.pair_id: outcome
-            for wave in replay.waves
-            for outcome in wave.outcomes
-        }
         plan = plans[cursor]
         outcome = outcomes.get(plan.pair_id)
         if outcome is not None:
+            provisional = (
+                outcome.kind is not DurablePairOutcomeKind.TERMINAL
+                or cast(DurablePairTerminal, outcome.terminal).terminal_row.get(
+                    "terminal_status"
+                )
+                != "succeeded"
+            )
             terminal = _finalize_original_outcome(
                 request=request,
                 plan=plan,
                 outcome=outcome,
-                source_wave_index=_wave_index_for_pair(replay.waves, plan.pair_id),
+                source_wave_index=wave_index_by_pair[plan.pair_id],
                 policy=policy,
                 settlement=settlement,
                 adapter_supplier=adapters,
             )
+            if provisional:
+                accounting = _physical_accounting(
+                    request=request,
+                    policy=policy,
+                    settlement=settlement,
+                    seal_inflight=False,
+                )
+                progress.accounting = accounting
+                progress.external_request_invocations = (
+                    _external_request_invocations_from_outcomes(
+                        request=request,
+                        policy=policy,
+                        outcomes=progress.outcomes,
+                    )
+                )
             if terminal is None:
                 return None
             results[plan.pair_id] = terminal
@@ -870,14 +1041,9 @@ def _settle_strict_batch(
             if candidate.pair_id in outcomes:
                 break
             missing.append(candidate)
-        logical_count = len(replay.dispatched_pair_ids)
-        accounting = _physical_accounting(
-            request=request,
-            policy=policy,
-            settlement=settlement,
-            seal_inflight=False,
-        )
         wave_plans = missing[: request.max_concurrency]
+        if not wave_plans:
+            raise ValueError("strict batch has an empty nonterminal wave")
         requested_reservation = (
             len(wave_plans) * request.maximum_attempts_per_dispatch
         )
@@ -915,8 +1081,22 @@ def _settle_strict_batch(
             adapters(),
             physical_reservation=requested_reservation,
         )
+        progress.waves.append(wave)
+        logical_count += len(wave.dispatched_pair_ids)
+        progress.logical_count = logical_count
+        accounting = _PhysicalAccounting(
+            actual=accounting.actual + wave.actual_physical_attempts,
+            uncertain=accounting.uncertain + wave.uncertain_physical_attempts,
+        )
+        progress.accounting = accounting
+        progress.external_request_invocations += sum(
+            captured.accounting.external_request_invocations_delta
+            for captured in wave.outcomes
+        )
         for captured in wave.outcomes:
             _validate_dispatch_accounting(captured, request.maximum_attempts_per_dispatch)
+            outcomes[captured.pair_id] = captured
+            wave_index_by_pair[captured.pair_id] = wave.wave_index
 
     if set(results) != set(plan_by_id):
         raise ValueError("strict batch settlement did not close every pending plan")
@@ -1246,6 +1426,76 @@ def _register_final_results(
         )
 
 
+def _strict_settlement_progress(
+    *,
+    request: StrictFreshReplayRequest,
+    policy: StrictPairPolicy,
+    main: DurableSettlementReplay,
+) -> _StrictSettlementProgress:
+    waves = list(main.waves)
+    return _StrictSettlementProgress(
+        waves=waves,
+        outcomes={
+            outcome.pair_id: outcome
+            for wave in waves
+            for outcome in wave.outcomes
+        },
+        wave_index_by_pair={
+            pair_id: wave.wave_index
+            for wave in waves
+            for pair_id in wave.canonical_pair_ids
+        },
+        logical_count=len(main.dispatched_pair_ids),
+        accounting=_physical_accounting_from_main(
+            request=request,
+            policy=policy,
+            main=main,
+            seal_inflight=True,
+        ),
+        external_request_invocations=_external_request_invocations_from_outcomes(
+            request=request,
+            policy=policy,
+            outcomes={
+                outcome.pair_id: outcome
+                for wave in waves
+                for outcome in wave.outcomes
+            },
+        ),
+    )
+
+
+def _external_request_invocations_from_outcomes(
+    *,
+    request: StrictFreshReplayRequest,
+    policy: StrictPairPolicy,
+    outcomes: Mapping[str, DurablePairOutcome],
+) -> int:
+    external = sum(
+        outcome.accounting.external_request_invocations_delta
+        for outcome in outcomes.values()
+    )
+    for dispatch in policy.replay().dispatches.values():
+        root = _reconciliation_settlement_root(
+            request.workspace,
+            PurePosixPath(dispatch.journal_relative_path),
+            create_parent=False,
+        )
+        if root.is_symlink() or not root.is_dir():
+            continue
+        replay = DurablePairSettlement(
+            root,
+            settlement_identity_hash=dispatch.reconciliation_identity_hash,
+            maximum_attempts_per_dispatch=request.maximum_attempts_per_dispatch,
+            max_concurrency=1,
+        ).replay(seal_inflight=True)
+        external += sum(
+            outcome.accounting.external_request_invocations_delta
+            for wave in replay.waves
+            for outcome in wave.outcomes
+        )
+    return external
+
+
 def _physical_accounting(
     *,
     request: StrictFreshReplayRequest,
@@ -1253,7 +1503,21 @@ def _physical_accounting(
     settlement: DurablePairSettlement,
     seal_inflight: bool,
 ) -> _PhysicalAccounting:
-    main = settlement.replay(seal_inflight=seal_inflight)
+    return _physical_accounting_from_main(
+        request=request,
+        policy=policy,
+        main=settlement.replay(seal_inflight=seal_inflight),
+        seal_inflight=seal_inflight,
+    )
+
+
+def _physical_accounting_from_main(
+    *,
+    request: StrictFreshReplayRequest,
+    policy: StrictPairPolicy,
+    main: DurableSettlementReplay,
+    seal_inflight: bool,
+) -> _PhysicalAccounting:
     actual = main.actual_physical_attempts
     uncertain = main.uncertain_physical_attempts
     policy_replay = policy.replay()
@@ -1286,12 +1550,35 @@ def _physical_accounting(
     return _PhysicalAccounting(actual=actual, uncertain=uncertain)
 
 
+def _final_succeeded_terminals_from_outcomes(
+    *,
+    policy: StrictPairPolicy,
+    outcomes: Mapping[str, DurablePairOutcome],
+) -> dict[str, DurablePairTerminal]:
+    policy_replay = policy.replay()
+    final_terminals: dict[str, DurablePairTerminal] = {}
+    for pair_id, outcome in outcomes.items():
+        if outcome.kind is DurablePairOutcomeKind.TERMINAL:
+            terminal = cast(DurablePairTerminal, outcome.terminal)
+            if terminal.terminal_row.get("terminal_status") == "succeeded":
+                final_terminals[pair_id] = terminal
+                continue
+        resolution = policy_replay.resolutions.get(pair_id)
+        if resolution is not None:
+            final_terminals[pair_id] = _load_resolved_terminal(
+                policy,
+                policy_replay.dispatches[pair_id],
+                resolution,
+            )
+    return final_terminals
+
+
 def _build_result(
     *,
     request: StrictFreshReplayRequest,
     identity_hash: str,
     policy: StrictPairPolicy,
-    settlement: DurablePairSettlement,
+    progress: _StrictSettlementProgress,
     journal: ConcurrentExecutionJournal,
     state: _ConcurrentRuntimeKernelState,
 ) -> StrictFreshReplayResult:
@@ -1307,45 +1594,20 @@ def _build_result(
         stop_pair_ids = (_non_empty(payload.get("pair_id"), "strict stop pair_id"),)
     else:
         raise ValueError("strict result requires a persisted terminal policy event")
-    main = settlement.replay(seal_inflight=True)
-    accounting = _physical_accounting(
-        request=request,
+    accounting = progress.accounting
+    final_terminals = _final_succeeded_terminals_from_outcomes(
         policy=policy,
-        settlement=settlement,
-        seal_inflight=True,
+        outcomes=progress.outcomes,
     )
-    final_terminals: dict[str, DurablePairTerminal] = {}
-    for wave in main.waves:
-        for outcome in wave.outcomes:
-            if outcome.kind is not DurablePairOutcomeKind.TERMINAL:
-                continue
-            terminal = cast(DurablePairTerminal, outcome.terminal)
-            if terminal.terminal_row.get("terminal_status") == "succeeded":
-                final_terminals[outcome.pair_id] = terminal
-            elif outcome.pair_id in policy_replay.resolutions:
-                final_terminals[outcome.pair_id] = _load_resolved_terminal(
-                    policy,
-                    policy_replay.dispatches[outcome.pair_id],
-                    policy_replay.resolutions[outcome.pair_id],
-                )
-        for pair_id in wave.unknown_pair_ids:
-            resolution = policy_replay.resolutions.get(pair_id)
-            if resolution is not None:
-                final_terminals[pair_id] = _load_resolved_terminal(
-                    policy,
-                    policy_replay.dispatches[pair_id],
-                    resolution,
-                )
-    replay_status = _mapping(journal._replay_runtime().get("status"), "runtime status")
-    committed_batches = _non_negative_int(
-        replay_status.get("committed_batch_count"), "committed batch count"
-    )
+    committed_batches = journal.committed_batch_count
+    if committed_batches != state.next_time_step:
+        raise ValueError("strict runtime state is crossed with durable batch commits")
     result = StrictFreshReplayResult(
         status=status,
         workspace_root=request.workspace,
         replay_identity_hash=identity_hash,
         committed_batch_count=committed_batches,
-        logical_count=len(set(main.dispatched_pair_ids)),
+        logical_count=progress.logical_count,
         final_succeeded_terminal_count=len(final_terminals),
         reconciliation_dispatch_count=len(policy_replay.dispatches),
         settled_actual_attempts=accounting.actual,
@@ -1357,6 +1619,14 @@ def _build_result(
     )
     if result.charged_physical_attempts > request.physical_cap:
         raise ValueError("strict result exceeds the frozen physical cap")
+    if status is StrictFreshReplayStatus.COMPLETE:
+        completion = _mapping(policy_replay.terminal_payload, "strict completion payload")
+        if completion != {
+            "logical_count": result.logical_count,
+            "committed_batch_count": result.committed_batch_count,
+            "charged_physical_attempts": result.charged_physical_attempts,
+        }:
+            raise ValueError("strict completion event is crossed with persisted runtime facts")
     if status is StrictFreshReplayStatus.COMPLETE and (
         result.logical_count != request.logical_cap
         or result.final_succeeded_terminal_count != request.logical_cap
@@ -1364,6 +1634,868 @@ def _build_result(
     ):
         raise ValueError("strict complete result does not close its logical or batch denominator")
     return result
+
+
+def _validate_rejected_history_reference(
+    reference: StrictRejectedHistoryReference,
+) -> None:
+    root = reference.source_root
+    manifest = root / "manifest.json"
+    if (
+        root.is_symlink()
+        or not root.is_dir()
+        or manifest.is_symlink()
+        or not manifest.is_file()
+        or _sha256_file(manifest) != reference.manifest_sha256
+    ):
+        raise ValueError("strict rejected source-v3 lineage changed after it was frozen")
+
+
+def _close_or_validate_source_v4(
+    *,
+    request: StrictFreshReplayRequest,
+    identity_hash: str,
+    sample_user_ids: Sequence[str],
+    result: StrictFreshReplayResult,
+    policy: StrictPairPolicy,
+    settlement: DurablePairSettlement,
+    progress: _StrictSettlementProgress,
+    journal: ConcurrentExecutionJournal,
+) -> _StrictSourceV4Reference | None:
+    final_terminals = _final_succeeded_terminals_from_outcomes(
+        policy=policy,
+        outcomes=progress.outcomes,
+    )
+    runtime_replay = journal._replay_runtime()
+    evidence = _scan_source_v4_evidence(
+        request=request,
+        journal=journal,
+        runtime_replay=runtime_replay,
+        sample_user_ids=sample_user_ids,
+        final_terminals=final_terminals,
+        external_request_invocations=progress.external_request_invocations,
+    )
+    source = request.workspace / STRICT_SOURCE_V4_DIR
+    staging = request.workspace / ".source-v4.staging"
+    if source.exists() or source.is_symlink():
+        if staging.exists() or staging.is_symlink():
+            raise ValueError("source-v4 and its staging directory cannot coexist")
+        if not evidence.source_eligible:
+            raise ValueError("persisted source-v4 exists without complete final response evidence")
+        manifest_sha256 = _sha256_file(source / "manifest.json")
+        _validate_source_v4(
+            source=source,
+            manifest_sha256=manifest_sha256,
+            request=request,
+            identity_hash=identity_hash,
+            sample_user_ids=sample_user_ids,
+            result=result,
+            policy=policy,
+            settlement=settlement,
+            progress=progress,
+            journal=journal,
+            evidence=evidence,
+        )
+        return _StrictSourceV4Reference(source, manifest_sha256)
+
+    _discard_source_v4_staging(staging, request.workspace)
+    if not evidence.source_eligible:
+        return None
+
+    staging.mkdir()
+    _fsync_directory(request.workspace)
+    try:
+        _write_source_v4_rows(staging, journal, runtime_replay=runtime_replay)
+        for relative, expected_hash in evidence.row_hashes.items():
+            if _sha256_file(staging / relative) != expected_hash:
+                raise ValueError("source-v4 row projection differs from committed runtime spool")
+
+        workspace_artifacts, reconciliation_entries = _source_v4_workspace_artifacts(
+            request=request,
+            policy=policy,
+            settlement=settlement,
+            journal=journal,
+        )
+        for relative, origin in workspace_artifacts.items():
+            _copy_file_durable(origin, staging / relative)
+
+        membership = _source_v4_membership_bytes(
+            request.config.dataset_dir,
+            sample_user_ids=sample_user_ids,
+        )
+        _write_bytes_durable(staging / "latent-membership.csv", membership)
+        _exclusive_write_json(staging / "fresh-request.json", _source_v4_request_payload(request))
+        _exclusive_write_json(staging / "schema.json", _source_v4_schema_payload())
+
+        artifacts = _source_v4_artifact_refs(staging)
+        manifest = _source_v4_expected_manifest(
+            request=request,
+            identity_hash=identity_hash,
+            result=result,
+            progress=progress,
+            evidence=evidence,
+            artifacts=artifacts,
+            reconciliation_entries=reconciliation_entries,
+        )
+        _exclusive_write_json(staging / "manifest.json", manifest)
+        manifest_sha256 = _sha256_file(staging / "manifest.json")
+        _validate_source_v4(
+            source=staging,
+            manifest_sha256=manifest_sha256,
+            request=request,
+            identity_hash=identity_hash,
+            sample_user_ids=sample_user_ids,
+            result=result,
+            policy=policy,
+            settlement=settlement,
+            progress=progress,
+            journal=journal,
+            evidence=evidence,
+        )
+        os.replace(staging, source)
+        _fsync_directory(request.workspace)
+        _validate_source_v4(
+            source=source,
+            manifest_sha256=manifest_sha256,
+            request=request,
+            identity_hash=identity_hash,
+            sample_user_ids=sample_user_ids,
+            result=result,
+            policy=policy,
+            settlement=settlement,
+            progress=progress,
+            journal=journal,
+            evidence=evidence,
+        )
+        return _StrictSourceV4Reference(source, manifest_sha256)
+    except Exception:
+        if staging.exists() and not staging.is_symlink() and staging.is_dir():
+            shutil.rmtree(staging)
+            _fsync_directory(request.workspace)
+        raise
+
+
+def _scan_source_v4_evidence(
+    *,
+    request: StrictFreshReplayRequest,
+    journal: ConcurrentExecutionJournal,
+    runtime_replay: Mapping[str, object],
+    sample_user_ids: Sequence[str],
+    final_terminals: Mapping[str, DurablePairTerminal],
+    external_request_invocations: int,
+) -> _StrictSourceV4Evidence:
+    spool = _ConcurrentRuntimeBatchSpool(
+        request.workspace,
+        run_id=journal.run_id,
+        identity_hash=journal.identity_hash,
+        terminal_variants=("primary",),
+    )
+    row_hashers = {
+        name: hashlib.sha256()
+        for name in (
+            "candidate_rows.jsonl",
+            "pair_rows.jsonl",
+            "terminal_rows.jsonl",
+            "variant_evidence_rows.jsonl",
+            "steps.jsonl",
+        )
+    }
+    counts = Counter[str]()
+    pair_ids: set[str] = set()
+    user_message_pairs: set[tuple[str, str]] = set()
+    distinct_users: set[str] = set()
+    message_ids = {message.message_id for message in request.config.messages}
+    coverage: Counter[str] = Counter()
+    observed_models: Counter[str] = Counter()
+    request_invocations = 0
+    provider_responses = 0
+    successful_decisions = 0
+    observed_missing = 0
+    observed_malformed = 0
+    usage_complete = 0
+    usage_missing = 0
+    usage_malformed = 0
+    input_usage = 0
+    output_usage = 0
+    total_usage = 0
+    cached_input_usage = 0
+    cached_reported_response_count = 0
+
+    for expected_time_step, chunk in enumerate(spool.iter_committed(runtime_replay)):
+        if chunk.time_step != expected_time_step:
+            raise ValueError("source-v4 committed batches are missing or reordered")
+        counts["committed_batches"] += 1
+        rows_by_file = {
+            "candidate_rows.jsonl": chunk.candidate_rows,
+            "pair_rows.jsonl": chunk.result_rows,
+            "terminal_rows.jsonl": chunk.terminal_rows,
+            "variant_evidence_rows.jsonl": chunk.variant_evidence_rows,
+            "steps.jsonl": [chunk.commit],
+        }
+        for relative, rows in rows_by_file.items():
+            for row in rows:
+                row_hashers[relative].update((_canonical_json(row) + "\n").encode("utf-8"))
+
+        counts["candidate_rows"] += len(chunk.candidate_rows)
+        counts["pair_rows"] += len(chunk.result_rows)
+        counts["terminal_rows"] += len(chunk.terminal_rows)
+        counts["variant_evidence_rows"] += len(chunk.variant_evidence_rows)
+        result_ids = tuple(
+            _non_empty(row.get("pair_id"), "source-v4 result pair_id")
+            for row in chunk.result_rows
+        )
+        terminal_ids = tuple(
+            _non_empty(row.get("pair_id"), "source-v4 terminal pair_id")
+            for row in chunk.terminal_rows
+        )
+        evidence_ids = tuple(
+            _non_empty(row.get("pair_id"), "source-v4 evidence pair_id")
+            for row in chunk.variant_evidence_rows
+        )
+        if result_ids != terminal_ids or result_ids != evidence_ids:
+            raise ValueError("source-v4 pair, terminal, and evidence order is crossed")
+        selected_rows = [
+            row for row in chunk.candidate_rows if _true_cell(row.get("selected"))
+        ]
+        selected_ids = {
+            f"{_non_empty(row.get('user_id'), 'selected user_id')}:"
+            f"{_non_empty(row.get('message_id'), 'selected message_id')}:"
+            f"{_non_negative_int(row.get('time_step'), 'selected time_step')}"
+            for row in selected_rows
+        }
+        remaining_per_message = max(
+            request.config.sample_size
+            - expected_time_step * request.config.delivery_capacity,
+            0,
+        )
+        expected_selected_per_message = min(
+            request.config.delivery_capacity,
+            remaining_per_message,
+        )
+        if (
+            len(chunk.candidate_rows) != remaining_per_message * len(message_ids)
+            or len(result_ids) != expected_selected_per_message * len(message_ids)
+            or len(selected_rows) != len(result_ids)
+            or selected_ids != set(result_ids)
+        ):
+            raise ValueError("source-v4 selected candidate frontier differs from committed pairs")
+
+        for result_row, terminal_row, evidence_row in zip(
+            chunk.result_rows,
+            chunk.terminal_rows,
+            chunk.variant_evidence_rows,
+            strict=True,
+        ):
+            pair_id = _non_empty(terminal_row.get("pair_id"), "source-v4 pair_id")
+            user_id = _non_empty(terminal_row.get("user_id"), "source-v4 user_id")
+            message_id = _non_empty(terminal_row.get("message_id"), "source-v4 message_id")
+            terminal = final_terminals.get(pair_id)
+            if (
+                pair_id in pair_ids
+                or message_id not in message_ids
+                or (user_id, message_id) in user_message_pairs
+                or terminal is None
+                or dict(terminal.terminal_row) != dict(terminal_row)
+                or dict(terminal.variant_evidence) != dict(evidence_row)
+                or result_row.get("primary_status") != "succeeded"
+                or terminal_row.get("terminal_status") != "succeeded"
+                or terminal_row.get("provider_status") != "succeeded"
+            ):
+                raise ValueError("source-v4 final succeeded terminal mapping is crossed")
+            pair_ids.add(pair_id)
+            user_message_pairs.add((user_id, message_id))
+            distinct_users.add(user_id)
+            coverage[user_id] += 1
+
+            invocations = _non_negative_int(
+                evidence_row.get("request_invocations"), "source-v4 request invocations"
+            )
+            responses = _non_negative_int(
+                evidence_row.get("provider_response_count"), "source-v4 provider responses"
+            )
+            successes = _non_negative_int(
+                evidence_row.get("successful_decision_count"), "source-v4 successful decisions"
+            )
+            if not invocations >= responses >= successes:
+                raise ValueError("source-v4 final response accounting invariant failed")
+            request_invocations += invocations
+            provider_responses += responses
+            successful_decisions += successes
+            for model, count in _mapping(
+                evidence_row.get("observed_model_counts"), "source-v4 observed models"
+            ).items():
+                observed_models[model] += _non_negative_int(count, "source-v4 model count")
+            observed_missing += _non_negative_int(
+                evidence_row.get("observed_model_missing_response_count"),
+                "source-v4 missing model count",
+            )
+            observed_malformed += _non_negative_int(
+                evidence_row.get("observed_model_malformed_response_count"),
+                "source-v4 malformed model count",
+            )
+            usage_complete += _non_negative_int(
+                evidence_row.get("usage_complete_response_count"),
+                "source-v4 complete usage count",
+            )
+            usage_missing += _non_negative_int(
+                evidence_row.get("usage_missing_response_count"),
+                "source-v4 missing usage count",
+            )
+            usage_malformed += _non_negative_int(
+                evidence_row.get("usage_malformed_response_count"),
+                "source-v4 malformed usage count",
+            )
+            input_value = evidence_row.get("input_usage")
+            output_value = evidence_row.get("output_usage")
+            total_value = evidence_row.get("total_usage")
+            if input_value is not None or output_value is not None or total_value is not None:
+                input_tokens = _non_negative_int(input_value, "source-v4 input usage")
+                output_tokens = _non_negative_int(output_value, "source-v4 output usage")
+                total_tokens = _non_negative_int(total_value, "source-v4 total usage")
+                if total_tokens != input_tokens + output_tokens:
+                    raise ValueError("source-v4 token usage total is crossed")
+                input_usage += input_tokens
+                output_usage += output_tokens
+                total_usage += total_tokens
+            cached_value = evidence_row.get("cached_input_usage")
+            if cached_value is not None:
+                cached_input_usage += _non_negative_int(
+                    cached_value, "source-v4 cached input usage"
+                )
+                cached_reported_response_count += responses
+
+    expected_messages = len(message_ids)
+    expected_candidates = expected_messages * sum(
+        max(
+            request.config.sample_size
+            - time_step * request.config.delivery_capacity,
+            0,
+        )
+        for time_step in range(request.config.horizon)
+    )
+    if (
+        counts["committed_batches"] != request.config.horizon
+        or counts["candidate_rows"] != expected_candidates
+        or len(pair_ids) != request.logical_cap
+        or set(pair_ids) != set(final_terminals)
+        or distinct_users != set(sample_user_ids)
+        or len(distinct_users) != request.config.sample_size
+        or set(coverage.values()) != {expected_messages}
+    ):
+        raise ValueError("source-v4 fresh user, pair, or batch denominator is incomplete")
+    counts["distinct_users"] = len(distinct_users)
+    expected_model = _non_empty(
+        request.provider_contract.get("requested_model"), "source-v4 requested model"
+    )
+    source_eligible = (
+        request_invocations >= request.logical_cap
+        and provider_responses == request.logical_cap
+        and successful_decisions == request.logical_cap
+        and dict(observed_models) == {expected_model: request.logical_cap}
+        and observed_missing == 0
+        and observed_malformed == 0
+        and usage_complete == request.logical_cap
+        and usage_missing == 0
+        and usage_malformed == 0
+    )
+    provider_accounting = {
+        "schema_version": "provider-accounting-v1",
+        "external_request_invocations": external_request_invocations,
+        "provider_response_count": provider_responses,
+        "successful_decision_count": successful_decisions,
+        "observed_model_counts": dict(sorted(observed_models.items())),
+        "observed_model_missing_response_count": observed_missing,
+        "observed_model_malformed_response_count": observed_malformed,
+        "usage_complete_response_count": usage_complete,
+        "usage_missing_response_count": usage_missing,
+        "usage_malformed_response_count": usage_malformed,
+        "input_tokens": input_usage if usage_complete else None,
+        "output_tokens": output_usage if usage_complete else None,
+        "total_tokens": total_usage if usage_complete else None,
+        "cached_input_tokens": (
+            cached_input_usage if cached_reported_response_count else None
+        ),
+        "cached_input_tokens_reported_response_count": cached_reported_response_count,
+    }
+    return _StrictSourceV4Evidence(
+        counts={
+            key: counts[key]
+            for key in (
+                "candidate_rows",
+                "committed_batches",
+                "distinct_users",
+                "pair_rows",
+                "terminal_rows",
+                "variant_evidence_rows",
+            )
+        },
+        provider_accounting=provider_accounting,
+        row_hashes={name: digest.hexdigest() for name, digest in row_hashers.items()},
+        source_eligible=source_eligible,
+    )
+
+
+def _write_source_v4_rows(
+    source: Path,
+    journal: ConcurrentExecutionJournal,
+    *,
+    runtime_replay: Mapping[str, object],
+) -> None:
+    spool = _ConcurrentRuntimeBatchSpool(
+        journal.workspace_dir,
+        run_id=journal.run_id,
+        identity_hash=journal.identity_hash,
+        terminal_variants=("primary",),
+    )
+    handles = {
+        name: (source / name).open("x", encoding="utf-8", newline="\n")
+        for name in (
+            "candidate_rows.jsonl",
+            "pair_rows.jsonl",
+            "terminal_rows.jsonl",
+            "variant_evidence_rows.jsonl",
+            "steps.jsonl",
+        )
+    }
+    try:
+        for chunk in spool.iter_committed(runtime_replay):
+            rows_by_file = {
+                "candidate_rows.jsonl": chunk.candidate_rows,
+                "pair_rows.jsonl": chunk.result_rows,
+                "terminal_rows.jsonl": chunk.terminal_rows,
+                "variant_evidence_rows.jsonl": chunk.variant_evidence_rows,
+                "steps.jsonl": [chunk.commit],
+            }
+            for relative, rows in rows_by_file.items():
+                for row in rows:
+                    handles[relative].write(_canonical_json(row) + "\n")
+        for handle in handles.values():
+            handle.flush()
+            os.fsync(handle.fileno())
+    finally:
+        for handle in handles.values():
+            handle.close()
+    _fsync_directory(source)
+
+
+def _source_v4_workspace_artifacts(
+    *,
+    request: StrictFreshReplayRequest,
+    policy: StrictPairPolicy,
+    settlement: DurablePairSettlement,
+    journal: ConcurrentExecutionJournal,
+) -> tuple[dict[str, Path], list[dict[str, object]]]:
+    _validate_rejected_history_reference(request.rejected_history)
+    artifacts = {
+        "runtime/fresh-run-identity.json": request.workspace
+        / CONCURRENT_MESSAGE_EXECUTION_RUN_IDENTITY_JSON,
+        "runtime/execution-journal.jsonl": request.workspace
+        / CONCURRENT_MESSAGE_EXECUTION_JOURNAL_JSONL,
+        "runtime/execution-status.json": request.workspace
+        / CONCURRENT_MESSAGE_EXECUTION_STATUS_JSON,
+        "strict/strict-pair-policy.json": policy.path,
+        "strict/strict-pair-policy-ledger.jsonl": policy.ledger_path,
+        "settlement/original/durable-pair-settlement-v2.jsonl": settlement.path,
+        "rejected-history/source-v3-manifest.json": request.rejected_history.source_root
+        / "manifest.json",
+    }
+    snapshot_root = request.workspace / CONCURRENT_MESSAGE_EXECUTION_SNAPSHOTS_DIR
+    if snapshot_root.is_symlink() or not snapshot_root.is_dir():
+        raise ValueError("source-v4 runtime snapshot directory is missing or unsafe")
+    for snapshot in sorted(snapshot_root.iterdir(), key=lambda path: path.name):
+        if snapshot.is_symlink() or not snapshot.is_file():
+            raise ValueError("source-v4 runtime snapshot inventory is unsafe")
+        artifacts[f"runtime/snapshots/{snapshot.name}"] = snapshot
+
+    reconciliation_entries: list[dict[str, object]] = []
+    policy_replay = policy.replay()
+    for pair_id, dispatch in sorted(policy_replay.dispatches.items()):
+        resolution = policy_replay.resolutions.get(pair_id)
+        if resolution is None:
+            raise ValueError("complete source-v4 has an unresolved reconciliation dispatch")
+        root = _reconciliation_settlement_root(
+            request.workspace,
+            PurePosixPath(dispatch.journal_relative_path),
+            create_parent=False,
+        )
+        journal_path = root / DURABLE_PAIR_SETTLEMENT_JOURNAL_FILE
+        relative = (
+            Path("settlement/reconciliations")
+            / dispatch.reconciliation_identity_hash
+            / "durable-pair-settlement-v2.jsonl"
+        ).as_posix()
+        if _sha256_file(journal_path) != resolution.journal_sha256:
+            raise ValueError("source-v4 reconciliation journal differs from policy closure")
+        artifacts[relative] = journal_path
+        reconciliation_entries.append(
+            {
+                "pair_id": pair_id,
+                "source_kind": dispatch.source_kind,
+                "reconciliation_identity_hash": dispatch.reconciliation_identity_hash,
+                "relative_path": relative,
+                "journal_sha256": resolution.journal_sha256,
+                "terminal_sha256": resolution.terminal_sha256,
+                "actual_physical_attempts": resolution.actual_physical_attempts,
+                "uncertain_physical_attempts": resolution.uncertain_physical_attempts,
+                "physical_attempt_charge": resolution.physical_attempt_charge,
+            }
+        )
+    for origin in artifacts.values():
+        _sha256_file(origin)
+    return artifacts, reconciliation_entries
+
+
+def _source_v4_membership_bytes(
+    dataset_dir: Path,
+    *,
+    sample_user_ids: Sequence[str],
+) -> bytes:
+    source = dataset_dir / "users.csv"
+    if source.is_symlink() or not source.is_file():
+        raise ValueError("source-v4 latent membership origin is missing or unsafe")
+    expected = set(sample_user_ids)
+    membership: dict[str, str] = {}
+    with source.open(encoding="utf-8-sig", newline="") as handle:
+        reader = csv.DictReader(handle)
+        if reader.fieldnames is None or not {"user_id", "latent_class"}.issubset(
+            reader.fieldnames
+        ):
+            raise ValueError("source-v4 latent membership columns are incomplete")
+        for row in reader:
+            user_id = row.get("user_id", "")
+            if user_id not in expected:
+                continue
+            latent_class = row.get("latent_class", "")
+            if user_id in membership or latent_class not in {
+                "class_1",
+                "class_2",
+                "class_3",
+            }:
+                raise ValueError("source-v4 latent membership is invalid or duplicated")
+            membership[user_id] = latent_class
+    if set(membership) != expected:
+        raise ValueError("source-v4 latent membership differs from the fresh user set")
+    output = io.StringIO(newline="")
+    writer = csv.writer(output, lineterminator="\n")
+    writer.writerow(("user_id", "latent_class"))
+    for user_id in sorted(expected):
+        writer.writerow((user_id, membership[user_id]))
+    return output.getvalue().encode("utf-8")
+
+
+def _source_v4_request_payload(request: StrictFreshReplayRequest) -> dict[str, object]:
+    return {
+        "schema_version": "full-pool-strict-fresh-request-v1",
+        "replay_id": request.replay_id,
+        "workspace": str(request.workspace),
+        "dataset_dir": str(request.config.dataset_dir.resolve()),
+        "seed_top_k_per_proxy": request.seed_top_k_per_proxy,
+        "logical_cap": request.logical_cap,
+        "physical_cap": request.physical_cap,
+        "maximum_attempts_per_dispatch": request.maximum_attempts_per_dispatch,
+        "max_concurrency": request.max_concurrency,
+        "provider_contract": dict(request.provider_contract),
+        "rejected_history": {
+            "source_root": str(request.rejected_history.source_root),
+            "manifest_sha256": request.rejected_history.manifest_sha256,
+            "rejection_reason": request.rejected_history.rejection_reason,
+        },
+    }
+
+
+def _source_v4_schema_payload() -> dict[str, object]:
+    return {
+        "schema_version": "full-pool-segmented-source-v4-schema-v1",
+        "source_schema_version": FULL_POOL_SOURCE_V4_SCHEMA,
+        "terminal_variants": ["primary"],
+        "row_files": {
+            "candidate": "candidate_rows.jsonl",
+            "pair": "pair_rows.jsonl",
+            "terminal": "terminal_rows.jsonl",
+            "variant_evidence": "variant_evidence_rows.jsonl",
+            "steps": "steps.jsonl",
+        },
+        "provisional_outcomes_are_attempt_evidence_only": True,
+    }
+
+
+def _source_v4_expected_manifest(
+    *,
+    request: StrictFreshReplayRequest,
+    identity_hash: str,
+    result: StrictFreshReplayResult,
+    progress: _StrictSettlementProgress,
+    evidence: _StrictSourceV4Evidence,
+    artifacts: Sequence[Mapping[str, object]],
+    reconciliation_entries: Sequence[Mapping[str, object]],
+) -> dict[str, object]:
+    artifact_by_path = {
+        _non_empty(item.get("relative_path"), "source-v4 artifact path"): item
+        for item in artifacts
+    }
+    outcomes = tuple(progress.outcomes.values())
+    provisional_provider_failed = sum(
+        1
+        for outcome in outcomes
+        if outcome.kind is DurablePairOutcomeKind.TERMINAL
+        and cast(DurablePairTerminal, outcome.terminal).terminal_row.get("terminal_status")
+        == "provider_failed"
+    )
+    snapshot_refs = [
+        {
+            "relative_path": relative,
+            "sha256": artifact_by_path[relative]["sha256"],
+        }
+        for relative in sorted(artifact_by_path)
+        if relative.startswith("runtime/snapshots/")
+    ]
+    return {
+        "schema_version": FULL_POOL_SOURCE_V4_SCHEMA,
+        "source_identity": identity_hash,
+        "replay_id": request.replay_id,
+        "profile": request.config.configuration_profile,
+        "production_topology": (
+            request.config.sample_size == 36_400
+            and request.config.horizon == 30
+            and request.logical_cap == 109_200
+            and request.physical_cap == 120_120
+            and request.max_concurrency == 10
+        ),
+        "counts": dict(evidence.counts),
+        "provider_accounting": dict(evidence.provider_accounting),
+        "physical_accounting": {
+            "settled_actual_attempts": result.settled_actual_attempts,
+            "dispatched_without_settlement_uncertainty": (
+                result.dispatched_without_settlement_uncertainty
+            ),
+            "charged_physical_attempts": result.charged_physical_attempts,
+            "active_reservations": result.active_physical_reservations,
+            "physical_cap": request.physical_cap,
+        },
+        "fresh_lineage": {
+            "schema_version": "full-pool-strict-fresh-lineage-v1",
+            "fresh_from_batch_zero": True,
+            "initial_positions": {
+                "batch": 0,
+                "logical": 0,
+                "physical": 0,
+                "pair_schedule": 0,
+            },
+            "imported_terminal_count": 0,
+            "imported_batch_count": 0,
+            "rejected_history": {
+                "source_root": str(request.rejected_history.source_root),
+                "manifest_sha256": request.rejected_history.manifest_sha256,
+                "rejection_reason": request.rejected_history.rejection_reason,
+            },
+        },
+        "runtime_lineage": {
+            "run_identity_sha256": artifact_by_path[
+                "runtime/fresh-run-identity.json"
+            ]["sha256"],
+            "execution_journal_sha256": artifact_by_path[
+                "runtime/execution-journal.jsonl"
+            ]["sha256"],
+            "execution_status_sha256": artifact_by_path[
+                "runtime/execution-status.json"
+            ]["sha256"],
+            "batch_snapshots": snapshot_refs,
+        },
+        "strict_policy": {
+            "policy_identity_hash": identity_hash,
+            "policy_sha256": artifact_by_path[
+                "strict/strict-pair-policy.json"
+            ]["sha256"],
+            "policy_ledger_sha256": artifact_by_path[
+                "strict/strict-pair-policy-ledger.jsonl"
+            ]["sha256"],
+            "reconciliation_dispatch_count": result.reconciliation_dispatch_count,
+        },
+        "settlement_v2": {
+            "schema_version": "full-pool-durable-pair-settlement-v2",
+            "original_journal_sha256": artifact_by_path[
+                "settlement/original/durable-pair-settlement-v2.jsonl"
+            ]["sha256"],
+            "wave_count": len(progress.waves),
+            "original_dispatched_pair_count": progress.logical_count,
+            "original_terminal_pair_count": sum(
+                outcome.kind is DurablePairOutcomeKind.TERMINAL
+                for outcome in outcomes
+            ),
+            "provisional_provider_failed_count": provisional_provider_failed,
+            "provisional_unknown_pair_count": sum(
+                outcome.kind is DurablePairOutcomeKind.PROVENANCE_UNKNOWN
+                for outcome in outcomes
+            ),
+            "implementation_failed_pair_count": sum(
+                outcome.kind is DurablePairOutcomeKind.IMPLEMENTATION_FAILED
+                for outcome in outcomes
+            ),
+            "final_succeeded_terminal_count": result.final_succeeded_terminal_count,
+            "reconciliation_journals": [dict(item) for item in reconciliation_entries],
+        },
+        "row_hashes": dict(evidence.row_hashes),
+        "provider_contract_sha256": _sha256_json(request.provider_contract),
+        "source_hash": _sha256_json(list(artifacts)),
+        "production_deploy_eligible": False,
+        "artifacts": [dict(item) for item in artifacts],
+    }
+
+
+def _validate_source_v4(
+    *,
+    source: Path,
+    manifest_sha256: str,
+    request: StrictFreshReplayRequest,
+    identity_hash: str,
+    sample_user_ids: Sequence[str],
+    result: StrictFreshReplayResult,
+    policy: StrictPairPolicy,
+    settlement: DurablePairSettlement,
+    progress: _StrictSettlementProgress,
+    journal: ConcurrentExecutionJournal,
+    evidence: _StrictSourceV4Evidence,
+) -> None:
+    if source.is_symlink() or not source.is_dir():
+        raise ValueError("source-v4 must be one real directory")
+    manifest_path = source / "manifest.json"
+    if _sha256_file(manifest_path) != _digest(manifest_sha256, "source-v4 manifest hash"):
+        raise ValueError("source-v4 manifest differs from its explicit hash")
+    manifest = _read_json(manifest_path)
+    if set(manifest) != _SOURCE_V4_MANIFEST_FIELDS:
+        raise ValueError("source-v4 manifest fields are not exact")
+    artifact_rows = manifest.get("artifacts")
+    if not isinstance(artifact_rows, Sequence) or isinstance(artifact_rows, (str, bytes)):
+        raise ValueError("source-v4 artifacts must be a sequence")
+    artifacts: list[dict[str, object]] = []
+    artifact_by_path: dict[str, dict[str, object]] = {}
+    for raw in artifact_rows:
+        artifact = _mapping(raw, "source-v4 artifact reference")
+        if set(artifact) != {"relative_path", "sha256", "bytes"}:
+            raise ValueError("source-v4 artifact reference fields are not exact")
+        relative_text = _non_empty(artifact.get("relative_path"), "source-v4 artifact path")
+        relative = PurePosixPath(relative_text)
+        target = source / Path(*relative.parts)
+        if (
+            relative.is_absolute()
+            or ".." in relative.parts
+            or relative_text == "manifest.json"
+            or relative_text in artifact_by_path
+            or target.is_symlink()
+            or not target.is_file()
+            or _sha256_file(target) != _digest(artifact.get("sha256"), "artifact hash")
+            or target.stat().st_size != _non_negative_int(artifact.get("bytes"), "artifact bytes")
+        ):
+            raise ValueError("source-v4 artifact inventory is unsafe or crossed")
+        artifacts.append(artifact)
+        artifact_by_path[relative_text] = artifact
+
+    workspace_artifacts, reconciliation_entries = _source_v4_workspace_artifacts(
+        request=request,
+        policy=policy,
+        settlement=settlement,
+        journal=journal,
+    )
+    expected_paths = {
+        "candidate_rows.jsonl",
+        "pair_rows.jsonl",
+        "terminal_rows.jsonl",
+        "variant_evidence_rows.jsonl",
+        "steps.jsonl",
+        "latent-membership.csv",
+        "fresh-request.json",
+        "schema.json",
+        *workspace_artifacts,
+    }
+    inventory = tuple(source.rglob("*"))
+    if any(path.is_symlink() or not (path.is_file() or path.is_dir()) for path in inventory):
+        raise ValueError("source-v4 artifact inventory contains an unsafe entry")
+    actual_files = {
+        path.relative_to(source).as_posix()
+        for path in inventory
+        if path.is_file()
+    }
+    if set(artifact_by_path) != expected_paths or actual_files != expected_paths | {
+        "manifest.json"
+    }:
+        raise ValueError("source-v4 artifact inventory is missing, extra, or unsafe")
+    for relative, origin in workspace_artifacts.items():
+        if artifact_by_path[relative]["sha256"] != _sha256_file(origin):
+            raise ValueError("source-v4 copied runtime lineage differs from its origin")
+    for relative, expected_hash in evidence.row_hashes.items():
+        if artifact_by_path[relative]["sha256"] != expected_hash:
+            raise ValueError("source-v4 row hash differs from committed runtime evidence")
+    membership_hash = hashlib.sha256(
+        _source_v4_membership_bytes(
+            request.config.dataset_dir,
+            sample_user_ids=sample_user_ids,
+        )
+    ).hexdigest()
+    if artifact_by_path["latent-membership.csv"]["sha256"] != membership_hash:
+        raise ValueError("source-v4 latent membership changed after closure")
+    if _read_json(source / "fresh-request.json") != _source_v4_request_payload(request):
+        raise ValueError("source-v4 frozen request is crossed")
+    if _read_json(source / "schema.json") != _source_v4_schema_payload():
+        raise ValueError("source-v4 schema document is crossed")
+    expected_manifest = _source_v4_expected_manifest(
+        request=request,
+        identity_hash=identity_hash,
+        result=result,
+        progress=progress,
+        evidence=evidence,
+        artifacts=artifacts,
+        reconciliation_entries=reconciliation_entries,
+    )
+    if manifest != expected_manifest:
+        raise ValueError("source-v4 manifest differs from persisted fresh runtime facts")
+
+
+def _source_v4_artifact_refs(source: Path) -> list[dict[str, object]]:
+    return [
+        {
+            "relative_path": path.relative_to(source).as_posix(),
+            "sha256": _sha256_file(path),
+            "bytes": path.stat().st_size,
+        }
+        for path in sorted(source.rglob("*"), key=lambda item: item.as_posix())
+        if path.is_file() and not path.is_symlink() and path.name != "manifest.json"
+    ]
+
+
+def _discard_source_v4_staging(staging: Path, workspace: Path) -> None:
+    if not staging.exists() and not staging.is_symlink():
+        return
+    if staging.is_symlink() or not staging.is_dir():
+        raise ValueError("source-v4 staging path is unsafe")
+    shutil.rmtree(staging)
+    _fsync_directory(workspace)
+
+
+def _true_cell(value: object) -> bool:
+    if value is True or value == "true":
+        return True
+    if value is False or value == "false":
+        return False
+    raise ValueError("source-v4 boolean cell is malformed")
+
+
+def _copy_file_durable(source: Path, target: Path) -> None:
+    if source.is_symlink() or not source.is_file():
+        raise ValueError("source-v4 copied artifact origin is missing or unsafe")
+    _write_bytes_durable(target, source.read_bytes())
+
+
+def _write_bytes_durable(path: Path, content: bytes) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    try:
+        with os.fdopen(descriptor, "wb", closefd=False) as handle:
+            handle.write(content)
+            handle.flush()
+            os.fsync(handle.fileno())
+    finally:
+        os.close(descriptor)
+    _fsync_directory(path.parent)
 
 
 def _validate_dispatch_accounting(
@@ -1423,15 +2555,6 @@ def _stop_for_cap(
     )
 
 
-def _wave_index_for_pair(
-    waves: Sequence[DurableWaveSettlement], pair_id: str
-) -> int:
-    for wave in waves:
-        if pair_id in wave.canonical_pair_ids:
-            return wave.wave_index
-    raise ValueError("strict outcome is missing its source wave")
-
-
 def _terminal_sha256(terminal: DurablePairTerminal) -> str:
     return _sha256_json(
         {
@@ -1483,6 +2606,8 @@ def _write_status(workspace: Path, result: StrictFreshReplayResult) -> None:
         "active_physical_reservations": result.active_physical_reservations,
         "committed_feedback_user_ids": list(result.committed_feedback_user_ids),
         "strict_stop_pair_ids": list(result.strict_stop_pair_ids),
+        "source_root": str(result.source_root) if result.source_root is not None else None,
+        "source_manifest_sha256": result.source_manifest_sha256,
         "production_deploy_eligible": False,
     }
     path = workspace / STRICT_FRESH_REPLAY_STATUS_FILE

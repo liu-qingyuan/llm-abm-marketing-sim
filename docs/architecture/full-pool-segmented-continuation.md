@@ -261,6 +261,16 @@ package-internal source version dispatcher 对 `full-pool-segmented-source-v3` �
 
 Evidence v10只从 source-v3、execution receipt、automation manifest、Report closure和冻结历史 artifacts重建 typed facts。Release dispatcher 对 source-v3 只接受 `abm-report-release-contract-v10`，并绑定 nested lineage、policy、settlement v2、result projection、execution manifest和 physical snapshot；v9 reader/validator继续只接受 source-v2。Validation/mock、incomplete、`implementation_failed`或`automation_exhausted`不能进入 production evidence。合法 Formal v10随后继续使用既有 immutable release、candidate health、snapshot、atomic `current` switch、rollback与逐 artifact public hash合同。
 
+## Strict fresh replay 与 source-v4
+
+package-internal `StrictFullPoolFormalReplay.run(request, adapter_factory)` 是从 Batch 0 启动 fresh trajectory 的唯一 runtime 最高 Interface。冻结 request 绑定 dataset/messages/config、P0 Provider contract、109,200/120,120 caps、十 lane topology和被拒绝 source-v3 的显式 manifest path/hash/reason；调用方不编排 Future、kernel、policy、journal、spool 或 source writer。Run identity 固定从 batch/logical/physical/pair schedule position 0 开始，旧 source-v3 不提供 terminal、snapshot、ranking 或 feedback。
+
+Module 复用既有 `_ConcurrentRuntimeKernel`、`DurablePairSettlement` 和 batch spool。每个 frozen batch 先按 wave 独立 durable capture siblings；`provider_failed` 或 provenance unknown 只能通过 `StrictPairPolicy` 的单个原子 slot-plus-dispatch event在同一 pair context reconciliation。只有全部 selected pairs 都拥有 final `succeeded` terminal，才按 canonical order注册并提交本批；任一 typed strict stop都阻止当前及后续 batch commit，也不暴露 source-v4。Same-identity replay从 settlement、policy、journal和spool恢复，captured pair不重新调用；settlement完成但commit前只补commit，已提交batch不重复feedback。
+
+完整 runtime 只在每个 logical pair恰有一个 final successful response、exact `gpt-5.6-sol` observed-model evidence、完整 usage、30 个 batch commits和不超过physical cap的持久化账务时关闭 additive `source-v4`。Closure先从 committed spool重建candidate/pair/terminal/step rows，复制fresh identity、runtime journal/status/snapshots、settlement v2、strict policy/ledger、reconciliation journals、latent membership和rejected-history manifest，再验证exact inventory后原子rename。Provisional failures与failed attempts只保留在settlement/physical accounting；source terminal rows全部是final success。Source rename前后的crash均可在同identity下零Adapter恢复，旧source-v3保持只读。
+
+Validation与zero-Provider rehearsal生成的source-v4固定`production_deploy_eligible=false`；本Module、测试和source closure不授予live authorization，不执行SSH、upload、promotion或canonical deployment。可重入fresh Formal operator、attempt ledger与live gate由后续operator Module拥有。
+
 ## Create-once automation execution manifest
 
 `AutomationExecutionManifest` 在执行前 create once，精确绑定 implementation commit、受影响 Module hashes、nested plan/hash、七个有序 pair/terminal mappings、绝对输出 paths、Pi `openai-codex`、`gpt-5.6-sol`、P0、Responses/low/256/30s/2-retry、十条隔离 lanes、109,200/120,120 caps、USD 0 billing和 bounded stop conditions。`FullPoolAutomationOperator` 不扫描 latest；它在创建 Adapter 前验证 manifest、Git/Module bytes、workspace identity、live gates、Provider/model与caps，Adapter metadata不一致时在第一次 decision 前停止。execution receipt在 dispatch 前持久化并防止 manifest被另一个 identity重复消费。

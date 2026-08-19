@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import hashlib
 import json
+import shutil
 from collections.abc import Mapping
 from copy import deepcopy
 from pathlib import Path
@@ -20,12 +22,19 @@ from llm_abm_sim.decision import (
     ProviderResponseProvenanceUnknown,
 )
 from llm_abm_sim.full_pool_strict_replay import (
+    FULL_POOL_SOURCE_V4_SCHEMA,
     STRICT_PAIR_POLICY_LEDGER_FILE,
     StrictFreshReplayRequest,
     StrictFreshReplayResult,
     StrictFreshReplayStatus,
     StrictFullPoolFormalReplay,
+    StrictRejectedHistoryReference,
     strict_formal_provider_contract,
+)
+from llm_abm_sim.provider_accounting import (
+    ProviderAccounting,
+    ProviderAccountingTracker,
+    ProviderResponseEnvelope,
 )
 from llm_abm_sim.schemas import PeerContext, PlatformContext, PostContent, UserProfile
 from tests.integration.test_full_pool_segmented_multibatch import _dataset
@@ -153,6 +162,21 @@ class _DelayedStrictAdapter(_StrictAdapter):
         return super().decide(post, profile, peer_context, platform_context, time_step)
 
 
+def _rejected_history(tmp_path: Path) -> StrictRejectedHistoryReference:
+    source = tmp_path / "rejected-source-v3"
+    source.mkdir(parents=True, exist_ok=True)
+    manifest = source / "manifest.json"
+    manifest.write_text(
+        '{"schema_version":"full-pool-segmented-source-v3","status":"mixed"}\n',
+        encoding="utf-8",
+    )
+    return StrictRejectedHistoryReference(
+        source_root=source,
+        manifest_sha256=hashlib.sha256(manifest.read_bytes()).hexdigest(),
+        rejection_reason="validation_mixed_provider_evidence",
+    )
+
+
 def _request(tmp_path: Path, *, physical_cap: int = 120_120) -> StrictFreshReplayRequest:
     dataset = _dataset(tmp_path, user_count=8)
     config = ConcurrentMessageExperimentConfig(
@@ -167,6 +191,7 @@ def _request(tmp_path: Path, *, physical_cap: int = 120_120) -> StrictFreshRepla
         workspace=tmp_path / "strict-fresh-replay",
         replay_id="offline-strict-fresh-v1",
         provider_contract=strict_formal_provider_contract(),
+        rejected_history=_rejected_history(tmp_path),
         seed_top_k_per_proxy=2,
         logical_cap=24,
         physical_cap=physical_cap,
@@ -1016,3 +1041,448 @@ def test_reconciliation_parent_symlink_fails_closed_without_writing_outside_work
 
     assert factory_calls == []
     assert list(outside.iterdir()) == []
+
+
+class _CompleteEvidenceStrictAdapter(LLMDecisionAdapter):
+    def __init__(self, lane_id: int, *, observed_model: str = "gpt-5.6-sol") -> None:
+        self.lane_id = lane_id
+        self.observed_model = observed_model
+        self.request_invocations = 0
+        self.external_request_invocations = 0
+        self.prompt_version = str(strict_formal_provider_contract()["prompt_version"])
+        self.safe_metadata = strict_formal_provider_contract()
+        self._accounting = ProviderAccountingTracker()
+
+    @property
+    def provider_accounting(self) -> ProviderAccounting:
+        return self._accounting.snapshot(external_request_invocations=0)
+
+    def decide(
+        self,
+        post: PostContent,
+        profile: UserProfile,
+        peer_context: PeerContext,
+        platform_context: PlatformContext | None = None,
+        time_step: int = 0,
+    ) -> EngageDecision:
+        del peer_context, platform_context, time_step
+        self.request_invocations += 1
+        self._accounting.record_response(
+            ProviderResponseEnvelope(
+                decision_text='{"engage":false,"action":"ignore"}',
+                observed_model=self.observed_model,
+                observed_model_status="reported",
+                usage_status="complete",
+                input_tokens=10,
+                output_tokens=2,
+                total_tokens=12,
+                cached_input_tokens=0,
+            )
+        )
+        self._accounting.record_successful_decision()
+        return EngageDecision(
+            engage=False,
+            probability=0.1,
+            confidence=0.9,
+            action="ignore",
+            reason=f"offline complete evidence for {profile.user_id}:{post.post_id}",
+            decision_source="offline_strict_rehearsal",
+            provider_metadata={"model": "gpt-5.6-sol"},
+        )
+
+
+class _CompleteEvidenceReconciliationAdapter(_CompleteEvidenceStrictAdapter):
+    def __init__(self, lane_id: int) -> None:
+        super().__init__(lane_id)
+        self.failed_pair_id: str | None = None
+
+    def decide(
+        self,
+        post: PostContent,
+        profile: UserProfile,
+        peer_context: PeerContext,
+        platform_context: PlatformContext | None = None,
+        time_step: int = 0,
+    ) -> EngageDecision:
+        pair_id = f"{profile.user_id}:{post.post_id}:{time_step}"
+        if self.lane_id == 4 and time_step == 0 and self.failed_pair_id is None:
+            self.failed_pair_id = pair_id
+            self.request_invocations += 3
+            raise ProviderDecisionError(TimeoutError("offline provisional failure"))
+        return super().decide(post, profile, peer_context, platform_context, time_step)
+
+
+def test_complete_persisted_evidence_atomically_closes_additive_source_v4(
+    tmp_path: Path,
+) -> None:
+    request = _request(tmp_path)
+    rejected_before = {
+        path.relative_to(request.rejected_history.source_root).as_posix(): (
+            hashlib.sha256(path.read_bytes()).hexdigest(),
+            path.stat().st_size,
+        )
+        for path in request.rejected_history.source_root.rglob("*")
+        if path.is_file()
+    }
+
+    result = StrictFullPoolFormalReplay().run(
+        request,
+        adapter_factory=_CompleteEvidenceStrictAdapter,
+    )
+
+    assert result.status is StrictFreshReplayStatus.COMPLETE
+    assert result.source_root == request.workspace / "source-v4"
+    source_root = result.source_root
+    assert source_root is not None
+    assert result.source_manifest_sha256 is not None
+    assert source_root.is_dir()
+    manifest_path = source_root / "manifest.json"
+    assert hashlib.sha256(manifest_path.read_bytes()).hexdigest() == result.source_manifest_sha256
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert manifest["schema_version"] == FULL_POOL_SOURCE_V4_SCHEMA
+    assert manifest["counts"] == {
+        "candidate_rows": 36,
+        "committed_batches": 2,
+        "distinct_users": 8,
+        "pair_rows": 24,
+        "terminal_rows": 24,
+        "variant_evidence_rows": 24,
+    }
+    assert manifest["provider_accounting"]["provider_response_count"] == 24
+    assert manifest["provider_accounting"]["successful_decision_count"] == 24
+    assert manifest["provider_accounting"]["observed_model_counts"] == {
+        "gpt-5.6-sol": 24
+    }
+    assert manifest["provider_accounting"]["usage_complete_response_count"] == 24
+    assert manifest["provider_accounting"]["usage_missing_response_count"] == 0
+    assert manifest["provider_accounting"]["usage_malformed_response_count"] == 0
+    assert manifest["physical_accounting"] == {
+        "active_reservations": 0,
+        "charged_physical_attempts": 24,
+        "dispatched_without_settlement_uncertainty": 0,
+        "physical_cap": 120_120,
+        "settled_actual_attempts": 24,
+    }
+    assert manifest["fresh_lineage"]["imported_batch_count"] == 0
+    assert manifest["fresh_lineage"]["imported_terminal_count"] == 0
+    assert manifest["fresh_lineage"]["rejected_history"] == {
+        "manifest_sha256": request.rejected_history.manifest_sha256,
+        "rejection_reason": "validation_mixed_provider_evidence",
+        "source_root": str(request.rejected_history.source_root),
+    }
+    assert manifest["production_deploy_eligible"] is False
+    assert not (request.workspace / ".source-v4.staging").exists()
+
+    rejected_after = {
+        path.relative_to(request.rejected_history.source_root).as_posix(): (
+            hashlib.sha256(path.read_bytes()).hexdigest(),
+            path.stat().st_size,
+        )
+        for path in request.rejected_history.source_root.rglob("*")
+        if path.is_file()
+    }
+    assert rejected_after == rejected_before
+
+    def tripwire(_: int) -> LLMDecisionAdapter:
+        raise AssertionError("closed source-v4 replay must not create an Adapter")
+
+    replay = StrictFullPoolFormalReplay().run(request, adapter_factory=tripwire)
+    assert replay == result
+    status = json.loads(
+        (request.workspace / "strict_fresh_replay_status.json").read_text(encoding="utf-8")
+    )
+    assert status["source_root"] == str(result.source_root)
+    assert status["source_manifest_sha256"] == result.source_manifest_sha256
+
+
+def test_complete_runtime_with_wrong_observed_model_cannot_create_source_v4(
+    tmp_path: Path,
+) -> None:
+    request = _request(tmp_path)
+
+    result = StrictFullPoolFormalReplay().run(
+        request,
+        adapter_factory=lambda lane_id: _CompleteEvidenceStrictAdapter(
+            lane_id,
+            observed_model="crossed-model",
+        ),
+    )
+
+    assert result.status is StrictFreshReplayStatus.COMPLETE
+    assert result.source_root is None
+    assert result.source_manifest_sha256 is None
+    assert not (request.workspace / "source-v4").exists()
+
+
+def test_source_v4_tamper_fails_closed_before_adapter_creation(tmp_path: Path) -> None:
+    request = _request(tmp_path)
+    result = StrictFullPoolFormalReplay().run(
+        request,
+        adapter_factory=_CompleteEvidenceStrictAdapter,
+    )
+    assert result.source_root is not None
+    terminal_path = result.source_root / "terminal_rows.jsonl"
+    terminal_path.write_bytes(terminal_path.read_bytes() + b"{}\n")
+    factory_calls: list[int] = []
+
+    with pytest.raises(ValueError, match="artifact inventory is unsafe or crossed"):
+        StrictFullPoolFormalReplay().run(
+            request,
+            adapter_factory=lambda lane_id: factory_calls.append(lane_id),  # type: ignore[arg-type,return-value]
+        )
+
+    assert factory_calls == []
+
+
+def test_source_v4_closure_rebuilds_after_crash_before_atomic_rename(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    request = _request(tmp_path)
+    real_write = strict_module._write_source_v4_rows
+
+    def crash_after_rows(
+        source: Path,
+        journal: ConcurrentExecutionJournal,
+        *,
+        runtime_replay: Mapping[str, object],
+    ) -> None:
+        real_write(source, journal, runtime_replay=runtime_replay)
+        raise RuntimeError("offline source-v4 staging crash")
+
+    monkeypatch.setattr(strict_module, "_write_source_v4_rows", crash_after_rows)
+    with pytest.raises(RuntimeError, match="staging crash"):
+        StrictFullPoolFormalReplay().run(
+            request,
+            adapter_factory=_CompleteEvidenceStrictAdapter,
+        )
+    assert not (request.workspace / "source-v4").exists()
+    assert not (request.workspace / ".source-v4.staging").exists()
+
+    monkeypatch.setattr(strict_module, "_write_source_v4_rows", real_write)
+
+    def tripwire(_: int) -> LLMDecisionAdapter:
+        raise AssertionError("source-v4 closure replay must not create an Adapter")
+
+    result = StrictFullPoolFormalReplay().run(request, adapter_factory=tripwire)
+    assert result.status is StrictFreshReplayStatus.COMPLETE
+    assert result.source_root == request.workspace / "source-v4"
+
+
+def test_source_v4_replay_recovers_crash_after_atomic_rename(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    request = _request(tmp_path)
+    real_replace = strict_module.os.replace
+    crashed = False
+
+    def crash_after_source_rename(source: Path, target: Path) -> None:
+        nonlocal crashed
+        real_replace(source, target)
+        if not crashed and source.name == ".source-v4.staging" and target.name == "source-v4":
+            crashed = True
+            raise RuntimeError("offline crash after source-v4 rename")
+
+    monkeypatch.setattr(strict_module.os, "replace", crash_after_source_rename)
+    with pytest.raises(RuntimeError, match="after source-v4 rename"):
+        StrictFullPoolFormalReplay().run(
+            request,
+            adapter_factory=_CompleteEvidenceStrictAdapter,
+        )
+    assert (request.workspace / "source-v4").is_dir()
+    assert not (request.workspace / ".source-v4.staging").exists()
+
+    monkeypatch.setattr(strict_module.os, "replace", real_replace)
+
+    def tripwire(_: int) -> LLMDecisionAdapter:
+        raise AssertionError("renamed source-v4 replay must not create an Adapter")
+
+    result = StrictFullPoolFormalReplay().run(request, adapter_factory=tripwire)
+    assert result.status is StrictFreshReplayStatus.COMPLETE
+    assert result.source_manifest_sha256 is not None
+
+
+def test_source_v4_keeps_provisional_failure_only_in_attempt_accounting(
+    tmp_path: Path,
+) -> None:
+    request = _request(tmp_path)
+    adapters: dict[int, _CompleteEvidenceReconciliationAdapter] = {}
+
+    def factory(lane_id: int) -> _CompleteEvidenceReconciliationAdapter:
+        adapter = _CompleteEvidenceReconciliationAdapter(lane_id)
+        adapters[lane_id] = adapter
+        return adapter
+
+    result = StrictFullPoolFormalReplay().run(request, adapter_factory=factory)
+
+    assert result.status is StrictFreshReplayStatus.COMPLETE
+    assert result.source_root is not None
+    assert result.reconciliation_dispatch_count == 1
+    assert result.settled_actual_attempts == 27
+    failed_pair_id = adapters[4].failed_pair_id
+    assert failed_pair_id is not None
+    manifest = json.loads((result.source_root / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["settlement_v2"]["provisional_provider_failed_count"] == 1
+    assert len(manifest["settlement_v2"]["reconciliation_journals"]) == 1
+    assert manifest["physical_accounting"]["settled_actual_attempts"] == 27
+    assert manifest["provider_accounting"]["provider_response_count"] == 24
+    terminals = _jsonl(result.source_root / "terminal_rows.jsonl")
+    assert len(terminals) == 24
+    assert {row["terminal_status"] for row in terminals} == {"succeeded"}
+    assert {row["provider_status"] for row in terminals} == {"succeeded"}
+    assert sum(cast(int, row["provider_response_count"]) for row in terminals) == 24
+    original_attempts = _jsonl(
+        result.source_root
+        / "settlement/original/durable-pair-settlement-v2.jsonl"
+    )
+    assert any(
+        row["event_type"] == "pair_settled"
+        and row["payload"]["pair_id"] == failed_pair_id  # type: ignore[index]
+        and row["payload"]["outcome"]["terminal_row"]["terminal_status"]  # type: ignore[index]
+        == "provider_failed"
+        for row in original_attempts
+    )
+
+
+def test_deterministic_thirty_batch_smoke_closes_every_fresh_pair_without_provider_calls(
+    tmp_path: Path,
+) -> None:
+    dataset = _dataset(tmp_path, user_count=30)
+    request = StrictFreshReplayRequest(
+        config=ConcurrentMessageExperimentConfig(
+            dataset_dir=dataset,
+            sample_size=30,
+            horizon=30,
+            delivery_capacity=1,
+            configuration_profile="validation",
+        ),
+        workspace=tmp_path / "strict-thirty-batch-replay",
+        replay_id="offline-strict-thirty-batch-v1",
+        provider_contract=strict_formal_provider_contract(),
+        rejected_history=_rejected_history(tmp_path),
+        seed_top_k_per_proxy=1,
+        logical_cap=90,
+    )
+    adapters: dict[int, _CompleteEvidenceStrictAdapter] = {}
+
+    def factory(lane_id: int) -> _CompleteEvidenceStrictAdapter:
+        adapter = _CompleteEvidenceStrictAdapter(lane_id)
+        adapters[lane_id] = adapter
+        return adapter
+
+    result = StrictFullPoolFormalReplay().run(request, adapter_factory=factory)
+
+    assert result.status is StrictFreshReplayStatus.COMPLETE
+    assert result.committed_batch_count == 30
+    assert result.logical_count == 90
+    assert result.final_succeeded_terminal_count == 90
+    assert result.reconciliation_dispatch_count == 0
+    assert result.settled_actual_attempts == 90
+    assert result.dispatched_without_settlement_uncertainty == 0
+    assert result.charged_physical_attempts == 90
+    assert sum(adapter.request_invocations for adapter in adapters.values()) == 90
+    assert sum(adapter.external_request_invocations for adapter in adapters.values()) == 0
+    assert result.source_root is not None
+    manifest = json.loads((result.source_root / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["counts"] == {
+        "candidate_rows": 1_395,
+        "committed_batches": 30,
+        "distinct_users": 30,
+        "pair_rows": 90,
+        "terminal_rows": 90,
+        "variant_evidence_rows": 90,
+    }
+    assert manifest["settlement_v2"]["provisional_provider_failed_count"] == 0
+    assert manifest["settlement_v2"]["provisional_unknown_pair_count"] == 0
+    assert manifest["settlement_v2"]["implementation_failed_pair_count"] == 0
+    assert manifest["production_topology"] is False
+
+
+@pytest.mark.full_scale_rehearsal
+def test_full_scale_zero_provider_rehearsal_closes_production_topology(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import llm_abm_sim._concurrent_runtime_spool as spool_module
+    import llm_abm_sim.concurrent_execution_journal as journal_module
+    import llm_abm_sim.concurrent_message_experiment as experiment_module
+
+    root = tmp_path / "full-scale-zero-provider"
+    root.mkdir()
+    try:
+        monkeypatch.setattr(strict_module.os, "fsync", lambda _descriptor: None)
+        for module in (
+            settlement_module,
+            spool_module,
+            journal_module,
+            experiment_module,
+            strict_module,
+        ):
+            monkeypatch.setattr(module, "safe_data", lambda value: value)
+
+        dataset = _dataset(root, user_count=36_400)
+        request = StrictFreshReplayRequest(
+            config=ConcurrentMessageExperimentConfig(
+                dataset_dir=dataset,
+                sample_size=36_400,
+                horizon=30,
+                delivery_capacity=1_214,
+                configuration_profile="validation",
+            ),
+            workspace=root / "strict-full-scale-replay",
+            replay_id="offline-strict-full-scale-v1",
+            provider_contract=strict_formal_provider_contract(),
+            rejected_history=_rejected_history(root),
+            seed_top_k_per_proxy=10,
+            logical_cap=109_200,
+            physical_cap=120_120,
+            max_concurrency=10,
+        )
+        adapters: dict[int, _CompleteEvidenceStrictAdapter] = {}
+
+        def factory(lane_id: int) -> _CompleteEvidenceStrictAdapter:
+            adapter = _CompleteEvidenceStrictAdapter(lane_id)
+            adapters[lane_id] = adapter
+            return adapter
+
+        result = StrictFullPoolFormalReplay().run(request, adapter_factory=factory)
+
+        assert result.status is StrictFreshReplayStatus.COMPLETE
+        assert result.committed_batch_count == 30
+        assert result.logical_count == 109_200
+        assert result.final_succeeded_terminal_count == 109_200
+        assert result.reconciliation_dispatch_count == 0
+        assert result.settled_actual_attempts == 109_200
+        assert result.dispatched_without_settlement_uncertainty == 0
+        assert result.charged_physical_attempts == 109_200
+        assert result.charged_physical_attempts <= 120_120
+        assert set(adapters) == set(range(10))
+        assert sum(adapter.request_invocations for adapter in adapters.values()) == 109_200
+        assert sum(adapter.external_request_invocations for adapter in adapters.values()) == 0
+        assert result.source_root is not None
+        manifest = json.loads(
+            (result.source_root / "manifest.json").read_text(encoding="utf-8")
+        )
+        assert manifest["production_topology"] is True
+        assert manifest["counts"] == {
+            "candidate_rows": 1_691_730,
+            "committed_batches": 30,
+            "distinct_users": 36_400,
+            "pair_rows": 109_200,
+            "terminal_rows": 109_200,
+            "variant_evidence_rows": 109_200,
+        }
+        assert manifest["provider_accounting"]["external_request_invocations"] == 0
+        assert manifest["provider_accounting"]["provider_response_count"] == 109_200
+        assert manifest["provider_accounting"]["successful_decision_count"] == 109_200
+        assert manifest["provider_accounting"]["observed_model_counts"] == {
+            "gpt-5.6-sol": 109_200
+        }
+        assert manifest["provider_accounting"]["usage_complete_response_count"] == 109_200
+        assert manifest["settlement_v2"]["provisional_provider_failed_count"] == 0
+        assert manifest["settlement_v2"]["provisional_unknown_pair_count"] == 0
+        assert manifest["settlement_v2"]["implementation_failed_pair_count"] == 0
+        assert manifest["production_deploy_eligible"] is False
+    finally:
+        shutil.rmtree(root, ignore_errors=True)

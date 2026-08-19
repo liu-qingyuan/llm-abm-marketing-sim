@@ -148,6 +148,18 @@ processed 数据中可用于构建历史信号的视频集合。对于单目标�
 
 通过显式 Live Provider Gate 为 Full-Pool 30-Batch Run 生成 fresh Primary Decisions 的 Formal experiment。它是下一版 additive report 的主要运行证据，并使用独立 run、candidate 和 release lineage，immutable v7 保持不变。
 
+### Strict Full-Pool Formal Replay
+
+从 Batch 0、logical/physical/pair position 0 初始化全新 Full-Pool trajectory 的最高 runtime Seam。调用方只提交冻结 request 与十 lane Adapter factory；Module 内部拥有 ranking、wave settlement、strict reconciliation、full-batch barrier、feedback commit 和 source closure。它不导入历史 terminal、batch commit、ranking state 或 feedback；被拒绝的 mixed source 只能作为 hash-bound audit lineage。
+
+### Strict Pair Policy
+
+Fresh replay 在 batch commit 前闭合非成功 pair 的持久化规则。标准 dispatch 的 `provider_failed` 或 provenance unknown 只是 provisional outcome；同一 frozen pair context 最多消费一个原子 slot-plus-dispatch reconciliation。只有 final `succeeded` terminal 可以跨过 full-batch barrier，第二次非成功、implementation failure 或 cap 不足都会形成 typed strict stop，且不生成完整 source。
+
+### Segmented Source-v4
+
+Strict Full-Pool Formal Replay 从 fresh workspace 的 persisted identity、30 个 batch commits、spool、settlement v2、Strict Pair Policy 和 final terminal evidence 原子生成的 additive source。每个 logical pair 必须恰有一个 final successful response、exact observed model 和完整 usage；provisional failures、failed attempts、reconciliation 与 uncertainty 只保留在 attempt/physical accounting，不伪装成 final Decision。旧 mixed source-v3 只以 manifest hash、path 和 rejection reason 进入 lineage，不参与 trajectory 计算。
+
 ### Durable Pair Settlement
 
 Full-Pool segmented runtime 中把每个已派发 pair 独立归约为 terminal、typed provenance unknown 或 `implementation_failed` 的持久化机制。completion order 只决定 settlement capture 顺序；canonical pair order 只决定完整 batch 的 ABM commit。一个 pair 的未知来源或实现失败不能抹掉同波 sibling 已形成的安全 evidence。
