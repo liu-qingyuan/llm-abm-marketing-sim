@@ -57,6 +57,7 @@ from .full_pool_source_v3 import (
     FULL_POOL_RESULT_LINEAGE_MARKDOWN,
     FULL_POOL_SOURCE_V3_SCHEMA,
 )
+from .full_pool_source_v4 import FULL_POOL_SOURCE_V4_SCHEMA, StrictFullPoolSourceFacts
 from .prompt_contracts import CONCURRENT_ROBUSTNESS_PROMPT_REGISTRY
 
 if TYPE_CHECKING:
@@ -1136,33 +1137,47 @@ class _ReportPresentationInterface:
                     manifest_sha256=full_pool_manifest_sha256,
                 ),
             )
-            validation_source = (
-                source.manifest.get("production_deploy_eligible") is False
-                and source.manifest.get("provider_calls") == 0
-                and source.manifest.get("live_api_triggered") is False
-                and source.aggregates.get("production_deploy_eligible") is False
-            )
-            source_provider_calls = source.manifest.get("provider_calls")
-            live_formal_evidence = (
-                source.manifest.get("evidence_profile") == "formal_live"
-                and isinstance(source_provider_calls, int)
-                and not isinstance(source_provider_calls, bool)
-                and source_provider_calls > 0
-                and source.manifest.get("live_api_triggered") is True
-            )
-            legacy_formal_source = (
-                live_formal_evidence
-                and source.manifest.get("production_deploy_eligible") is True
-                and source.aggregates.get("production_deploy_eligible") is True
-            )
-            segmented_formal_source = (
-                live_formal_evidence
-                and source.manifest.get("source_schema_version")
-                in {"full-pool-segmented-source-v2", FULL_POOL_SOURCE_V3_SCHEMA}
-                and source.manifest.get("production_deploy_eligible") is False
-                and source.aggregates.get("production_deploy_eligible") is False
-            )
-            formal_source = legacy_formal_source or segmented_formal_source
+            strict_facts = getattr(source, "facts", None)
+            if isinstance(strict_facts, StrictFullPoolSourceFacts):
+                validation_source = (
+                    source.manifest.get("schema_version") == FULL_POOL_SOURCE_V4_SCHEMA
+                    and strict_facts.profile == "validation"
+                    and strict_facts.production_deploy_eligible is False
+                )
+                formal_source = (
+                    source.manifest.get("schema_version") == FULL_POOL_SOURCE_V4_SCHEMA
+                    and strict_facts.profile == "production"
+                    and strict_facts.production_deploy_eligible is True
+                    and strict_facts.external_request_invocations > 0
+                )
+            else:
+                validation_source = (
+                    source.manifest.get("production_deploy_eligible") is False
+                    and source.manifest.get("provider_calls") == 0
+                    and source.manifest.get("live_api_triggered") is False
+                    and source.aggregates.get("production_deploy_eligible") is False
+                )
+                source_provider_calls = source.manifest.get("provider_calls")
+                live_formal_evidence = (
+                    source.manifest.get("evidence_profile") == "formal_live"
+                    and isinstance(source_provider_calls, int)
+                    and not isinstance(source_provider_calls, bool)
+                    and source_provider_calls > 0
+                    and source.manifest.get("live_api_triggered") is True
+                )
+                legacy_formal_source = (
+                    live_formal_evidence
+                    and source.manifest.get("production_deploy_eligible") is True
+                    and source.aggregates.get("production_deploy_eligible") is True
+                )
+                segmented_formal_source = (
+                    live_formal_evidence
+                    and source.manifest.get("source_schema_version")
+                    in {"full-pool-segmented-source-v2", FULL_POOL_SOURCE_V3_SCHEMA}
+                    and source.manifest.get("production_deploy_eligible") is False
+                    and source.aggregates.get("production_deploy_eligible") is False
+                )
+                formal_source = legacy_formal_source or segmented_formal_source
             if not validation_source and not formal_source:
                 raise ValueError(
                     "Full-Pool presentation composition requires an exact closed Validation or Formal source"
@@ -1804,6 +1819,7 @@ def _validate_full_pool_production_stage_facts(
             "abm-report-release-contract-v8",
             "abm-report-release-contract-v9",
             "abm-report-release-contract-v10",
+            "abm-report-release-contract-v11",
         }
         or stage_facts.canonical_endpoint != "https://abm.q1ngyuan.top/"
         or stage_facts.production_evidence_schema
@@ -2048,54 +2064,106 @@ def _validate_full_pool_production_presentation(
 
 def _full_pool_candidate_source_lineage(inputs: _FullPoolCandidateInputs) -> dict[str, Any]:
     source = inputs.source
-    counts = _mapping(source.manifest.get("counts"), "Full-Pool source counts")
-    if set(counts) != _FULL_POOL_COUNT_FIELDS or any(
-        type(value) is not int or value < 0 for value in counts.values()
-    ):
-        raise _RobustnessReportClosureError("Full-Pool source counts are missing, extra, or invalid")
-    provider_accounting = _mapping(
-        source.aggregates.get("provider_accounting"),
-        "Full-Pool Provider accounting",
-    )
-    if (
-        source.manifest.get("counts") != counts
-        or source.aggregates.get("counts") != counts
-        or source.manifest.get("provider_calls") != provider_accounting.get("external_request_invocations")
-        or source.manifest.get("physical_provider_attempts") != provider_accounting.get("physical_attempts")
-    ):
-        raise _RobustnessReportClosureError("Full-Pool source accounting is crossed")
-    execution = source.contract.formal_execution
-    full_pool = {
-        "source_path": source.root.as_posix(),
-        "source_schema_version": source.manifest.get("source_schema_version"),
-        "manifest_schema_version": source.manifest.get("schema_version"),
-        "contract_schema_version": source.contract.schema_version,
-        "source_identity": source.source_identity,
-        "manifest_sha256": source.manifest_sha256,
-        "contract_sha256": source.manifest.get("contract_sha256"),
-        "source_hash": source.manifest.get("source_hash"),
-        "profile": source.manifest.get("profile"),
-        "evidence_profile": source.manifest.get("evidence_profile"),
-        "requested_model": execution.requested_model if execution is not None else None,
-        "counts": counts,
-        "provider_accounting": provider_accounting,
-        "provider_calls": source.manifest.get("provider_calls"),
-        "live_api_triggered": source.manifest.get("live_api_triggered"),
-        "source_production_deploy_eligible": source.manifest.get("production_deploy_eligible"),
-        "evidence_scope": ["full_pool_main_experiment", "primary_only"],
-    }
-    segmented_execution = source.manifest.get("segmented_execution")
-    if segmented_execution is not None:
-        full_pool["segmented_execution"] = _mapping(
-            segmented_execution,
-            "segmented Full-Pool execution lineage",
+    strict_facts = getattr(source, "facts", None)
+    if isinstance(strict_facts, StrictFullPoolSourceFacts):
+        counts = _mapping(source.aggregates.get("counts"), "source-v4 presentation counts")
+        provider_accounting = _mapping(
+            source.aggregates.get("provider_accounting"),
+            "source-v4 Provider accounting",
         )
-    nested_recovery = source.manifest.get("nested_recovery")
-    if nested_recovery is not None:
-        full_pool["nested_recovery"] = _mapping(
-            nested_recovery,
-            "nested Full-Pool recovery lineage",
+        if (
+            set(counts) != _FULL_POOL_COUNT_FIELDS
+            or any(type(value) is not int or value < 0 for value in counts.values())
+            or counts["eligible_pairs"] != strict_facts.logical_pairs
+            or counts["primary_terminals"] != strict_facts.logical_pairs
+            or provider_accounting.get("physical_attempts") != strict_facts.charged_physical_attempts
+            or provider_accounting.get("external_request_invocations") != strict_facts.external_request_invocations
+        ):
+            raise _RobustnessReportClosureError("source-v4 presentation accounting is crossed")
+        fresh_lineage = _mapping(source.manifest.get("fresh_lineage"), "source-v4 fresh lineage")
+        strict_execution = source.contract.formal_execution
+        if strict_execution is None:
+            raise _RobustnessReportClosureError("source-v4 presentation lacks its execution contract")
+        full_pool = {
+            "source_path": source.root.as_posix(),
+            "source_schema_version": FULL_POOL_SOURCE_V4_SCHEMA,
+            "manifest_schema_version": FULL_POOL_SOURCE_V4_SCHEMA,
+            "contract_schema_version": source.contract.schema_version,
+            "source_identity": source.source_identity,
+            "manifest_sha256": source.manifest_sha256,
+            "contract_sha256": source.manifest.get("provider_contract_sha256"),
+            "source_hash": source.manifest.get("source_hash"),
+            "profile": strict_facts.profile,
+            "evidence_profile": source.aggregates.get("evidence_profile"),
+            "requested_model": strict_execution.requested_model,
+            "counts": counts,
+            "provider_accounting": provider_accounting,
+            "provider_calls": strict_facts.external_request_invocations,
+            "live_api_triggered": strict_facts.external_request_invocations > 0,
+            "source_production_deploy_eligible": strict_facts.production_deploy_eligible,
+            "evidence_scope": ["full_pool_main_experiment", "primary_only"],
+            "strict_fresh_execution": {
+                "fresh_from_batch_zero": fresh_lineage.get("fresh_from_batch_zero"),
+                "imported_terminal_count": fresh_lineage.get("imported_terminal_count"),
+                "imported_batch_count": fresh_lineage.get("imported_batch_count"),
+                "rejected_history": fresh_lineage.get("rejected_history"),
+                "execution_manifest_sha256": strict_facts.execution_manifest_sha256,
+                "execution_manifest_identity_sha256": (strict_facts.execution_manifest_identity_sha256),
+                "attempt_ledger_identity_sha256": (strict_facts.attempt_ledger_identity_sha256),
+                "strict_policy": source.manifest.get("strict_policy"),
+                "settlement_v2": source.manifest.get("settlement_v2"),
+                "physical_accounting": source.manifest.get("physical_accounting"),
+            },
+        }
+    else:
+        counts = _mapping(source.manifest.get("counts"), "Full-Pool source counts")
+        if set(counts) != _FULL_POOL_COUNT_FIELDS or any(
+            type(value) is not int or value < 0 for value in counts.values()
+        ):
+            raise _RobustnessReportClosureError("Full-Pool source counts are missing, extra, or invalid")
+        provider_accounting = _mapping(
+            source.aggregates.get("provider_accounting"),
+            "Full-Pool Provider accounting",
         )
+        if (
+            source.manifest.get("counts") != counts
+            or source.aggregates.get("counts") != counts
+            or source.manifest.get("provider_calls") != provider_accounting.get("external_request_invocations")
+            or source.manifest.get("physical_provider_attempts") != provider_accounting.get("physical_attempts")
+        ):
+            raise _RobustnessReportClosureError("Full-Pool source accounting is crossed")
+        execution = source.contract.formal_execution
+        full_pool = {
+            "source_path": source.root.as_posix(),
+            "source_schema_version": source.manifest.get("source_schema_version"),
+            "manifest_schema_version": source.manifest.get("schema_version"),
+            "contract_schema_version": source.contract.schema_version,
+            "source_identity": source.source_identity,
+            "manifest_sha256": source.manifest_sha256,
+            "contract_sha256": source.manifest.get("contract_sha256"),
+            "source_hash": source.manifest.get("source_hash"),
+            "profile": source.manifest.get("profile"),
+            "evidence_profile": source.manifest.get("evidence_profile"),
+            "requested_model": execution.requested_model if execution is not None else None,
+            "counts": counts,
+            "provider_accounting": provider_accounting,
+            "provider_calls": source.manifest.get("provider_calls"),
+            "live_api_triggered": source.manifest.get("live_api_triggered"),
+            "source_production_deploy_eligible": source.manifest.get("production_deploy_eligible"),
+            "evidence_scope": ["full_pool_main_experiment", "primary_only"],
+        }
+        segmented_execution = source.manifest.get("segmented_execution")
+        if segmented_execution is not None:
+            full_pool["segmented_execution"] = _mapping(
+                segmented_execution,
+                "segmented Full-Pool execution lineage",
+            )
+        nested_recovery = source.manifest.get("nested_recovery")
+        if nested_recovery is not None:
+            full_pool["nested_recovery"] = _mapping(
+                nested_recovery,
+                "nested Full-Pool recovery lineage",
+            )
 
     projection = inputs.projection
     formal = projection.formal
@@ -2214,13 +2282,17 @@ def _full_pool_approved_downloads(inputs: _FullPoolCandidateInputs) -> dict[str,
         historical_payload.get("downloads"),
         "historical approved downloads",
     )
-    source_v3_downloads = (
+    result_downloads = (
         {
             "full_pool_segment_results_csv": FULL_POOL_RESULT_CSV,
             "full_pool_segment_lineage_markdown": FULL_POOL_RESULT_LINEAGE_MARKDOWN,
         }
-        if inputs.source.manifest.get("source_schema_version")
-        == FULL_POOL_SOURCE_V3_SCHEMA
+        if (
+            inputs.source.manifest.get("source_schema_version")
+            == FULL_POOL_SOURCE_V3_SCHEMA
+            or inputs.source.manifest.get("schema_version")
+            == FULL_POOL_SOURCE_V4_SCHEMA
+        )
         else {}
     )
     downloads = {
@@ -2230,7 +2302,7 @@ def _full_pool_approved_downloads(inputs: _FullPoolCandidateInputs) -> dict[str,
         "full_pool_candidate_rows": f"{_FULL_POOL_SOURCE_DIR}/candidate_rows.jsonl",
         "full_pool_pair_rows": f"{_FULL_POOL_SOURCE_DIR}/pair_rows.jsonl",
         "full_pool_terminal_rows": f"{_FULL_POOL_SOURCE_DIR}/terminal_rows.jsonl",
-        **source_v3_downloads,
+        **result_downloads,
         **{
             f"historical_{key}": f"{_HISTORICAL_DIR}/{relative_path}"
             for key, relative_path in historical_downloads.items()
@@ -2409,7 +2481,11 @@ def _full_pool_presentation_inventory(inputs: _FullPoolCandidateInputs) -> dict[
         index.get("schema_version") != _TRACE_INDEX_SCHEMA
         or index.get("source_identity") != inputs.source.source_identity
         or index.get("source_manifest_sha256") != inputs.source.manifest_sha256
-        or index.get("contract_sha256") != inputs.source.manifest.get("contract_sha256")
+        or index.get("contract_sha256")
+        != (
+            inputs.source.manifest.get("contract_sha256")
+            or inputs.source.manifest.get("provider_contract_sha256")
+        )
         or type(terminal_count) is not int
         or terminal_count != inputs.source.contract.expected_primary_terminals
         or partition_rows != terminal_count

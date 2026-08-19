@@ -33,6 +33,11 @@ from .full_pool_source_v3 import (
     FullPoolResultProjection,
     compose_full_pool_result_projection,
 )
+from .full_pool_source_v4 import (
+    FULL_POOL_SOURCE_V4_SCHEMA,
+    StrictFullPoolSourceFacts,
+    compose_strict_full_pool_result_projection,
+)
 
 _TRACE_INDEX_SCHEMA = "full-pool-trace-index-v1"
 _TRACE_PARTITION_SCHEMA = "full-pool-trace-partition-v1"
@@ -218,6 +223,16 @@ def _non_empty_string(value: object, context: str) -> str:
     return value
 
 
+def _source_schema(source: Any) -> object:
+    schema = source.manifest.get("source_schema_version")
+    return source.manifest.get("schema_version") if schema is None else schema
+
+
+def _source_contract_sha256(source: Any) -> object:
+    contract_sha256 = source.manifest.get("contract_sha256")
+    return source.manifest.get("provider_contract_sha256") if contract_sha256 is None else contract_sha256
+
+
 def _identity_sha256(terminal_ids: Sequence[str]) -> str:
     return _sha256_bytes(_canonical_json(list(terminal_ids)).encode("utf-8"))
 
@@ -397,10 +412,10 @@ def _trace_projection(
         raise _FullPoolPresentationError("Full-Pool trace does not cover every persisted terminal identity")
     index = {
         "schema_version": _TRACE_INDEX_SCHEMA,
-        "source_schema_version": source.manifest.get("source_schema_version"),
+        "source_schema_version": _source_schema(source),
         "source_identity": source.source_identity,
         "source_manifest_sha256": source.manifest_sha256,
-        "contract_sha256": source.manifest.get("contract_sha256"),
+        "contract_sha256": _source_contract_sha256(source),
         "message_order": list(contract.message_ids),
         "batch_order": list(range(contract.horizon)),
         "terminal_count": len(ordered_terminal_ids),
@@ -912,8 +927,13 @@ def _render_full_pool_main(
     batch_options = "".join(
         f'<option value="{time_step}">{time_step + 1:02d}</option>' for time_step in range(source.contract.horizon)
     )
-    source_schema = source.manifest.get("source_schema_version")
-    if source_schema == FULL_POOL_SOURCE_V3_SCHEMA:
+    source_schema = _source_schema(source)
+    if source_schema == FULL_POOL_SOURCE_V4_SCHEMA:
+        facts = getattr(source, "facts", None)
+        if not isinstance(facts, StrictFullPoolSourceFacts):
+            raise _FullPoolPresentationError("source-v4 presentation lacks typed persisted facts")
+        source_artifacts = ("manifest.json", *tuple(sorted(facts.artifact_hashes)))
+    elif source_schema == FULL_POOL_SOURCE_V3_SCHEMA:
         facts = getattr(source, "facts", None)
         if not isinstance(facts, AutomatedFullPoolSourceFacts):
             raise _FullPoolPresentationError("source-v3 presentation lacks typed persisted facts")
@@ -978,7 +998,7 @@ def _render_full_pool_main(
     <article><h3>{_i18n(catalog, "scope.target")}</h3><dl>{target_facts}</dl></article>
     <article><h3>{_i18n(catalog, "scope.actual")}</h3><dl>{actual_facts}</dl></article>
   </div>
-  <code class="full-pool-source-facts">actual-users={actual_users} actual-primary-terminals={actual_terminals} source-schema={html.escape(str(source.manifest.get("source_schema_version")))} requested-model={html.escape(requested_model)} evidence-profile={html.escape(evidence_profile)} production_deploy_eligible=false</code>
+  <code class="full-pool-source-facts">actual-users={actual_users} actual-primary-terminals={actual_terminals} source-schema={html.escape(str(_source_schema(source)))} requested-model={html.escape(requested_model)} evidence-profile={html.escape(evidence_profile)} production_deploy_eligible=false</code>
   {segmented_lineage}
   <aside class="full-pool-claim-boundary" data-testid="full-pool-claim-boundary">
     {_i18n(catalog, "claims.title", tag="h3")}
@@ -1153,11 +1173,15 @@ def compose_full_pool_presentation_bundle(
         _copy_tree_exact(source.root, staging / _FULL_POOL_SOURCE_DIR)
         _copy_tree_exact(historical_candidate, staging / _HISTORICAL_DIR)
         result_projection: FullPoolResultProjection | None = None
-        if source.manifest.get("source_schema_version") == FULL_POOL_SOURCE_V3_SCHEMA:
+        source_schema = _source_schema(source)
+        if source_schema == FULL_POOL_SOURCE_V4_SCHEMA:
+            result_projection = compose_strict_full_pool_result_projection(cast(Any, source))
+        elif source_schema == FULL_POOL_SOURCE_V3_SCHEMA:
             result_projection = compose_full_pool_result_projection(
                 cast(Any, source),
                 historical_artifact_hashes=historical_inventory,
             )
+        if result_projection is not None:
             (staging / result_projection.csv_filename).write_bytes(
                 result_projection.csv_bytes
             )
@@ -1221,11 +1245,15 @@ def validate_full_pool_presentation_bundle(
     if _file_hashes(historical_copy) != historical_hashes:
         raise _FullPoolPresentationError("historical presentation copy differs from its approved candidate")
     result_projection: FullPoolResultProjection | None = None
-    if source.manifest.get("source_schema_version") == FULL_POOL_SOURCE_V3_SCHEMA:
+    source_schema = _source_schema(source)
+    if source_schema == FULL_POOL_SOURCE_V4_SCHEMA:
+        result_projection = compose_strict_full_pool_result_projection(cast(Any, source))
+    elif source_schema == FULL_POOL_SOURCE_V3_SCHEMA:
         result_projection = compose_full_pool_result_projection(
             cast(Any, source),
             historical_artifact_hashes=historical_hashes,
         )
+    if result_projection is not None:
         for relative_path, expected in (
             (result_projection.csv_filename, result_projection.csv_bytes),
             (result_projection.lineage_filename, result_projection.lineage_bytes),
@@ -1234,7 +1262,7 @@ def validate_full_pool_presentation_bundle(
             _require_regular_file(path, relative_path)
             if path.read_bytes() != expected:
                 raise _FullPoolPresentationError(
-                    "source-v3 result delivery is malformed, non-canonical, or crossed"
+                    "source-v3/v4 result delivery is malformed, non-canonical, or crossed"
                 )
     elif any(
         (root / relative_path).exists() or (root / relative_path).is_symlink()
@@ -1359,7 +1387,7 @@ def validate_full_pool_presentation_bundle(
         f"{_FULL_POOL_SOURCE_DIR}/terminal_rows.jsonl",
     }
     facts = getattr(source, "facts", None)
-    if isinstance(facts, AutomatedFullPoolSourceFacts):
+    if isinstance(facts, (AutomatedFullPoolSourceFacts, StrictFullPoolSourceFacts)):
         source_download_paths.update(
             f"{_FULL_POOL_SOURCE_DIR}/{relative_path}"
             for relative_path in facts.artifact_hashes

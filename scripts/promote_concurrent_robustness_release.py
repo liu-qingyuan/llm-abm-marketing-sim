@@ -23,6 +23,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--full-pool-source-root", type=Path)
     parser.add_argument("--full-pool-manifest-sha256")
     parser.add_argument("--implementation-commit")
+    parser.add_argument("--automation-execution-manifest", type=Path)
+    parser.add_argument("--fresh-execution-manifest", type=Path)
     return parser.parse_args()
 
 
@@ -42,6 +44,8 @@ def main() -> int:
         full_pool_source_root=args.full_pool_source_root,
         full_pool_manifest_sha256=args.full_pool_manifest_sha256,
         implementation_commit=args.implementation_commit,
+        automation_execution_manifest_path=args.automation_execution_manifest,
+        fresh_execution_manifest_path=args.fresh_execution_manifest,
     )
     print(
         json.dumps(

@@ -200,6 +200,14 @@ Automated Recovery Policy 的 nondeployable 终止状态。second unknown、reco
 
 只接受 exact manifest-driven Formal Source-v3 的 additive production release contract。它显式绑定 original/first/second recovery、automated policy、settlement v2、aggregate accounting与结果 projection；Release v9继续只表达source-v2。Validation/mock、incomplete、`implementation_failed`和`automation_exhausted`证据均不可晋升。
 
+### Release v11
+
+只接受 exact fresh execution manifest 驱动且 production-eligible 的 Strict Source-v4。Evidence Module 从 persisted manifest、operator attempt chain、strict policy/settlement、30-batch spool、109,200 个 final successful Decisions、model/usage/physical accounting 与同源九格 projection 重闭合事实；Report 与 Release Module 不接受 caller 注入 Formal claims。v11 contract 绑定 immutable release、physical snapshot、approved downloads、被拒绝 mixed source-v3 的三个 historical Provider failures，以及供 #205 独立 operational authorization 精确引用的 execution handoff。Validation/mock/zero-Provider、strict stop、mixed 或 incomplete source 只能形成 nondeployable presentation；handoff、Spec、commit 和测试本身都不授权 live run 或 canonical deployment。
+
+### Release v11 Execution Handoff
+
+从 create-once Strict Fresh Execution Manifest 零 Provider 调用投影的 operational facts。它精确记录 implementation commit、manifest path/hash/identity、Pi `openai-codex` / `gpt-5.6-sol`、logical/physical/fee budgets、独立 operator/runtime/source paths、release id 与 #205 authorization requirement，并显式声明 artifact 不授予 authorization、未触发 deployment 或 canonical request。
+
 ### Full-Pool Mechanism Master
 
 为 Full-Pool Formal Main Experiment 新增的单张端到端 Mermaid 总图，文件名为 `full-pool-mechanism.mmd`。它只表达全池分母、30-batch delivery、Primary-only Decision 和 feedback 主路径；现有五张主机制图、`real-batch-mechanism.mmd` 与 Prompt–Model factorial 保持原字节，不复制另一套分图。

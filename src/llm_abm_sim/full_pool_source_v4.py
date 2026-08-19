@@ -53,6 +53,15 @@ from .full_pool_strict_replay import (
 _MESSAGE_CODES = {"message_1": "M1", "message_2": "M2", "message_3": "M3"}
 _SEGMENT_CODES = {"class_1": "S1", "class_2": "S2", "class_3": "S3"}
 _PRODUCTION_SEGMENT_DENOMINATORS = {"class_1": 15_616, "class_2": 15_070, "class_3": 5_714}
+_STRICT_RESULT_FIELDS = (
+    "Run",
+    "Message",
+    "Segment",
+    "Total Likes",
+    "Total Comments",
+    "Total Shares",
+    "Exposure",
+)
 _SOURCE_FIELDS = frozenset(
     {
         "schema_version",
@@ -130,7 +139,25 @@ class StrictFullPoolSourceFacts:
 
 
 @dataclass(frozen=True)
+class _StrictPresentationExecutionView:
+    requested_model: str
+
+
+@dataclass(frozen=True)
+class _StrictPresentationContractView:
+    schema_version: str
+    message_ids: tuple[str, ...]
+    horizon: int
+    per_message_capacity: int
+    expected_primary_terminals: int
+    expected_final_batch_pairs_per_message: int
+    formal_execution: _StrictPresentationExecutionView
+
+
+@dataclass(frozen=True)
 class _ClosedStrictFullPoolSource:
+    """Closed source-v4 plus the read-only presentation Interface it can satisfy."""
+
     root: Path
     source_identity: str
     manifest_sha256: str
@@ -140,6 +167,9 @@ class _ClosedStrictFullPoolSource:
     runtime_replay: Mapping[str, object]
     runtime_run_id: str
     runtime_identity_hash: str
+    contract: _StrictPresentationContractView
+    aggregates: Mapping[str, object]
+    diagnostics: Mapping[str, object]
 
     def read_batch(self, time_step: int) -> Mapping[str, object]:
         if time_step < 0 or time_step >= self.facts.committed_batches:
@@ -1030,6 +1060,39 @@ def read_closed_strict_full_pool_source(
         production_topology=production_topology,
         production_deploy_eligible=production_eligible,
     )
+    sample_size = _non_negative_int(
+        runtime_configuration.get("sample_size"), "source-v4 sample size"
+    )
+    horizon = _non_negative_int(
+        runtime_configuration.get("horizon"), "source-v4 horizon"
+    )
+    delivery_capacity = _non_negative_int(
+        runtime_configuration.get("delivery_capacity"),
+        "source-v4 delivery capacity",
+    )
+    final_capacity = sample_size - delivery_capacity * max(horizon - 1, 0)
+    if horizon < 1 or delivery_capacity < 1 or final_capacity < 1:
+        raise ValueError("source-v4 presentation schedule is invalid")
+    presentation_counts = {
+        "candidate_ranking_rows": facts.candidate_rows,
+        "committed_batches": facts.committed_batches,
+        "distinct_users": facts.distinct_users,
+        "eligible_pairs": facts.logical_pairs,
+        "exposures": facts.logical_pairs,
+        "primary_terminals": facts.logical_pairs,
+        "provider_failed_terminals": facts.provider_failed_final_count,
+        "below_delivery_capacity_pairs": 0,
+    }
+    presentation_accounting = {
+        "logical_judgments": facts.logical_pairs,
+        "physical_attempts": facts.charged_physical_attempts,
+        "provider_responses": facts.provider_responses,
+        "successful_decisions": facts.successful_decisions,
+        "external_request_invocations": facts.external_request_invocations,
+        "observed_model_counts": dict(facts.observed_model_counts),
+        "usage_complete_response_count": facts.usage_complete_response_count,
+        "subscription_billed_cost_usd": 0.0,
+    }
     return _ClosedStrictFullPoolSource(
         root=source,
         source_identity=source_identity,
@@ -1040,7 +1103,84 @@ def read_closed_strict_full_pool_source(
         runtime_replay=runtime_replay,
         runtime_run_id=journal.run_id,
         runtime_identity_hash=journal.identity_hash,
+        contract=_StrictPresentationContractView(
+            schema_version="full-pool-strict-presentation-contract-v1",
+            message_ids=tuple(_MESSAGE_CODES),
+            horizon=horizon,
+            per_message_capacity=delivery_capacity,
+            expected_primary_terminals=facts.logical_pairs,
+            expected_final_batch_pairs_per_message=final_capacity,
+            formal_execution=_StrictPresentationExecutionView(
+                requested_model="gpt-5.6-sol"
+            ),
+        ),
+        aggregates={
+            "counts": presentation_counts,
+            "provider_accounting": presentation_accounting,
+            "evidence_profile": (
+                "formal_live" if facts.production_deploy_eligible else "validation"
+            ),
+            "production_deploy_eligible": facts.production_deploy_eligible,
+        },
+        diagnostics={
+            "schedule": {
+                "per_message_capacity": delivery_capacity,
+                "final_batch_pairs_per_message": final_capacity,
+            }
+        },
     )
+
+
+def _strict_projection_html(rows: Sequence[Mapping[str, int | str]]) -> str:
+    fragment = _html_projection(rows)
+    for index, field in enumerate(_STRICT_RESULT_FIELDS):
+        fragment = fragment.replace(
+            f"<th>{field}</th>",
+            f'<th><button type="button" class="full-pool-segment-sort" '
+            f'data-sort-column="{index}" aria-label="Sort by {field}">{field}</button></th>',
+        )
+    fragment = fragment.replace(
+        "<p>Rows are ordered Segment → Message → Run. Exposure includes ignore; interaction columns count only succeeded terminal actions.</p>",
+        "<p>Rows are ordered Segment → Message → Run. Exposure includes ignore; interaction columns count only succeeded terminal actions.</p>"
+        '<aside data-testid="strict-trajectory-disclosure">The strict fresh trajectory is the only source of these results. '
+        "The mixed source-v3 trajectory is not combined because it contains three historical Provider failures. "
+        "Historical 1,000-user sensitivity evidence remains descriptive; population and model both change, so single-factor or causal attribution is prohibited.</aside>",
+    )
+    return fragment + """
+<script>
+(() => {
+  const table = document.querySelector('[data-testid="full-pool-segment-table"]');
+  if (!table) return;
+  const body = table.querySelector('tbody');
+  const buttons = [...table.querySelectorAll('[data-sort-column]')];
+  let activeColumn = -1;
+  let direction = 1;
+  const value = (row, column) => {
+    const text = row.cells[column]?.textContent?.trim() ?? '';
+    const numeric = Number(text.replaceAll(',', ''));
+    return Number.isFinite(numeric) && text !== '' ? numeric : text;
+  };
+  for (const button of buttons) {
+    button.addEventListener('click', () => {
+      const column = Number(button.dataset.sortColumn);
+      direction = activeColumn === column ? -direction : 1;
+      activeColumn = column;
+      for (const candidate of buttons) candidate.removeAttribute('aria-sort');
+      button.setAttribute('aria-sort', direction === 1 ? 'ascending' : 'descending');
+      const rows = [...body.rows];
+      rows.sort((left, right) => {
+        const a = value(left, column);
+        const b = value(right, column);
+        return (typeof a === 'number' && typeof b === 'number'
+          ? a - b
+          : String(a).localeCompare(String(b))) * direction;
+      });
+      body.replaceChildren(...rows);
+    });
+  }
+})();
+</script>
+"""
 
 
 def compose_strict_full_pool_result_projection(
@@ -1109,6 +1249,8 @@ def compose_strict_full_pool_result_projection(
             f"- operator attempt ledger identity SHA-256: `{source.facts.attempt_ledger_identity_sha256 or 'direct-validation'}`",
             f"- rejected mixed source-v3 manifest SHA-256: `{rejected_hash}`",
             "- 旧 mixed trajectory 未参与结果；它只作为 hash-bound rejection lineage 保留。",
+            "- 旧 source-v3 因三个 historical Provider failures 被拒绝；strict fresh trajectory 从 Batch 0 独立重建。",
+            "- Historical 1,000-user sensitivity evidence is retained, but population and model both change; this does not support single-factor or causal attribution.",
             "",
             "## Data dictionary",
             "",
@@ -1134,7 +1276,7 @@ def compose_strict_full_pool_result_projection(
         lineage_filename=FULL_POOL_RESULT_LINEAGE_MARKDOWN,
         lineage_bytes=lineage,
         lineage_sha256=hashlib.sha256(lineage).hexdigest(),
-        html_fragment=_html_projection(rows),
+        html_fragment=_strict_projection_html(rows),
         segment_denominators=dict(source.facts.segment_denominators),
         total_exposure=total_exposure,
     )

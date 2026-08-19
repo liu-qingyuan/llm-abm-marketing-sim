@@ -33,24 +33,34 @@ set -euo pipefail
 . .venv/bin/activate
 export PYTHONPATH="$PWD/src:$PWD"
 mkdir -p ${JSON.stringify(root)}
-cat > ${JSON.stringify(path.join(root, 'compose_source_v3_fixture_test.py'))} <<'PY'
+cat > ${JSON.stringify(path.join(root, 'compose_source_v4_fixture_test.py'))} <<'PY'
 from pathlib import Path
-import pytest
 from llm_abm_sim import concurrent_robustness_report as report
-from llm_abm_sim.full_pool_segmented_automated_recovery import FullPoolSegmentedAutomatedRecovery
-from tests.integration.test_full_pool_presentation_bundle import _historical_candidate
-from tests.integration.test_full_pool_segmented_automated_recovery import (
-    _LaneAdapter,
-    _automated_request,
+from llm_abm_sim.full_pool_strict_operator import (
+    StrictFreshAutomationOperator,
+    StrictFreshLiveGates,
+    create_strict_fresh_execution_manifest,
 )
+from tests.integration.test_full_pool_presentation_bundle import _historical_candidate
+from tests.integration.test_full_pool_strict_operator import _manifest_request
+from tests.integration.test_full_pool_strict_replay import _CompleteEvidenceStrictAdapter
 
 
-def test_compose_source_v3_fixture(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_compose_source_v4_fixture() -> None:
     root = Path(${JSON.stringify(root)}).resolve()
-    request = _automated_request(root / 'automated-inputs', monkeypatch, logical_cap=90)
-    result = FullPoolSegmentedAutomatedRecovery().run(
-        request,
-        adapter_factory=lambda _lane_id: _LaneAdapter([]),
+    request = _manifest_request(root / 'strict-inputs')
+    manifest = create_strict_fresh_execution_manifest(request)
+    result = StrictFreshAutomationOperator().run(
+        manifest,
+        gates=StrictFreshLiveGates(
+            explicit_live_authorization=True,
+            external_requests_allowed=True,
+            credentials_available=True,
+            provider_transport='openai-codex',
+            requested_model='gpt-5.6-sol',
+            subscription_billed_cost_usd=0.0,
+        ),
+        adapter_factory=lambda lane_id: _CompleteEvidenceStrictAdapter(lane_id),
     )
     assert result.source_root is not None
     assert result.source_manifest_sha256 is not None
@@ -64,8 +74,8 @@ def test_compose_source_v3_fixture(monkeypatch: pytest.MonkeyPatch) -> None:
         destination_dir=root / 'bundle',
     )
 PY
-pytest -q ${JSON.stringify(path.join(root, 'compose_source_v3_fixture_test.py'))}
-rm -f ${JSON.stringify(path.join(root, 'compose_source_v3_fixture_test.py'))}`;
+pytest -q ${JSON.stringify(path.join(root, 'compose_source_v4_fixture_test.py'))}
+rm -f ${JSON.stringify(path.join(root, 'compose_source_v4_fixture_test.py'))}`;
   execFileSync('bash', ['-lc', command], { stdio: 'inherit' });
   const bundleDir = path.join(root, 'bundle');
   const index = JSON.parse(
@@ -199,6 +209,21 @@ test('Full-Pool report is bilingual, responsive, lazy, filterable, and keyboard 
       'S1:M1:1', 'S1:M2:1', 'S1:M3:1',
       'S2:M1:1', 'S2:M2:1', 'S2:M3:1',
       'S3:M1:1', 'S3:M2:1', 'S3:M3:1',
+    ]);
+    await expect(page.getByTestId('strict-trajectory-disclosure')).toContainText(
+      'three historical Provider failures',
+    );
+    const messageSort = segmentTable.getByRole('button', { name: 'Sort by Message' });
+    await messageSort.focus();
+    await messageSort.press('Enter');
+    await expect(messageSort).toHaveAttribute('aria-sort', 'ascending');
+    expect(await segmentRows.locator('td:nth-child(2)').allTextContents()).toEqual([
+      'M1', 'M1', 'M1', 'M2', 'M2', 'M2', 'M3', 'M3', 'M3',
+    ]);
+    await messageSort.press('Enter');
+    await expect(messageSort).toHaveAttribute('aria-sort', 'descending');
+    expect(await segmentRows.locator('td:nth-child(2)').allTextContents()).toEqual([
+      'M3', 'M3', 'M3', 'M2', 'M2', 'M2', 'M1', 'M1', 'M1',
     ]);
     const resultCsv = await request.get(`${baseURL}/full-pool-segment-results.csv`);
     expect(resultCsv.status()).toBe(200);

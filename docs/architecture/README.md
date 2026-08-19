@@ -6,7 +6,7 @@
 
 - [ABM Runtime 与仿真流程](abm-runtime.md)：通用 SimulationModel、PlatformEnvironment、SocialUserAgent、Decision Adapter、事件和输出边界。
 - [Concurrent Message Competition Experiment](concurrent-message-competition-experiment.md)：当前三 message runtime、ranking、Primary/Shadow、diagnostics、report rebuild 和发布边界。
-- [Full-Pool Segmented Continuation Runtime](full-pool-segmented-continuation.md)：只读 v1 prefix、十 lane suffix、双未决显式 recovery/source-v2 closure，以及 recovery lineage 到 Report/Evidence/Release v9 的 exact persisted projection。
+- [Full-Pool Segmented Continuation Runtime](full-pool-segmented-continuation.md)：只读 v1 prefix、十 lane continuation、显式/自动 recovery、strict fresh replay，以及 source-v2/v3/v4 到 Report/Evidence/Release v9/v10/v11 的版本化 persisted contracts。
 - [Full-Pool Segmented Continuation Operator](full-pool-segmented-continuation-operator.md)：显式 prepare/status/dry-run/cutover/run、人工单 PID stop、frozen-prefix reconciliation、十 lane first-wave qualification；终点为 source-v2，不含 Report/Release v9 或部署。
 - [锦江用户数据结构](jinjiang-user-profile-data-structure.md)：Observed Profile Attributes、latent attributes、`interest_tags` 当前边界、`PostContent` runtime contract 和 message snapshot ownership。
 - [TikHub / Douyin 数据收集架构](douyin-data-collection-architecture.md)：阶段化 collector、视频 metadata 分母、profile evidence recovery 和 quota guard。

@@ -1,6 +1,6 @@
 # Full-Pool Segmented Continuation Runtime
 
-本 note 描述 segmented source runtime、显式与自动 recovery、source-v2 到 Report/Evidence/Release v9 的冻结 projection，以及 source-v3 到结果交付与 Release v10 的 additive persisted contract。它不改变 Full-Pool v1 或 v9 contract；Module 本身不授予 live authorization，也不执行 SSH 或 canonical deployment。
+本 note 描述 segmented source runtime、显式与自动 recovery、source-v2 到 Report/Evidence/Release v9 的冻结 projection、source-v3 到 Release v10，以及 strict source-v4 到 Report/Evidence/Release v11 的 additive persisted contract。它不改变 Full-Pool v1、source-v2/v3 或 v9/v10 contract；Module 本身不授予 live authorization，也不执行 SSH 或 canonical deployment。
 
 ## Module 与 Interface
 
@@ -281,7 +281,17 @@ Validation与zero-Provider rehearsal生成的source-v4固定`production_deploy_e
 
 versioned source dispatcher对`full-pool-segmented-source-v4`只路由`read_closed_strict_full_pool_source(explicit_path, manifest_sha256)`。Consumer先验证source exact inventory与copied execution manifest，再沿source-bound paths重放attempt chain、runtime identity/journal/snapshots、30个hash-bound spool chunks、original/reconciliation settlement v2、strict policy ledger、terminal/model/usage rows和latent membership。每个logical pair只允许一个final succeeded response/model/usage，original与reconciliation每dispatch各1–3 invocations、每pair最多两个dispatch；任何hash drift、strict stop、unresolved outcome、mixed final evidence或accounting/cap不闭合均nondeployable。Caller没有Formal facts注入参数。
 
-同一closed source生成固定九行`Run | Message | Segment | Total Likes | Total Comments | Total Shares | Exposure`，按Segment → Message → Run排序。每个message的Exposure等于完整user denominator，`ignore`计Exposure，like/comment/share只计final succeeded action。HTML fragment、UTF-8 CSV和Markdown lineage共用同一rows hash；lineage明确rejected mixed source-v3只提供path/hash/reason，未参与fresh trajectory结果。
+同一closed source生成固定九行`Run | Message | Segment | Total Likes | Total Comments | Total Shares | Exposure`，按Segment → Message → Run排序。每个message的Exposure等于完整user denominator，`ignore`计Exposure，like/comment/share只计final succeeded action。HTML fragment、UTF-8 CSV和Markdown lineage共用同一rows hash；lineage明确rejected mixed source-v3只提供path/hash/reason，未参与fresh trajectory结果。source-v4 projection额外提供本地、键盘可用的列排序；默认顺序和CSV/Markdown bytes不随浏览器排序改变。
+
+## Evidence、Report 与 Release v11
+
+`validate_strict_full_pool_production_evidence(...)` 是 source-v4 到 production facts 的唯一 Evidence Interface。调用方只能提供 explicit source-v4 path/hash、fresh execution manifest、historical Formal/study、candidate、presentation closure 与 implementation commit；Interface 没有 caller-supplied Formal facts 参数。Evidence 重新运行 persisted source consumer，并 exact 验证 fresh-from-Batch-0、109,200 final successes、30 commits、36,400 users、observed `gpt-5.6-sol`/完整 usage、120,120 cap、zero uncertainty、attempt/policy/settlement identities、15,616/15,070/5,714 segment denominators 与旧 mixed source rejection。Validation、mock、strict stop、provider failure、unknown、incomplete model/usage 或 cap drift均在 Release 前失败。
+
+Report Module让source-v4满足既有read-only presentation Interface，但v1/v2/v3 readers与bytes不变。source-v4 candidate只从persisted facts生成trace、canonical HTML、UTF-8 CSV和Markdown data dictionary；页面明确strict fresh trajectory是新结果的唯一来源，旧source-v3因三个historical Provider failures被拒绝且不混算。Historical 1,000-user sensitivity原bytes/hashes/denominators继续保留；population与model同时变化，因此不支持单因素或因果归因。Validation candidate始终`production_deploy_eligible=false`。
+
+Release dispatcher只把`full-pool-segmented-source-v4`路由到独立`abm-report-release-contract-v11`。v11重新调用Evidence Interface，零Provider物化immutable presentation与physical snapshot，并绑定fresh manifest、source facts、strict lineage/policy/settlement、operator attempt、physical accounting、同源projection、rejected-history、approved downloads和release identity。Standalone validator从explicit contract/source/snapshot再次重闭合上述facts与逐artifact hashes；v10仍只接受source-v3，v9仍只接受source-v2。
+
+`compose_strict_full_pool_v11_execution_handoff(...)`在live run前从clean、current、create-once fresh manifest零调用投影implementation commit、Provider/model、109,200/120,120/USD0 budgets和独立operator/runtime/source paths。handoff固定引用#205并声明artifact不授予operational authorization。缺少独立授权时不得运行Adapter、SSH、upload、promotion、canonical request或deployment。授权后的部署继续只消费explicit source directory/release id，执行local snapshot validation、candidate health、atomic `current` switch、rollback和公网逐artifact hash/interaction/download验收。
 
 ## Historical nested-recovery create-once automation execution manifest
 
@@ -289,4 +299,4 @@ versioned source dispatcher对`full-pool-segmented-source-v4`只路由`read_clos
 
 ## 局部边界与后续 seam
 
-Source Module 负责从单一 active cutoff 连续运行到 horizon并关闭完整 source-v2；automated nested recovery关闭 additive source-v3；strict fresh runtime关闭 additive source-v4。Versioned Consumer/Projection/Evidence/Release各自只读取明确版本的已关闭 persisted artifacts；v1/v2/v3与v9/v10 readers保持冻结。Manifest和operator表达可执行身份但不自行授予 live authorization；测试、candidate composition和release validation均为零 Provider call，也不执行SSH、upload、promotion或canonical deployment。
+Source Module 负责从单一 active cutoff 连续运行到 horizon并关闭完整 source-v2；automated nested recovery关闭 additive source-v3；strict fresh runtime关闭 additive source-v4。Versioned Consumer/Projection/Evidence/Release各自只读取明确版本的已关闭 persisted artifacts；v1/v2/v3与v9/v10 readers保持冻结，v11只消费source-v4。Manifest、operator与execution handoff表达可执行身份但不自行授予 live authorization；测试、candidate/handoff/release composition和validator均不新增 Provider call，也不自行执行SSH、upload、promotion或canonical deployment。
