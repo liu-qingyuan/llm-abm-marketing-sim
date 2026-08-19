@@ -79,6 +79,7 @@ from .schemas import PeerContext, PlatformContext, ProviderLLMConfig
 
 if TYPE_CHECKING:
     from .full_pool_source_v3 import _ClosedAutomatedFullPoolSource
+    from .full_pool_source_v4 import _ClosedStrictFullPoolSource
 
 FULL_POOL_SEGMENTED_LOGICAL_CAP = 109_200
 FULL_POOL_SEGMENTED_PHYSICAL_CAP = 120_120
@@ -4486,8 +4487,13 @@ def _read_closed_full_pool_source_versioned(
     source_root: str | Path,
     *,
     manifest_sha256: str,
-) -> _ClosedFullPoolSource | _ClosedSegmentedFullPoolSource | _ClosedAutomatedFullPoolSource:
-    """Dispatch exact source-v1/v2/v3 readers without widening historical contracts."""
+) -> (
+    _ClosedFullPoolSource
+    | _ClosedSegmentedFullPoolSource
+    | _ClosedAutomatedFullPoolSource
+    | _ClosedStrictFullPoolSource
+):
+    """Dispatch exact source-v1/v2/v3/v4 readers without widening historical contracts."""
     source = Path(source_root).expanduser()
     try:
         schema_version = _read_json_object(source / "manifest.json").get("schema_version")
@@ -4502,6 +4508,13 @@ def _read_closed_full_pool_source_versioned(
         from .full_pool_source_v3 import _read_closed_automated_full_pool_source
 
         return _read_closed_automated_full_pool_source(
+            source,
+            manifest_sha256=manifest_sha256,
+        )
+    if schema_version == "full-pool-segmented-source-v4":
+        from .full_pool_source_v4 import read_closed_strict_full_pool_source
+
+        return read_closed_strict_full_pool_source(
             source,
             manifest_sha256=manifest_sha256,
         )

@@ -156,9 +156,21 @@ processed 数据中可用于构建历史信号的视频集合。对于单目标�
 
 Fresh replay 在 batch commit 前闭合非成功 pair 的持久化规则。标准 dispatch 的 `provider_failed` 或 provenance unknown 只是 provisional outcome；同一 frozen pair context 最多消费一个原子 slot-plus-dispatch reconciliation。只有 final `succeeded` terminal 可以跨过 full-batch barrier，第二次非成功、implementation failure 或 cap 不足都会形成 typed strict stop，且不生成完整 source。
 
+### Strict Fresh Execution Manifest
+
+Strict Full-Pool Formal Replay 启动前 create once 的执行身份合同。它精确绑定 clean implementation commit 与可验证 Module set、dataset inventory、三条 authoritative messages、P0 Pi `openai-codex` / `gpt-5.6-sol` request contract、十条 lanes、109,200 / 120,120 caps、USD 0 billing 和独立 operator/runtime paths；manifest bytes 不可变，但不会把同一 identity 永久标记为“已消费”。
+
+### Reentrant Strict Fresh Operator
+
+只消费显式 Strict Fresh Execution Manifest 的本机执行 Module。operator workspace 的 OS advisory lock 是唯一 active-owner 机制；进程退出即由 OS 释放，不使用 TTL、heartbeat、remote lease、database 或 queue。同一 manifest 可以在 released lock 后重新进入同一 runtime workspace；append-only attempt ledger 以 identity、sequence 和 checksum 记录 start、resume、runtime terminal、resumable 与 persisted-consumer rejection facts，captured pair 不重新进入 Adapter。
+
 ### Segmented Source-v4
 
-Strict Full-Pool Formal Replay 从 fresh workspace 的 persisted identity、30 个 batch commits、spool、settlement v2、Strict Pair Policy 和 final terminal evidence 原子生成的 additive source。每个 logical pair 必须恰有一个 final successful response、exact observed model 和完整 usage；provisional failures、failed attempts、reconciliation 与 uncertainty 只保留在 attempt/physical accounting，不伪装成 final Decision。旧 mixed source-v3 只以 manifest hash、path 和 rejection reason 进入 lineage，不参与 trajectory 计算。
+Strict Full-Pool Formal Replay 从 fresh workspace 的 persisted identity、30 个 batch commits、hash-bound spool、settlement v2、Strict Pair Policy、operator manifest/attempt identity 和 final terminal evidence 原子生成的 additive source。每个 logical pair 必须恰有一个 final successful response、exact observed model 和完整 usage；provisional failures、failed attempts、reconciliation 与 uncertainty 只保留在 attempt/physical accounting，不伪装成 final Decision。旧 mixed source-v3 只以 manifest hash、path 和 rejection reason 进入 lineage，不参与 trajectory 计算。
+
+### Source-v4 Persisted Consumer
+
+只接收显式 source-v4 path 与 manifest SHA-256 的 persisted reader。它从 source inventory、execution manifest、operator attempt ledger、runtime journal/spool、settlement/policy ledgers、final terminal/model/usage rows和冻结 latent membership独立重建 typed Formal facts；caller不能注入或覆盖 Provider、model、accounting、membership 或 deploy eligibility声明。同一 closed facts再生成固定九行 HTML fragment、UTF-8 CSV 与 Markdown lineage。
 
 ### Durable Pair Settlement
 
@@ -182,7 +194,7 @@ Automated Recovery Policy 的 nondeployable 终止状态。second unknown、reco
 
 ### Full-Pool Segment Result Projection
 
-从 closed Segmented Source-v3 terminal rows 按 `user_id` 连接冻结 latent-v1 membership 后形成的九格同源投影。固定列为 `Run | Message | Segment | Total Likes | Total Comments | Total Shares | Exposure`，按 Segment → Message → Run 排序；Exposure包含`ignore`，互动列只统计成功 terminal 的对应 action。Canonical HTML、UTF-8 CSV与Markdown lineage/data dictionary共享同一 rows identity。
+从 closed Segmented Source-v3 或 Strict Source-v4 terminal rows 按 `user_id` 连接各自 source-bound latent membership 后形成的九格同源投影。固定列为 `Run | Message | Segment | Total Likes | Total Comments | Total Shares | Exposure`，按 Segment → Message → Run 排序；Exposure包含`ignore`，互动列只统计最终成功 terminal 的对应 action。HTML fragment、UTF-8 CSV与Markdown lineage/data dictionary共享同一 rows identity；source-v4 lineage明确旧 mixed trajectory 只作为 rejected-history引用，未参与结果。
 
 ### Release v10
 

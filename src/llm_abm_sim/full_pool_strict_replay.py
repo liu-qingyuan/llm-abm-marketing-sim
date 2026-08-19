@@ -79,6 +79,7 @@ _SOURCE_V4_MANIFEST_FIELDS = frozenset(
         "counts",
         "provider_accounting",
         "physical_accounting",
+        "operator_execution",
         "fresh_lineage",
         "runtime_lineage",
         "strict_policy",
@@ -127,6 +128,46 @@ class StrictRejectedHistoryReference:
 
 
 @dataclass(frozen=True)
+class StrictFreshOperatorExecutionReference:
+    """Manifest and append-only attempt identity attached by the reentrant operator."""
+
+    execution_manifest_path: Path
+    execution_manifest_sha256: str
+    execution_manifest_identity_sha256: str
+    attempt_ledger_path: Path
+    attempt_ledger_identity_sha256: str
+
+    def __post_init__(self) -> None:
+        manifest = self.execution_manifest_path.expanduser().absolute()
+        ledger = self.attempt_ledger_path.expanduser().absolute()
+        if manifest.is_symlink() or not manifest.is_file():
+            raise ValueError("strict fresh execution manifest is missing or unsafe")
+        if ledger.is_symlink() or not ledger.is_file():
+            raise ValueError("strict fresh operator attempt ledger is missing or unsafe")
+        manifest_sha256 = _digest(
+            self.execution_manifest_sha256, "strict fresh execution manifest hash"
+        )
+        if _sha256_file(manifest) != manifest_sha256:
+            raise ValueError("strict fresh execution manifest differs from its frozen hash")
+        object.__setattr__(self, "execution_manifest_path", manifest)
+        object.__setattr__(self, "execution_manifest_sha256", manifest_sha256)
+        object.__setattr__(
+            self,
+            "execution_manifest_identity_sha256",
+            _digest(
+                self.execution_manifest_identity_sha256,
+                "strict fresh execution manifest identity",
+            ),
+        )
+        object.__setattr__(self, "attempt_ledger_path", ledger)
+        object.__setattr__(
+            self,
+            "attempt_ledger_identity_sha256",
+            _digest(self.attempt_ledger_identity_sha256, "strict fresh attempt ledger identity"),
+        )
+
+
+@dataclass(frozen=True)
 class StrictFreshReplayRequest:
     """Frozen inputs for a fresh strict trajectory; no historical terminal can be imported."""
 
@@ -140,6 +181,7 @@ class StrictFreshReplayRequest:
     physical_cap: int = FULL_POOL_FORMAL_PHYSICAL_ATTEMPT_CAP
     maximum_attempts_per_dispatch: int = 3
     max_concurrency: int = 10
+    operator_execution: StrictFreshOperatorExecutionReference | None = None
 
     def __post_init__(self) -> None:
         workspace = self.workspace.expanduser().absolute()
@@ -186,6 +228,21 @@ class StrictFreshReplayRequest:
             raise ValueError("strict replay requires the frozen three-attempt dispatch window")
         if self.max_concurrency != 10:
             raise ValueError("strict replay requires the frozen ten-lane topology")
+        if self.operator_execution is not None:
+            manifest = self.operator_execution.execution_manifest_path
+            ledger = self.operator_execution.attempt_ledger_path
+            if (
+                manifest == workspace
+                or manifest.is_relative_to(workspace)
+                or workspace.is_relative_to(manifest)
+                or ledger == workspace
+                or ledger.is_relative_to(workspace)
+                or ledger == dataset
+                or ledger.is_relative_to(dataset)
+                or ledger == rejected_root
+                or ledger.is_relative_to(rejected_root)
+            ):
+                raise ValueError("strict operator evidence paths overlap protected runtime inputs")
 
 
 @dataclass(frozen=True)
@@ -818,10 +875,14 @@ def _finalize_strict_result(
             journal=journal,
         )
         if source_ref is not None:
+            source_manifest = _read_json(source_ref.root / "manifest.json")
             result = replace(
                 result,
                 source_root=source_ref.root,
                 source_manifest_sha256=source_ref.manifest_sha256,
+                production_deploy_eligible=(
+                    source_manifest.get("production_deploy_eligible") is True
+                ),
             )
     elif any(path.exists() or path.is_symlink() for path in (source, staging)):
         raise ValueError("strict-stopped replay cannot expose source-v4 bytes")
@@ -867,6 +928,31 @@ def strict_formal_provider_contract() -> dict[str, object]:
     return _mapping(json.loads(_canonical_json(contract)), "strict Provider contract")
 
 
+def _operator_execution_payload(
+    reference: StrictFreshOperatorExecutionReference | None,
+) -> dict[str, object] | None:
+    if reference is None:
+        return None
+    if (
+        reference.execution_manifest_path.is_symlink()
+        or not reference.execution_manifest_path.is_file()
+        or _sha256_file(reference.execution_manifest_path)
+        != reference.execution_manifest_sha256
+        or reference.attempt_ledger_path.is_symlink()
+        or not reference.attempt_ledger_path.is_file()
+    ):
+        raise ValueError("strict fresh operator execution evidence changed or is unsafe")
+    return {
+        "execution_manifest_path": str(reference.execution_manifest_path),
+        "execution_manifest_sha256": reference.execution_manifest_sha256,
+        "execution_manifest_identity_sha256": (
+            reference.execution_manifest_identity_sha256
+        ),
+        "attempt_ledger_path": str(reference.attempt_ledger_path),
+        "attempt_ledger_identity_sha256": reference.attempt_ledger_identity_sha256,
+    }
+
+
 def _strict_run_identity(
     request: StrictFreshReplayRequest,
     sample_audit: Mapping[str, object],
@@ -901,6 +987,7 @@ def _strict_run_identity(
         execution_contract={
             "schema_version": _STRICT_EXECUTION_SCHEMA,
             "replay_id": request.replay_id,
+            "operator_execution": _operator_execution_payload(request.operator_execution),
             "seed_top_k_per_proxy": request.seed_top_k_per_proxy,
             "logical_cap": request.logical_cap,
             "physical_cap": request.physical_cap,
@@ -959,6 +1046,13 @@ def _validate_adapter(
     )
     actual_identity = metadata.get("adapter_identity") or transport.get("adapter_identity")
     actual_model = metadata.get("requested_model", metadata.get("model"))
+    fresh_claim = metadata.get("fresh_no_cache")
+    production_live_fresh = (
+        fresh_claim is None
+        and metadata.get("enabled") is True
+        and metadata.get("require_live_env") is True
+        and metadata.get("adapter") == "openai_compatible"
+    )
     if (
         actual_transport != expected.get("provider_transport")
         or actual_identity != expected.get("adapter_identity")
@@ -966,7 +1060,7 @@ def _validate_adapter(
         or metadata.get("prompt_version", getattr(adapter, "prompt_version", None))
         != expected.get("prompt_version")
         or metadata.get("max_retries") != 2
-        or metadata.get("fresh_no_cache") is not True
+        or not (fresh_claim is True or production_live_fresh)
         or _canonical_json(metadata.get("request_contract"))
         != _canonical_json(expected.get("request_contract"))
     ):
@@ -2099,6 +2193,10 @@ def _source_v4_workspace_artifacts(
         "rejected-history/source-v3-manifest.json": request.rejected_history.source_root
         / "manifest.json",
     }
+    if request.operator_execution is not None:
+        artifacts["operator/execution-manifest.json"] = (
+            request.operator_execution.execution_manifest_path
+        )
     snapshot_root = request.workspace / CONCURRENT_MESSAGE_EXECUTION_SNAPSHOTS_DIR
     if snapshot_root.is_symlink() or not snapshot_root.is_dir():
         raise ValueError("source-v4 runtime snapshot directory is missing or unsafe")
@@ -2195,6 +2293,7 @@ def _source_v4_request_payload(request: StrictFreshReplayRequest) -> dict[str, o
         "maximum_attempts_per_dispatch": request.maximum_attempts_per_dispatch,
         "max_concurrency": request.max_concurrency,
         "provider_contract": dict(request.provider_contract),
+        "operator_execution": _operator_execution_payload(request.operator_execution),
         "rejected_history": {
             "source_root": str(request.rejected_history.source_root),
             "manifest_sha256": request.rejected_history.manifest_sha256,
@@ -2217,6 +2316,31 @@ def _source_v4_schema_payload() -> dict[str, object]:
         },
         "provisional_outcomes_are_attempt_evidence_only": True,
     }
+
+
+def _source_v4_spool_refs(
+    request: StrictFreshReplayRequest,
+) -> list[dict[str, object]]:
+    root = request.workspace / "concurrent_runtime_batch_spool"
+    if root.is_symlink() or not root.is_dir():
+        raise ValueError("source-v4 runtime batch spool is missing or unsafe")
+    entries = tuple(sorted(root.iterdir(), key=lambda path: path.name))
+    expected_names = {
+        f"batch-{time_step:06d}.json" for time_step in range(request.config.horizon)
+    }
+    if (
+        any(path.is_symlink() or not path.is_file() for path in entries)
+        or {path.name for path in entries} != expected_names
+    ):
+        raise ValueError("source-v4 runtime batch spool inventory is incomplete or unsafe")
+    return [
+        {
+            "workspace_relative_path": path.relative_to(request.workspace).as_posix(),
+            "sha256": _sha256_file(path),
+            "bytes": path.stat().st_size,
+        }
+        for path in entries
+    ]
 
 
 def _source_v4_expected_manifest(
@@ -2249,18 +2373,31 @@ def _source_v4_expected_manifest(
         for relative in sorted(artifact_by_path)
         if relative.startswith("runtime/snapshots/")
     ]
+    production_topology = (
+        request.config.sample_size == 36_400
+        and request.config.horizon == 30
+        and request.logical_cap == 109_200
+        and request.physical_cap == 120_120
+        and request.max_concurrency == 10
+    )
+    external_invocations = _non_negative_int(
+        evidence.provider_accounting.get("external_request_invocations"),
+        "source-v4 external request invocations",
+    )
+    production_deploy_eligible = (
+        production_topology
+        and request.config.configuration_profile == "production"
+        and request.operator_execution is not None
+        and evidence.source_eligible
+        and external_invocations >= request.logical_cap
+        and result.dispatched_without_settlement_uncertainty == 0
+    )
     return {
         "schema_version": FULL_POOL_SOURCE_V4_SCHEMA,
         "source_identity": identity_hash,
         "replay_id": request.replay_id,
         "profile": request.config.configuration_profile,
-        "production_topology": (
-            request.config.sample_size == 36_400
-            and request.config.horizon == 30
-            and request.logical_cap == 109_200
-            and request.physical_cap == 120_120
-            and request.max_concurrency == 10
-        ),
+        "production_topology": production_topology,
         "counts": dict(evidence.counts),
         "provider_accounting": dict(evidence.provider_accounting),
         "physical_accounting": {
@@ -2272,6 +2409,7 @@ def _source_v4_expected_manifest(
             "active_reservations": result.active_physical_reservations,
             "physical_cap": request.physical_cap,
         },
+        "operator_execution": _operator_execution_payload(request.operator_execution),
         "fresh_lineage": {
             "schema_version": "full-pool-strict-fresh-lineage-v1",
             "fresh_from_batch_zero": True,
@@ -2300,6 +2438,7 @@ def _source_v4_expected_manifest(
                 "runtime/execution-status.json"
             ]["sha256"],
             "batch_snapshots": snapshot_refs,
+            "batch_spool": _source_v4_spool_refs(request),
         },
         "strict_policy": {
             "policy_identity_hash": identity_hash,
@@ -2337,7 +2476,7 @@ def _source_v4_expected_manifest(
         "row_hashes": dict(evidence.row_hashes),
         "provider_contract_sha256": _sha256_json(request.provider_contract),
         "source_hash": _sha256_json(list(artifacts)),
-        "production_deploy_eligible": False,
+        "production_deploy_eligible": production_deploy_eligible,
         "artifacts": [dict(item) for item in artifacts],
     }
 
@@ -2608,7 +2747,7 @@ def _write_status(workspace: Path, result: StrictFreshReplayResult) -> None:
         "strict_stop_pair_ids": list(result.strict_stop_pair_ids),
         "source_root": str(result.source_root) if result.source_root is not None else None,
         "source_manifest_sha256": result.source_manifest_sha256,
-        "production_deploy_eligible": False,
+        "production_deploy_eligible": result.production_deploy_eligible,
     }
     path = workspace / STRICT_FRESH_REPLAY_STATUS_FILE
     _replace_json(path, payload)
