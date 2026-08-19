@@ -698,9 +698,16 @@ class FullPoolAutomationOperator:
         metadata = getattr(adapter, "safe_metadata", None)
         if not isinstance(metadata, Mapping):
             raise ValueError("automation Adapter contract metadata is missing")
-        transport = metadata.get("provider_transport", metadata.get("provider"))
+        external_transport = metadata.get("external_transport", {})
+        if not isinstance(external_transport, Mapping):
+            raise ValueError("automation Adapter external transport metadata is malformed")
+        transport = metadata.get("provider_transport") or external_transport.get(
+            "provider_transport"
+        ) or metadata.get("provider")
         model = metadata.get("requested_model", metadata.get("model"))
-        adapter_identity = metadata.get("adapter_identity", metadata.get("adapter"))
+        adapter_identity = metadata.get("adapter_identity") or external_transport.get(
+            "adapter_identity"
+        ) or metadata.get("adapter")
         prompt_version = metadata.get("prompt_version", getattr(adapter, "prompt_version", None))
         provider = _mapping(facts.payload.get("provider_contract"), "manifest Provider")
         if (

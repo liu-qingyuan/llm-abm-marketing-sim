@@ -16,7 +16,13 @@ from llm_abm_sim.full_pool_automation import (
     validate_automation_execution_manifest,
 )
 from llm_abm_sim.full_pool_formal_experiment import FULL_POOL_FORMAL_ADAPTER_IDENTITY
+from llm_abm_sim.full_pool_segmented_operator import SEGMENTED_PROMPT_VERSION, LiveLanePool
 from llm_abm_sim.prompt_field_summary import CONCURRENT_MESSAGE_PRIMARY_PROMPT_VERSION
+from llm_abm_sim.providers.pi_subscription import (
+    PI_SUBSCRIPTION_ADAPTER_IDENTITY,
+    PI_SUBSCRIPTION_MODEL_ALIASES,
+    PI_SUBSCRIPTION_PROVIDER,
+)
 from tests.integration.test_full_pool_segmented_automated_recovery import (
     _automated_request,
     _LaneAdapter,
@@ -31,6 +37,22 @@ class _ContractShapedValidationAdapter(_LaneAdapter):
         "requested_model": "gpt-5.6-sol",
         "prompt_version": CONCURRENT_MESSAGE_PRIMARY_PROMPT_VERSION,
     }
+
+
+class _ReadyPiClient:
+    ready = True
+    response_timeout_seconds = 30.0
+    subscription_nominal_cost_usd_total = 0.0
+    safe_metadata = {
+        "provider_transport": PI_SUBSCRIPTION_PROVIDER,
+        "adapter_identity": PI_SUBSCRIPTION_ADAPTER_IDENTITY,
+        "authentication": "local_oauth_subscription",
+        "requested_model_aliases": PI_SUBSCRIPTION_MODEL_ALIASES,
+        "output_token_ceiling_enforcement": "application_fail_closed",
+    }
+
+    def close(self) -> None:
+        return None
 
 
 def _head() -> str:
@@ -128,6 +150,27 @@ def test_manifest_model_or_module_drift_is_rejected_without_adapter_factory(
         )
 
     assert factory_calls == []
+
+
+def test_exact_operator_accepts_production_live_lane_adapter_metadata(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    request = _manifest_request(tmp_path, monkeypatch)
+    manifest_path = create_automation_execution_manifest(request)
+    facts = validate_automation_execution_manifest(manifest_path)
+    monkeypatch.setenv("LLM_ABM_RUN_LIVE_LLM", "1")
+    monkeypatch.setenv("LLM_ABM_RUN_FULL_POOL_SEGMENTED_CONTINUATION", "1")
+    pool = LiveLanePool(
+        prompt_version=SEGMENTED_PROMPT_VERSION,
+        client_factory=lambda **_kwargs: _ReadyPiClient(),  # type: ignore[arg-type]
+    )
+
+    try:
+        adapter = pool.adapter_factory(0)
+        FullPoolAutomationOperator._validate_adapter(adapter, facts=facts)
+    finally:
+        pool.close()
 
 
 def test_missing_live_gate_and_adapter_contract_mismatch_never_make_provider_calls(
