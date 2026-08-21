@@ -65,6 +65,8 @@ def test_report_composes_source_v4_projection_without_provider_calls(tmp_path: P
     lineage = (created / FULL_POOL_RESULT_LINEAGE_MARKDOWN).read_text(encoding="utf-8")
     assert (created / FULL_POOL_RESULT_CSV).is_file()
     assert 'data-testid="full-pool-segment-table"' in report
+    assert ".full-pool-download-list li { min-width: 0;" in report
+    assert ".full-pool-download-link { overflow-wrap: anywhere; word-break: break-word; }" in report
     assert "strict fresh trajectory" in report
     assert "three historical Provider failures" in report
     assert "旧 mixed trajectory 未参与结果" in lineage

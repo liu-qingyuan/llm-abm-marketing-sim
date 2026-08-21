@@ -1504,7 +1504,8 @@ tr[data-message-id="message_3"] .full-pool-message-mark { border-top-style: doub
 .full-pool-trace-drawer-surface button { min-width: 44px; min-height: 44px; border: 1px solid var(--fp-line); border-radius: 8px; background: var(--fp-surface); }
 .full-pool-trace-drawer-surface pre { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; }
 .full-pool-download-list { columns: 2; padding-left: 20px; }
-.full-pool-download-list li { break-inside: avoid; margin: 8px 0; }
+.full-pool-download-list li { min-width: 0; break-inside: avoid; margin: 8px 0; }
+.full-pool-download-link { overflow-wrap: anywhere; word-break: break-word; }
 .full-pool-history { padding: 110px 0 0; border-top: 8px solid var(--fp-ink); background: #fff; }
 .full-pool-history-heading { padding-bottom: 54px; }
 .full-pool-history > .editorial-report { width: 100%; }
