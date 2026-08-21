@@ -5,7 +5,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 RELEASE_CONTRACT=""
 
-DEPLOY_HOST="${ABM_DEPLOY_HOST:-q1ngyuan.top}"
+DEPLOY_HOST="${ABM_DEPLOY_HOST:-BandwagonHost2}"
 DOMAIN="${ABM_DEPLOY_DOMAIN:-abm.q1ngyuan.top}"
 REMOTE_ROOT="${ABM_DEPLOY_REMOTE_ROOT:-/opt/llm-abm-marketing-sim-report}"
 PORT="${ABM_DEPLOY_PORT:-18083}"

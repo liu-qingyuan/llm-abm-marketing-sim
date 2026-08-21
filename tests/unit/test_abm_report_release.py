@@ -1022,6 +1022,13 @@ def test_deploy_rejects_symlink_contract_before_any_remote_action(tmp_path: Path
         temporary.cleanup()
 
 
+def test_deploy_defaults_to_the_established_canonical_origin_alias():
+    deploy_script = REPO_ROOT / "scripts" / "deploy_abm_report.sh"
+    script = deploy_script.read_text(encoding="utf-8")
+
+    assert 'DEPLOY_HOST="${ABM_DEPLOY_HOST:-BandwagonHost2}"' in script
+
+
 def test_deploy_preserves_empty_previous_release_across_ssh_boundaries():
     deploy_script = REPO_ROOT / "scripts" / "deploy_abm_report.sh"
     script = deploy_script.read_text(encoding="utf-8")
