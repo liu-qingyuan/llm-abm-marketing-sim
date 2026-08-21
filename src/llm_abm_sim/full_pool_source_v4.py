@@ -497,8 +497,28 @@ def read_closed_strict_full_pool_source(
     runtime_workspace = Path(
         _non_empty(request.get("workspace"), "source-v4 runtime workspace")
     )
-    if source != runtime_workspace / "source-v4":
-        raise ValueError("source-v4 root is crossed with its frozen runtime workspace")
+    runtime_absolute = runtime_workspace.expanduser().absolute()
+    if (
+        runtime_workspace.is_symlink()
+        or not runtime_workspace.is_dir()
+        or runtime_workspace.resolve(strict=True) != runtime_absolute
+    ):
+        raise ValueError("source-v4 runtime workspace is missing or unsafe")
+    origin_source = runtime_workspace / "source-v4"
+    if source != origin_source:
+        if (
+            source.is_relative_to(runtime_workspace)
+            or runtime_workspace.is_relative_to(source)
+            or origin_source.is_symlink()
+            or not origin_source.is_dir()
+            or origin_source.resolve(strict=True) != origin_source.absolute()
+            or _sha256_file(origin_source / "manifest.json") != manifest_sha256
+            or (origin_source / "manifest.json").read_bytes()
+            != manifest_path.read_bytes()
+        ):
+            raise ValueError(
+                "source-v4 publication snapshot is crossed with its frozen runtime origin"
+            )
     provider_contract = _mapping(request.get("provider_contract"), "source-v4 Provider contract")
     if (
         _canonical_json(provider_contract) != _canonical_json(strict_formal_provider_contract())
@@ -561,8 +581,6 @@ def read_closed_strict_full_pool_source(
     if actual_snapshot_paths != expected_snapshot_paths:
         raise ValueError("source-v4 copied runtime snapshot inventory is crossed")
 
-    if runtime_workspace.is_symlink() or not runtime_workspace.is_dir():
-        raise ValueError("source-v4 runtime workspace is missing or unsafe")
     journal = ConcurrentExecutionJournal.open_existing(runtime_workspace)
     runtime_replay = journal._replay_runtime()
     runtime_identity = journal.identity

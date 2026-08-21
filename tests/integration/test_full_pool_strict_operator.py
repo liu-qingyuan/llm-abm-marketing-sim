@@ -598,6 +598,42 @@ def test_persisted_source_v4_consumer_rebuilds_facts_and_nine_row_projection(
     assert isinstance(dispatched, _ClosedStrictFullPoolSource)
     assert dispatched.facts.source_manifest_sha256 == result.source_manifest_sha256
 
+    publication_snapshot = tmp_path / "publication-source-v4"
+    shutil.copytree(result.source_root, publication_snapshot)
+    published = read_closed_strict_full_pool_source(
+        publication_snapshot,
+        manifest_sha256=result.source_manifest_sha256,
+    )
+    assert published.facts.source_root == publication_snapshot.resolve()
+    assert published.facts.source_identity == source.facts.source_identity
+    assert compose_strict_full_pool_result_projection(published).rows_sha256 == (
+        projection.rows_sha256
+    )
+
+    unexpected = publication_snapshot / "unexpected.txt"
+    unexpected.write_text("not declared\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="inventory|extra"):
+        read_closed_strict_full_pool_source(
+            publication_snapshot,
+            manifest_sha256=result.source_manifest_sha256,
+        )
+    unexpected.unlink()
+
+    origin_manifest = result.source_root / "manifest.json"
+    origin_bytes = origin_manifest.read_bytes()
+    origin_mode = origin_manifest.stat().st_mode
+    try:
+        origin_manifest.chmod(origin_mode | 0o200)
+        origin_manifest.write_bytes(origin_bytes + b"\n")
+        with pytest.raises(ValueError, match="snapshot|origin"):
+            read_closed_strict_full_pool_source(
+                publication_snapshot,
+                manifest_sha256=result.source_manifest_sha256,
+            )
+    finally:
+        origin_manifest.write_bytes(origin_bytes)
+        origin_manifest.chmod(origin_mode)
+
 
 def test_source_v4_projection_counts_only_final_success_actions_and_includes_ignore_exposure(
     tmp_path: Path,
