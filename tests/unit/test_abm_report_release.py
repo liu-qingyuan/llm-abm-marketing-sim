@@ -1043,11 +1043,15 @@ def test_deploy_retries_transient_public_transport_errors_without_weakening_chec
     deploy_script = REPO_ROOT / "scripts" / "deploy_abm_report.sh"
     script = deploy_script.read_text(encoding="utf-8")
 
-    assert "PUBLIC_CURL_RETRY=(--retry 4 --retry-all-errors --retry-delay 2 --retry-max-time 120)" in script
-    assert "PUBLIC_ARTIFACT_CURL_RETRY=(--retry 4 --retry-all-errors --retry-delay 2 --retry-max-time 1800)" in script
+    assert "PUBLIC_CURL_RETRY=(--noproxy '*' --http1.1 --retry 4 --retry-all-errors --retry-delay 2 --retry-max-time 120)" in script
+    assert "PUBLIC_ARTIFACT_CURL_RETRY=(--noproxy '*' --http1.1 --retry 4 --retry-all-errors --retry-delay 2 --retry-max-time 1800)" in script
     assert script.count('curl "${PUBLIC_CURL_RETRY[@]}"') == 6
     assert script.count('curl "${PUBLIC_ARTIFACT_CURL_RETRY[@]}"') == 1
-    assert 'curl "${PUBLIC_ARTIFACT_CURL_RETRY[@]}" -fsSL --compressed --max-time 1800' in script
+    assert (
+        'curl "${PUBLIC_ARTIFACT_CURL_RETRY[@]}" -fsSL --compressed --continue-at - '
+        "--max-time 1800"
+    ) in script
+    assert "printf 'Verifying public artifact %s\\n'" in script
 
 
 def test_deploy_reuses_only_an_exact_hash_verified_remote_release():

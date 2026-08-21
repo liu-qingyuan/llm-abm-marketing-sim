@@ -777,8 +777,8 @@ rollback_on_failure() {
 }
 trap rollback_on_failure EXIT
 
-PUBLIC_CURL_RETRY=(--retry 4 --retry-all-errors --retry-delay 2 --retry-max-time 120)
-PUBLIC_ARTIFACT_CURL_RETRY=(--retry 4 --retry-all-errors --retry-delay 2 --retry-max-time 1800)
+PUBLIC_CURL_RETRY=(--noproxy '*' --http1.1 --retry 4 --retry-all-errors --retry-delay 2 --retry-max-time 120)
+PUBLIC_ARTIFACT_CURL_RETRY=(--noproxy '*' --http1.1 --retry 4 --retry-all-errors --retry-delay 2 --retry-max-time 1800)
 for _attempt in 1 2 3 4 5 6 7 8; do
   if curl "${PUBLIC_CURL_RETRY[@]}" -fsS --max-time 20 "https://${DOMAIN}/healthz" >/dev/null; then
     break
@@ -832,7 +832,8 @@ while IFS=$'\t' read -r artifact expected_sha; do
   [[ -n "${artifact}" && "${expected_sha}" =~ ^[a-f0-9]{64}$ ]] || fail "invalid public artifact hash contract row"
   artifact_index=$((artifact_index + 1))
   public_artifact="${PUBLIC_ARTIFACT_DIR}/artifact-${artifact_index}"
-  curl "${PUBLIC_ARTIFACT_CURL_RETRY[@]}" -fsSL --compressed --max-time 1800 \
+  printf 'Verifying public artifact %s\n' "${artifact}"
+  curl "${PUBLIC_ARTIFACT_CURL_RETRY[@]}" -fsSL --compressed --continue-at - --max-time 1800 \
     -H 'Cache-Control: no-cache' \
     "https://${DOMAIN}/${artifact}?release=${RELEASE_ID}" \
     -o "${public_artifact}"
