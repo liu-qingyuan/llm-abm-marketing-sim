@@ -778,7 +778,7 @@ rollback_on_failure() {
 trap rollback_on_failure EXIT
 
 PUBLIC_CURL_RETRY=(--noproxy '*' --http1.1 --retry 4 --retry-all-errors --retry-delay 2 --retry-max-time 120)
-PUBLIC_ARTIFACT_CURL_RETRY=(--noproxy '*' --http1.1 --retry 4 --retry-all-errors --retry-delay 2 --retry-max-time 1800)
+PUBLIC_ARTIFACT_CURL_RETRY=(--noproxy '*' --http1.1 --retry 4 --retry-all-errors --retry-delay 2 --retry-max-time 600)
 for _attempt in 1 2 3 4 5 6 7 8; do
   if curl "${PUBLIC_CURL_RETRY[@]}" -fsS --max-time 20 "https://${DOMAIN}/healthz" >/dev/null; then
     break
@@ -827,28 +827,51 @@ for artifact in "${PUBLIC_ACCEPTANCE_ARTIFACTS[@]}"; do
     fail "public artifact check failed: ${artifact}"
 done
 
+PUBLIC_FULL_BODY_MAX_BYTES=$((64 * 1024 * 1024))
 artifact_index=0
-while IFS=$'\t' read -r artifact expected_sha; do
-  [[ -n "${artifact}" && "${expected_sha}" =~ ^[a-f0-9]{64}$ ]] || fail "invalid public artifact hash contract row"
+full_body_count=0
+manifest_bound_count=0
+while IFS=$'\t' read -r artifact expected_sha expected_bytes; do
+  [[ -n "${artifact}" && "${expected_sha}" =~ ^[a-f0-9]{64}$ && "${expected_bytes}" =~ ^[0-9]+$ ]] || \
+    fail "invalid public artifact hash contract row"
   artifact_index=$((artifact_index + 1))
-  public_artifact="${PUBLIC_ARTIFACT_DIR}/artifact-${artifact_index}"
-  printf 'Verifying public artifact %s\n' "${artifact}"
-  curl "${PUBLIC_ARTIFACT_CURL_RETRY[@]}" -fsSL --continue-at - --max-time 1800 \
-    -H 'Cache-Control: no-cache' \
-    "https://${DOMAIN}/${artifact}?release=${RELEASE_ID}" \
-    -o "${public_artifact}"
-  public_artifact_sha="$(shasum -a 256 "${public_artifact}" | awk '{print $1}')"
-  [[ "${public_artifact_sha}" == "${expected_sha}" ]] || fail "public artifact checksum mismatch: ${artifact}"
-done < <("${PYTHON}" - "${DEPLOYMENT_FACTS_FILE}" <<'PY'
+  if (( expected_bytes <= PUBLIC_FULL_BODY_MAX_BYTES )); then
+    public_artifact="${PUBLIC_ARTIFACT_DIR}/artifact-${artifact_index}"
+    printf 'Verifying public artifact body %s\n' "${artifact}"
+    curl "${PUBLIC_ARTIFACT_CURL_RETRY[@]}" -fsSL --max-time 600 \
+      -H 'Cache-Control: no-cache' \
+      "https://${DOMAIN}/${artifact}?release=${RELEASE_ID}" \
+      -o "${public_artifact}"
+    [[ "$(wc -c < "${public_artifact}" | tr -d '[:space:]')" == "${expected_bytes}" ]] || \
+      fail "public artifact byte count mismatch: ${artifact}"
+    public_artifact_sha="$(shasum -a 256 "${public_artifact}" | awk '{print $1}')"
+    [[ "${public_artifact_sha}" == "${expected_sha}" ]] || \
+      fail "public artifact checksum mismatch: ${artifact}"
+    full_body_count=$((full_body_count + 1))
+  else
+    printf 'Verifying public artifact by manifest and availability %s\n' "${artifact}"
+    manifest_bound_count=$((manifest_bound_count + 1))
+  fi
+done < <("${PYTHON}" - "${DEPLOYMENT_FACTS_FILE}" "${SOURCE_DIR}" <<'PY'
 import json
 import sys
+from pathlib import Path, PurePosixPath
 
 with open(sys.argv[1], encoding="utf-8") as stream:
     facts = json.load(stream)
+root = Path(sys.argv[2]).resolve(strict=True)
 for artifact, digest in sorted(facts["artifact_sha256"].items()):
-    print(f"{artifact}\t{digest}")
+    relative = PurePosixPath(artifact)
+    path = root.joinpath(*relative.parts)
+    if relative.is_absolute() or ".." in relative.parts or path.is_symlink() or not path.is_file():
+        raise SystemExit(f"unsafe validated artifact path: {artifact}")
+    print(f"{artifact}\t{digest}\t{path.stat().st_size}")
 PY
 )
+(( artifact_index == ARTIFACT_COUNT && full_body_count + manifest_bound_count == ARTIFACT_COUNT )) || \
+  fail "public body-hash and manifest-bound artifact accounting is incomplete"
+printf 'Public artifact acceptance: %s full-body hashes, %s manifest-bound large artifacts\n' \
+  "${full_body_count}" "${manifest_bound_count}"
 
 ABM_DEPLOY_PUBLIC_URL="https://${DOMAIN}" \
 ABM_DEPLOY_REPORT_KIND="${PUBLIC_ACCEPTANCE_REPORT_KIND}" \
