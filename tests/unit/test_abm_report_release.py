@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import hashlib
 import importlib.util
 import json
@@ -1043,7 +1044,64 @@ def test_deploy_retries_transient_public_transport_errors_without_weakening_chec
     script = deploy_script.read_text(encoding="utf-8")
 
     assert "PUBLIC_CURL_RETRY=(--retry 4 --retry-all-errors --retry-delay 2 --retry-max-time 120)" in script
-    assert script.count('curl "${PUBLIC_CURL_RETRY[@]}"') == 7
+    assert "PUBLIC_ARTIFACT_CURL_RETRY=(--retry 4 --retry-all-errors --retry-delay 2 --retry-max-time 1800)" in script
+    assert script.count('curl "${PUBLIC_CURL_RETRY[@]}"') == 6
+    assert script.count('curl "${PUBLIC_ARTIFACT_CURL_RETRY[@]}"') == 1
+    assert 'curl "${PUBLIC_ARTIFACT_CURL_RETRY[@]}" -fsSL --compressed --max-time 1800' in script
+
+
+def test_deploy_reuses_only_an_exact_hash_verified_remote_release():
+    deploy_script = REPO_ROOT / "scripts" / "deploy_abm_report.sh"
+    script = deploy_script.read_text(encoding="utf-8")
+    prepare = script.split("<<'PREPARE_RELEASE'", maxsplit=1)[1].split(
+        "PREPARE_RELEASE", maxsplit=1
+    )[0]
+
+    unsafe_check = prepare.index('find "${remote_release}" -mindepth 1 ! -type f ! -type d')
+    count_check = prepare.index('[[ "${actual_count}" == "${artifact_count}" ]]')
+    hash_check = prepare.index('sha256sum -c "${checksum_file}"')
+    reuse = prepare.index("printf 'reused\\n'")
+    assert unsafe_check < count_check < hash_check < reuse
+    assert 'if [[ "${REMOTE_RELEASE_STATE}" == "created" ]]; then' in script
+    assert 'Reusing hash-verified remote release' in script
+
+
+def test_remote_release_prepare_reuses_exact_bytes_and_rejects_drift(tmp_path: Path):
+    deploy_script = REPO_ROOT / "scripts" / "deploy_abm_report.sh"
+    script = deploy_script.read_text(encoding="utf-8")
+    prepare = script.split("<<'PREPARE_RELEASE'", maxsplit=1)[1].split(
+        "PREPARE_RELEASE", maxsplit=1
+    )[0]
+    remote_release = tmp_path / "remote-release"
+    remote_release.mkdir()
+    (remote_release / "report.html").write_text("report", encoding="utf-8")
+    (remote_release / "artifact_manifest.json").write_text("{}", encoding="utf-8")
+    checksums = "".join(
+        f"{_sha256(remote_release / name)}  {name}\n"
+        for name in ("artifact_manifest.json", "report.html")
+    )
+    encoded = base64.b64encode(checksums.encode("ascii")).decode("ascii")
+
+    exact = subprocess.run(
+        ["bash", "-s", "--", str(remote_release), encoded, "2"],
+        input=prepare,
+        text=True,
+        capture_output=True,
+    )
+    assert exact.returncode == 0
+    assert exact.stdout == "reused\n"
+
+    (remote_release / "report.html").write_text("drift", encoding="utf-8")
+    drifted = subprocess.run(
+        ["bash", "-s", "--", str(remote_release), encoded, "2"],
+        input=prepare,
+        text=True,
+        capture_output=True,
+    )
+    assert drifted.returncode != 0
+    assert "hashes differ from contract" in drifted.stderr
+    assert remote_release.is_dir()
+    assert (remote_release / "report.html").read_text(encoding="utf-8") == "drift"
 
 
 def test_deploy_prevents_cdn_transformations_of_hash_bound_report():
@@ -1201,6 +1259,11 @@ count=0
 count=$((count + 1))
 printf '%s' "${count}" > "${FAKE_SSH_COUNT}"
 printf '%s %s\n' "${count}" "$*" >> "${FAKE_SSH_LOG}"
+if [[ "${count}" == "2" ]]; then
+  while IFS= read -r _line; do :; done
+  printf 'created\n'
+  exit 0
+fi
 if [[ "${count}" == "3" ]]; then
   cat > "${FAKE_UPLOAD_ARCHIVE}"
   exit 0

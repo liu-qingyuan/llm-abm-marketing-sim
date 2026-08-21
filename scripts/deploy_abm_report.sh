@@ -239,18 +239,51 @@ PREVIOUS_RELEASE_ARG="${PREVIOUS_RELEASE:-__ABM_NO_PREVIOUS_RELEASE__}"
 PREVIOUS_REPORT_SHA_ARG="${PREVIOUS_REPORT_SHA:-__ABM_NO_PREVIOUS_REPORT_SHA__}"
 PREVIOUS_MANIFEST_SHA_ARG="${PREVIOUS_MANIFEST_SHA:-__ABM_NO_PREVIOUS_MANIFEST_SHA__}"
 
-printf 'Uploading %s to %s:%s\n' "${SOURCE_DIR}" "${DEPLOY_HOST}" "${REMOTE_RELEASE}"
-ssh "${DEPLOY_HOST}" bash -s -- "${REMOTE_RELEASE}" <<'PREPARE_RELEASE'
+REMOTE_RELEASE_STATE="$(ssh "${DEPLOY_HOST}" bash -s -- \
+  "${REMOTE_RELEASE}" \
+  "${ARTIFACT_CHECKSUMS_B64}" \
+  "${ARTIFACT_COUNT}" <<'PREPARE_RELEASE'
 set -euo pipefail
 remote_release="$1"
-[[ ! -e "${remote_release}" ]] || {
-  printf 'deploy error: release already exists: %s\n' "${remote_release}" >&2
+artifact_checksums_b64="$2"
+artifact_count="$3"
+if [[ ! -e "${remote_release}" && ! -L "${remote_release}" ]]; then
+  install -d -m 755 "${remote_release}"
+  printf 'created\n'
+  exit 0
+fi
+[[ -d "${remote_release}" && ! -L "${remote_release}" ]] || {
+  printf 'deploy error: existing release is not a real directory: %s\n' "${remote_release}" >&2
   exit 1
 }
-install -d -m 755 "${remote_release}"
+unsafe_entry="$(find "${remote_release}" -mindepth 1 ! -type f ! -type d -print -quit)"
+[[ -z "${unsafe_entry}" ]] || {
+  printf 'deploy error: existing release contains an unsafe entry: %s\n' "${unsafe_entry}" >&2
+  exit 1
+}
+actual_count="$(find "${remote_release}" -type f | wc -l | tr -d '[:space:]')"
+[[ "${actual_count}" == "${artifact_count}" ]] || {
+  printf 'deploy error: existing release file count differs from contract\n' >&2
+  exit 1
+}
+checksum_file="$(mktemp)"
+trap 'rm -f "${checksum_file}"' EXIT
+printf '%s' "${artifact_checksums_b64}" | base64 --decode > "${checksum_file}"
+(
+  cd "${remote_release}"
+  sha256sum -c "${checksum_file}" >/dev/null
+) || {
+  printf 'deploy error: existing release hashes differ from contract\n' >&2
+  exit 1
+}
+printf 'reused\n'
 PREPARE_RELEASE
+)" || fail "cannot prepare or verify remote release"
+[[ "${REMOTE_RELEASE_STATE}" == "created" || "${REMOTE_RELEASE_STATE}" == "reused" ]] || \
+  fail "remote release preparation returned an invalid state"
 
 upload_complete=0
+[[ "${REMOTE_RELEASE_STATE}" != "reused" ]] || upload_complete=1
 cleanup_partial_upload() {
   status=$?
   trap - EXIT
@@ -266,9 +299,14 @@ CLEAN_PARTIAL
 }
 trap cleanup_partial_upload EXIT
 
-COPYFILE_DISABLE=1 tar --no-xattrs -C "${SOURCE_DIR}" -czf - . \
-  | ssh "${DEPLOY_HOST}" "tar -xzf - -C '${REMOTE_RELEASE}'"
-upload_complete=1
+if [[ "${REMOTE_RELEASE_STATE}" == "created" ]]; then
+  printf 'Uploading %s to %s:%s\n' "${SOURCE_DIR}" "${DEPLOY_HOST}" "${REMOTE_RELEASE}"
+  COPYFILE_DISABLE=1 tar --no-xattrs -C "${SOURCE_DIR}" -czf - . \
+    | ssh "${DEPLOY_HOST}" "tar -xzf - -C '${REMOTE_RELEASE}'"
+  upload_complete=1
+else
+  printf 'Reusing hash-verified remote release %s:%s\n' "${DEPLOY_HOST}" "${REMOTE_RELEASE}"
+fi
 trap cleanup_local_snapshot EXIT
 
 ssh "${DEPLOY_HOST}" bash -s -- \
@@ -740,6 +778,7 @@ rollback_on_failure() {
 trap rollback_on_failure EXIT
 
 PUBLIC_CURL_RETRY=(--retry 4 --retry-all-errors --retry-delay 2 --retry-max-time 120)
+PUBLIC_ARTIFACT_CURL_RETRY=(--retry 4 --retry-all-errors --retry-delay 2 --retry-max-time 1800)
 for _attempt in 1 2 3 4 5 6 7 8; do
   if curl "${PUBLIC_CURL_RETRY[@]}" -fsS --max-time 20 "https://${DOMAIN}/healthz" >/dev/null; then
     break
@@ -793,7 +832,7 @@ while IFS=$'\t' read -r artifact expected_sha; do
   [[ -n "${artifact}" && "${expected_sha}" =~ ^[a-f0-9]{64}$ ]] || fail "invalid public artifact hash contract row"
   artifact_index=$((artifact_index + 1))
   public_artifact="${PUBLIC_ARTIFACT_DIR}/artifact-${artifact_index}"
-  curl "${PUBLIC_CURL_RETRY[@]}" -fsSL --compressed --max-time 180 \
+  curl "${PUBLIC_ARTIFACT_CURL_RETRY[@]}" -fsSL --compressed --max-time 1800 \
     -H 'Cache-Control: no-cache' \
     "https://${DOMAIN}/${artifact}?release=${RELEASE_ID}" \
     -o "${public_artifact}"
