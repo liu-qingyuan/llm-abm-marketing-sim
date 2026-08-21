@@ -438,7 +438,7 @@ install -d -m 755 "${remote_root}/nginx" "${remote_root}/tls" "${remote_root}/re
   printf 'deploy error: invalid validated contract identity\n' >&2
   exit 1
 }
-[[ "${release_contract_schema}" =~ ^abm-report-release-contract-v([2-9]|10)$ ]] || {
+[[ "${release_contract_schema}" =~ ^abm-report-release-contract-v([2-9]|10|11)$ ]] || {
   printf 'deploy error: invalid validated release contract schema\n' >&2
   exit 1
 }
@@ -813,6 +813,7 @@ PY
 ABM_DEPLOY_PUBLIC_URL="https://${DOMAIN}" \
 ABM_DEPLOY_REPORT_KIND="${PUBLIC_ACCEPTANCE_REPORT_KIND}" \
 ABM_DEPLOY_PUBLIC_ARTIFACTS="${PUBLIC_ACCEPTANCE_ARTIFACTS_JSON}" \
+ABM_DEPLOY_RELEASE_CONTRACT_SCHEMA="${RELEASE_CONTRACT_SCHEMA}" \
   npx playwright test tests/playwright/deployed-abm-report.spec.ts
 
 cleanup_public_artifacts

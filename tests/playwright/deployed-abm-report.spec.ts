@@ -2,6 +2,7 @@ import { expect, test, type APIRequestContext, type Page } from '@playwright/tes
 
 const publicUrl = process.env.ABM_DEPLOY_PUBLIC_URL;
 const reportKind = process.env.ABM_DEPLOY_REPORT_KIND ?? 'final-research';
+const releaseContractSchema = process.env.ABM_DEPLOY_RELEASE_CONTRACT_SCHEMA;
 const artifactPaths = (() => {
   const raw = process.env.ABM_DEPLOY_PUBLIC_ARTIFACTS;
   if (!raw) return null;
@@ -272,7 +273,7 @@ async function expectFullPoolReport(page: Page): Promise<void> {
   await expect(page.locator('html')).toHaveAttribute('lang', 'zh-CN');
   await expect(page.locator('meta[name="abm-release-contract"]')).toHaveAttribute(
     'content',
-    'abm-report-release-contract-v8',
+    releaseContractSchema ?? 'abm-report-release-contract-v8',
   );
   const root = page.getByTestId('full-pool-presentation');
   await expect(root).toHaveAttribute('data-production-deploy-eligible', 'true');

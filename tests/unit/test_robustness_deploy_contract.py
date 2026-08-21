@@ -797,8 +797,15 @@ def test_deploy_accepts_v11_only_through_existing_validated_atomic_contract() ->
     script = (REPO_ROOT / "scripts" / "deploy_abm_report.sh").read_text(
         encoding="utf-8"
     )
+    remote = script.split("<<'REMOTE_DEPLOY'", maxsplit=1)[1].split(
+        "REMOTE_DEPLOY", maxsplit=1
+    )[0]
+    acceptance = (REPO_ROOT / "tests/playwright/deployed-abm-report.spec.ts").read_text(
+        encoding="utf-8"
+    )
 
     assert "^abm-report-release-contract-v([2-9]|10|11)$" in script
+    assert "^abm-report-release-contract-v([2-9]|10|11)$" in remote
     assert script.index("--require-formal-production") < script.index(
         'printf \'Uploading %s to %s:%s\\n\''
     )
@@ -807,6 +814,9 @@ def test_deploy_accepts_v11_only_through_existing_validated_atomic_contract() ->
     )
     assert "REMOTE_ROLLBACK" in script
     assert "public artifact checksum mismatch" in script
+    assert 'ABM_DEPLOY_RELEASE_CONTRACT_SCHEMA="${RELEASE_CONTRACT_SCHEMA}"' in script
+    assert "process.env.ABM_DEPLOY_RELEASE_CONTRACT_SCHEMA" in acceptance
+    assert "releaseContractSchema ?? 'abm-report-release-contract-v8'" in acceptance
 
 
 def test_deploy_consumes_validated_facts_and_checks_the_snapshot_before_ssh() -> None:
@@ -819,7 +829,7 @@ def test_deploy_consumes_validated_facts_and_checks_the_snapshot_before_ssh() ->
     assert "--deployment-release-id" in script
     assert "--deployment-domain" in script
     assert "PUBLIC_ACCEPTANCE_ARTIFACTS_JSON" in script
-    assert "^abm-report-release-contract-v([2-9]|10)$" in script
+    assert "^abm-report-release-contract-v([2-9]|10|11)$" in script
     assert "ARTIFACT_CHECKSUMS_B64" in script
     assert "Path(sys.argv[1]).read_text" not in script
 
