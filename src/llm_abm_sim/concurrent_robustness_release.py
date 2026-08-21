@@ -1151,6 +1151,7 @@ def _v11_execution_handoff(
     root: Path,
     release_id: str,
     execution: StrictFreshExecutionManifestFacts,
+    source_v4_directory: Path,
 ) -> dict[str, object]:
     if not _RELEASE_ID.fullmatch(release_id):
         raise ConcurrentRobustnessReleaseError("v11 execution handoff release id is invalid")
@@ -1167,7 +1168,7 @@ def _v11_execution_handoff(
         "fee_budget_usd": 0.0,
         "operator_workspace": str(execution.operator_workspace),
         "runtime_workspace": str(execution.replay_request.workspace),
-        "source_v4_directory": str(execution.replay_request.workspace / "source-v4"),
+        "source_v4_directory": str(source_v4_directory),
         "release_id": release_id,
         "operational_authorization_issue": 205,
         "operational_authorization_required": True,
@@ -1211,6 +1212,7 @@ def compose_strict_full_pool_v11_execution_handoff(
         root=root,
         release_id=release_id,
         execution=execution,
+        source_v4_directory=execution.replay_request.workspace / "source-v4",
     )
 
 
@@ -1301,6 +1303,7 @@ def _v11_fact_documents(
         root=root,
         release_id=release_id,
         execution=execution,
+        source_v4_directory=strict.source_root,
     )
     if handoff["source_v4_directory"] != str(strict.source_root):
         raise ConcurrentRobustnessReleaseError("v11 execution handoff source directory is crossed")

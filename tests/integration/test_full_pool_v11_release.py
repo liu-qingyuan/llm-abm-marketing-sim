@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 from dataclasses import replace
 from pathlib import Path
 
@@ -239,7 +240,9 @@ def test_release_v11_materializes_and_round_trips_typed_formal_fixture(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    source_root, source_manifest_sha256 = _validation_source_v4(tmp_path)
+    origin_source_root, source_manifest_sha256 = _validation_source_v4(tmp_path)
+    source_root = tmp_path / "published-source-v4"
+    shutil.copytree(origin_source_root, source_root)
     closed = read_closed_strict_full_pool_source(
         source_root,
         manifest_sha256=source_manifest_sha256,
@@ -375,6 +378,10 @@ def test_release_v11_materializes_and_round_trips_typed_formal_fixture(
     assert contract["result_projection_facts"]["total_exposure"] == 109_200
     assert contract["execution_handoff"]["provider_calls_during_composition"] == 0
     assert contract["execution_handoff"]["operational_authorization_required"] is True
+    assert contract["execution_handoff"]["source_v4_directory"] == str(source_root.resolve())
+    assert contract["execution_handoff"]["runtime_workspace"] == str(
+        execution.replay_request.workspace
+    )
     assert contract["production_deploy_eligible"] is True
     assert (destination / FULL_POOL_RESULT_CSV).is_file()
     assert (destination / FULL_POOL_RESULT_LINEAGE_MARKDOWN).is_file()
