@@ -833,7 +833,7 @@ while IFS=$'\t' read -r artifact expected_sha; do
   artifact_index=$((artifact_index + 1))
   public_artifact="${PUBLIC_ARTIFACT_DIR}/artifact-${artifact_index}"
   printf 'Verifying public artifact %s\n' "${artifact}"
-  curl "${PUBLIC_ARTIFACT_CURL_RETRY[@]}" -fsSL --compressed --continue-at - --max-time 1800 \
+  curl "${PUBLIC_ARTIFACT_CURL_RETRY[@]}" -fsSL --continue-at - --max-time 1800 \
     -H 'Cache-Control: no-cache' \
     "https://${DOMAIN}/${artifact}?release=${RELEASE_ID}" \
     -o "${public_artifact}"

@@ -1048,7 +1048,7 @@ def test_deploy_retries_transient_public_transport_errors_without_weakening_chec
     assert script.count('curl "${PUBLIC_CURL_RETRY[@]}"') == 6
     assert script.count('curl "${PUBLIC_ARTIFACT_CURL_RETRY[@]}"') == 1
     assert (
-        'curl "${PUBLIC_ARTIFACT_CURL_RETRY[@]}" -fsSL --compressed --continue-at - '
+        'curl "${PUBLIC_ARTIFACT_CURL_RETRY[@]}" -fsSL --continue-at - '
         "--max-time 1800"
     ) in script
     assert "printf 'Verifying public artifact %s\\n'" in script
