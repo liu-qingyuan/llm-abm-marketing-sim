@@ -17,6 +17,7 @@ type TracePartitionEntry = {
 
 type FullPoolFixture = {
   bundleDir: string;
+  synthetic: boolean;
   index: {
     terminal_count: number;
     partitions: TracePartitionEntry[];
@@ -32,7 +33,7 @@ function generateFullPoolFixture(outputDir: string): FullPoolFixture {
     if (!existsSync(reportPath) || !existsSync(indexPath)) {
       throw new Error('FULL_POOL_PRESENTATION_BUNDLE must contain report.html and the trace index');
     }
-    return { bundleDir, index: JSON.parse(readFileSync(indexPath, 'utf8')) };
+    return { bundleDir, synthetic: false, index: JSON.parse(readFileSync(indexPath, 'utf8')) };
   }
   const root = path.join(outputDir, 'full-pool-presentation-fixture');
   const command = `
@@ -88,7 +89,7 @@ rm -f ${JSON.stringify(path.join(root, 'compose_source_v4_fixture_test.py'))}`;
   const index = JSON.parse(
     readFileSync(path.join(bundleDir, 'trace', 'full-pool-trace-index.json'), 'utf8'),
   );
-  return { bundleDir, index };
+  return { bundleDir, synthetic: true, index };
 }
 
 function sha256(value: Buffer | string): string {
@@ -184,7 +185,21 @@ function stopServer(server: ChildProcess): void {
 test('Full-Pool report is bilingual, responsive, lazy, filterable, and keyboard accessible', async ({ page, request }, testInfo) => {
   test.setTimeout(180_000);
   const fixture = generateFullPoolFixture(testInfo.outputDir);
-  const firstPartition = expandFirstPartitionForPagination(fixture);
+  const firstPartition = fixture.synthetic
+    ? expandFirstPartitionForPagination(fixture)
+    : fixture.index.partitions.find(
+      (entry) => entry.message_id === 'message_1' && entry.time_step === 0,
+    );
+  if (!firstPartition) throw new Error('Full-Pool trace index is missing the first partition');
+  const protectedBytes = fixture.synthetic
+    ? null
+    : new Map(
+      [
+        'report.html',
+        'trace/full-pool-trace-index.json',
+        firstPartition.relative_path,
+      ].map((relative) => [relative, readFileSync(path.join(fixture.bundleDir, relative))]),
+    );
   const { baseURL, server } = await serveFixture(fixture.bundleDir);
   const secondMessagePartition = fixture.index.partitions.find(
     (entry) => entry.message_id === 'message_2' && entry.time_step === 0,
@@ -305,33 +320,43 @@ test('Full-Pool report is bilingual, responsive, lazy, filterable, and keyboard 
     ]);
     const pagination = page.getByTestId('full-pool-trace-pagination');
     const pageStatus = page.getByTestId('full-pool-trace-page-status');
+    const firstPartitionPageCount = Math.max(1, Math.ceil(firstPartition.row_count / 25));
     const previousPage = pagination.locator('[data-full-pool-trace-page="previous"]');
     const nextPage = pagination.locator('[data-full-pool-trace-page="next"]');
     await expect(pagination).toBeVisible();
-    await expect(pageStatus).toContainText('第 1 / 3 页');
+    await expect(pageStatus).toContainText(`第 1 / ${firstPartitionPageCount} 页`);
     await expect(previousPage).toBeDisabled();
     await expect(nextPage).toBeEnabled();
     await nextPage.focus();
     await nextPage.press('Enter');
-    await expect(pageStatus).toContainText('第 2 / 3 页');
+    await expect(pageStatus).toContainText(`第 2 / ${firstPartitionPageCount} 页`);
     await expect(page.getByTestId('full-pool-trace-table-body').locator('tr')).toHaveCount(25);
     await nextPage.click();
-    await expect(pageStatus).toContainText('第 3 / 3 页');
-    await expect(page.getByTestId('full-pool-trace-table-body').locator('tr')).toHaveCount(10);
-    await expect(nextPage).toBeDisabled();
+    await expect(pageStatus).toContainText(`第 3 / ${firstPartitionPageCount} 页`);
+    await expect(page.getByTestId('full-pool-trace-table-body').locator('tr')).toHaveCount(
+      Math.min(25, firstPartition.row_count - 50),
+    );
+    if (firstPartitionPageCount === 3) await expect(nextPage).toBeDisabled();
+    else await expect(nextPage).toBeEnabled();
+    await previousPage.click();
+    await expect(pageStatus).toContainText(`第 2 / ${firstPartitionPageCount} 页`);
     expect(traceRequests).toEqual([
       '/trace/full-pool-trace-index.json',
       `/${firstPartition.relative_path}`,
     ]);
-    await page.getByTestId('full-pool-trace-search').fill('pagination-user-00');
-    await expect(pageStatus).toContainText('第 1 / 1 页');
-    await expect(page.getByTestId('full-pool-trace-table-body').locator('tr')).toHaveCount(1);
-    await expect(previousPage).toBeDisabled();
-    await expect(nextPage).toBeDisabled();
-    await page.getByTestId('full-pool-trace-search').fill('');
-    await expect(pageStatus).toContainText('第 1 / 3 页');
+    if (fixture.synthetic) {
+      await page.getByTestId('full-pool-trace-search').fill('pagination-user-00');
+      await expect(pageStatus).toContainText('第 1 / 1 页');
+      await expect(page.getByTestId('full-pool-trace-table-body').locator('tr')).toHaveCount(1);
+      await expect(previousPage).toBeDisabled();
+      await expect(nextPage).toBeDisabled();
+      await page.getByTestId('full-pool-trace-search').fill('');
+    } else {
+      await previousPage.click();
+    }
+    await expect(pageStatus).toContainText(`第 1 / ${firstPartitionPageCount} 页`);
     await nextPage.click();
-    await expect(pageStatus).toContainText('第 2 / 3 页');
+    await expect(pageStatus).toContainText(`第 2 / ${firstPartitionPageCount} 页`);
 
     const messageResponse = page.waitForResponse((response) =>
       response.url().endsWith(`/${secondMessagePartition.relative_path}`),
@@ -339,7 +364,9 @@ test('Full-Pool report is bilingual, responsive, lazy, filterable, and keyboard 
     await page.getByTestId('full-pool-trace-message').selectOption('message_2');
     await messageResponse;
     await expect(traceState).toHaveAttribute('data-trace-state', 'ready');
-    await expect(pageStatus).toContainText('第 1 / 1 页');
+    await expect(pageStatus).toContainText(
+      `第 1 / ${Math.max(1, Math.ceil(secondMessagePartition.row_count / 25))} 页`,
+    );
     await expect(page.getByTestId('full-pool-trace-table-body').locator('tr')).toHaveCount(
       Math.min(secondMessagePartition.row_count, 25),
     );
@@ -436,6 +463,11 @@ test('Full-Pool report is bilingual, responsive, lazy, filterable, and keyboard 
     expect(pageErrors).toEqual([]);
   } finally {
     stopServer(server);
+    if (protectedBytes) {
+      for (const [relative, before] of protectedBytes) {
+        expect(readFileSync(path.join(fixture.bundleDir, relative))).toEqual(before);
+      }
+    }
   }
 });
 
