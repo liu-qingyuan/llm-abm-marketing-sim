@@ -778,6 +778,7 @@ rollback_on_failure() {
 trap rollback_on_failure EXIT
 
 PUBLIC_CURL_RETRY=(--noproxy '*' --http1.1 --retry 4 --retry-all-errors --retry-delay 2 --retry-max-time 120)
+PUBLIC_REPORT_CURL_RETRY=(--noproxy '*' --http1.1 --retry 4 --retry-all-errors --retry-delay 2 --retry-max-time 1800)
 for _attempt in 1 2 3 4 5 6 7 8; do
   if curl "${PUBLIC_CURL_RETRY[@]}" -fsS --max-time 20 "https://${DOMAIN}/healthz" >/dev/null; then
     break
@@ -808,7 +809,7 @@ cleanup_and_rollback_on_failure() {
   rollback_on_failure "${status}"
 }
 trap cleanup_and_rollback_on_failure EXIT
-curl "${PUBLIC_CURL_RETRY[@]}" -fsSL --max-time 180 \
+curl "${PUBLIC_REPORT_CURL_RETRY[@]}" -fsSL --max-time 1800 \
   -H 'Cache-Control: no-cache' \
   "https://${DOMAIN}/report.html?release=${RELEASE_ID}" \
   -o "${PUBLIC_REPORT}"

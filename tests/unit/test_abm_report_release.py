@@ -1046,7 +1046,9 @@ def test_deploy_batches_public_bodies_without_weakening_transport_or_hash_checks
     verifier = verifier_script.read_text(encoding="utf-8")
 
     assert "PUBLIC_CURL_RETRY=(--noproxy '*' --http1.1 --retry 4 --retry-all-errors --retry-delay 2 --retry-max-time 120)" in script
-    assert script.count('curl "${PUBLIC_CURL_RETRY[@]}"') == 6
+    assert "PUBLIC_REPORT_CURL_RETRY=(--noproxy '*' --http1.1 --retry 4 --retry-all-errors --retry-delay 2 --retry-max-time 1800)" in script
+    assert script.count('curl "${PUBLIC_CURL_RETRY[@]}"') == 5
+    assert 'curl "${PUBLIC_REPORT_CURL_RETRY[@]}" -fsSL --max-time 1800' in script
     assert '"${SCRIPT_DIR}/verify_abm_public_artifact_bodies.py"' in script
     assert script.index('"${SCRIPT_DIR}/verify_abm_public_artifact_bodies.py"') < script.index(
         "npx playwright test tests/playwright/deployed-abm-report.spec.ts"
