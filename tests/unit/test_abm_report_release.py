@@ -1044,6 +1044,9 @@ def test_deploy_batches_public_bodies_without_weakening_transport_or_hash_checks
     verifier_script = REPO_ROOT / "scripts" / "verify_abm_public_artifact_bodies.py"
     script = deploy_script.read_text(encoding="utf-8")
     verifier = verifier_script.read_text(encoding="utf-8")
+    browser_acceptance = (
+        REPO_ROOT / "tests" / "playwright" / "deployed-abm-report.spec.ts"
+    ).read_text(encoding="utf-8")
 
     assert "PUBLIC_CURL_RETRY=(--noproxy '*' --http1.1 --retry 4 --retry-all-errors --retry-delay 2 --retry-max-time 120)" in script
     assert "PUBLIC_REPORT_CURL_RETRY=(--noproxy '*' --http1.1 --retry 4 --retry-all-errors --retry-delay 2 --retry-max-time 1800)" in script
@@ -1064,6 +1067,8 @@ def test_deploy_batches_public_bodies_without_weakening_transport_or_hash_checks
     assert "--continue-at" not in verifier
     assert "--compressed" not in verifier
     assert "--compressed" not in script
+    assert "const artifactHeadBatchSize = 8;" in browser_acceptance
+    assert "await Promise.all(batch.map((artifact) => expectArtifactHead(request, artifact)));" in browser_acceptance
     assert 'summary.get("body_policy")' in script
     assert "full_body_count + manifest_bound_count == ARTIFACT_COUNT" in script
 

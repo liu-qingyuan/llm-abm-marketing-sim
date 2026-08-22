@@ -57,25 +57,32 @@ async function expectNoHorizontalOverflow(page: Page): Promise<void> {
   expect(hasHorizontalOverflow).toBeFalsy();
 }
 
+const artifactHeadBatchSize = 8;
+
+async function expectArtifactHead(request: APIRequestContext, artifact: string): Promise<void> {
+  for (let attempt = 1; attempt <= 4; attempt += 1) {
+    let response;
+    try {
+      response = await request.head(`${publicUrl}/${artifact}`, { timeout: 30_000 });
+    } catch (error) {
+      if (attempt === 4) throw error;
+      await new Promise((resolve) => setTimeout(resolve, 2_000));
+      continue;
+    }
+    try {
+      expect(response.ok(), artifact).toBeTruthy();
+    } finally {
+      await response.dispose();
+    }
+    return;
+  }
+}
+
 async function expectArtifactHeads(request: APIRequestContext): Promise<void> {
   const artifacts = artifactPaths ?? fallbackArtifactsByKind[reportKind] ?? fallbackArtifactsByKind['final-research'];
-  for (const artifact of artifacts) {
-    for (let attempt = 1; attempt <= 4; attempt += 1) {
-      let response;
-      try {
-        response = await request.head(`${publicUrl}/${artifact}`, { timeout: 30_000 });
-      } catch (error) {
-        if (attempt === 4) throw error;
-        await new Promise((resolve) => setTimeout(resolve, 2_000));
-        continue;
-      }
-      try {
-        expect(response.ok(), artifact).toBeTruthy();
-      } finally {
-        await response.dispose();
-      }
-      break;
-    }
+  for (let offset = 0; offset < artifacts.length; offset += artifactHeadBatchSize) {
+    const batch = artifacts.slice(offset, offset + artifactHeadBatchSize);
+    await Promise.all(batch.map((artifact) => expectArtifactHead(request, artifact)));
   }
 }
 
