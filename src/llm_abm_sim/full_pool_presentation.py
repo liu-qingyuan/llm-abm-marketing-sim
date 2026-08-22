@@ -551,6 +551,9 @@ def _full_pool_catalog() -> dict[str, dict[str, str]]:
             "trace.ready": "轨迹分区已就绪。",
             "trace.error": "轨迹分区不可用；筛选器、表格与详情保持禁用。",
             "trace.results": "当前匹配",
+            "trace.pagination": "轨迹分页",
+            "trace.previous": "上一页",
+            "trace.next": "下一页",
             "trace.open": "查看详情",
             "trace.user": "用户",
             "trace.status": "终态",
@@ -632,6 +635,9 @@ def _full_pool_catalog() -> dict[str, dict[str, str]]:
             "trace.ready": "The trace partition is ready.",
             "trace.error": "The trace partition is unavailable; filters, table, and details remain disabled.",
             "trace.results": "Current matches",
+            "trace.pagination": "Trace pagination",
+            "trace.previous": "Previous page",
+            "trace.next": "Next page",
             "trace.open": "Open details",
             "trace.user": "User",
             "trace.status": "Terminal",
@@ -1038,6 +1044,11 @@ def _render_full_pool_main(
     <label>{_i18n(catalog, "trace.action")}<select data-testid="full-pool-trace-action" disabled><option value="">{_i18n(catalog, "trace.all_actions")}</option><option value="like">like</option><option value="comment">comment</option><option value="share">share</option><option value="ignore">ignore</option><option value="provider_failed">provider_failed</option></select></label>
   </div>
   <p data-testid="full-pool-trace-filtered-count">{_i18n(catalog, "trace.results")}: <strong>0</strong></p>
+  <nav class="full-pool-trace-pagination" data-testid="full-pool-trace-pagination" aria-label="{html.escape(catalog["zh-CN"]["trace.pagination"], quote=True)}" data-full-pool-i18n-aria-label="trace.pagination">
+    <button type="button" data-full-pool-trace-page="previous" aria-label="{html.escape(catalog["zh-CN"]["trace.previous"], quote=True)}" data-full-pool-i18n-aria-label="trace.previous" disabled>{_i18n(catalog, "trace.previous")}</button>
+    <p data-testid="full-pool-trace-page-status" role="status" aria-live="polite" aria-atomic="true">第 1 / 1 页 · 0–0 / 0</p>
+    <button type="button" data-full-pool-trace-page="next" aria-label="{html.escape(catalog["zh-CN"]["trace.next"], quote=True)}" data-full-pool-i18n-aria-label="trace.next" disabled>{_i18n(catalog, "trace.next")}</button>
+  </nav>
   <div class="full-pool-table-wrap"><table data-testid="full-pool-trace-table" aria-label="{html.escape(catalog["zh-CN"]["trace.title"], quote=True)}" data-full-pool-i18n-aria-label="trace.title" hidden>
     <thead><tr><th>{_i18n(catalog, "trace.user")}</th><th>{_i18n(catalog, "trace.message")}</th><th>{_i18n(catalog, "trace.batch")}</th><th>{_i18n(catalog, "trace.status")}</th><th>{_i18n(catalog, "trace.action")}</th><th>{_i18n(catalog, "trace.probability")}</th><th>{_i18n(catalog, "trace.reason")}</th><th></th></tr></thead>
     <tbody data-testid="full-pool-trace-table-body"></tbody>
@@ -1344,6 +1355,10 @@ def validate_full_pool_presentation_bundle(
         'data-testid="full-pool-provider-accounting"',
         'data-testid="full-pool-mechanism-section"',
         'data-testid="full-pool-trace-reader"',
+        'data-testid="full-pool-trace-pagination"',
+        'data-testid="full-pool-trace-page-status"',
+        'data-full-pool-trace-page="previous"',
+        'data-full-pool-trace-page="next"',
         'data-testid="historical-sensitivity-1000"',
         f'data-full-pool-source-manifest-sha256="{source.manifest_sha256}"',
         f'data-full-pool-trace-index-sha256="{trace.index_sha256}"',
@@ -1496,7 +1511,12 @@ tr[data-message-id="message_3"] .full-pool-message-mark { border-top-style: doub
 .full-pool-trace-controls select, .full-pool-trace-controls input { min-height: 44px; width: 100%; padding: 8px 10px; border: 1px solid #98a6b4; border-radius: 8px; color: var(--fp-ink); background: var(--fp-surface); }
 .full-pool-trace-status { min-height: 24px; margin-top: 20px; font-weight: 700; }
 .full-pool-trace-status[data-trace-state="error"] { color: #9a261c; }
-.full-pool-trace-table button { white-space: nowrap; min-height: 36px; border: 1px solid var(--fp-accent); border-radius: 8px; color: var(--fp-accent); background: var(--fp-surface); cursor: pointer; }
+.full-pool-trace-pagination { display: flex; align-items: center; justify-content: flex-end; gap: 12px; margin-top: 18px; }
+.full-pool-trace-pagination p { min-width: 190px; margin: 0; text-align: center; font-variant-numeric: tabular-nums; }
+.full-pool-trace-pagination button, .full-pool-trace-table button { min-height: 40px; border: 1px solid var(--fp-accent); border-radius: 8px; color: var(--fp-accent); background: var(--fp-surface); cursor: pointer; }
+.full-pool-trace-pagination button { padding: 8px 14px; }
+.full-pool-trace-pagination button:disabled { cursor: not-allowed; opacity: .45; }
+.full-pool-trace-table button { min-height: 36px; white-space: nowrap; }
 .full-pool-trace-drawer { position: fixed; inset: 0; z-index: 80; }
 .full-pool-trace-drawer-backdrop { position: absolute; inset: 0; background: rgb(12 20 28 / .55); }
 .full-pool-trace-drawer-surface { position: absolute; top: 0; right: 0; width: min(680px, 92vw); height: 100%; padding: 24px; overflow: auto; color: var(--fp-ink); background: var(--fp-surface); box-shadow: -18px 0 50px rgb(32 48 64 / .2); }
@@ -1521,6 +1541,8 @@ tr[data-message-id="message_3"] .full-pool-message-mark { border-top-style: doub
   .full-pool-batch-row { grid-template-columns: 1fr; }
   .full-pool-batch-messages { grid-template-columns: 1fr; }
   .full-pool-trace-controls { grid-template-columns: 1fr; }
+  .full-pool-trace-pagination { justify-content: space-between; }
+  .full-pool-trace-pagination p { min-width: 0; }
   .full-pool-download-list { columns: 1; }
 }
 @media (prefers-reduced-motion: reduce) {
@@ -1544,6 +1566,9 @@ _FULL_POOL_RUNTIME = r"""
   const searchInput = reader.querySelector('[data-testid="full-pool-trace-search"]');
   const actionSelect = reader.querySelector('[data-testid="full-pool-trace-action"]');
   const count = reader.querySelector('[data-testid="full-pool-trace-filtered-count"] strong');
+  const pageStatus = reader.querySelector('[data-testid="full-pool-trace-page-status"]');
+  const previousPage = reader.querySelector('[data-full-pool-trace-page="previous"]');
+  const nextPage = reader.querySelector('[data-full-pool-trace-page="next"]');
   const table = reader.querySelector('[data-testid="full-pool-trace-table"]');
   const body = reader.querySelector('[data-testid="full-pool-trace-table-body"]');
   const drawer = reader.querySelector('[data-testid="full-pool-trace-drawer"]');
@@ -1555,6 +1580,8 @@ _FULL_POOL_RUNTIME = r"""
   let controller = null;
   let restoreFocus = null;
   let state = 'loading-index';
+  let page = 0;
+  const pageSize = 25;
 
   const language = () => document.documentElement.lang === 'en-US' ? 'en-US' : 'zh-CN';
   const copy = (key) => (catalog[language()] || catalog['zh-CN'])[key] || key;
@@ -1576,6 +1603,8 @@ _FULL_POOL_RUNTIME = r"""
     batchSelect.disabled = failed || !index || loading;
     searchInput.disabled = failed || loading || !rows;
     actionSelect.disabled = failed || loading || !rows;
+    previousPage.disabled = true;
+    nextPage.disabled = true;
     table.hidden = failed || loading || !rows;
   };
   const applyLanguage = (nextLanguage) => {
@@ -1735,8 +1764,19 @@ _FULL_POOL_RUNTIME = r"""
       return (!query || haystack.includes(query)) && (!action || actionValue === action);
     });
     count.textContent = filtered.length.toLocaleString(language());
+    const pageCount = Math.max(1, Math.ceil(filtered.length / pageSize));
+    page = Math.min(page, pageCount - 1);
+    const start = page * pageSize;
+    const visibleRows = filtered.slice(start, start + pageSize);
+    const first = filtered.length ? start + 1 : 0;
+    const last = filtered.length ? start + visibleRows.length : 0;
+    pageStatus.textContent = language() === 'en-US'
+      ? `Page ${page + 1} of ${pageCount} · ${first}–${last} of ${filtered.length}`
+      : `第 ${page + 1} / ${pageCount} 页 · ${first}–${last} / ${filtered.length}`;
+    previousPage.disabled = page === 0;
+    nextPage.disabled = page >= pageCount - 1;
     body.replaceChildren();
-    filtered.slice(0, 25).forEach((row) => {
+    visibleRows.forEach((row) => {
       const tr = document.createElement('tr');
       tr.dataset.terminalRowId = row.terminal_row_id;
       const values = [
@@ -1764,8 +1804,20 @@ _FULL_POOL_RUNTIME = r"""
       body.append(tr);
     });
   };
-  searchInput.addEventListener('input', render);
-  actionSelect.addEventListener('change', render);
+  const resetPageAndRender = () => {
+    page = 0;
+    render();
+  };
+  searchInput.addEventListener('input', resetPageAndRender);
+  actionSelect.addEventListener('change', resetPageAndRender);
+  previousPage.addEventListener('click', () => {
+    page = Math.max(0, page - 1);
+    render();
+  });
+  nextPage.addEventListener('click', () => {
+    page += 1;
+    render();
+  });
 
   const loadSelected = async () => {
     const entry = selectedEntry();
@@ -1775,6 +1827,7 @@ _FULL_POOL_RUNTIME = r"""
       return { state: 'error', rowCount: 0 };
     }
     generation += 1;
+    page = 0;
     const current = generation;
     if (controller) controller.abort();
     controller = new AbortController();

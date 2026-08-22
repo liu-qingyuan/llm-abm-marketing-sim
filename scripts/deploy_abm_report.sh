@@ -575,7 +575,7 @@ server {
     add_header X-Content-Type-Options nosniff always;
     add_header Referrer-Policy same-origin always;
     add_header X-Frame-Options SAMEORIGIN always;
-    add_header Cache-Control "no-cache" always;
+    add_header Cache-Control "no-cache, no-transform" always;
 
     location = /healthz {
         default_type text/plain;
@@ -778,7 +778,6 @@ rollback_on_failure() {
 trap rollback_on_failure EXIT
 
 PUBLIC_CURL_RETRY=(--noproxy '*' --http1.1 --retry 4 --retry-all-errors --retry-delay 2 --retry-max-time 120)
-PUBLIC_ARTIFACT_CURL_RETRY=(--noproxy '*' --http1.1 --retry 4 --retry-all-errors --retry-delay 2 --retry-max-time 600)
 for _attempt in 1 2 3 4 5 6 7 8; do
   if curl "${PUBLIC_CURL_RETRY[@]}" -fsS --max-time 20 "https://${DOMAIN}/healthz" >/dev/null; then
     break
@@ -798,8 +797,9 @@ REMOTE_REPORT_HEADER_SHA="$(printf '%s\n' "${PUBLIC_REPORT_HEADERS}" \
 PUBLIC_MANIFEST="$(mktemp "${TMPDIR:-/tmp}/abm-report-public-manifest.XXXXXX")"
 PUBLIC_REPORT="$(mktemp "${TMPDIR:-/tmp}/abm-report-public-report.XXXXXX")"
 PUBLIC_ARTIFACT_DIR="$(mktemp -d "${TMPDIR:-/tmp}/abm-report-public-artifacts.XXXXXX")"
+PUBLIC_BODY_SUMMARY="$(mktemp "${TMPDIR:-/tmp}/abm-report-public-body-summary.XXXXXX")"
 cleanup_public_artifacts() {
-  rm -f "${PUBLIC_MANIFEST}" "${PUBLIC_REPORT}"
+  rm -f "${PUBLIC_MANIFEST}" "${PUBLIC_REPORT}" "${PUBLIC_BODY_SUMMARY}"
   rm -r -- "${PUBLIC_ARTIFACT_DIR}"
 }
 cleanup_and_rollback_on_failure() {
@@ -808,7 +808,7 @@ cleanup_and_rollback_on_failure() {
   rollback_on_failure "${status}"
 }
 trap cleanup_and_rollback_on_failure EXIT
-curl "${PUBLIC_CURL_RETRY[@]}" -fsSL --compressed --max-time 180 \
+curl "${PUBLIC_CURL_RETRY[@]}" -fsSL --max-time 180 \
   -H 'Cache-Control: no-cache' \
   "https://${DOMAIN}/report.html?release=${RELEASE_ID}" \
   -o "${PUBLIC_REPORT}"
@@ -827,51 +827,47 @@ for artifact in "${PUBLIC_ACCEPTANCE_ARTIFACTS[@]}"; do
     fail "public artifact check failed: ${artifact}"
 done
 
-PUBLIC_FULL_BODY_MAX_BYTES=$((64 * 1024 * 1024))
-artifact_index=0
-full_body_count=0
-manifest_bound_count=0
-while IFS=$'\t' read -r artifact expected_sha expected_bytes; do
-  [[ -n "${artifact}" && "${expected_sha}" =~ ^[a-f0-9]{64}$ && "${expected_bytes}" =~ ^[0-9]+$ ]] || \
-    fail "invalid public artifact hash contract row"
-  artifact_index=$((artifact_index + 1))
-  if (( expected_bytes <= PUBLIC_FULL_BODY_MAX_BYTES )); then
-    public_artifact="${PUBLIC_ARTIFACT_DIR}/artifact-${artifact_index}"
-    printf 'Verifying public artifact body %s\n' "${artifact}"
-    curl "${PUBLIC_ARTIFACT_CURL_RETRY[@]}" -fsSL --max-time 600 \
-      -H 'Cache-Control: no-cache' \
-      "https://${DOMAIN}/${artifact}?release=${RELEASE_ID}" \
-      -o "${public_artifact}"
-    [[ "$(wc -c < "${public_artifact}" | tr -d '[:space:]')" == "${expected_bytes}" ]] || \
-      fail "public artifact byte count mismatch: ${artifact}"
-    public_artifact_sha="$(shasum -a 256 "${public_artifact}" | awk '{print $1}')"
-    [[ "${public_artifact_sha}" == "${expected_sha}" ]] || \
-      fail "public artifact checksum mismatch: ${artifact}"
-    full_body_count=$((full_body_count + 1))
-  else
-    printf 'Verifying public artifact by manifest and availability %s\n' "${artifact}"
-    manifest_bound_count=$((manifest_bound_count + 1))
-  fi
-done < <("${PYTHON}" - "${DEPLOYMENT_FACTS_FILE}" "${SOURCE_DIR}" <<'PY'
+"${PYTHON}" "${SCRIPT_DIR}/verify_abm_public_artifact_bodies.py" \
+  --deployment-facts "${DEPLOYMENT_FACTS_FILE}" \
+  --snapshot-dir "${SOURCE_DIR}" \
+  --download-dir "${PUBLIC_ARTIFACT_DIR}" \
+  --summary-output "${PUBLIC_BODY_SUMMARY}"
+PUBLIC_BODY_SUMMARY_ROW="$("${PYTHON}" - "${PUBLIC_BODY_SUMMARY}" "${ARTIFACT_COUNT}" "${PUBLIC_ACCEPTANCE_REPORT_KIND}" <<'PY'
 import json
 import sys
-from pathlib import Path, PurePosixPath
 
 with open(sys.argv[1], encoding="utf-8") as stream:
-    facts = json.load(stream)
-root = Path(sys.argv[2]).resolve(strict=True)
-for artifact, digest in sorted(facts["artifact_sha256"].items()):
-    relative = PurePosixPath(artifact)
-    path = root.joinpath(*relative.parts)
-    if relative.is_absolute() or ".." in relative.parts or path.is_symlink() or not path.is_file():
-        raise SystemExit(f"unsafe validated artifact path: {artifact}")
-    print(f"{artifact}\t{digest}\t{path.stat().st_size}")
-PY
+    summary = json.load(stream)
+if summary.get("schema_version") != "abm-public-artifact-body-acceptance-v1":
+    raise SystemExit("public body summary schema is invalid")
+body_policy = summary.get("body_policy")
+expected_policy = "full-pool-paged-v1" if sys.argv[3] == "full-pool" else "default-64mib-v1"
+if body_policy != expected_policy:
+    raise SystemExit("public body summary policy is crossed")
+keys = (
+    "artifact_count",
+    "full_body_count",
+    "full_body_bytes",
+    "manifest_bound_count",
+    "manifest_bound_bytes",
+    "batch_count",
+    "batch_size",
 )
+values = [summary.get(key) for key in keys]
+if any(not isinstance(value, int) or isinstance(value, bool) or value < 0 for value in values):
+    raise SystemExit("public body summary accounting is invalid")
+if values[0] != int(sys.argv[2]) or values[1] + values[3] != values[0]:
+    raise SystemExit("public body summary inventory is incomplete")
+print("\t".join([body_policy, *(str(value) for value in values)]))
+PY
+)" || fail "cannot read public body acceptance summary"
+IFS=$'\t' read -r body_policy artifact_index full_body_count full_body_bytes \
+  manifest_bound_count manifest_bound_bytes body_batch_count body_batch_size <<< "${PUBLIC_BODY_SUMMARY_ROW}"
 (( artifact_index == ARTIFACT_COUNT && full_body_count + manifest_bound_count == ARTIFACT_COUNT )) || \
   fail "public body-hash and manifest-bound artifact accounting is incomplete"
-printf 'Public artifact acceptance: %s full-body hashes, %s manifest-bound large artifacts\n' \
-  "${full_body_count}" "${manifest_bound_count}"
+printf 'Public artifact acceptance (%s): %s full-body hashes (%s bytes) in %s batches of at most %s; %s manifest-bound large artifacts (%s bytes)\n' \
+  "${body_policy}" "${full_body_count}" "${full_body_bytes}" "${body_batch_count}" "${body_batch_size}" \
+  "${manifest_bound_count}" "${manifest_bound_bytes}"
 
 ABM_DEPLOY_PUBLIC_URL="https://${DOMAIN}" \
 ABM_DEPLOY_REPORT_KIND="${PUBLIC_ACCEPTANCE_REPORT_KIND}" \

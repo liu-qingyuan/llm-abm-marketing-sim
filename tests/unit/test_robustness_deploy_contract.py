@@ -813,7 +813,11 @@ def test_deploy_accepts_v11_only_through_existing_validated_atomic_contract() ->
         'atomic_current "${remote_release}"'
     )
     assert "REMOTE_ROLLBACK" in script
-    assert "public artifact checksum mismatch" in script
+    verifier = (REPO_ROOT / "scripts" / "verify_abm_public_artifact_bodies.py").read_text(
+        encoding="utf-8"
+    )
+    assert "public artifact checksum mismatch" in verifier
+    assert '"${SCRIPT_DIR}/verify_abm_public_artifact_bodies.py"' in script
     assert 'ABM_DEPLOY_RELEASE_CONTRACT_SCHEMA="${RELEASE_CONTRACT_SCHEMA}"' in script
     assert "process.env.ABM_DEPLOY_RELEASE_CONTRACT_SCHEMA" in acceptance
     assert "releaseContractSchema ?? 'abm-report-release-contract-v8'" in acceptance
@@ -876,12 +880,16 @@ def test_public_failure_rollback_revalidates_fresh_report_and_manifest_identity(
     assert '"$(readlink -f "${remote_root}/current")" == "${previous_release}"' in rollback
 
 
-def test_public_acceptance_hashes_every_contract_artifact() -> None:
+def test_public_acceptance_accounts_for_every_contract_artifact() -> None:
     script = (REPO_ROOT / "scripts" / "deploy_abm_report.sh").read_text(encoding="utf-8")
+    verifier = (REPO_ROOT / "scripts" / "verify_abm_public_artifact_bodies.py").read_text(
+        encoding="utf-8"
+    )
 
-    assert 'for artifact, digest in sorted(facts["artifact_sha256"].items())' in script
-    assert "public artifact checksum mismatch: ${artifact}" in script
-    assert 'shasum -a 256 "${public_artifact}"' in script
+    assert "raw_public != sorted(raw_hashes)" in verifier
+    assert "artifact.size_bytes <= _BODY_LIMIT_BYTES" in verifier
+    assert "public artifact checksum mismatch" in verifier
+    assert "full_body_count + manifest_bound_count == ARTIFACT_COUNT" in script
 
 
 def test_success_emits_operational_time_and_fresh_acceptance_only_after_browser_gate() -> None:

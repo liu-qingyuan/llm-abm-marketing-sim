@@ -1,18 +1,25 @@
 import { execFileSync, spawn, type ChildProcess } from 'node:child_process';
-import { existsSync, readFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import net from 'node:net';
 import path from 'node:path';
 import { expect, test, type Page } from '@playwright/test';
 
+type TracePartitionEntry = {
+  message_id: string;
+  time_step: number;
+  relative_path: string;
+  row_count: number;
+  bytes: number;
+  sha256: string;
+  terminal_identity_sha256: string;
+};
+
 type FullPoolFixture = {
   bundleDir: string;
   index: {
-    partitions: Array<{
-      message_id: string;
-      time_step: number;
-      relative_path: string;
-      row_count: number;
-    }>;
+    terminal_count: number;
+    partitions: TracePartitionEntry[];
   };
 };
 
@@ -84,6 +91,54 @@ rm -f ${JSON.stringify(path.join(root, 'compose_source_v4_fixture_test.py'))}`;
   return { bundleDir, index };
 }
 
+function sha256(value: Buffer | string): string {
+  return createHash('sha256').update(value).digest('hex');
+}
+
+function expandFirstPartitionForPagination(fixture: FullPoolFixture): TracePartitionEntry {
+  const entry = fixture.index.partitions.find(
+    (candidate) => candidate.message_id === 'message_1' && candidate.time_step === 0,
+  );
+  if (!entry) throw new Error('Full-Pool fixture is missing the first trace partition');
+  const partitionPath = path.join(fixture.bundleDir, entry.relative_path);
+  const partition = JSON.parse(readFileSync(partitionPath, 'utf8'));
+  const sourceRows = partition.rows as Array<Record<string, unknown>>;
+  if (!sourceRows.length) throw new Error('Full-Pool fixture partition is empty');
+  const rows = Array.from({ length: 60 }, (_, index) => {
+    const source = sourceRows[index % sourceRows.length];
+    return {
+      ...source,
+      terminal_row_id: `${String(source.terminal_row_id)}-page-${index.toString().padStart(2, '0')}`,
+      user_id: `pagination-user-${index.toString().padStart(2, '0')}`,
+    };
+  });
+  const terminalIdentity = sha256(JSON.stringify(rows.map((row) => row.terminal_row_id)));
+  partition.rows = rows;
+  partition.row_count = rows.length;
+  partition.terminal_identity_sha256 = terminalIdentity;
+  const partitionBytes = Buffer.from(JSON.stringify(partition));
+  writeFileSync(partitionPath, partitionBytes);
+
+  const indexPath = path.join(fixture.bundleDir, 'trace', 'full-pool-trace-index.json');
+  const oldIndexBytes = readFileSync(indexPath);
+  const oldIndexSha = sha256(oldIndexBytes);
+  entry.row_count = rows.length;
+  entry.bytes = partitionBytes.byteLength;
+  entry.sha256 = sha256(partitionBytes);
+  entry.terminal_identity_sha256 = terminalIdentity;
+  fixture.index.terminal_count = fixture.index.partitions.reduce(
+    (total, candidate) => total + candidate.row_count,
+    0,
+  );
+  const newIndexBytes = Buffer.from(JSON.stringify(fixture.index));
+  writeFileSync(indexPath, newIndexBytes);
+  const reportPath = path.join(fixture.bundleDir, 'report.html');
+  const report = readFileSync(reportPath, 'utf8');
+  if (!report.includes(oldIndexSha)) throw new Error('Full-Pool report is missing the trace index hash');
+  writeFileSync(reportPath, report.replaceAll(oldIndexSha, sha256(newIndexBytes)));
+  return entry;
+}
+
 async function availablePort(): Promise<number> {
   return new Promise((resolve, reject) => {
     const server = net.createServer();
@@ -129,17 +184,15 @@ function stopServer(server: ChildProcess): void {
 test('Full-Pool report is bilingual, responsive, lazy, filterable, and keyboard accessible', async ({ page, request }, testInfo) => {
   test.setTimeout(180_000);
   const fixture = generateFullPoolFixture(testInfo.outputDir);
+  const firstPartition = expandFirstPartitionForPagination(fixture);
   const { baseURL, server } = await serveFixture(fixture.bundleDir);
-  const firstPartition = fixture.index.partitions.find(
-    (entry) => entry.message_id === 'message_1' && entry.time_step === 0,
-  );
   const secondMessagePartition = fixture.index.partitions.find(
     (entry) => entry.message_id === 'message_2' && entry.time_step === 0,
   );
   const secondMessageFinalPartition = fixture.index.partitions
     .filter((entry) => entry.message_id === 'message_2')
     .sort((left, right) => right.time_step - left.time_step)[0];
-  if (!firstPartition || !secondMessagePartition || !secondMessageFinalPartition) {
+  if (!secondMessagePartition || !secondMessageFinalPartition) {
     throw new Error('Full-Pool trace index is missing required message/batch partitions');
   }
   const traceRequests: string[] = [];
@@ -250,6 +303,35 @@ test('Full-Pool report is bilingual, responsive, lazy, filterable, and keyboard 
       '/trace/full-pool-trace-index.json',
       `/${firstPartition.relative_path}`,
     ]);
+    const pagination = page.getByTestId('full-pool-trace-pagination');
+    const pageStatus = page.getByTestId('full-pool-trace-page-status');
+    const previousPage = pagination.locator('[data-full-pool-trace-page="previous"]');
+    const nextPage = pagination.locator('[data-full-pool-trace-page="next"]');
+    await expect(pagination).toBeVisible();
+    await expect(pageStatus).toContainText('第 1 / 3 页');
+    await expect(previousPage).toBeDisabled();
+    await expect(nextPage).toBeEnabled();
+    await nextPage.focus();
+    await nextPage.press('Enter');
+    await expect(pageStatus).toContainText('第 2 / 3 页');
+    await expect(page.getByTestId('full-pool-trace-table-body').locator('tr')).toHaveCount(25);
+    await nextPage.click();
+    await expect(pageStatus).toContainText('第 3 / 3 页');
+    await expect(page.getByTestId('full-pool-trace-table-body').locator('tr')).toHaveCount(10);
+    await expect(nextPage).toBeDisabled();
+    expect(traceRequests).toEqual([
+      '/trace/full-pool-trace-index.json',
+      `/${firstPartition.relative_path}`,
+    ]);
+    await page.getByTestId('full-pool-trace-search').fill('pagination-user-00');
+    await expect(pageStatus).toContainText('第 1 / 1 页');
+    await expect(page.getByTestId('full-pool-trace-table-body').locator('tr')).toHaveCount(1);
+    await expect(previousPage).toBeDisabled();
+    await expect(nextPage).toBeDisabled();
+    await page.getByTestId('full-pool-trace-search').fill('');
+    await expect(pageStatus).toContainText('第 1 / 3 页');
+    await nextPage.click();
+    await expect(pageStatus).toContainText('第 2 / 3 页');
 
     const messageResponse = page.waitForResponse((response) =>
       response.url().endsWith(`/${secondMessagePartition.relative_path}`),
@@ -257,6 +339,7 @@ test('Full-Pool report is bilingual, responsive, lazy, filterable, and keyboard 
     await page.getByTestId('full-pool-trace-message').selectOption('message_2');
     await messageResponse;
     await expect(traceState).toHaveAttribute('data-trace-state', 'ready');
+    await expect(pageStatus).toContainText('第 1 / 1 页');
     await expect(page.getByTestId('full-pool-trace-table-body').locator('tr')).toHaveCount(
       Math.min(secondMessagePartition.row_count, 25),
     );
@@ -313,6 +396,15 @@ test('Full-Pool report is bilingual, responsive, lazy, filterable, and keyboard 
       'ranking changes exposure timing and order only',
     );
     await expect(page.getByTestId('full-pool-trace-state')).toContainText('ready');
+    await expect(page.getByTestId('full-pool-trace-page-status')).toContainText('Page 1 of 1');
+    await expect(page.locator('[data-full-pool-trace-page="previous"]')).toHaveAttribute(
+      'aria-label',
+      'Previous page',
+    );
+    await expect(page.locator('[data-full-pool-trace-page="next"]')).toHaveAttribute(
+      'aria-label',
+      'Next page',
+    );
 
     const downloadHrefs = await page.getByTestId('full-pool-downloads').locator('a[href]').evaluateAll(
       (links) => links.map((link) => (link as HTMLAnchorElement).getAttribute('href') ?? ''),
@@ -385,6 +477,8 @@ test('Full-Pool trace failure remains an accessible fail-closed state', async ({
     await expect(page.getByTestId('full-pool-trace-batch')).toBeDisabled();
     await expect(page.getByTestId('full-pool-trace-search')).toBeDisabled();
     await expect(page.getByTestId('full-pool-trace-action')).toBeDisabled();
+    await expect(page.locator('[data-full-pool-trace-page="previous"]')).toBeDisabled();
+    await expect(page.locator('[data-full-pool-trace-page="next"]')).toBeDisabled();
     await expect(page.getByTestId('full-pool-trace-table')).toBeHidden();
     await expect(page.getByTestId('full-pool-trace-table-body').locator('tr')).toHaveCount(0);
     await expect(page.getByTestId('full-pool-trace-filtered-count')).toContainText('0');

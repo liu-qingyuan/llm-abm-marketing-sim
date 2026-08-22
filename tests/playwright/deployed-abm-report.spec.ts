@@ -301,6 +301,19 @@ async function expectFullPoolReport(page: Page): Promise<void> {
   await expect(page.getByTestId('full-pool-trace-reader')).toHaveAttribute('aria-busy', 'false');
   await expect(page.getByTestId('full-pool-trace-message')).toBeEnabled();
   await expect(page.getByTestId('full-pool-trace-batch')).toBeEnabled();
+  const pagination = page.getByTestId('full-pool-trace-pagination');
+  const pageStatus = page.getByTestId('full-pool-trace-page-status');
+  const previousPage = pagination.locator('[data-full-pool-trace-page="previous"]');
+  const nextPage = pagination.locator('[data-full-pool-trace-page="next"]');
+  await expect(pagination).toBeVisible();
+  await expect(pageStatus).toContainText('第 1 /');
+  await expect(previousPage).toBeDisabled();
+  await expect(nextPage).toBeEnabled();
+  await nextPage.focus();
+  await nextPage.press('Enter');
+  await expect(pageStatus).toContainText('第 2 /');
+  await previousPage.click();
+  await expect(pageStatus).toContainText('第 1 /');
   const search = page.getByTestId('full-pool-trace-search');
   await expect(search).toBeEnabled();
   await expect(page.getByTestId('full-pool-trace-action')).toBeEnabled();
@@ -330,6 +343,7 @@ async function expectFullPoolReport(page: Page): Promise<void> {
   await expect(page.getByTestId('full-pool-claim-boundary')).toContainText(
     'ranking changes exposure timing and order only',
   );
+  await expect(page.getByTestId('full-pool-trace-page-status')).toContainText('Page 1 of');
 }
 
 async function expectRobustnessWeightFamily(page: Page, familyId: string): Promise<void> {

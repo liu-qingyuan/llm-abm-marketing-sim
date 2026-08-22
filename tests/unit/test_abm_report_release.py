@@ -1039,20 +1039,30 @@ def test_deploy_preserves_empty_previous_release_across_ssh_boundaries():
     assert script.count('"${PREVIOUS_RELEASE_ARG}"') == 2
 
 
-def test_deploy_retries_transient_public_transport_errors_without_weakening_checks():
+def test_deploy_batches_public_bodies_without_weakening_transport_or_hash_checks():
     deploy_script = REPO_ROOT / "scripts" / "deploy_abm_report.sh"
+    verifier_script = REPO_ROOT / "scripts" / "verify_abm_public_artifact_bodies.py"
     script = deploy_script.read_text(encoding="utf-8")
+    verifier = verifier_script.read_text(encoding="utf-8")
 
     assert "PUBLIC_CURL_RETRY=(--noproxy '*' --http1.1 --retry 4 --retry-all-errors --retry-delay 2 --retry-max-time 120)" in script
-    assert "PUBLIC_ARTIFACT_CURL_RETRY=(--noproxy '*' --http1.1 --retry 4 --retry-all-errors --retry-delay 2 --retry-max-time 600)" in script
     assert script.count('curl "${PUBLIC_CURL_RETRY[@]}"') == 6
-    assert script.count('curl "${PUBLIC_ARTIFACT_CURL_RETRY[@]}"') == 1
-    assert 'curl "${PUBLIC_ARTIFACT_CURL_RETRY[@]}" -fsSL --max-time 600' in script
-    assert "PUBLIC_FULL_BODY_MAX_BYTES=$((64 * 1024 * 1024))" in script
-    assert "if (( expected_bytes <= PUBLIC_FULL_BODY_MAX_BYTES )); then" in script
-    assert "printf 'Verifying public artifact body %s\\n'" in script
-    assert "printf 'Verifying public artifact by manifest and availability %s\\n'" in script
-    assert "artifact_index == ARTIFACT_COUNT" in script
+    assert '"${SCRIPT_DIR}/verify_abm_public_artifact_bodies.py"' in script
+    assert script.index('"${SCRIPT_DIR}/verify_abm_public_artifact_bodies.py"') < script.index(
+        "npx playwright test tests/playwright/deployed-abm-report.spec.ts"
+    )
+    assert '_BODY_LIMIT_BYTES = 64 * 1024 * 1024' in verifier
+    assert "_BATCH_SIZE = 8" in verifier
+    assert '"--noproxy",' in verifier and '"--http1.1",' in verifier
+    assert '"--retry-all-errors",' in verifier
+    assert '"--max-time",' in verifier
+    assert 'output.stat().st_size != artifact.size_bytes' in verifier
+    assert '_sha256(output) != artifact.sha256' in verifier
+    assert "Range" not in verifier
+    assert "--continue-at" not in verifier
+    assert "--compressed" not in verifier
+    assert "--compressed" not in script
+    assert 'summary.get("body_policy")' in script
     assert "full_body_count + manifest_bound_count == ARTIFACT_COUNT" in script
 
 
@@ -1118,6 +1128,7 @@ def test_deploy_prevents_cdn_transformations_of_hash_bound_report():
     )[0]
     report_location = container_nginx.split("location = /report.html {", maxsplit=1)[1].split("}", maxsplit=1)[0]
 
+    assert container_nginx.count('add_header Cache-Control "no-cache, no-transform" always;') == 2
     assert 'add_header X-Artifact-SHA256 "__REPORT_SHA__" always;' in report_location
     assert 'add_header Cache-Control "no-cache, no-transform" always;' in report_location
 

@@ -148,6 +148,10 @@ def test_report_interface_composes_a_closed_non_promotable_full_pool_bundle(tmp_
     assert "production_deploy_eligible=false" in report_html
     assert "full-pool-validation-source-v1" in report_html
     assert "full-pool-trace-index-v1" in report_html
+    assert 'data-testid="full-pool-trace-pagination"' in report_html
+    assert 'data-testid="full-pool-trace-page-status"' in report_html
+    assert 'data-full-pool-trace-page="previous"' in report_html
+    assert 'data-full-pool-trace-page="next"' in report_html
     assert "full-pool-trace-inline-data" not in report_html
     first_terminal = json.loads((full_pool_source / "terminal_rows.jsonl").read_text(encoding="utf-8").splitlines()[0])
     assert first_terminal["terminal_row_id"] not in report_html
