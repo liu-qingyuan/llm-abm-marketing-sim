@@ -58,6 +58,8 @@ from .full_pool_strict_replay import (
 _MESSAGE_CODES = {"message_1": "M1", "message_2": "M2", "message_3": "M3"}
 _SEGMENT_CODES = {"class_1": "S1", "class_2": "S2", "class_3": "S3"}
 _PRODUCTION_SEGMENT_DENOMINATORS = {"class_1": 15_616, "class_2": 15_070, "class_3": 5_714}
+STRICT_FULL_POOL_RESULT_PROJECTION_SCHEMA_V1 = FULL_POOL_RESULT_PROJECTION_SCHEMA
+STRICT_FULL_POOL_RESULT_PROJECTION_SCHEMA_V2 = "full-pool-segment-result-projection-v2"
 _STRICT_RESULT_FIELDS = (
     "Run",
     "Message",
@@ -1161,7 +1163,11 @@ def read_closed_strict_full_pool_source(
     )
 
 
-def _strict_projection_html(rows: Sequence[Mapping[str, int | str]]) -> str:
+def _strict_projection_html(
+    rows: Sequence[Mapping[str, int | str]],
+    *,
+    schema_version: str = STRICT_FULL_POOL_RESULT_PROJECTION_SCHEMA_V1,
+) -> str:
     fragment = _html_projection(rows)
     for index, field in enumerate(_STRICT_RESULT_FIELDS):
         fragment = fragment.replace(
@@ -1169,9 +1175,15 @@ def _strict_projection_html(rows: Sequence[Mapping[str, int | str]]) -> str:
             f'<th><button type="button" class="full-pool-segment-sort" '
             f'data-sort-column="{index}" aria-label="Sort by {field}">{field}</button></th>',
         )
+    run_disclosure = (
+        " Run is the one-based delivery round and equals the persisted source time_step plus 1."
+        if schema_version == STRICT_FULL_POOL_RESULT_PROJECTION_SCHEMA_V2
+        else ""
+    )
     fragment = fragment.replace(
         "<p>Rows are ordered Segment → Message → Run. Exposure includes ignore; interaction columns count only succeeded terminal actions.</p>",
-        "<p>Rows are ordered Segment → Message → Run. Exposure includes ignore; interaction columns count only succeeded terminal actions.</p>"
+        "<p>Rows are ordered Segment → Message → Run."
+        f"{run_disclosure} Exposure includes ignore; interaction columns count only succeeded terminal actions.</p>"
         '<aside data-testid="strict-trajectory-disclosure">The strict fresh trajectory is the only source of these results. '
         "The mixed source-v3 trajectory is not combined because it contains three historical Provider failures. "
         "Historical 1,000-user sensitivity evidence remains descriptive; population and model both change, so single-factor or causal attribution is prohibited.</aside>",
@@ -1213,10 +1225,9 @@ def _strict_projection_html(rows: Sequence[Mapping[str, int | str]]) -> str:
 """
 
 
-def compose_strict_full_pool_result_projection(
+def _compose_strict_full_pool_result_projection_v1(
     source: _ClosedStrictFullPoolSource,
 ) -> FullPoolResultProjection:
-    """Project one validated source-v4 into same-source HTML, UTF-8 CSV, and lineage."""
     counters: dict[tuple[str, str], Counter[str]] = {
         (latent_class, message_id): Counter()
         for latent_class in _SEGMENT_CODES
@@ -1270,7 +1281,7 @@ def compose_strict_full_pool_result_projection(
         (
             "# Full-Pool strict source-v4 segment result lineage and data dictionary",
             "",
-            f"- schema: `{FULL_POOL_RESULT_PROJECTION_SCHEMA}`",
+            f"- schema: `{STRICT_FULL_POOL_RESULT_PROJECTION_SCHEMA_V1}`",
             f"- source-v4 manifest SHA-256: `{source.manifest_sha256}`",
             f"- source-v4 identity: `{source.source_identity}`",
             f"- rows SHA-256: `{rows_sha256}`",
@@ -1297,7 +1308,7 @@ def compose_strict_full_pool_result_projection(
         )
     ).encode("utf-8")
     return FullPoolResultProjection(
-        schema_version=FULL_POOL_RESULT_PROJECTION_SCHEMA,
+        schema_version=STRICT_FULL_POOL_RESULT_PROJECTION_SCHEMA_V1,
         rows=tuple(rows_document),
         rows_sha256=rows_sha256,
         csv_filename=FULL_POOL_RESULT_CSV,
@@ -1310,3 +1321,131 @@ def compose_strict_full_pool_result_projection(
         segment_denominators=dict(source.facts.segment_denominators),
         total_exposure=total_exposure,
     )
+
+
+def _compose_strict_full_pool_result_projection_v2(
+    source: _ClosedStrictFullPoolSource,
+) -> FullPoolResultProjection:
+    counters: dict[tuple[str, str, int], Counter[str]] = {
+        (latent_class, message_id, time_step): Counter()
+        for latent_class in _SEGMENT_CODES
+        for message_id in _MESSAGE_CODES
+        for time_step in range(source.facts.committed_batches)
+    }
+    for terminal in _jsonl(source.root / "terminal_rows.jsonl"):
+        user_id = _non_empty(terminal.get("user_id"), "projection user id")
+        message_id = _non_empty(terminal.get("message_id"), "projection message id")
+        time_step = terminal.get("time_step")
+        if (
+            user_id not in source.membership
+            or message_id not in _MESSAGE_CODES
+            or type(time_step) is not int
+            or not 0 <= time_step < source.facts.committed_batches
+        ):
+            raise ValueError("source-v4 projection membership, message, or delivery run is crossed")
+        counter = counters[(source.membership[user_id], message_id, time_step)]
+        counter["exposure"] += 1
+        if terminal.get("terminal_status") == "succeeded":
+            action = terminal.get("action")
+            if action in {"like", "comment", "share"}:
+                counter[str(action)] += 1
+
+    rows: list[dict[str, int | str]] = []
+    for latent_class, segment_code in _SEGMENT_CODES.items():
+        for message_id, message_code in _MESSAGE_CODES.items():
+            for time_step in range(source.facts.committed_batches):
+                counter = counters[(latent_class, message_id, time_step)]
+                rows.append(
+                    {
+                        "Run": time_step + 1,
+                        "Message": message_code,
+                        "Segment": segment_code,
+                        "Total Likes": counter["like"],
+                        "Total Comments": counter["comment"],
+                        "Total Shares": counter["share"],
+                        "Exposure": counter["exposure"],
+                    }
+                )
+
+    for latent_class, segment_code in _SEGMENT_CODES.items():
+        expected = source.facts.segment_denominators[latent_class]
+        for message_code in _MESSAGE_CODES.values():
+            observed = sum(
+                cast(int, row["Exposure"])
+                for row in rows
+                if row["Segment"] == segment_code and row["Message"] == message_code
+            )
+            if observed != expected:
+                raise ValueError("source-v4 delivery-run projection segment denominator is incomplete")
+    total_exposure = sum(cast(int, row["Exposure"]) for row in rows)
+    if total_exposure != source.facts.logical_pairs:
+        raise ValueError("source-v4 delivery-run projection total exposure is crossed")
+
+    rows_document = [dict(row) for row in rows]
+    rows_sha256 = _json_sha256(rows_document)
+    csv_bytes = _csv_bytes(rows)
+    csv_sha256 = hashlib.sha256(csv_bytes).hexdigest()
+    rejected_hash = _non_empty(
+        source.facts.rejected_history.get("manifest_sha256"), "rejected source hash"
+    )
+    lineage = "\n".join(
+        (
+            "# Full-Pool strict source-v4 segment result lineage and data dictionary",
+            "",
+            f"- schema: `{STRICT_FULL_POOL_RESULT_PROJECTION_SCHEMA_V2}`",
+            f"- source-v4 manifest SHA-256: `{source.manifest_sha256}`",
+            f"- source-v4 identity: `{source.source_identity}`",
+            f"- delivery runs: `1`–`{source.facts.committed_batches}` mapped from persisted `time_step` `0`–`{source.facts.committed_batches - 1}`",
+            f"- rows SHA-256: `{rows_sha256}`",
+            f"- CSV SHA-256: `{csv_sha256}`",
+            f"- execution manifest SHA-256: `{source.facts.execution_manifest_sha256 or 'direct-validation'}`",
+            f"- operator attempt ledger identity SHA-256: `{source.facts.attempt_ledger_identity_sha256 or 'direct-validation'}`",
+            f"- rejected mixed source-v3 manifest SHA-256: `{rejected_hash}`",
+            "- 旧 mixed trajectory 未参与结果；它只作为 hash-bound rejection lineage 保留。",
+            "- 旧 source-v3 因三个 historical Provider failures 被拒绝；strict fresh trajectory 从 Batch 0 独立重建。",
+            "- Historical 1,000-user sensitivity evidence is retained, but population and model both change; this does not support single-factor or causal attribution.",
+            "",
+            "## Data dictionary",
+            "",
+            "| Column | Meaning |",
+            "|---|---|",
+            "| Run | The one-based delivery round; `Run = time_step + 1`. |",
+            "| Message | `M1` / `M2` / `M3`, mapped from the three persisted messages. |",
+            "| Segment | `S1` / `S2` / `S3`, joined by `user_id` from frozen latent membership. |",
+            "| Total Likes | Count of final `succeeded` actions equal to `like` in this delivery round. |",
+            "| Total Comments | Count of final `succeeded` actions equal to `comment` in this delivery round. |",
+            "| Total Shares | Count of final `succeeded` actions equal to `share` in this delivery round. |",
+            "| Exposure | Every final successful Decision in this delivery round, including `ignore`. |",
+            "",
+        )
+    ).encode("utf-8")
+    return FullPoolResultProjection(
+        schema_version=STRICT_FULL_POOL_RESULT_PROJECTION_SCHEMA_V2,
+        rows=tuple(rows_document),
+        rows_sha256=rows_sha256,
+        csv_filename=FULL_POOL_RESULT_CSV,
+        csv_bytes=csv_bytes,
+        csv_sha256=csv_sha256,
+        lineage_filename=FULL_POOL_RESULT_LINEAGE_MARKDOWN,
+        lineage_bytes=lineage,
+        lineage_sha256=hashlib.sha256(lineage).hexdigest(),
+        html_fragment=_strict_projection_html(
+            rows,
+            schema_version=STRICT_FULL_POOL_RESULT_PROJECTION_SCHEMA_V2,
+        ),
+        segment_denominators=dict(source.facts.segment_denominators),
+        total_exposure=total_exposure,
+    )
+
+
+def compose_strict_full_pool_result_projection(
+    source: _ClosedStrictFullPoolSource,
+    *,
+    schema_version: str = STRICT_FULL_POOL_RESULT_PROJECTION_SCHEMA_V2,
+) -> FullPoolResultProjection:
+    """Project one validated source-v4 into a versioned HTML/CSV/lineage delivery."""
+    if schema_version == STRICT_FULL_POOL_RESULT_PROJECTION_SCHEMA_V1:
+        return _compose_strict_full_pool_result_projection_v1(source)
+    if schema_version == STRICT_FULL_POOL_RESULT_PROJECTION_SCHEMA_V2:
+        return _compose_strict_full_pool_result_projection_v2(source)
+    raise ValueError("unsupported strict Full-Pool result projection schema")

@@ -24,6 +24,7 @@ from llm_abm_sim.full_pool_segmented_continuation import (
 )
 from llm_abm_sim.full_pool_segmented_operator import SEGMENTED_PROMPT_VERSION, LiveLanePool
 from llm_abm_sim.full_pool_source_v4 import (
+    STRICT_FULL_POOL_RESULT_PROJECTION_SCHEMA_V1,
     _ClosedStrictFullPoolSource,
     compose_strict_full_pool_result_projection,
     read_closed_strict_full_pool_source,
@@ -534,7 +535,7 @@ def test_released_lock_resumes_same_manifest_after_source_closure_crash(
     ]
 
 
-def test_persisted_source_v4_consumer_rebuilds_facts_and_nine_row_projection(
+def test_persisted_source_v4_consumer_rebuilds_facts_and_delivery_run_projection(
     tmp_path: Path,
 ) -> None:
     request = _manifest_request(tmp_path)
@@ -571,7 +572,8 @@ def test_persisted_source_v4_consumer_rebuilds_facts_and_nine_row_projection(
     assert source.facts.maximum_dispatches_for_one_pair == 1
     assert source.facts.external_request_invocations == 0
     assert source.facts.production_deploy_eligible is False
-    assert len(projection.rows) == 9
+    assert projection.schema_version == "full-pool-segment-result-projection-v2"
+    assert len(projection.rows) == 18
     assert projection.total_exposure == 24
     assert list(projection.rows[0]) == [
         "Run",
@@ -583,14 +585,57 @@ def test_persisted_source_v4_consumer_rebuilds_facts_and_nine_row_projection(
         "Exposure",
     ]
     assert [(row["Segment"], row["Message"], row["Run"]) for row in projection.rows] == [
-        (segment, message, 1)
+        (segment, message, run)
         for segment in ("S1", "S2", "S3")
         for message in ("M1", "M2", "M3")
+        for run in (1, 2)
     ]
+    assert {
+        (segment, message): sum(
+            int(row["Exposure"])
+            for row in projection.rows
+            if row["Segment"] == segment and row["Message"] == message
+        )
+        for segment in ("S1", "S2", "S3")
+        for message in ("M1", "M2", "M3")
+    } == {
+        ("S1", "M1"): 3,
+        ("S1", "M2"): 3,
+        ("S1", "M3"): 3,
+        ("S2", "M1"): 3,
+        ("S2", "M2"): 3,
+        ("S2", "M3"): 3,
+        ("S3", "M1"): 2,
+        ("S3", "M2"): 2,
+        ("S3", "M3"): 2,
+    }
     assert projection.csv_bytes.startswith(
         b"Run,Message,Segment,Total Likes,Total Comments,Total Shares,Exposure\n"
     )
     assert "旧 mixed trajectory 未参与结果" in projection.lineage_markdown
+    assert "one-based delivery round" in projection.lineage_markdown
+    assert "time_step + 1" in projection.lineage_markdown
+    legacy_projection = compose_strict_full_pool_result_projection(
+        source,
+        schema_version=STRICT_FULL_POOL_RESULT_PROJECTION_SCHEMA_V1,
+    )
+    assert legacy_projection.schema_version == "full-pool-segment-result-projection-v1"
+    assert len(legacy_projection.rows) == 9
+    assert {row["Run"] for row in legacy_projection.rows} == {1}
+    for aggregate in legacy_projection.rows:
+        matching = [
+            row
+            for row in projection.rows
+            if row["Segment"] == aggregate["Segment"]
+            and row["Message"] == aggregate["Message"]
+        ]
+        for field in (
+            "Total Likes",
+            "Total Comments",
+            "Total Shares",
+            "Exposure",
+        ):
+            assert sum(int(row[field]) for row in matching) == aggregate[field]
     dispatched = _read_closed_full_pool_source_versioned(
         result.source_root,
         manifest_sha256=result.source_manifest_sha256,
@@ -609,6 +654,24 @@ def test_persisted_source_v4_consumer_rebuilds_facts_and_nine_row_projection(
     assert compose_strict_full_pool_result_projection(published).rows_sha256 == (
         projection.rows_sha256
     )
+
+    crossed_projection_root = tmp_path / "crossed-projection-source-v4"
+    shutil.copytree(result.source_root, crossed_projection_root)
+    terminal_path = crossed_projection_root / "terminal_rows.jsonl"
+    terminal_lines = terminal_path.read_text(encoding="utf-8").splitlines()
+    crossed_terminal = json.loads(terminal_lines[0])
+    crossed_terminal["time_step"] = source.facts.committed_batches
+    terminal_lines[0] = json.dumps(
+        crossed_terminal,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    terminal_path.write_text("\n".join(terminal_lines) + "\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="delivery run"):
+        compose_strict_full_pool_result_projection(
+            replace(source, root=crossed_projection_root),
+        )
 
     unexpected = publication_snapshot / "unexpected.txt"
     unexpected.write_text("not declared\n", encoding="utf-8")

@@ -185,6 +185,16 @@ function stopServer(server: ChildProcess): void {
 test('Full-Pool report is bilingual, responsive, lazy, filterable, and keyboard accessible', async ({ page, request }, testInfo) => {
   test.setTimeout(180_000);
   const fixture = generateFullPoolFixture(testInfo.outputDir);
+  const resultLineageText = readFileSync(
+    path.join(fixture.bundleDir, 'full-pool-segment-lineage.md'),
+    'utf8',
+  );
+  const usesDeliveryRunProjection = resultLineageText.includes(
+    'full-pool-segment-result-projection-v2',
+  );
+  const deliveryRunCount = usesDeliveryRunProjection
+    ? new Set(fixture.index.partitions.map((entry) => entry.time_step)).size
+    : 1;
   const firstPartition = fixture.synthetic
     ? expandFirstPartitionForPagination(fixture)
     : fixture.index.partitions.find(
@@ -265,7 +275,7 @@ test('Full-Pool report is bilingual, responsive, lazy, filterable, and keyboard 
       'Exposure',
     ]);
     const segmentRows = segmentTable.locator('tbody tr');
-    await expect(segmentRows).toHaveCount(9);
+    await expect(segmentRows).toHaveCount(deliveryRunCount * 9);
     expect(
       await segmentRows.evaluateAll((rows) =>
         rows.map((row) => {
@@ -273,11 +283,21 @@ test('Full-Pool report is bilingual, responsive, lazy, filterable, and keyboard 
           return `${cells[2]}:${cells[1]}:${cells[0]}`;
         }),
       ),
-    ).toEqual([
-      'S1:M1:1', 'S1:M2:1', 'S1:M3:1',
-      'S2:M1:1', 'S2:M2:1', 'S2:M3:1',
-      'S3:M1:1', 'S3:M2:1', 'S3:M3:1',
-    ]);
+    ).toEqual(
+      ['S1', 'S2', 'S3'].flatMap((segment) =>
+        ['M1', 'M2', 'M3'].flatMap((message) =>
+          Array.from(
+            { length: deliveryRunCount },
+            (_, index) => `${segment}:${message}:${index + 1}`,
+          ),
+        ),
+      ),
+    );
+    if (usesDeliveryRunProjection) {
+      await expect(page.getByTestId('full-pool-segment-results')).toContainText(
+        'Run is the one-based delivery round',
+      );
+    }
     await expect(page.getByTestId('strict-trajectory-disclosure')).toContainText(
       'three historical Provider failures',
     );
@@ -286,12 +306,16 @@ test('Full-Pool report is bilingual, responsive, lazy, filterable, and keyboard 
     await messageSort.press('Enter');
     await expect(messageSort).toHaveAttribute('aria-sort', 'ascending');
     expect(await segmentRows.locator('td:nth-child(2)').allTextContents()).toEqual([
-      'M1', 'M1', 'M1', 'M2', 'M2', 'M2', 'M3', 'M3', 'M3',
+      ...Array(deliveryRunCount * 3).fill('M1'),
+      ...Array(deliveryRunCount * 3).fill('M2'),
+      ...Array(deliveryRunCount * 3).fill('M3'),
     ]);
     await messageSort.press('Enter');
     await expect(messageSort).toHaveAttribute('aria-sort', 'descending');
     expect(await segmentRows.locator('td:nth-child(2)').allTextContents()).toEqual([
-      'M3', 'M3', 'M3', 'M2', 'M2', 'M2', 'M1', 'M1', 'M1',
+      ...Array(deliveryRunCount * 3).fill('M3'),
+      ...Array(deliveryRunCount * 3).fill('M2'),
+      ...Array(deliveryRunCount * 3).fill('M1'),
     ]);
     const resultCsv = await request.get(`${baseURL}/full-pool-segment-results.csv`);
     expect(resultCsv.status()).toBe(200);
@@ -300,7 +324,12 @@ test('Full-Pool report is bilingual, responsive, lazy, filterable, and keyboard 
     );
     const resultLineage = await request.get(`${baseURL}/full-pool-segment-lineage.md`);
     expect(resultLineage.status()).toBe(200);
-    expect(await resultLineage.text()).toContain('population and model both change');
+    const resultLineageBody = await resultLineage.text();
+    expect(resultLineageBody).toContain('population and model both change');
+    if (usesDeliveryRunProjection) {
+      expect(resultLineageBody).toContain('one-based delivery round');
+      expect(resultLineageBody).toContain('time_step + 1');
+    }
 
     const traceState = page.getByTestId('full-pool-trace-state');
     await expect(traceState).toHaveAttribute('data-trace-state', 'ready');

@@ -223,6 +223,36 @@ def test_standalone_validator_dispatches_v7_through_its_own_branch(
         }
     ]
 
+    contract_path.write_text(
+        json.dumps({"schema_version": "abm-report-release-contract-v12"}),
+        encoding="utf-8",
+    )
+    expected_v12 = {
+        **expected_v11,
+        "schema_version": "abm-report-release-contract-v12",
+    }
+    v12_calls: list[dict[str, object]] = []
+
+    def validate_v12(**kwargs: object) -> dict[str, object]:
+        v12_calls.append(kwargs)
+        return expected_v12
+
+    monkeypatch.setattr(validator, "_validate_v12", validate_v12, raising=False)
+    assert validator.validate_release(
+        repo_root=tmp_path,
+        contract_path=contract_path,
+        source_dir=source,
+        snapshot_dir=snapshot,
+    ) == expected_v12
+    assert v12_calls == [
+        {
+            "repo_root": tmp_path.resolve(),
+            "contract_document": {"schema_version": "abm-report-release-contract-v12"},
+            "source_dir": source,
+            "snapshot_dir": snapshot,
+        }
+    ]
+
 
 @pytest.mark.parametrize(
     "mutation",
@@ -270,12 +300,17 @@ def test_formal_production_gate_accepts_only_matching_live_deployable_facts(
         "release_purpose": "full_pool_strict_fresh_formal_research",
         "sampling_status": "persisted_strict_fresh_full_pool_formal_run",
     }
+    valid_v12 = {
+        **valid_v11,
+        "schema_version": "abm-report-release-contract-v12",
+    }
 
     validator._require_formal_production(valid_v7)
     validator._require_formal_production(valid_v8)
     validator._require_formal_production(valid_v9)
     validator._require_formal_production(valid_v10)
     validator._require_formal_production(valid_v11)
+    validator._require_formal_production(valid_v12)
     with pytest.raises(validator.ReleaseValidationError, match="formal production deployment"):
         validator._require_formal_production(valid_v7 | mutation)
     with pytest.raises(validator.ReleaseValidationError, match="formal production deployment"):
@@ -286,6 +321,8 @@ def test_formal_production_gate_accepts_only_matching_live_deployable_facts(
         validator._require_formal_production(valid_v10 | mutation)
     with pytest.raises(validator.ReleaseValidationError, match="formal production deployment"):
         validator._require_formal_production(valid_v11 | mutation)
+    with pytest.raises(validator.ReleaseValidationError, match="formal production deployment"):
+        validator._require_formal_production(valid_v12 | mutation)
     with pytest.raises(validator.ReleaseValidationError, match="formal production deployment"):
         validator._require_formal_production(
             valid_v8 | {"release_purpose": "concurrent_robustness_formal_research"}
@@ -793,7 +830,7 @@ fi
         assert not compose_count.exists()
 
 
-def test_deploy_accepts_v11_only_through_existing_validated_atomic_contract() -> None:
+def test_deploy_accepts_v12_only_through_existing_validated_atomic_contract() -> None:
     script = (REPO_ROOT / "scripts" / "deploy_abm_report.sh").read_text(
         encoding="utf-8"
     )
@@ -804,8 +841,8 @@ def test_deploy_accepts_v11_only_through_existing_validated_atomic_contract() ->
         encoding="utf-8"
     )
 
-    assert "^abm-report-release-contract-v([2-9]|10|11)$" in script
-    assert "^abm-report-release-contract-v([2-9]|10|11)$" in remote
+    assert "^abm-report-release-contract-v([2-9]|10|11|12)$" in script
+    assert "^abm-report-release-contract-v([2-9]|10|11|12)$" in remote
     assert script.index("--require-formal-production") < script.index(
         'printf \'Uploading %s to %s:%s\\n\''
     )
@@ -833,7 +870,7 @@ def test_deploy_consumes_validated_facts_and_checks_the_snapshot_before_ssh() ->
     assert "--deployment-release-id" in script
     assert "--deployment-domain" in script
     assert "PUBLIC_ACCEPTANCE_ARTIFACTS_JSON" in script
-    assert "^abm-report-release-contract-v([2-9]|10|11)$" in script
+    assert "^abm-report-release-contract-v([2-9]|10|11|12)$" in script
     assert "ARTIFACT_CHECKSUMS_B64" in script
     assert "Path(sys.argv[1]).read_text" not in script
 

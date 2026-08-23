@@ -46,6 +46,10 @@ from .full_pool_segmented_continuation import (
     _segmented_recovery_accounting_document,
     _segmented_recovery_lineage_document,
 )
+from .full_pool_source_v4 import (
+    STRICT_FULL_POOL_RESULT_PROJECTION_SCHEMA_V1,
+    STRICT_FULL_POOL_RESULT_PROJECTION_SCHEMA_V2,
+)
 from .full_pool_strict_operator import (
     StrictFreshExecutionManifestFacts,
     validate_strict_fresh_execution_manifest,
@@ -61,6 +65,7 @@ ROBUSTNESS_RELEASE_CONTRACT_SCHEMA_V8 = "abm-report-release-contract-v8"
 ROBUSTNESS_RELEASE_CONTRACT_SCHEMA_V9 = "abm-report-release-contract-v9"
 ROBUSTNESS_RELEASE_CONTRACT_SCHEMA_V10 = "abm-report-release-contract-v10"
 ROBUSTNESS_RELEASE_CONTRACT_SCHEMA_V11 = "abm-report-release-contract-v11"
+ROBUSTNESS_RELEASE_CONTRACT_SCHEMA_V12 = "abm-report-release-contract-v12"
 ROBUSTNESS_RELEASE_CONTRACT_SCHEMA = ROBUSTNESS_RELEASE_CONTRACT_SCHEMA_V5
 ROBUSTNESS_PRESENTATION_CLOSURE_CONTRACT = "presentation_closure_contract.json"
 FULL_POOL_PRODUCTION_MANIFEST_SCHEMA = "full-pool-production-release-manifest-v1"
@@ -206,6 +211,7 @@ _RELEASE_CONTRACT_V11_FIELDS = _RELEASE_CONTRACT_V8_FIELDS | {
     "execution_handoff",
     "physical_snapshot_identity_sha256",
 }
+_RELEASE_CONTRACT_V12_FIELDS = _RELEASE_CONTRACT_V11_FIELDS
 _SEGMENTED_SOURCE_FACT_FIELDS = frozenset(
     {
         "source_schema_version",
@@ -390,6 +396,7 @@ _RELEASE_CONTRACT_FIELDS = {
     ROBUSTNESS_RELEASE_CONTRACT_SCHEMA_V9: _RELEASE_CONTRACT_V9_FIELDS,
     ROBUSTNESS_RELEASE_CONTRACT_SCHEMA_V10: _RELEASE_CONTRACT_V10_FIELDS,
     ROBUSTNESS_RELEASE_CONTRACT_SCHEMA_V11: _RELEASE_CONTRACT_V11_FIELDS,
+    ROBUSTNESS_RELEASE_CONTRACT_SCHEMA_V12: _RELEASE_CONTRACT_V12_FIELDS,
 }
 _V7_MERMAID_INVENTORY = frozenset(_evidence._SEMANTIC_MERMAID_DOWNLOADS.values())
 _V8_MERMAID_INVENTORY = frozenset(
@@ -575,9 +582,9 @@ def promote_concurrent_robustness_release(
                 or fresh_execution_manifest_path is None
             ):
                 raise ConcurrentRobustnessReleaseError(
-                    "v11 production promotion requires persisted source-v4 and fresh manifest facts and rejects injected Formal facts"
+                    "v12 production promotion requires persisted source-v4, projection-v2, and fresh manifest facts and rejects injected Formal facts"
                 )
-            return _promote_full_pool_v11_release(
+            return _promote_full_pool_v12_release(
                 repo_root=repo_root,
                 full_pool_source_root=full_pool_source_root,
                 full_pool_manifest_sha256=full_pool_manifest_sha256,
@@ -2474,7 +2481,7 @@ def _promote_full_pool_v10_release(
     )
 
 
-def _promote_full_pool_v11_release(
+def _promote_full_pool_v12_release(
     *,
     repo_root: str | Path,
     full_pool_source_root: str | Path,
@@ -2492,19 +2499,19 @@ def _promote_full_pool_v11_release(
     """Promote only independently closed strict source-v4 evidence."""
     root = _real_directory(Path(repo_root), "repository root")
     full_pool = _repo_directory(root, Path(full_pool_source_root), "source-v4 Full-Pool source")
-    historical_formal = _repo_directory(root, Path(historical_formal_root), "v11 historical Formal source")
-    historical_study = _repo_directory(root, Path(historical_study_root), "v11 historical robustness study")
+    historical_formal = _repo_directory(root, Path(historical_formal_root), "v12 historical Formal source")
+    historical_study = _repo_directory(root, Path(historical_study_root), "v12 historical robustness study")
     candidate = _repo_directory(root, Path(candidate_dir), "source-v4 Full-Pool candidate")
     closure_file = _repo_file(root, Path(presentation_closure_path), "source-v4 presentation closure")
     execution_manifest_file = _repo_file(root, Path(fresh_execution_manifest_path), "fresh execution manifest")
-    destination = _new_repo_path(root, Path(destination_dir), "v11 production destination")
-    contract_path = _new_repo_path(root, Path(release_contract_path), "v11 release contract")
+    destination = _new_repo_path(root, Path(destination_dir), "v12 production destination")
+    contract_path = _new_repo_path(root, Path(release_contract_path), "v12 release contract")
     if not _RELEASE_ID.fullmatch(release_id):
-        raise ConcurrentRobustnessReleaseError("v11 release id is not a bounded stable token")
+        raise ConcurrentRobustnessReleaseError("v12 release id is not a bounded stable token")
     if not _COMMIT.fullmatch(implementation_commit):
-        raise ConcurrentRobustnessReleaseError("v11 implementation commit is invalid")
+        raise ConcurrentRobustnessReleaseError("v12 implementation commit is invalid")
     if not _SHA256.fullmatch(full_pool_manifest_sha256):
-        raise ConcurrentRobustnessReleaseError("v11 source-v4 manifest SHA-256 is invalid")
+        raise ConcurrentRobustnessReleaseError("v12 source-v4 manifest SHA-256 is invalid")
     direct_inputs = (
         full_pool,
         historical_formal,
@@ -2515,13 +2522,13 @@ def _promote_full_pool_v11_release(
     )
     for index, left in enumerate(direct_inputs):
         if any(_paths_overlap(left, right) for right in direct_inputs[index + 1 :]):
-            raise ConcurrentRobustnessReleaseError("v11 immutable inputs overlap or are nested")
+            raise ConcurrentRobustnessReleaseError("v12 immutable inputs overlap or are nested")
     if (
         any(_paths_overlap(destination, path) for path in direct_inputs)
         or any(_paths_overlap(contract_path, path) for path in direct_inputs)
         or _paths_overlap(destination, contract_path)
     ):
-        raise ConcurrentRobustnessReleaseError("v11 output overlaps immutable input evidence")
+        raise ConcurrentRobustnessReleaseError("v12 output overlaps immutable input evidence")
     snapshots = _v8_input_snapshots(direct_inputs)
     try:
         evidence = _evidence.validate_strict_full_pool_production_evidence(
@@ -2534,22 +2541,32 @@ def _promote_full_pool_v11_release(
             candidate_dir=candidate,
             fresh_execution_manifest_path=execution_manifest_file,
             implementation_commit=implementation_commit,
+            required_result_projection_schema=(
+                STRICT_FULL_POOL_RESULT_PROJECTION_SCHEMA_V2
+            ),
         )
     except ConcurrentRobustnessEvidenceError as exc:
         raise ConcurrentRobustnessReleaseError(str(exc)) from exc
+    if (
+        evidence.result_projection.get("schema_version")
+        != STRICT_FULL_POOL_RESULT_PROJECTION_SCHEMA_V2
+    ):
+        raise ConcurrentRobustnessReleaseError(
+            "v12 promotion requires delivery-run projection-v2"
+        )
     base_evidence = _v11_base_evidence(evidence)
     bundle = evidence.closure.presentation_bundle_path
     if any(_paths_overlap(bundle, path) for path in direct_inputs):
-        raise ConcurrentRobustnessReleaseError("v11 presentation bundle overlaps immutable inputs")
+        raise ConcurrentRobustnessReleaseError("v12 presentation bundle overlaps immutable inputs")
     if _paths_overlap(destination, bundle) or _paths_overlap(contract_path, bundle):
-        raise ConcurrentRobustnessReleaseError("v11 output overlaps the presentation bundle")
+        raise ConcurrentRobustnessReleaseError("v12 output overlaps the presentation bundle")
     snapshots[bundle] = _flat_file_hashes(bundle)
     _assert_v8_input_snapshots(snapshots)
 
     stage_facts = _full_pool_production_stage_facts(
         release_id=release_id,
         evidence=base_evidence,
-        release_contract_schema=ROBUSTNESS_RELEASE_CONTRACT_SCHEMA_V11,
+        release_contract_schema=ROBUSTNESS_RELEASE_CONTRACT_SCHEMA_V12,
     )
     presentation = _materialize_full_pool_production_presentation(
         evidence=base_evidence,
@@ -2570,7 +2587,7 @@ def _promote_full_pool_v11_release(
     contract_path.parent.mkdir(parents=True, exist_ok=True)
     staging = Path(
         tempfile.mkdtemp(
-            prefix=f".{destination.name}.v11.",
+            prefix=f".{destination.name}.v12.",
             suffix=".staging",
             dir=destination.parent,
         )
@@ -2593,7 +2610,7 @@ def _promote_full_pool_v11_release(
         release_hashes = _flat_file_hashes(staging)
         snapshot_identity = _physical_snapshot_identity(release_hashes)
         contract_document: dict[str, object] = {
-            "schema_version": ROBUSTNESS_RELEASE_CONTRACT_SCHEMA_V11,
+            "schema_version": ROBUSTNESS_RELEASE_CONTRACT_SCHEMA_V12,
             "release_purpose": "full_pool_strict_fresh_formal_research",
             "release_id": release_id,
             "canonical_endpoint": ROBUSTNESS_CANONICAL_ENDPOINT,
@@ -2646,11 +2663,11 @@ def _promote_full_pool_v11_release(
             "production_deploy_eligible": True,
             "artifact_sha256": dict(sorted(release_hashes.items())),
         }
-        if set(contract_document) != _RELEASE_CONTRACT_V11_FIELDS:
-            raise ConcurrentRobustnessReleaseError("v11 release contract fields are crossed")
+        if set(contract_document) != _RELEASE_CONTRACT_V12_FIELDS:
+            raise ConcurrentRobustnessReleaseError("v12 release contract fields are crossed")
         contract_staging.write_bytes(_json_bytes(contract_document))
         if destination.exists() or contract_path.exists():
-            raise ConcurrentRobustnessReleaseError("v11 production destination or contract appeared during staging")
+            raise ConcurrentRobustnessReleaseError("v12 production destination or contract appeared during staging")
         os.replace(staging, destination)
         destination_installed = True
         os.replace(contract_staging, contract_path)
@@ -2660,8 +2677,8 @@ def _promote_full_pool_v11_release(
             final_hashes != contract_document["artifact_sha256"]
             or _physical_snapshot_identity(final_hashes) != snapshot_identity
         ):
-            raise ConcurrentRobustnessReleaseError("v11 physical snapshot drifted after publication")
-        round_trip = _validate_full_pool_v11_production_release(
+            raise ConcurrentRobustnessReleaseError("v12 physical snapshot drifted after publication")
+        round_trip = _validate_full_pool_v12_production_release(
             repo_root=root,
             contract_document=contract_document,
             source_dir=destination,
@@ -2670,7 +2687,7 @@ def _promote_full_pool_v11_release(
             round_trip.get("production_deploy_eligible") is not True
             or round_trip.get("report_sha256") != final_hashes[CONCURRENT_MESSAGE_REPORT_HTML]
         ):
-            raise ConcurrentRobustnessReleaseError("v11 standalone round-trip facts are crossed")
+            raise ConcurrentRobustnessReleaseError("v12 standalone round-trip facts are crossed")
         _assert_v8_input_snapshots(snapshots)
     except Exception:
         if staging.exists():
@@ -3453,11 +3470,14 @@ def _validate_full_pool_v11_production_release(
     contract_document: Mapping[str, object],
     source_dir: str | Path,
     snapshot_dir: str | Path | None = None,
+    _contract_schema: str = ROBUSTNESS_RELEASE_CONTRACT_SCHEMA_V11,
+    _contract_fields: frozenset[str] = _RELEASE_CONTRACT_V11_FIELDS,
+    _required_projection_schema: str = STRICT_FULL_POOL_RESULT_PROJECTION_SCHEMA_V1,
 ) -> dict[str, object]:
     root = _real_directory(Path(repo_root), "repository root")
     if (
-        contract_document.get("schema_version") != ROBUSTNESS_RELEASE_CONTRACT_SCHEMA_V11
-        or set(contract_document) != _RELEASE_CONTRACT_V11_FIELDS
+        contract_document.get("schema_version") != _contract_schema
+        or set(contract_document) != _contract_fields
     ):
         raise ConcurrentRobustnessReleaseError(
             "v11 release contract fields are missing, unexpected, or schema-confused"
@@ -3551,9 +3571,14 @@ def _validate_full_pool_v11_production_release(
             candidate_dir=candidate,
             fresh_execution_manifest_path=execution_manifest,
             implementation_commit=implementation_commit,
+            required_result_projection_schema=_required_projection_schema,
         )
     except ConcurrentRobustnessEvidenceError as exc:
         raise ConcurrentRobustnessReleaseError(str(exc)) from exc
+    if evidence.result_projection.get("schema_version") != _required_projection_schema:
+        raise ConcurrentRobustnessReleaseError(
+            "strict Full-Pool release projection schema differs from its contract version"
+        )
     base_evidence = _v11_base_evidence(evidence)
     lineages = _v8_lineage_documents(root=root, evidence=base_evidence)
     full_pool_facts, historical_formal_facts, historical_study_facts = _v8_fact_documents(evidence.formal)
@@ -3653,7 +3678,7 @@ def _validate_full_pool_v11_production_release(
     stage_facts = _full_pool_production_stage_facts(
         release_id=release_id,
         evidence=base_evidence,
-        release_contract_schema=ROBUSTNESS_RELEASE_CONTRACT_SCHEMA_V11,
+        release_contract_schema=_contract_schema,
     )
     _validate_full_pool_v8_release_dir(
         evidence_dir,
@@ -3663,7 +3688,7 @@ def _validate_full_pool_v11_production_release(
         release_identity=release_identity,
     )
     return {
-        "schema_version": ROBUSTNESS_RELEASE_CONTRACT_SCHEMA_V11,
+        "schema_version": _contract_schema,
         "release_purpose": "full_pool_strict_fresh_formal_research",
         "release_id": release_id,
         "source_directory": contract_document["source_directory"],
@@ -3679,6 +3704,24 @@ def _validate_full_pool_v11_production_release(
     }
 
 
+def _validate_full_pool_v12_production_release(
+    *,
+    repo_root: str | Path,
+    contract_document: Mapping[str, object],
+    source_dir: str | Path,
+    snapshot_dir: str | Path | None = None,
+) -> dict[str, object]:
+    return _validate_full_pool_v11_production_release(
+        repo_root=repo_root,
+        contract_document=contract_document,
+        source_dir=source_dir,
+        snapshot_dir=snapshot_dir,
+        _contract_schema=ROBUSTNESS_RELEASE_CONTRACT_SCHEMA_V12,
+        _contract_fields=_RELEASE_CONTRACT_V12_FIELDS,
+        _required_projection_schema=STRICT_FULL_POOL_RESULT_PROJECTION_SCHEMA_V2,
+    )
+
+
 def validate_concurrent_robustness_production_release(
     *,
     repo_root: str | Path,
@@ -3688,6 +3731,13 @@ def validate_concurrent_robustness_production_release(
 ) -> dict[str, object]:
     """Fail-closed validator used by the production deployment gate."""
     schema_version = contract_document.get("schema_version")
+    if schema_version == ROBUSTNESS_RELEASE_CONTRACT_SCHEMA_V12:
+        return _validate_full_pool_v12_production_release(
+            repo_root=repo_root,
+            contract_document=contract_document,
+            source_dir=source_dir,
+            snapshot_dir=snapshot_dir,
+        )
     if schema_version == ROBUSTNESS_RELEASE_CONTRACT_SCHEMA_V11:
         return _validate_full_pool_v11_production_release(
             repo_root=repo_root,

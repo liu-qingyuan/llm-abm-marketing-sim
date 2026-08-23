@@ -97,7 +97,7 @@ python scripts/validate_abm_report_release.py \
   --source-dir runs/<persisted-run>
 ```
 
-该命令支持历史 `abm-report-release-contract-v1` 的本地证据验证，以及 v2–v11 的版本化 Formal production 验证。v2/v3/v4 分别保护 Final Research 与 Concurrent Message 的既有合同；v5/v6/v7 保护 Concurrent Robustness；v8/v9/v10分别只接受 Full-Pool source-v1/source-v2/source-v3；v11只接受fresh manifest驱动且production-eligible的strict source-v4。v11会从persisted source、operator attempt chain、strict policy/settlement、30-batch spool、109,200 final successful Decisions、model/usage/physical accounting与九格projection重新闭合facts，并拒绝source-v3/v10 masquerade、mixed、Validation/mock、strict stop、incomplete usage/model和cap drift。所有 source directory 都拒绝父级 artifact path、symlink、FIFO/socket/device 等 non-regular entry、未声明文件、缺失下载或 hash 不一致；non-live evidence不能通过 `--require-formal-production`。
+该命令支持历史 `abm-report-release-contract-v1` 的本地证据验证，以及 v2–v12 的版本化 Formal production 验证。v2/v3/v4 分别保护 Final Research 与 Concurrent Message 的既有合同；v5/v6/v7 保护 Concurrent Robustness；v8/v9/v10分别只接受 Full-Pool source-v1/source-v2/source-v3；v11只读兼容strict source-v4的九行projection-v1；新的v12只接受同一source-v4产生的delivery-run projection-v2。v11/v12都会从persisted source、operator attempt chain、strict policy/settlement、30-batch spool、109,200 final successful Decisions、model/usage/physical accounting与同源result projection重新闭合facts；v12进一步要求270行，`Run = time_step + 1`并覆盖1–30，且roll-up回原九格与109,200 Exposure。它们同时拒绝source-v3/v10 masquerade、mixed、Validation/mock、strict stop、incomplete usage/model和cap drift。所有 source directory 都拒绝父级 artifact path、symlink、FIFO/socket/device 等 non-regular entry、未声明文件、缺失下载或 hash 不一致；non-live evidence不能通过 `--require-formal-production`。
 
 在真实 strict run 前，可从最终 create-once manifest 生成零调用 handoff：
 
@@ -112,7 +112,7 @@ python scripts/compose_full_pool_v11_handoff.py \
 
 该 handoff exact绑定 Pi `openai-codex` / `gpt-5.6-sol`、logical/physical/fee budgets与独立workspace，并固定声明`operational_authorization_required=true`、`provider_calls_during_composition=0`。它只供#205独立operational authorization引用，不授权live execution、promotion或deployment。
 
-production deploy 只能显式提供通过本地 gate 的 v2–v11 Formal contract：
+production deploy 只能显式提供通过本地 gate 的 v2–v12 Formal contract：
 
 ```bash
 scripts/deploy_abm_report.sh \

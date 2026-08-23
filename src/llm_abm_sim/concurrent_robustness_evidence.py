@@ -56,6 +56,8 @@ from .full_pool_source_v3 import (
 )
 from .full_pool_source_v4 import (
     FULL_POOL_SOURCE_V4_SCHEMA,
+    STRICT_FULL_POOL_RESULT_PROJECTION_SCHEMA_V1,
+    STRICT_FULL_POOL_RESULT_PROJECTION_SCHEMA_V2,
     StrictFullPoolSourceFacts,
     compose_strict_full_pool_result_projection,
     read_closed_strict_full_pool_source,
@@ -3003,9 +3005,49 @@ def _validate_strict_formal_release_facts(
         and execution.provider_calls_during_composition == 0
         and execution.production_deploy_eligible is False
     )
-    exact_projection = (
-        projection.get("schema_version") == "full-pool-segment-result-projection-v1"
+    projection_schema = projection.get("schema_version")
+    legacy_projection = (
+        projection_schema == STRICT_FULL_POOL_RESULT_PROJECTION_SCHEMA_V1
         and projection.get("row_count") == 9
+        and set(projection)
+        == {
+            "schema_version",
+            "row_count",
+            "rows_sha256",
+            "csv_sha256",
+            "lineage_sha256",
+            "segment_denominators",
+            "total_exposure",
+        }
+    )
+    delivery_run_projection = (
+        projection_schema == STRICT_FULL_POOL_RESULT_PROJECTION_SCHEMA_V2
+        and projection.get("row_count") == FULL_POOL_PRODUCTION_HORIZON * 9
+        and projection.get("run_count") == FULL_POOL_PRODUCTION_HORIZON
+        and projection.get("run_min") == 1
+        and projection.get("run_max") == FULL_POOL_PRODUCTION_HORIZON
+        and projection.get("run_semantics") == "one_based_delivery_round"
+        and projection.get("source_time_step_min") == 0
+        and projection.get("source_time_step_max") == FULL_POOL_PRODUCTION_HORIZON - 1
+        and set(projection)
+        == {
+            "schema_version",
+            "row_count",
+            "rows_sha256",
+            "csv_sha256",
+            "lineage_sha256",
+            "segment_denominators",
+            "total_exposure",
+            "run_count",
+            "run_min",
+            "run_max",
+            "run_semantics",
+            "source_time_step_min",
+            "source_time_step_max",
+        }
+    )
+    exact_projection = (
+        (legacy_projection or delivery_run_projection)
         and projection.get("total_exposure") == FULL_POOL_PRODUCTION_ELIGIBLE_PAIRS
         and projection.get("segment_denominators") == {"S1": 15_616, "S2": 15_070, "S3": 5_714}
         and all(
@@ -3074,6 +3116,7 @@ def validate_strict_full_pool_production_evidence(
     candidate_dir: str | Path,
     fresh_execution_manifest_path: str | Path | None,
     implementation_commit: str,
+    required_result_projection_schema: str | None = None,
 ) -> StrictFullPoolProductionEvidenceFacts:
     """Close v11 only from explicit source-v4, manifest, report, and historical bytes."""
     root = _real_directory(Path(repo_root), "repository root")
@@ -3132,9 +3175,42 @@ def validate_strict_full_pool_production_evidence(
         strict,
         provider_contract_sha256=provider_contract_sha256,
     )
-    projection = compose_strict_full_pool_result_projection(closed)
     csv_path = closure.presentation_bundle_path / FULL_POOL_RESULT_CSV
     lineage_path = closure.presentation_bundle_path / FULL_POOL_RESULT_LINEAGE_MARKDOWN
+    try:
+        lineage_text = lineage_path.read_text(encoding="utf-8")
+    except (OSError, UnicodeError) as exc:
+        raise ConcurrentRobustnessEvidenceError(
+            "source-v4 result projection lineage is unreadable"
+        ) from exc
+    projection_schemas = [
+        schema
+        for schema in (
+            STRICT_FULL_POOL_RESULT_PROJECTION_SCHEMA_V1,
+            STRICT_FULL_POOL_RESULT_PROJECTION_SCHEMA_V2,
+        )
+        if f"- schema: `{schema}`" in lineage_text
+    ]
+    if (
+        len(projection_schemas) != 1
+        or required_result_projection_schema
+        not in {
+            None,
+            STRICT_FULL_POOL_RESULT_PROJECTION_SCHEMA_V1,
+            STRICT_FULL_POOL_RESULT_PROJECTION_SCHEMA_V2,
+        }
+        or (
+            required_result_projection_schema is not None
+            and projection_schemas[0] != required_result_projection_schema
+        )
+    ):
+        raise ConcurrentRobustnessEvidenceError(
+            "source-v4 result projection schema is missing, unsupported, or crossed"
+        )
+    projection = compose_strict_full_pool_result_projection(
+        closed,
+        schema_version=projection_schemas[0],
+    )
     projection_facts: dict[str, object] = {
         "schema_version": projection.schema_version,
         "row_count": len(projection.rows),
@@ -3144,6 +3220,17 @@ def validate_strict_full_pool_production_evidence(
         "segment_denominators": {f"S{index}": projection.segment_denominators[f"class_{index}"] for index in (1, 2, 3)},
         "total_exposure": projection.total_exposure,
     }
+    if projection.schema_version == STRICT_FULL_POOL_RESULT_PROJECTION_SCHEMA_V2:
+        projection_facts.update(
+            {
+                "run_count": strict.committed_batches,
+                "run_min": 1,
+                "run_max": strict.committed_batches,
+                "run_semantics": "one_based_delivery_round",
+                "source_time_step_min": 0,
+                "source_time_step_max": strict.committed_batches - 1,
+            }
+        )
     if (
         csv_path.is_symlink()
         or not csv_path.is_file()

@@ -35,6 +35,8 @@ from .full_pool_source_v3 import (
 )
 from .full_pool_source_v4 import (
     FULL_POOL_SOURCE_V4_SCHEMA,
+    STRICT_FULL_POOL_RESULT_PROJECTION_SCHEMA_V1,
+    STRICT_FULL_POOL_RESULT_PROJECTION_SCHEMA_V2,
     StrictFullPoolSourceFacts,
     compose_strict_full_pool_result_projection,
 )
@@ -1240,6 +1242,26 @@ def compose_full_pool_presentation_bundle(
         raise
 
 
+def _strict_projection_schema_from_bundle(bundle_root: Path) -> str:
+    lineage_path = bundle_root / FULL_POOL_RESULT_LINEAGE_MARKDOWN
+    _require_regular_file(lineage_path, FULL_POOL_RESULT_LINEAGE_MARKDOWN)
+    try:
+        lineage = lineage_path.read_text(encoding="utf-8")
+    except UnicodeDecodeError as exc:
+        raise _FullPoolPresentationError("Full-Pool result lineage is not UTF-8") from exc
+    matched = [
+        schema
+        for schema in (
+            STRICT_FULL_POOL_RESULT_PROJECTION_SCHEMA_V1,
+            STRICT_FULL_POOL_RESULT_PROJECTION_SCHEMA_V2,
+        )
+        if f"- schema: `{schema}`" in lineage
+    ]
+    if len(matched) != 1:
+        raise _FullPoolPresentationError("Full-Pool result projection schema is missing or crossed")
+    return matched[0]
+
+
 def validate_full_pool_presentation_bundle(
     bundle_root: Path,
     *,
@@ -1258,7 +1280,10 @@ def validate_full_pool_presentation_bundle(
     result_projection: FullPoolResultProjection | None = None
     source_schema = _source_schema(source)
     if source_schema == FULL_POOL_SOURCE_V4_SCHEMA:
-        result_projection = compose_strict_full_pool_result_projection(cast(Any, source))
+        result_projection = compose_strict_full_pool_result_projection(
+            cast(Any, source),
+            schema_version=_strict_projection_schema_from_bundle(root),
+        )
     elif source_schema == FULL_POOL_SOURCE_V3_SCHEMA:
         result_projection = compose_full_pool_result_projection(
             cast(Any, source),

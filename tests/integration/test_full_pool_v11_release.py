@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import csv
+import io
 import json
 import shutil
 from dataclasses import replace
@@ -63,8 +65,18 @@ def test_report_composes_source_v4_projection_without_provider_calls(tmp_path: P
     assert created == destination.resolve()
     report = (created / "report.html").read_text(encoding="utf-8")
     lineage = (created / FULL_POOL_RESULT_LINEAGE_MARKDOWN).read_text(encoding="utf-8")
-    assert (created / FULL_POOL_RESULT_CSV).is_file()
+    projection_rows = list(
+        csv.DictReader(
+            io.StringIO((created / FULL_POOL_RESULT_CSV).read_text(encoding="utf-8"))
+        )
+    )
+    assert len(projection_rows) == 18
+    assert sorted({int(row["Run"]) for row in projection_rows}) == [1, 2]
+    assert "full-pool-segment-result-projection-v2" in lineage
+    assert "one-based delivery round" in lineage
+    assert "time_step + 1" in lineage
     assert 'data-testid="full-pool-segment-table"' in report
+    assert "Run is the one-based delivery round" in report
     assert ".full-pool-download-list li { min-width: 0;" in report
     assert ".full-pool-download-link { overflow-wrap: anywhere; word-break: break-word; }" in report
     assert "strict fresh trajectory" in report
@@ -173,7 +185,7 @@ def test_evidence_v11_rejects_validation_source_v4_from_persisted_bytes(
         )
 
 
-def test_release_v11_rejects_validation_source_before_publication(tmp_path: Path) -> None:
+def test_release_v12_rejects_validation_source_before_publication(tmp_path: Path) -> None:
     source_root, source_manifest_sha256 = _validation_source_v4(tmp_path)
     source = read_closed_strict_full_pool_source(
         source_root,
@@ -212,10 +224,10 @@ def test_release_v11_rejects_validation_source_before_publication(tmp_path: Path
         destination_path=closure_path,
         implementation_commit=implementation_commit,
     )
-    destination = tmp_path / "forbidden-v11-release"
-    contract_path = tmp_path / "forbidden-v11-contract.json"
+    destination = tmp_path / "forbidden-v12-release"
+    contract_path = tmp_path / "forbidden-v12-contract.json"
 
-    assert release_module.ROBUSTNESS_RELEASE_CONTRACT_SCHEMA_V11 == ("abm-report-release-contract-v11")
+    assert release_module.ROBUSTNESS_RELEASE_CONTRACT_SCHEMA_V12 == ("abm-report-release-contract-v12")
     with pytest.raises(
         release_module.ConcurrentRobustnessReleaseError,
         match="source-v4|Validation|production|Formal",
@@ -227,7 +239,7 @@ def test_release_v11_rejects_validation_source_before_publication(tmp_path: Path
             candidate_dir=candidate,
             destination_dir=destination,
             release_contract_path=contract_path,
-            release_id="forbidden-validation-v11",
+            release_id="forbidden-validation-v12",
             presentation_closure_path=closure_path,
             full_pool_source_root=source_root,
             full_pool_manifest_sha256=source_manifest_sha256,
@@ -238,7 +250,7 @@ def test_release_v11_rejects_validation_source_before_publication(tmp_path: Path
     assert not contract_path.exists()
 
 
-def test_release_v11_materializes_and_round_trips_typed_formal_fixture(
+def test_release_v12_materializes_and_round_trips_typed_formal_fixture(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -334,13 +346,19 @@ def test_release_v11_materializes_and_round_trips_typed_formal_fixture(
         historical_study_logical_judgments=28_800,
     )
     projection = {
-        "schema_version": "full-pool-segment-result-projection-v1",
-        "row_count": 9,
+        "schema_version": "full-pool-segment-result-projection-v2",
+        "row_count": 270,
         "rows_sha256": "1" * 64,
         "csv_sha256": "2" * 64,
         "lineage_sha256": "3" * 64,
         "segment_denominators": {"S1": 15_616, "S2": 15_070, "S3": 5_714},
         "total_exposure": 109_200,
+        "run_count": 30,
+        "run_min": 1,
+        "run_max": 30,
+        "run_semantics": "one_based_delivery_round",
+        "source_time_step_min": 0,
+        "source_time_step_max": 29,
     }
     injected = evidence_module.StrictFullPoolProductionEvidenceFacts(
         closure=closure,
@@ -354,8 +372,8 @@ def test_release_v11_materializes_and_round_trips_typed_formal_fixture(
         "validate_strict_full_pool_production_evidence",
         lambda **_kwargs: injected,
     )
-    destination = tmp_path / "typed-formal-v11-release"
-    contract_path = tmp_path / "typed-formal-v11-contract.json"
+    destination = tmp_path / "typed-formal-v12-release"
+    contract_path = tmp_path / "typed-formal-v12-contract.json"
 
     promoted = release_module.promote_concurrent_robustness_release(
         repo_root=tmp_path,
@@ -364,7 +382,7 @@ def test_release_v11_materializes_and_round_trips_typed_formal_fixture(
         candidate_dir=candidate,
         destination_dir=destination,
         release_contract_path=contract_path,
-        release_id="typed-formal-v11",
+        release_id="typed-formal-v12",
         presentation_closure_path=closure_path,
         full_pool_source_root=source_root,
         full_pool_manifest_sha256=source_manifest_sha256,
@@ -374,10 +392,16 @@ def test_release_v11_materializes_and_round_trips_typed_formal_fixture(
 
     contract = json.loads(contract_path.read_text(encoding="utf-8"))
     assert promoted.source_dir == destination.resolve()
-    assert contract["schema_version"] == "abm-report-release-contract-v11"
-    assert set(contract) == release_module._RELEASE_CONTRACT_V11_FIELDS
+    assert contract["schema_version"] == "abm-report-release-contract-v12"
+    assert set(contract) == release_module._RELEASE_CONTRACT_V12_FIELDS
     assert contract["strict_source_facts"]["logical_judgments"] == 109_200
     assert contract["result_projection_facts"]["total_exposure"] == 109_200
+    assert contract["result_projection_facts"]["row_count"] == 270
+    assert contract["result_projection_facts"]["run_semantics"] == (
+        "one_based_delivery_round"
+    )
+    assert contract["result_projection_facts"]["run_min"] == 1
+    assert contract["result_projection_facts"]["run_max"] == 30
     assert contract["execution_handoff"]["provider_calls_during_composition"] == 0
     assert contract["execution_handoff"]["operational_authorization_required"] is True
     assert contract["execution_handoff"]["source_v4_directory"] == str(source_root.resolve())
@@ -387,7 +411,7 @@ def test_release_v11_materializes_and_round_trips_typed_formal_fixture(
     assert contract["production_deploy_eligible"] is True
     assert (destination / FULL_POOL_RESULT_CSV).is_file()
     assert (destination / FULL_POOL_RESULT_LINEAGE_MARKDOWN).is_file()
-    assert '<meta name="abm-release-contract" content="abm-report-release-contract-v11">' in (
+    assert '<meta name="abm-release-contract" content="abm-report-release-contract-v12">' in (
         destination / "report.html"
     ).read_text(encoding="utf-8")
     validated = release_module.validate_concurrent_robustness_production_release(
@@ -395,14 +419,14 @@ def test_release_v11_materializes_and_round_trips_typed_formal_fixture(
         contract_document=contract,
         source_dir=destination,
     )
-    assert validated["schema_version"] == "abm-report-release-contract-v11"
+    assert validated["schema_version"] == "abm-report-release-contract-v12"
     assert validated["sampling_status"] == "persisted_strict_fresh_full_pool_formal_run"
 
     masquerade = json.loads(json.dumps(contract))
-    masquerade["schema_version"] = "abm-report-release-contract-v10"
+    masquerade["schema_version"] = "abm-report-release-contract-v11"
     with pytest.raises(
         release_module.ConcurrentRobustnessReleaseError,
-        match="v10|schema-confused|fields",
+        match="v11|schema-confused|fields|projection",
     ):
         release_module.validate_concurrent_robustness_production_release(
             repo_root=tmp_path,
@@ -433,6 +457,17 @@ def test_release_v11_materializes_and_round_trips_typed_formal_fixture(
         release_module.validate_concurrent_robustness_production_release(
             repo_root=tmp_path,
             contract_document=projection_tamper,
+            source_dir=destination,
+        )
+    run_semantics_tamper = json.loads(json.dumps(contract))
+    run_semantics_tamper["result_projection_facts"]["run_max"] = 29
+    with pytest.raises(
+        release_module.ConcurrentRobustnessReleaseError,
+        match="projection|crossed",
+    ):
+        release_module.validate_concurrent_robustness_production_release(
+            repo_root=tmp_path,
+            contract_document=run_semantics_tamper,
             source_dir=destination,
         )
     handoff_tamper = json.loads(json.dumps(contract))

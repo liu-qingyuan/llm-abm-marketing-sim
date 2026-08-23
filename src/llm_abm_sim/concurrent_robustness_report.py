@@ -1820,6 +1820,7 @@ def _validate_full_pool_production_stage_facts(
             "abm-report-release-contract-v9",
             "abm-report-release-contract-v10",
             "abm-report-release-contract-v11",
+            "abm-report-release-contract-v12",
         }
         or stage_facts.canonical_endpoint != "https://abm.q1ngyuan.top/"
         or stage_facts.production_evidence_schema
