@@ -295,6 +295,17 @@ async function expectFullPoolReport(page: Page): Promise<void> {
   await expect(mechanism.locator('[data-mechanism-edge-id]')).toHaveCount(8);
   await expect(mechanism).toContainText('Primary-only');
 
+  if (releaseContractSchema === 'abm-report-release-contract-v12') {
+    const segmentResults = page.getByTestId('full-pool-segment-results');
+    const segmentRows = page.getByTestId('full-pool-segment-table').locator('tbody tr');
+    await expect(segmentResults).toContainText('Run is the one-based delivery round');
+    await expect(segmentRows).toHaveCount(270);
+    const runValues = (await segmentRows.locator('td:first-child').allTextContents()).map(Number);
+    expect([...new Set(runValues)].sort((left, right) => left - right)).toEqual(
+      Array.from({ length: 30 }, (_, index) => index + 1),
+    );
+  }
+
   const fallback = page.getByTestId('full-pool-mechanism-fallback');
   const fallbackSummary = fallback.locator('summary');
   await fallbackSummary.focus();
