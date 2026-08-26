@@ -11,5 +11,8 @@
 - [ADR 0005: Prompt–Model Robustness 使用增量证据呈现](0005-use-additive-robustness-presentation.md)：保留现有 Formal mechanism、Shadow/barrier evidence，并增量加入 Ranking Weight 与 Prompt–Model layers。
 - [ADR 0006: 机制展示使用 Mermaid-first 单一语义所有者](0006-use-mermaid-first-single-owner-mechanism-presentation.md)：以一个 package-internal Module 统一拥有六张机制母版、双语投影与两次整组审批，并通过 additive release 保留历史 bytes。
 - [ADR 0007: 采用增量全池主实验并保留历史敏感性](0007-use-additive-full-pool-main-experiment.md)：36,400-user Primary-only Formal Run 成为网页主区，既有 1,000-user sensitivity 与 immutable v7 原样保留。
+- [ADR 0008: Full-Pool 主结果采用两阶段互动实现](0008-use-two-stage-engagement-realization.md)：Provider Judgment经稳定 probability gate形成 realized action；只让 realized positives进入feedback，并以新 immutable主结果替换旧direct-action语义。
+
+ADR 0008 supersede ADR 0007 中 direct positive feedback与增量 Full-Pool主呈现的相关决策；ADR 0007 的全池分母、capacity、barrier和历史 sensitivity决策继续有效。ADR 0004 的 ranking与去重结构保留，其 two-stage feedback consequence由 ADR 0008解释。旧 ADR 正文不改写。
 
 新的 executable requirements 发布到 GitHub `Spec:` issue；当前行为和实现边界写入对应 Architecture Note。

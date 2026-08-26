@@ -86,7 +86,7 @@ Target Delivery Ranking 在一个推荐批次中最多可以投放目标视频�
 
 ### Campaign Engagement Ranking Signal
 
-Concurrent Message Competition Experiment 中，平台根据此前批次对任意 Experimental Message Video 产生 `like/comment/share` 的去重用户集合，计算候选用户在历史评论图中的直接邻居互动信号。该信号在 Batch 0 固定为 0，之后只影响三条 message 的个性化 Ranking，不进入 LLM-Visible Decision Context；同一用户对多条 message 的成功互动在 campaign engaged-user 集合中只计一次，`ignore` 和 `provider_failed` 不传播。
+Concurrent Message Competition Experiment 中，平台根据此前批次对任意 Experimental Message Video 已提交的 `like/comment/share` 去重用户集合，计算候选用户在历史评论图中的直接邻居互动信号。legacy direct-action runtime提交成功 Primary positive；Full-Pool Two-Stage Realization Replay只提交 `realized_engage=true` 的 users。该信号在 Batch 0固定为0，之后只影响三条 message的个性化 Ranking，不进入 LLM-Visible Decision Context；同一用户跨 message按campaign去重，Provider ignore、draw fail、`ignore`和`provider_failed`都不传播。
 
 ### Below Delivery Capacity
 
@@ -142,7 +142,7 @@ processed 数据中可用于构建历史信号的视频集合。对于单目标�
 
 ### Full-Pool 30-Batch Run
 
-使用全部 36,400 位合格 processed users、现有三条 Experimental Message Videos 和固定 30 个推荐批次的 Concurrent Message 运行。每条 message 每批容量为 1,214、最后一批为 1,194，使 109,200 个 `user × message` pairs 各获得一次曝光和一次 Primary Campaign Decision；不执行新的 Shadow，现有 ranking、barrier 和正向 Primary 的 next-batch feedback 边界保持不变。
+使用全部 36,400 位合格 processed users、现有三条 Experimental Message Videos 和固定 30 个推荐批次的 Concurrent Message 运行。每条 message每批容量为1,214、最后一批为1,194，使109,200个 `user × message` pairs各获得一次曝光和一次Primary Campaign Decision；不执行新的Shadow。ranking、per-message capacity、single exposure和full-batch barrier保持不变；legacy source记录正向Provider Judgment，Two-Stage Realization路径只把realized positives提交给next-batch feedback。
 
 ### Full-Pool Formal Main Experiment
 
@@ -280,13 +280,25 @@ processed 数据中能够关联到具体用户与视频的历史互动证据，�
 
 用户代理在一次观察后的结构化输出。核心含义是是否互动、互动概率、动作、置信度和简短理由；它是仿真事件和指标的输入，而不是自由文本解释。
 
+### Provider Judgment
+
+Provider通过现有 `EngageDecision` Interface返回的结构化互动判断，包含 `engage`、`probability`、`action`、`reason`、`confidence`和`decision_source`。在legacy direct-action runtime中，成功正向Judgment仍按历史合同直接成为action；在Full-Pool Two-Stage Realization路径中，它只表示互动意向及其provenance，必须经过ABM realization后才能成为已实现行动。
+
+### Engagement Realization
+
+Provider Judgment之后的ABM行动实现步骤。Provider `ignore`不生成draw并保持`ignore`；Provider正向action才按固定seed、source/user/message稳定key和persisted probability得到`draw_pass`或`draw_fail`。pass保留原action，fail变为`ignore`。Provider reason始终是Judgment provenance；ABM不生成`realized_reason`。
+
+### Full-Pool Two-Stage Realization Replay
+
+从显式path、manifest SHA-256和source identity绑定的closed Strict Source-v4读取全部Provider Judgments，从Batch 0重建Per-Message Ranking与full-batch feedback trajectory，并关闭独立realized source、evidence和projection的零新增Provider调用Replay。Judgment按`source_identity × user_id × message_id × primary`唯一解析；realization key不含upstream/replay batch或time step。只有整批完成后的realized-positive users进入下一批Campaign Engagement Ranking Signal。
+
 ### LLM-Visible Decision Context
 
 LLM 在一次具体 User-Video Interaction 获得曝光后实际可见的 allowlisted 语义输入。message 一侧只提供当前视频原文，不提供 Intended Audience Segment 或内部六维 `0/1` 向量；Primary 用户侧只提供三个可观测代理指标、环保意识、全部六个有符号价值系数、入住酒店类型和出行目的，不提供 `latent_class`。Primary 与 Demographic Shadow 的 PeerContext 均保持全 0，PlatformContext 全部留在 runtime/trace；Ranking、holdout、campaign feedback 和竞争视频分数不属于该上下文。
 
 ### Primary Campaign Decision
 
-实际曝光后产生、且唯一能够写入 action、指标和后续 Campaign Engagement Ranking Signal 的结构化 Decision。它不向 LLM 暴露性别、年龄、教育或收入等 demographic labels。
+实际曝光后产生的Provider-backed结构化Decision。它不向LLM暴露性别、年龄、教育或收入等demographic labels。legacy direct-action runtime继续允许成功正向Primary写入action、指标和feedback；Full-Pool Two-Stage Realization路径把它保存为Provider Judgment，只有后续`realized_engage=true`才写入realized指标与Campaign Engagement Ranking Signal。
 
 ### Demographic Shadow Decision
 

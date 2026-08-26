@@ -12,7 +12,7 @@ Canonical endpoint: [`https://abm.q1ngyuan.top/`](https://abm.q1ngyuan.top/)
 - 每条 message 使用 Per-Message Personalized Top20，30 个 batch、每条 600 次 exposure；同一 pair 最多 exposure，同一 user 可以跨 message 重叠。
 - Batch 0 使用共同的 Full-Pool Influence Seed Union；之后每条队列独立排序，完全同分按 `user_id` 稳定处理。
 - Platform Environment 选择 exposure；Decision Adapter 只处理已曝光的 pair，并生成 Primary 与 report-only Demographic Shadow Decision。
-- 成功 Primary 的 `like/comment/share` 用户按 campaign 去重，只影响下一批 ranking；`ignore`、`provider_failed` 和 Shadow 不传播。
+- legacy direct-action runtime中，成功Primary的`like/comment/share`用户按campaign去重并只影响下一批ranking；Full-Pool Two-Stage Realization Replay只提交realized positives。Provider ignore、draw fail、`ignore`、`provider_failed`和Shadow不传播。
 - `Message-User Fit` 使用 message 六维 `0/1` vector 与用户 signed value weights 的 cosine similarity，并映射到 `[0, 1]`；Class 名称不是硬性 routing 条件。
 
 当前首次 release 的固定研究边界为 1,000 sample users、3,000 eligible pairs、1,800 exposures 和 3,600 个 Primary/Shadow decision opportunities。结果是 descriptive simulation evidence，不构成真实世界文案的因果胜负或总体代表性结论。
@@ -43,6 +43,7 @@ personalized_delivery_score
 | `ConcurrentMessageExperimentRunner` | 保持公开 Primary+Shadow preflight，执行 paired Decisions，并从私有 spool reader 投影既有 candidate/pair rows 和最终 source |
 | 私有 `_PrimaryOnlyConcurrentRuntimeConsumer` | 只执行 Primary；现有调用仍从同一私有 spool reader 组装兼容结果，Full-Pool 调用则把已关闭 spool 交给流式 source closure；不建立 Shadow 或公共 storage Seam |
 | package-internal `FullPoolFormalExperiment.run(...)` | 以 frozen contract、一个 Primary Adapter 和显式 output identity 驱动完整 eligible pool；同一 Interface 支持 deterministic Validation、显式授权的 Formal durable run、safe resume、`reconciliation_required` 与只读 source replay，不公开独立 resume/factory Seam |
+| `EngagementRealizationPolicy` / `FullPoolTwoStageReplay.run_and_close(...)` | 从显式 Source-v4 Judgment inventory按稳定source/user/message key实现action，从Batch 0重建realized-positive feedback并原子关闭nonproduction source/evidence/projection；不修改`EngageDecision`或legacy runtime，不提供direct Provider-action fallback |
 | `PlatformEnvironment` / ranking | 每条 message 的 candidates、delivery capacity、Top20 或 Full-Pool scaled capacity、exposure gate 和稳定 tie-break |
 | Decision Adapter | 对已曝光 `user × message` pair 生成 Primary/Shadow typed decisions；不选择 exposure |
 | `ConcurrentCampaignDiagnostics` | 从 persisted candidate/pair rows 重建 funnel、allocation、response、feedback 和 sensitivity diagnostics |
