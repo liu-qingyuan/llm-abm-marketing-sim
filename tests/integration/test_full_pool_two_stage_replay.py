@@ -5,10 +5,12 @@ import hashlib
 import io
 import json
 from collections import Counter
+from collections.abc import Mapping
 from copy import deepcopy
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
@@ -155,6 +157,108 @@ def _source_v4(tmp_path: Path) -> tuple[Path, str, str]:
 
 def _jsonl(path: Path) -> list[dict[str, Any]]:
     return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line]
+
+
+def test_formal_two_stage_replay_rejects_a_validation_source_v4(
+    tmp_path: Path,
+) -> None:
+    source_root, source_manifest_sha256, source_identity = _source_v4(tmp_path)
+    output = tmp_path / "forbidden-formal-two-stage"
+
+    with pytest.raises(ValueError, match="production.*Source-v4|Source-v4.*production"):
+        FullPoolTwoStageReplay().run_and_close_formal(
+            FullPoolTwoStageReplayRequest(
+                source_root=source_root,
+                source_manifest_sha256=source_manifest_sha256,
+                source_identity=source_identity,
+                output_dir=output,
+            )
+        )
+
+    assert not output.exists()
+
+
+def test_formal_two_stage_replay_closes_a_distinct_authoritative_source(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import llm_abm_sim.full_pool_two_stage_replay as replay_module
+    from llm_abm_sim.full_pool_source_v4 import read_closed_strict_full_pool_source
+
+    source_root, source_manifest_sha256, source_identity = _source_v4(tmp_path)
+    closed = read_closed_strict_full_pool_source(
+        source_root,
+        manifest_sha256=source_manifest_sha256,
+    )
+    provider_accounting = dict(
+        cast(Mapping[str, object], closed.manifest["provider_accounting"])
+    )
+    provider_accounting["external_request_invocations"] = closed.facts.logical_pairs
+    formal_closed = replace(
+        closed,
+        manifest={**closed.manifest, "provider_accounting": provider_accounting},
+        facts=replace(
+            closed.facts,
+            profile="production",
+            external_request_invocations=closed.facts.logical_pairs,
+            production_topology=True,
+            production_deploy_eligible=True,
+        ),
+        aggregates={
+            **closed.aggregates,
+            "evidence_profile": "formal_live",
+            "production_deploy_eligible": True,
+        },
+    )
+    monkeypatch.setattr(
+        replay_module,
+        "read_closed_strict_full_pool_source",
+        lambda *_args, **_kwargs: formal_closed,
+    )
+    monkeypatch.setattr(
+        replay_module,
+        "CONCURRENT_MESSAGE_FULL_POOL_PRODUCTION_SAMPLE_SIZE",
+        closed.facts.distinct_users,
+    )
+    monkeypatch.setattr(
+        replay_module,
+        "CONCURRENT_MESSAGE_FULL_POOL_PRODUCTION_DELIVERY_CAPACITY",
+        closed.contract.per_message_capacity,
+    )
+    monkeypatch.setattr(
+        replay_module,
+        "CONCURRENT_MESSAGE_FULL_POOL_PRODUCTION_HORIZON",
+        closed.facts.committed_batches,
+    )
+    output = tmp_path / "formal-two-stage"
+
+    result = FullPoolTwoStageReplay().run_and_close_formal(
+        FullPoolTwoStageReplayRequest(
+            source_root=source_root,
+            source_manifest_sha256=source_manifest_sha256,
+            source_identity=source_identity,
+            output_dir=output,
+        )
+    )
+    closed_realized = read_closed_full_pool_two_stage_source(
+        output,
+        manifest_sha256=result.manifest_sha256,
+    )
+
+    assert result.production_deploy_eligible is True
+    assert closed_realized.classification == "formal_two_stage_realized"
+    assert closed_realized.formal_research_evidence is True
+    assert closed_realized.production_deploy_eligible is True
+    accounting = cast(
+        Mapping[str, object],
+        closed_realized.manifest["accounting"],
+    )
+    upstream_accounting = cast(Mapping[str, object], accounting["upstream"])
+    assert upstream_accounting["live_api_triggered"] is True
+    assert accounting["realization"] == {
+        "live_api_triggered": False,
+        "provider_calls": 0,
+    }
 
 
 def test_two_stage_replay_closes_realized_feedback_source_without_provider_calls(

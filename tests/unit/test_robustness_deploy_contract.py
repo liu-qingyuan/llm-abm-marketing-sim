@@ -253,6 +253,38 @@ def test_standalone_validator_dispatches_v7_through_its_own_branch(
         }
     ]
 
+    contract_path.write_text(
+        json.dumps({"schema_version": "abm-report-release-contract-v13"}),
+        encoding="utf-8",
+    )
+    expected_v13 = {
+        **expected_v12,
+        "schema_version": "abm-report-release-contract-v13",
+        "release_purpose": "full_pool_two_stage_realization_formal_research",
+        "sampling_status": "persisted_two_stage_realized_full_pool_formal_run",
+    }
+    v13_calls: list[dict[str, object]] = []
+
+    def validate_v13(**kwargs: object) -> dict[str, object]:
+        v13_calls.append(kwargs)
+        return expected_v13
+
+    monkeypatch.setattr(validator, "_validate_v13", validate_v13, raising=False)
+    assert validator.validate_release(
+        repo_root=tmp_path,
+        contract_path=contract_path,
+        source_dir=source,
+        snapshot_dir=snapshot,
+    ) == expected_v13
+    assert v13_calls == [
+        {
+            "repo_root": tmp_path.resolve(),
+            "contract_document": {"schema_version": "abm-report-release-contract-v13"},
+            "source_dir": source,
+            "snapshot_dir": snapshot,
+        }
+    ]
+
 
 @pytest.mark.parametrize(
     "mutation",

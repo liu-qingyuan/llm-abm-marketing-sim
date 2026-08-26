@@ -294,7 +294,15 @@ Provider Judgment之后的ABM行动实现步骤。Provider `ignore`不生成draw
 
 ### Full-Pool Two-Stage Realized Presentation Candidate
 
-从 independently closed two-stage realized source 与既有 Historical 1,000-User candidate 形成的非部署展示产物。当前 Full-Pool headline、总体/Message/Segment/Segment × Message 九格、batch trajectory、feedback与trace只投影 realized facts；单次 `user × message` exposure是唯一Primary engagement单位，Exposure包含realized ignore。Mechanism Presentation Module继续唯一拥有two-stage Full-Pool节点、边、双语fallback与`.mmd`语义，Report只把同一语义渲染为deterministic inline SVG。candidate继承输入的validation/nondeployable分类，不构成v13 release或canonical cutover授权。
+从 independently closed two-stage realized source 与既有 Historical 1,000-User candidate 形成的非部署展示产物。当前 Full-Pool headline、总体/Message/Segment/Segment × Message 九格、batch trajectory、feedback与trace只投影 realized facts；单次 `user × message` exposure是唯一Primary engagement单位，Exposure包含realized ignore。Mechanism Presentation Module继续唯一拥有two-stage Full-Pool节点、边、双语fallback与`.mmd`语义，Report只把同一语义渲染为deterministic inline SVG。candidate保持`production_deploy_eligible=false`并保留输入source classification；validation candidate不能被改标签或直接晋升，formal candidate也只有经过Release v13独立closure后才成为production presentation。
+
+### Full-Pool Two-Stage Formal Realized Source
+
+`FullPoolTwoStageReplay.run_and_close_formal(...)`只接受persisted consumer重新证明为production-eligible、formal-live且具有production topology的Strict Source-v4。它与既有validation入口共享realization与streaming Implementation，但使用独立formal closure Interface，写出`formal_two_stage_realized` classification、完整upstream live Provider lineage与`production_deploy_eligible=true`；realization阶段仍固定为零Provider调用。Validation source不能通过字段重写、复制声明或caller注入变成Formal source。
+
+### Release v13
+
+只接受exact Full-Pool Two-Stage Formal Realized Source、同源evidence/projection、Report验证的nondeployable formal candidate、Historical Formal/study artifacts及显式v12 baseline的immutable production release。Release Module唯一拥有`abm-report-release-contract-v13`、purpose `full_pool_two_stage_realization_formal_research`、status `persisted_two_stage_realized_full_pool_formal_run`、composite Provider accounting、promotion eligibility、inventory与pre-deployment readiness。Report Module只拥有deterministic production HTML bytes；standalone validator通过Release Interface从persisted bytes重建facts。Release v13不记录public acceptance，也不授予deployment或canonical cutover。
 
 ### LLM-Visible Decision Context
 

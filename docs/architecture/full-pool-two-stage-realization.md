@@ -1,6 +1,6 @@
 # Full-Pool Two-Stage Engagement Realization
 
-本文描述当前可执行的 Full-Pool 两阶段 validation replay。它在已关闭的 Strict Source-v4 Provider Judgment 与 ABM feedback commit 之间加入 `Engagement Realization Module`，但不修改旧 Source-v4、`EngageDecision`、v12 release 或 canonical endpoint。当前输出固定为 nonproduction、nondeployable，也不授权 Provider、Report promotion 或部署。
+本文描述 Full-Pool 两阶段 replay、realized presentation 与 Release v13。它在已关闭的 Strict Source-v4 Provider Judgment 与 ABM feedback commit 之间加入 `Engagement Realization Module`，但不修改旧 Source-v4、`EngageDecision`、v12 release 或 canonical endpoint。既有validation入口继续只生成nonproduction、nondeployable输出；独立formal closure只消费persisted consumer重新证明的production Source-v4。任何本地source、candidate或release都不自行授权Provider、部署或canonical cutover。
 
 ## Module 与 Interface
 
@@ -82,4 +82,25 @@ evidence 分开保存 upstream Provider accounting 与 realization accounting。
 - users/pairs/candidates/terminals/projection/action counts不能互相重算；
 - extra/missing file、symlink、path escape、artifact hash或canonical JSONL漂移。
 
-Replay 在开始和发布后重复 inventory immutable Source-v4；任何 upstream bytes变化都会失败。当前 validation source、evidence 和 projection始终声明 `production_deploy_eligible=false`，且不调用真实 Provider、live API、SSH 或 canonical deployment。
+Replay 在开始和发布后重复 inventory immutable Source-v4；任何 upstream bytes变化都会失败。Validation source、evidence 和 projection始终声明 `production_deploy_eligible=false`，且不调用真实 Provider、live API、SSH 或 canonical deployment。
+
+## Formal closure 与 Release v13
+
+`FullPoolTwoStageReplay`保留原`run_and_close(request)` validation Interface，并新增语义独立的`run_and_close_formal(request)`。Formal入口没有mode矩阵或caller-supplied claims；它只在Source-v4 persisted facts同时闭合`profile=production`、production topology、formal-live accounting、非零upstream external requests与`production_deploy_eligible=true`时运行。输出继续使用同一realized source/evidence/projection schema，但classification固定为`formal_two_stage_realized`，source identity通过独立closure profile与artifact bytes区分；validation bytes与行为保持不变。
+
+Report Presentation Interface可以从formal realized source生成仍为nondeployable的source-bound candidate，并通过独立production materialization把Release批准的release ID与contract schema投影到deterministic HTML。Report会重新闭合source、Historical Formal/study/candidate、trace、两阶段机制与页面bytes；它不决定purpose、sampling status、Provider accounting或promotion eligibility。Validation candidate不能作为formal candidate使用，也不能通过替换DOM marker直接晋升。
+
+Release Module唯一拥有：
+
+- schema `abm-report-release-contract-v13`；
+- purpose `full_pool_two_stage_realization_formal_research`；
+- sampling status `persisted_two_stage_realized_full_pool_formal_run`；
+- upstream live Provider与realization zero-call的composite accounting；
+- realized source/evidence/projection、presentation、Historical artifacts、v12 baseline、mechanism、downloads与physical inventory closure；
+- 只含部署前immutable facts的`full-pool-v13-release-readiness-v1`。
+
+Promotion只接收显式source path/hash/identity、Historical roots、candidate、v12 release/contract、release ID与新destination。全部输入必须为repository内real path、互不重叠且在写出前后hash snapshot一致。Materialization先exact复制candidate，再由Report提供production HTML，加入canonical JSON evidence与manifest，在staging内验证missing/extra/symlink/non-regular/hash/identity后才原子安装release与contract；round-trip失败会删除二者。
+
+Package validator与standalone CLI都dispatch到同一Release v13 validator。Validator重新读取formal realized source与upstream Source-v4、复算accounting/metrics/projection、验证Report production bytes、Historical与v12 snapshots、两阶段mechanism、downloads、release identity和完整artifact hashes，不信任caller summary。顶层`live_api_triggered=true`表达复合Formal继承upstream live evidence；同时独立保留`realization_provider_calls=0`与`realization_live_api_triggered=false`，不会把整个研究误报为zero-Provider。
+
+Release readiness固定声明`operational_authorization_required=true`、`deployment_authorized=false`、`canonical_deployment_triggered=false`和`public_acceptance_recorded=false`。Operational authorization、remote candidate health、atomic `current`切换、public acceptance与rollback仍由后续Deployment Module拥有，不能反向写入immutable v13 release。

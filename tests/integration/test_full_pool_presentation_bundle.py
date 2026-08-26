@@ -3,7 +3,10 @@ from __future__ import annotations
 import hashlib
 import json
 import shutil
+from collections.abc import Mapping
+from dataclasses import replace
 from pathlib import Path
+from typing import cast
 
 import pytest
 
@@ -83,6 +86,70 @@ def _realized_full_pool_source(root: Path) -> tuple[Path, str]:
     upstream, manifest_sha256, source_identity = _source_v4(root / "upstream")
     output = root / "realized-source"
     result = FullPoolTwoStageReplay().run_and_close(
+        FullPoolTwoStageReplayRequest(
+            source_root=upstream,
+            source_manifest_sha256=manifest_sha256,
+            source_identity=source_identity,
+            output_dir=output,
+        )
+    )
+    return output, result.manifest_sha256
+
+
+def _formal_realized_full_pool_source(
+    root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> tuple[Path, str]:
+    import llm_abm_sim.full_pool_two_stage_replay as replay_module
+    from llm_abm_sim.full_pool_source_v4 import read_closed_strict_full_pool_source
+
+    upstream, manifest_sha256, source_identity = _source_v4(root / "upstream")
+    closed = read_closed_strict_full_pool_source(
+        upstream,
+        manifest_sha256=manifest_sha256,
+    )
+    provider_accounting = dict(
+        cast(Mapping[str, object], closed.manifest["provider_accounting"])
+    )
+    provider_accounting["external_request_invocations"] = closed.facts.logical_pairs
+    formal_closed = replace(
+        closed,
+        manifest={**closed.manifest, "provider_accounting": provider_accounting},
+        facts=replace(
+            closed.facts,
+            profile="production",
+            external_request_invocations=closed.facts.logical_pairs,
+            production_topology=True,
+            production_deploy_eligible=True,
+        ),
+        aggregates={
+            **closed.aggregates,
+            "evidence_profile": "formal_live",
+            "production_deploy_eligible": True,
+        },
+    )
+    monkeypatch.setattr(
+        replay_module,
+        "read_closed_strict_full_pool_source",
+        lambda *_args, **_kwargs: formal_closed,
+    )
+    monkeypatch.setattr(
+        replay_module,
+        "CONCURRENT_MESSAGE_FULL_POOL_PRODUCTION_SAMPLE_SIZE",
+        closed.facts.distinct_users,
+    )
+    monkeypatch.setattr(
+        replay_module,
+        "CONCURRENT_MESSAGE_FULL_POOL_PRODUCTION_DELIVERY_CAPACITY",
+        closed.contract.per_message_capacity,
+    )
+    monkeypatch.setattr(
+        replay_module,
+        "CONCURRENT_MESSAGE_FULL_POOL_PRODUCTION_HORIZON",
+        closed.facts.committed_batches,
+    )
+    output = root / "formal-realized-source"
+    result = FullPoolTwoStageReplay().run_and_close_formal(
         FullPoolTwoStageReplayRequest(
             source_root=upstream,
             source_manifest_sha256=manifest_sha256,
@@ -209,6 +276,98 @@ def test_report_interface_composes_a_closed_non_promotable_full_pool_bundle(tmp_
         full_pool_manifest_sha256=full_pool_manifest_sha256,
         historical_candidate_dir=historical_candidate,
     )
+
+
+def test_report_interface_composes_a_formal_two_stage_candidate_without_relabelling_it(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    realized_source, realized_manifest_sha256 = _formal_realized_full_pool_source(
+        tmp_path / "formal-realized",
+        monkeypatch,
+    )
+    historical_formal, historical_study, historical_candidate = _historical_candidate(
+        tmp_path / "formal-history"
+    )
+    destination = tmp_path / "formal-realized-candidate"
+
+    created = report_module._REPORT_PRESENTATION.compose_full_pool_presentation_bundle(
+        full_pool_source_root=realized_source,
+        full_pool_manifest_sha256=realized_manifest_sha256,
+        historical_formal_root=historical_formal,
+        historical_study_root=historical_study,
+        historical_candidate_dir=historical_candidate,
+        destination_dir=destination,
+    )
+
+    assert created == destination.resolve()
+    report_html = (created / "report.html").read_text(encoding="utf-8")
+    assert 'data-source-classification="formal_two_stage_realized"' in report_html
+    assert 'data-production-deploy-eligible="false"' in report_html
+    assert 'name="abm-release-contract"' not in report_html
+
+
+def test_report_interface_owns_deterministic_v13_production_html(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    realized_source, realized_manifest_sha256 = _formal_realized_full_pool_source(
+        tmp_path / "production-realized",
+        monkeypatch,
+    )
+    historical_formal, historical_study, historical_candidate = _historical_candidate(
+        tmp_path / "production-history"
+    )
+    candidate = report_module._REPORT_PRESENTATION.compose_full_pool_presentation_bundle(
+        full_pool_source_root=realized_source,
+        full_pool_manifest_sha256=realized_manifest_sha256,
+        historical_formal_root=historical_formal,
+        historical_study_root=historical_study,
+        historical_candidate_dir=historical_candidate,
+        destination_dir=tmp_path / "production-candidate",
+    )
+    candidate_before = _snapshot(candidate)
+    source_identity = json.loads(
+        (realized_source / "manifest.json").read_text(encoding="utf-8")
+    )["source_identity"]
+    stage_facts = report_module._FullPoolTwoStageProductionPresentationFacts(
+        release_id="formal-two-stage-v13",
+        release_contract_schema="abm-report-release-contract-v13",
+        source_identity=source_identity,
+        source_manifest_sha256=realized_manifest_sha256,
+    )
+
+    production_html = report_module._REPORT_PRESENTATION.materialize_full_pool_two_stage_production(
+        presentation_bundle_dir=candidate,
+        full_pool_source_root=realized_source,
+        full_pool_manifest_sha256=realized_manifest_sha256,
+        historical_formal_root=historical_formal,
+        historical_study_root=historical_study,
+        stage_facts=stage_facts,
+    )
+    report_module._REPORT_PRESENTATION.validate_full_pool_two_stage_production(
+        production_html,
+        presentation_bundle_dir=candidate,
+        full_pool_source_root=realized_source,
+        full_pool_manifest_sha256=realized_manifest_sha256,
+        historical_formal_root=historical_formal,
+        historical_study_root=historical_study,
+        stage_facts=stage_facts,
+    )
+
+    assert _snapshot(candidate) == candidate_before
+    rendered = production_html.decode("utf-8")
+    assert 'data-production-deploy-eligible="true"' in rendered
+    assert '<meta name="abm-release-id" content="formal-two-stage-v13">' in rendered
+    assert (
+        '<meta name="abm-release-contract" content="abm-report-release-contract-v13">'
+        in rendered
+    )
+    assert 'source_production_deploy_eligible=true' in rendered
+    assert 'presentation_release_production_deploy_eligible=true' in rendered
+    assert "Formal Research Release v13" in rendered
+    assert "Two-Stage Validation" not in rendered
+    assert 'data-canonical-deployment-triggered="false"' in rendered
 
 
 def test_report_interface_composes_realized_facts_and_two_stage_mechanism(

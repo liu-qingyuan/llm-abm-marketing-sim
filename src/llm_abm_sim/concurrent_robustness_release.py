@@ -28,6 +28,7 @@ from .concurrent_robustness_evidence import (
 from .concurrent_robustness_report import (
     _REPORT_PRESENTATION,
     _FullPoolProductionPresentationFacts,
+    _FullPoolTwoStageProductionPresentationFacts,
     _PresentationBundle,
     _ProductionPresentationFacts,
 )
@@ -49,10 +50,18 @@ from .full_pool_segmented_continuation import (
 from .full_pool_source_v4 import (
     STRICT_FULL_POOL_RESULT_PROJECTION_SCHEMA_V1,
     STRICT_FULL_POOL_RESULT_PROJECTION_SCHEMA_V2,
+    _ClosedStrictFullPoolSource,
+    read_closed_strict_full_pool_source,
 )
 from .full_pool_strict_operator import (
     StrictFreshExecutionManifestFacts,
     validate_strict_fresh_execution_manifest,
+)
+from .full_pool_two_stage_replay import (
+    FULL_POOL_TWO_STAGE_FORMAL_CLASSIFICATION,
+    FULL_POOL_TWO_STAGE_SOURCE_SCHEMA,
+    ClosedFullPoolTwoStageSource,
+    read_closed_full_pool_two_stage_source,
 )
 from .providers.pi_subscription import PI_SUBSCRIPTION_MODEL_ALIASES
 
@@ -66,6 +75,7 @@ ROBUSTNESS_RELEASE_CONTRACT_SCHEMA_V9 = "abm-report-release-contract-v9"
 ROBUSTNESS_RELEASE_CONTRACT_SCHEMA_V10 = "abm-report-release-contract-v10"
 ROBUSTNESS_RELEASE_CONTRACT_SCHEMA_V11 = "abm-report-release-contract-v11"
 ROBUSTNESS_RELEASE_CONTRACT_SCHEMA_V12 = "abm-report-release-contract-v12"
+ROBUSTNESS_RELEASE_CONTRACT_SCHEMA_V13 = "abm-report-release-contract-v13"
 ROBUSTNESS_RELEASE_CONTRACT_SCHEMA = ROBUSTNESS_RELEASE_CONTRACT_SCHEMA_V5
 ROBUSTNESS_PRESENTATION_CLOSURE_CONTRACT = "presentation_closure_contract.json"
 FULL_POOL_PRODUCTION_MANIFEST_SCHEMA = "full-pool-production-release-manifest-v1"
@@ -75,6 +85,19 @@ FULL_POOL_PRESENTATION_CLOSURE_ARTIFACT = "full_pool_presentation_closure.json"
 FULL_POOL_CANDIDATE_MANIFEST_ARTIFACT = "full_pool_candidate_artifact_manifest.json"
 FULL_POOL_CANDIDATE_EVIDENCE_ARTIFACT = "full_pool_candidate_release_evidence.json"
 FULL_POOL_PRODUCTION_EVIDENCE_ARTIFACT = "full_pool_production_release_evidence.json"
+FULL_POOL_V13_PRODUCTION_MANIFEST_SCHEMA = (
+    "full-pool-two-stage-production-release-manifest-v1"
+)
+FULL_POOL_V13_PRODUCTION_EVIDENCE_SCHEMA = (
+    "full-pool-two-stage-production-release-evidence-v1"
+)
+FULL_POOL_V13_PRODUCTION_EVIDENCE_ARTIFACT = (
+    "full_pool_two_stage_production_release_evidence.json"
+)
+FULL_POOL_V13_RELEASE_PURPOSE = "full_pool_two_stage_realization_formal_research"
+FULL_POOL_V13_SAMPLING_STATUS = "persisted_two_stage_realized_full_pool_formal_run"
+FULL_POOL_V13_READINESS_SCHEMA = "full-pool-v13-release-readiness-v1"
+FULL_POOL_V13_ACCOUNTING_SCHEMA = "full-pool-two-stage-provider-accounting-v1"
 ROBUSTNESS_CANONICAL_ENDPOINT = "https://abm.q1ngyuan.top/"
 ROBUSTNESS_REPORT_PAYLOAD = "concurrent_robustness_report_payload.json"
 ROBUSTNESS_CANDIDATE_RELEASE_EVIDENCE = "release_evidence.json"
@@ -212,6 +235,38 @@ _RELEASE_CONTRACT_V11_FIELDS = _RELEASE_CONTRACT_V8_FIELDS | {
     "physical_snapshot_identity_sha256",
 }
 _RELEASE_CONTRACT_V12_FIELDS = _RELEASE_CONTRACT_V11_FIELDS
+_RELEASE_CONTRACT_V13_FIELDS = frozenset(
+    {
+        "schema_version",
+        "release_purpose",
+        "sampling_status",
+        "release_id",
+        "canonical_endpoint",
+        "source_directory",
+        "live_api_triggered",
+        "formal_research_evidence",
+        "realization_provider_calls",
+        "realization_live_api_triggered",
+        "implementation_commit",
+        "release_manifest_schema_version",
+        "release_evidence_schema_version",
+        "realized_source",
+        "upstream_source",
+        "presentation_candidate",
+        "historical_inputs",
+        "protected_v12",
+        "realization_policy",
+        "composite_provider_accounting",
+        "realized_metrics",
+        "mechanism_inventory",
+        "approved_downloads",
+        "release_readiness",
+        "release_identity_sha256",
+        "physical_snapshot_identity_sha256",
+        "production_deploy_eligible",
+        "artifact_sha256",
+    }
+)
 _SEGMENTED_SOURCE_FACT_FIELDS = frozenset(
     {
         "source_schema_version",
@@ -397,6 +452,7 @@ _RELEASE_CONTRACT_FIELDS = {
     ROBUSTNESS_RELEASE_CONTRACT_SCHEMA_V10: _RELEASE_CONTRACT_V10_FIELDS,
     ROBUSTNESS_RELEASE_CONTRACT_SCHEMA_V11: _RELEASE_CONTRACT_V11_FIELDS,
     ROBUSTNESS_RELEASE_CONTRACT_SCHEMA_V12: _RELEASE_CONTRACT_V12_FIELDS,
+    ROBUSTNESS_RELEASE_CONTRACT_SCHEMA_V13: _RELEASE_CONTRACT_V13_FIELDS,
 }
 _V7_MERMAID_INVENTORY = frozenset(_evidence._SEMANTIC_MERMAID_DOWNLOADS.values())
 _V8_MERMAID_INVENTORY = frozenset(
@@ -525,6 +581,30 @@ class ConcurrentRobustnessProductionRelease:
     release_identity_sha256: str
 
 
+@dataclass(frozen=True)
+class _FullPoolV13Closure:
+    source: ClosedFullPoolTwoStageSource
+    upstream: _ClosedStrictFullPoolSource
+    historical_formal: Path
+    historical_study: Path
+    candidate: Path
+    protected_v12_release: Path
+    protected_v12_contract: Path
+    production_html: bytes
+    realized_source: Mapping[str, object]
+    upstream_source: Mapping[str, object]
+    presentation_candidate: Mapping[str, object]
+    historical_inputs: Mapping[str, object]
+    protected_v12: Mapping[str, object]
+    realization_policy: Mapping[str, object]
+    composite_provider_accounting: Mapping[str, object]
+    realized_metrics: Mapping[str, object]
+    mechanism_inventory: Mapping[str, str]
+    approved_downloads: Mapping[str, str]
+    release_readiness: Mapping[str, object]
+    snapshots: Mapping[Path, Mapping[str, str]]
+
+
 def promote_concurrent_robustness_release(
     *,
     repo_root: str | Path,
@@ -539,6 +619,9 @@ def promote_concurrent_robustness_release(
     presentation_closure_path: str | Path | None = None,
     full_pool_source_root: str | Path | None = None,
     full_pool_manifest_sha256: str | None = None,
+    full_pool_source_identity: str | None = None,
+    protected_v12_release_root: str | Path | None = None,
+    protected_v12_contract_path: str | Path | None = None,
     implementation_commit: str | None = None,
     automation_execution_manifest_path: str | Path | None = None,
     fresh_execution_manifest_path: str | Path | None = None,
@@ -549,6 +632,9 @@ def promote_concurrent_robustness_release(
         full_pool_source_root,
         full_pool_manifest_sha256,
         implementation_commit,
+        full_pool_source_identity,
+        protected_v12_release_root,
+        protected_v12_contract_path,
         automation_execution_manifest_path,
         fresh_execution_manifest_path,
         _closed_full_pool_formal_facts,
@@ -556,12 +642,11 @@ def promote_concurrent_robustness_release(
     if any(value is not None for value in full_pool_values):
         if (
             any(value is None for value in full_pool_values[:3])
-            or presentation_closure_path is None
             or workspace_root is not None
             or execution_contract_path is not None
         ):
             raise ConcurrentRobustnessReleaseError(
-                "versioned Full-Pool promotion requires only explicit source, historical, candidate, closure, and release inputs"
+                "versioned Full-Pool promotion requires only explicit source, historical, candidate, and release inputs"
             )
         assert full_pool_source_root is not None
         assert full_pool_manifest_sha256 is not None
@@ -575,6 +660,35 @@ def promote_concurrent_robustness_release(
             raise ConcurrentRobustnessReleaseError(
                 "Full-Pool source manifest cannot be version-dispatched"
             ) from exc
+        if source_schema == FULL_POOL_TWO_STAGE_SOURCE_SCHEMA:
+            return _promote_full_pool_v13_release(
+                repo_root=repo_root,
+                full_pool_source_root=full_pool_source_root,
+                full_pool_manifest_sha256=full_pool_manifest_sha256,
+                full_pool_source_identity=full_pool_source_identity,
+                historical_formal_root=formal_root,
+                historical_study_root=study_root,
+                candidate_dir=candidate_dir,
+                protected_v12_release_root=protected_v12_release_root,
+                protected_v12_contract_path=protected_v12_contract_path,
+                destination_dir=destination_dir,
+                release_contract_path=release_contract_path,
+                release_id=release_id,
+                implementation_commit=implementation_commit,
+                presentation_closure_path=presentation_closure_path,
+                automation_execution_manifest_path=automation_execution_manifest_path,
+                fresh_execution_manifest_path=fresh_execution_manifest_path,
+                closed_full_pool_formal_facts=_closed_full_pool_formal_facts,
+            )
+        if (
+            presentation_closure_path is None
+            or full_pool_source_identity is not None
+            or protected_v12_release_root is not None
+            or protected_v12_contract_path is not None
+        ):
+            raise ConcurrentRobustnessReleaseError(
+                "v8-v12 Full-Pool promotion requires its historical closure inputs and rejects v13-only identities"
+            )
         if source_schema == "full-pool-segmented-source-v4":
             if (
                 _closed_full_pool_formal_facts is not None
@@ -2481,6 +2595,855 @@ def _promote_full_pool_v10_release(
     )
 
 
+def _v13_inventory_identity(path: Path) -> str:
+    return _physical_snapshot_identity(_flat_file_hashes(path))
+
+
+def _v13_composite_provider_accounting(
+    source: ClosedFullPoolTwoStageSource,
+    upstream: _ClosedStrictFullPoolSource,
+) -> dict[str, object]:
+    accounting = _object_mapping(source.manifest.get("accounting"), "v13 source accounting")
+    if set(accounting) != {"upstream", "realization", "composite_zero_provider_formal"}:
+        raise ConcurrentRobustnessReleaseError("v13 source accounting fields are crossed")
+    upstream_accounting = _object_mapping(accounting.get("upstream"), "v13 upstream accounting")
+    realization = _object_mapping(accounting.get("realization"), "v13 realization accounting")
+    expected_upstream = {
+        "logical_judgments": upstream.facts.logical_pairs,
+        "provider_responses": upstream.facts.provider_responses,
+        "successful_decisions": upstream.facts.successful_decisions,
+        "external_request_invocations": upstream.facts.external_request_invocations,
+        "requested_model": upstream.contract.formal_execution.requested_model,
+        "observed_model_counts": dict(upstream.facts.observed_model_counts),
+        "usage_complete_response_count": upstream.facts.usage_complete_response_count,
+        "usage_missing_response_count": upstream.facts.usage_missing_response_count,
+        "usage_malformed_response_count": upstream.facts.usage_malformed_response_count,
+        "settled_actual_attempts": upstream.facts.settled_actual_attempts,
+        "dispatched_without_settlement_uncertainty": (
+            upstream.facts.dispatched_without_settlement_uncertainty
+        ),
+        "charged_physical_attempts": upstream.facts.charged_physical_attempts,
+        "physical_cap": upstream.facts.physical_cap,
+        "original_dispatch_count": upstream.facts.original_dispatch_count,
+        "reconciliation_dispatch_count": upstream.facts.reconciliation_dispatch_count,
+        "maximum_dispatches_for_one_pair": upstream.facts.maximum_dispatches_for_one_pair,
+        "maximum_request_invocations_for_one_dispatch": (
+            upstream.facts.maximum_request_invocations_for_one_dispatch
+        ),
+        "evidence_profile": "formal_live",
+        "formal_research_evidence": True,
+        "production_deploy_eligible": True,
+        "live_api_triggered": True,
+    }
+    for field, expected in expected_upstream.items():
+        if upstream_accounting.get(field) != expected:
+            raise ConcurrentRobustnessReleaseError(
+                f"v13 persisted upstream accounting is crossed: {field}"
+            )
+    provider_accounting = _object_mapping(
+        upstream_accounting.get("provider_accounting"),
+        "v13 persisted Provider accounting",
+    )
+    if (
+        realization != {"live_api_triggered": False, "provider_calls": 0}
+        or accounting.get("composite_zero_provider_formal") is not False
+        or provider_accounting.get("external_request_invocations")
+        != upstream.facts.external_request_invocations
+    ):
+        raise ConcurrentRobustnessReleaseError(
+            "v13 realization or composite Provider accounting is crossed"
+        )
+    return {
+        "schema_version": FULL_POOL_V13_ACCOUNTING_SCHEMA,
+        "upstream_live_api_triggered": True,
+        "upstream_formal_research_evidence": True,
+        "upstream_production_deploy_eligible": True,
+        "upstream_requested_model": expected_upstream["requested_model"],
+        "upstream_observed_model_counts": dict(
+            sorted(upstream.facts.observed_model_counts.items())
+        ),
+        "upstream_logical_judgments": upstream.facts.logical_pairs,
+        "upstream_provider_responses": upstream.facts.provider_responses,
+        "upstream_successful_decisions": upstream.facts.successful_decisions,
+        "upstream_external_request_invocations": (
+            upstream.facts.external_request_invocations
+        ),
+        "upstream_usage_complete_response_count": (
+            upstream.facts.usage_complete_response_count
+        ),
+        "upstream_usage_missing_response_count": (
+            upstream.facts.usage_missing_response_count
+        ),
+        "upstream_usage_malformed_response_count": (
+            upstream.facts.usage_malformed_response_count
+        ),
+        "upstream_settled_actual_attempts": upstream.facts.settled_actual_attempts,
+        "upstream_dispatched_without_settlement_uncertainty": (
+            upstream.facts.dispatched_without_settlement_uncertainty
+        ),
+        "upstream_charged_physical_attempts": upstream.facts.charged_physical_attempts,
+        "upstream_physical_cap": upstream.facts.physical_cap,
+        "upstream_provider_accounting": provider_accounting,
+        "realization_provider_calls": 0,
+        "realization_live_api_triggered": False,
+        "composite_live_api_triggered": True,
+        "composite_zero_provider_formal": False,
+    }
+
+
+def _close_full_pool_v13_inputs(
+    *,
+    root: Path,
+    source: Path,
+    source_manifest_sha256: str,
+    source_identity: str,
+    historical_formal: Path,
+    historical_study: Path,
+    candidate: Path,
+    protected_v12_release: Path,
+    protected_v12_contract: Path,
+    release_id: str,
+) -> _FullPoolV13Closure:
+    protected_contract_document = _json_object(protected_v12_contract)
+    if protected_contract_document.get("schema_version") != ROBUSTNESS_RELEASE_CONTRACT_SCHEMA_V12:
+        raise ConcurrentRobustnessReleaseError("v13 baseline contract is not v12")
+    upstream_ref_from_manifest = _object_mapping(
+        _json_object(source / "manifest.json").get("upstream_source"),
+        "v13 upstream source reference",
+    )
+    upstream_path = _repo_directory(
+        root,
+        Path(_string(upstream_ref_from_manifest.get("source_root"), "v13 upstream source path")),
+        "v13 upstream Source-v4",
+    )
+    snapshots = _v8_input_snapshots(
+        (
+            source,
+            upstream_path,
+            historical_formal,
+            historical_study,
+            candidate,
+            protected_v12_release,
+            protected_v12_contract,
+        )
+    )
+    try:
+        closed = read_closed_full_pool_two_stage_source(
+            source,
+            manifest_sha256=source_manifest_sha256,
+        )
+    except (FileNotFoundError, OSError, TypeError, ValueError) as exc:
+        raise ConcurrentRobustnessReleaseError(
+            "v13 realized source failed independent closure"
+        ) from exc
+    if (
+        closed.source_identity != source_identity
+        or closed.classification != FULL_POOL_TWO_STAGE_FORMAL_CLASSIFICATION
+        or closed.formal_research_evidence is not True
+        or closed.production_deploy_eligible is not True
+    ):
+        raise ConcurrentRobustnessReleaseError(
+            "v13 production promotion rejects validation, crossed, or non-formal realized sources"
+        )
+    upstream_ref = _object_mapping(closed.manifest.get("upstream_source"), "v13 upstream source")
+    if upstream_ref != upstream_ref_from_manifest:
+        raise ConcurrentRobustnessReleaseError("v13 upstream source reference drifted during read")
+    try:
+        upstream = read_closed_strict_full_pool_source(
+            upstream_path,
+            manifest_sha256=_string(
+                upstream_ref.get("manifest_sha256"),
+                "v13 upstream manifest SHA-256",
+            ),
+        )
+    except (FileNotFoundError, OSError, TypeError, ValueError) as exc:
+        raise ConcurrentRobustnessReleaseError(
+            "v13 upstream Source-v4 failed persisted closure"
+        ) from exc
+    if (
+        upstream.source_identity != upstream_ref.get("source_identity")
+        or upstream.facts.source_hash != upstream_ref.get("source_hash")
+        or upstream.facts.profile != "production"
+        or upstream.facts.production_topology is not True
+        or upstream.facts.production_deploy_eligible is not True
+        or upstream.facts.external_request_invocations <= 0
+    ):
+        raise ConcurrentRobustnessReleaseError(
+            "v13 upstream Source-v4 identity, topology, or Formal eligibility is crossed"
+        )
+    expected_v12_lineage = {
+        "full_pool_source_directory": upstream_path.relative_to(root).as_posix(),
+        "full_pool_source_identity": upstream.source_identity,
+        "full_pool_source_manifest_sha256": upstream.manifest_sha256,
+        "full_pool_source_hash": upstream.facts.source_hash,
+        "historical_formal_directory": historical_formal.relative_to(root).as_posix(),
+        "historical_study_directory": historical_study.relative_to(root).as_posix(),
+        "production_deploy_eligible": True,
+    }
+    if any(
+        protected_contract_document.get(field) != expected
+        for field, expected in expected_v12_lineage.items()
+    ):
+        raise ConcurrentRobustnessReleaseError(
+            "v13 source or Historical inputs differ from the protected v12 lineage"
+        )
+    composite_accounting = _v13_composite_provider_accounting(closed, upstream)
+
+    stage_facts = _FullPoolTwoStageProductionPresentationFacts(
+        release_id=release_id,
+        release_contract_schema=ROBUSTNESS_RELEASE_CONTRACT_SCHEMA_V13,
+        source_identity=closed.source_identity,
+        source_manifest_sha256=closed.manifest_sha256,
+    )
+    try:
+        production_html = _REPORT_PRESENTATION.materialize_full_pool_two_stage_production(
+            presentation_bundle_dir=candidate,
+            full_pool_source_root=source,
+            full_pool_manifest_sha256=source_manifest_sha256,
+            historical_formal_root=historical_formal,
+            historical_study_root=historical_study,
+            stage_facts=stage_facts,
+        )
+    except (OSError, TypeError, ValueError) as exc:
+        raise ConcurrentRobustnessReleaseError(
+            "v13 Report production materialization failed closure"
+        ) from exc
+
+    v12_facts = _validate_full_pool_v12_production_release(
+        repo_root=root,
+        contract_document=protected_contract_document,
+        source_dir=protected_v12_release,
+    )
+    if (
+        v12_facts.get("schema_version") != ROBUSTNESS_RELEASE_CONTRACT_SCHEMA_V12
+        or v12_facts.get("production_deploy_eligible") is not True
+    ):
+        raise ConcurrentRobustnessReleaseError("v13 protected v12 baseline is not deployable")
+
+    source_evidence = _object_mapping(closed.manifest.get("evidence"), "v13 source evidence")
+    source_projection = _object_mapping(closed.manifest.get("projection"), "v13 source projection")
+    realized_source = {
+        "directory": source.relative_to(root).as_posix(),
+        "schema_version": FULL_POOL_TWO_STAGE_SOURCE_SCHEMA,
+        "classification": closed.classification,
+        "source_identity": closed.source_identity,
+        "manifest_sha256": closed.manifest_sha256,
+        "source_hash": closed.manifest.get("source_hash"),
+        "evidence_schema_version": source_evidence.get("schema_version"),
+        "evidence_identity": source_evidence.get("identity"),
+        "evidence_sha256": source_evidence.get("sha256"),
+        "projection_schema_version": source_projection.get("schema_version"),
+        "projection_identity": source_projection.get("identity"),
+        "projection_json_sha256": source_projection.get("json_sha256"),
+        "projection_csv_sha256": source_projection.get("csv_sha256"),
+        "formal_research_evidence": True,
+        "production_deploy_eligible": True,
+    }
+    upstream_source = {
+        "directory": upstream_path.relative_to(root).as_posix(),
+        "schema_version": upstream.manifest.get("schema_version"),
+        "source_identity": upstream.source_identity,
+        "manifest_sha256": upstream.manifest_sha256,
+        "source_hash": upstream.facts.source_hash,
+        "profile": upstream.facts.profile,
+        "production_deploy_eligible": True,
+    }
+    candidate_hashes = _flat_file_hashes(candidate)
+    historical_candidate = candidate / _HISTORICAL_DIR
+    trace_index_path = candidate / "trace" / "full-pool-trace-index.json"
+    presentation_candidate = {
+        "directory": candidate.relative_to(root).as_posix(),
+        "inventory_identity_sha256": _physical_snapshot_identity(candidate_hashes),
+        "report_sha256": candidate_hashes[CONCURRENT_MESSAGE_REPORT_HTML],
+        "trace_index_sha256": _sha256_file(trace_index_path),
+        "source_copy_inventory_identity_sha256": _v13_inventory_identity(
+            candidate / "full-pool-source"
+        ),
+        "historical_inventory_identity_sha256": _v13_inventory_identity(
+            historical_candidate
+        ),
+        "production_deploy_eligible": False,
+    }
+    historical_inputs = {
+        "formal_directory": historical_formal.relative_to(root).as_posix(),
+        "formal_inventory_identity_sha256": _v13_inventory_identity(historical_formal),
+        "study_directory": historical_study.relative_to(root).as_posix(),
+        "study_inventory_identity_sha256": _v13_inventory_identity(historical_study),
+        "candidate_directory": historical_candidate.relative_to(root).as_posix(),
+        "candidate_inventory_identity_sha256": _v13_inventory_identity(
+            historical_candidate
+        ),
+    }
+    protected_v12 = {
+        "release_directory": protected_v12_release.relative_to(root).as_posix(),
+        "release_inventory_identity_sha256": _v13_inventory_identity(
+            protected_v12_release
+        ),
+        "contract_path": protected_v12_contract.relative_to(root).as_posix(),
+        "contract_sha256": _sha256_file(protected_v12_contract),
+        "schema_version": ROBUSTNESS_RELEASE_CONTRACT_SCHEMA_V12,
+        "release_id": v12_facts.get("release_id"),
+        "report_sha256": v12_facts.get("report_sha256"),
+        "production_deploy_eligible": True,
+    }
+    counts = {key: closed.counts[key] for key in sorted(closed.counts)}
+    realized_metrics = {
+        "counts": counts,
+        "action_counts": _object_mapping(
+            closed.manifest.get("action_counts"),
+            "v13 realized action counts",
+        ),
+        "realization_status_counts": _object_mapping(
+            closed.manifest.get("realization_status_counts"),
+            "v13 realization status counts",
+        ),
+        "projection_row_count": len(closed.projection_rows),
+        "projection_total_exposure": closed.projection.get("total_exposure"),
+        "projection_rows_sha256": closed.projection.get("rows_sha256"),
+    }
+    mechanism_paths = {
+        path.relative_to(candidate).as_posix(): _sha256_file(path)
+        for path in sorted(candidate.rglob("*.mmd"))
+    }
+    if set(mechanism_paths) != _V8_MERMAID_INVENTORY:
+        raise ConcurrentRobustnessReleaseError(
+            "v13 mechanism inventory must contain the exact Full-Pool and Historical masters"
+        )
+    approved_downloads = {
+        "realized_source_manifest": "full-pool-source/manifest.json",
+        "realization_evidence": "full-pool-source/realization-evidence.json",
+        "realized_projection_json": "full-pool-source/realized-projection.json",
+        "realized_projection_csv": "full-pool-source/full-pool-realized-projection.csv",
+        "two_stage_mechanism": _FULL_POOL_MASTER,
+        "trace_index": "trace/full-pool-trace-index.json",
+    }
+    if (
+        len(set(approved_downloads.values())) != len(approved_downloads)
+        or any(relative not in candidate_hashes for relative in approved_downloads.values())
+    ):
+        raise ConcurrentRobustnessReleaseError("v13 approved download inventory is crossed")
+    release_readiness = {
+        "schema_version": FULL_POOL_V13_READINESS_SCHEMA,
+        "release_id": release_id,
+        "release_contract_schema": ROBUSTNESS_RELEASE_CONTRACT_SCHEMA_V13,
+        "realized_source_identity": closed.source_identity,
+        "canonical_endpoint": ROBUSTNESS_CANONICAL_ENDPOINT,
+        "provider_calls_during_promotion": 0,
+        "image_generation_triggered": False,
+        "canonical_deployment_triggered": False,
+        "operational_authorization_required": True,
+        "deployment_authorized": False,
+        "public_acceptance_recorded": False,
+    }
+    _assert_v8_input_snapshots(snapshots)
+    return _FullPoolV13Closure(
+        source=closed,
+        upstream=upstream,
+        historical_formal=historical_formal,
+        historical_study=historical_study,
+        candidate=candidate,
+        protected_v12_release=protected_v12_release,
+        protected_v12_contract=protected_v12_contract,
+        production_html=production_html,
+        realized_source=realized_source,
+        upstream_source=upstream_source,
+        presentation_candidate=presentation_candidate,
+        historical_inputs=historical_inputs,
+        protected_v12=protected_v12,
+        realization_policy=_object_mapping(
+            closed.manifest.get("realization_policy"),
+            "v13 realization policy",
+        ),
+        composite_provider_accounting=composite_accounting,
+        realized_metrics=realized_metrics,
+        mechanism_inventory=dict(sorted(mechanism_paths.items())),
+        approved_downloads=approved_downloads,
+        release_readiness=release_readiness,
+        snapshots=snapshots,
+    )
+
+
+def _v13_evidence_document(
+    closure: _FullPoolV13Closure,
+    *,
+    release_id: str,
+    implementation_commit: str,
+) -> dict[str, object]:
+    return {
+        "schema_version": FULL_POOL_V13_PRODUCTION_EVIDENCE_SCHEMA,
+        "release_purpose": FULL_POOL_V13_RELEASE_PURPOSE,
+        "sampling_status": FULL_POOL_V13_SAMPLING_STATUS,
+        "release_id": release_id,
+        "canonical_endpoint": ROBUSTNESS_CANONICAL_ENDPOINT,
+        "implementation_commit": implementation_commit,
+        "live_api_triggered": True,
+        "formal_research_evidence": True,
+        "realization_provider_calls": 0,
+        "realization_live_api_triggered": False,
+        "realized_source": dict(closure.realized_source),
+        "upstream_source": dict(closure.upstream_source),
+        "presentation_candidate": dict(closure.presentation_candidate),
+        "historical_inputs": dict(closure.historical_inputs),
+        "protected_v12": dict(closure.protected_v12),
+        "realization_policy": dict(closure.realization_policy),
+        "composite_provider_accounting": dict(
+            closure.composite_provider_accounting
+        ),
+        "realized_metrics": dict(closure.realized_metrics),
+        "mechanism_inventory": dict(closure.mechanism_inventory),
+        "approved_downloads": dict(closure.approved_downloads),
+        "release_readiness": dict(closure.release_readiness),
+        "production_deploy_eligible": True,
+    }
+
+
+def _v13_release_identity(
+    closure: _FullPoolV13Closure,
+    *,
+    release_id: str,
+    implementation_commit: str,
+    content_hashes: Mapping[str, str],
+) -> str:
+    return _sha256_bytes(
+        _json_bytes(
+            {
+                "schema_version": "full-pool-two-stage-release-identity-v1",
+                "release_id": release_id,
+                "implementation_commit": implementation_commit,
+                "realized_source": dict(closure.realized_source),
+                "upstream_source": dict(closure.upstream_source),
+                "presentation_candidate": dict(closure.presentation_candidate),
+                "historical_inputs": dict(closure.historical_inputs),
+                "protected_v12": dict(closure.protected_v12),
+                "realization_policy": dict(closure.realization_policy),
+                "composite_provider_accounting": dict(
+                    closure.composite_provider_accounting
+                ),
+                "realized_metrics": dict(closure.realized_metrics),
+                "mechanism_inventory": dict(closure.mechanism_inventory),
+                "approved_downloads": dict(closure.approved_downloads),
+                "release_readiness": dict(closure.release_readiness),
+                "artifact_sha256": dict(sorted(content_hashes.items())),
+            }
+        )
+    )
+
+
+def _v13_manifest_document(
+    release_root: Path,
+    closure: _FullPoolV13Closure,
+    *,
+    release_id: str,
+    implementation_commit: str,
+    content_hashes: Mapping[str, str],
+    release_identity: str,
+) -> dict[str, object]:
+    artifacts = [
+        {
+            "relative_path": relative,
+            "sha256": sha256,
+            "bytes": (release_root / relative).stat().st_size,
+        }
+        for relative, sha256 in sorted(content_hashes.items())
+    ]
+    return {
+        "schema_version": FULL_POOL_V13_PRODUCTION_MANIFEST_SCHEMA,
+        "release_type": FULL_POOL_V13_RELEASE_PURPOSE,
+        "release_contract_schema": ROBUSTNESS_RELEASE_CONTRACT_SCHEMA_V13,
+        "release_id": release_id,
+        "canonical_endpoint": ROBUSTNESS_CANONICAL_ENDPOINT,
+        "implementation_commit": implementation_commit,
+        "live_api_triggered": True,
+        "formal_research_evidence": True,
+        "realization_provider_calls": 0,
+        "realization_live_api_triggered": False,
+        "realized_source": dict(closure.realized_source),
+        "upstream_source": dict(closure.upstream_source),
+        "presentation_candidate": dict(closure.presentation_candidate),
+        "composite_provider_accounting": dict(
+            closure.composite_provider_accounting
+        ),
+        "realized_metrics": dict(closure.realized_metrics),
+        "mechanism_inventory": dict(closure.mechanism_inventory),
+        "approved_downloads": dict(closure.approved_downloads),
+        "release_readiness": dict(closure.release_readiness),
+        "production_evidence": {
+            "relative_path": FULL_POOL_V13_PRODUCTION_EVIDENCE_ARTIFACT,
+            "schema_version": FULL_POOL_V13_PRODUCTION_EVIDENCE_SCHEMA,
+            "sha256": content_hashes[FULL_POOL_V13_PRODUCTION_EVIDENCE_ARTIFACT],
+        },
+        "artifacts": artifacts,
+        "release_identity_sha256": release_identity,
+        "provider_calls_during_promotion": 0,
+        "production_deploy_eligible": True,
+    }
+
+
+def _validate_full_pool_v13_release_dir(
+    release_root: Path,
+    *,
+    closure: _FullPoolV13Closure,
+    release_id: str,
+    implementation_commit: str,
+    release_identity: str,
+) -> dict[str, str]:
+    hashes = _flat_file_hashes(release_root)
+    candidate_hashes = _flat_file_hashes(closure.candidate)
+    expected_paths = (
+        set(candidate_hashes)
+        | {
+            FULL_POOL_V13_PRODUCTION_EVIDENCE_ARTIFACT,
+            CONCURRENT_MESSAGE_ARTIFACT_MANIFEST_JSON,
+        }
+    )
+    if set(hashes) != expected_paths:
+        raise ConcurrentRobustnessReleaseError(
+            "v13 release inventory contains missing or extra files"
+        )
+    for relative, expected in candidate_hashes.items():
+        if relative == CONCURRENT_MESSAGE_REPORT_HTML:
+            continue
+        if hashes.get(relative) != expected:
+            raise ConcurrentRobustnessReleaseError(
+                "v13 release copied or mutated candidate artifacts"
+            )
+    if (release_root / CONCURRENT_MESSAGE_REPORT_HTML).read_bytes() != closure.production_html:
+        raise ConcurrentRobustnessReleaseError(
+            "v13 release report differs from Report materialization"
+        )
+    expected_evidence = _v13_evidence_document(
+        closure,
+        release_id=release_id,
+        implementation_commit=implementation_commit,
+    )
+    evidence_path = release_root / FULL_POOL_V13_PRODUCTION_EVIDENCE_ARTIFACT
+    evidence_document = _json_object(evidence_path)
+    if (
+        evidence_document != expected_evidence
+        or evidence_path.read_bytes() != _json_bytes(evidence_document)
+    ):
+        raise ConcurrentRobustnessReleaseError(
+            "v13 production evidence facts or canonical serialization are crossed"
+        )
+    content_hashes = {
+        relative: sha256
+        for relative, sha256 in hashes.items()
+        if relative != CONCURRENT_MESSAGE_ARTIFACT_MANIFEST_JSON
+    }
+    expected_identity = _v13_release_identity(
+        closure,
+        release_id=release_id,
+        implementation_commit=implementation_commit,
+        content_hashes=content_hashes,
+    )
+    if release_identity != expected_identity:
+        raise ConcurrentRobustnessReleaseError("v13 release identity is crossed")
+    expected_manifest = _v13_manifest_document(
+        release_root,
+        closure,
+        release_id=release_id,
+        implementation_commit=implementation_commit,
+        content_hashes=content_hashes,
+        release_identity=release_identity,
+    )
+    manifest_path = release_root / CONCURRENT_MESSAGE_ARTIFACT_MANIFEST_JSON
+    manifest_document = _json_object(manifest_path)
+    if (
+        manifest_document != expected_manifest
+        or manifest_path.read_bytes() != _json_bytes(manifest_document)
+    ):
+        raise ConcurrentRobustnessReleaseError(
+            "v13 release manifest or canonical serialization differs from release bytes"
+        )
+    stage_facts = _FullPoolTwoStageProductionPresentationFacts(
+        release_id=release_id,
+        release_contract_schema=ROBUSTNESS_RELEASE_CONTRACT_SCHEMA_V13,
+        source_identity=closure.source.source_identity,
+        source_manifest_sha256=closure.source.manifest_sha256,
+    )
+    try:
+        _REPORT_PRESENTATION.validate_full_pool_two_stage_production(
+            (release_root / CONCURRENT_MESSAGE_REPORT_HTML).read_bytes(),
+            presentation_bundle_dir=closure.candidate,
+            full_pool_source_root=closure.source.root,
+            full_pool_manifest_sha256=closure.source.manifest_sha256,
+            historical_formal_root=closure.historical_formal,
+            historical_study_root=closure.historical_study,
+            stage_facts=stage_facts,
+        )
+    except (OSError, TypeError, ValueError) as exc:
+        raise ConcurrentRobustnessReleaseError(
+            "v13 production presentation failed round-trip validation"
+        ) from exc
+    return hashes
+
+
+def _v13_contract_document(
+    *,
+    root: Path,
+    destination: Path,
+    closure: _FullPoolV13Closure,
+    release_id: str,
+    implementation_commit: str,
+    release_identity: str,
+    release_hashes: Mapping[str, str],
+) -> dict[str, object]:
+    document: dict[str, object] = {
+        "schema_version": ROBUSTNESS_RELEASE_CONTRACT_SCHEMA_V13,
+        "release_purpose": FULL_POOL_V13_RELEASE_PURPOSE,
+        "sampling_status": FULL_POOL_V13_SAMPLING_STATUS,
+        "release_id": release_id,
+        "canonical_endpoint": ROBUSTNESS_CANONICAL_ENDPOINT,
+        "source_directory": destination.relative_to(root).as_posix(),
+        "implementation_commit": implementation_commit,
+        "live_api_triggered": True,
+        "formal_research_evidence": True,
+        "realization_provider_calls": 0,
+        "realization_live_api_triggered": False,
+        "release_manifest_schema_version": FULL_POOL_V13_PRODUCTION_MANIFEST_SCHEMA,
+        "release_evidence_schema_version": FULL_POOL_V13_PRODUCTION_EVIDENCE_SCHEMA,
+        "realized_source": dict(closure.realized_source),
+        "upstream_source": dict(closure.upstream_source),
+        "presentation_candidate": dict(closure.presentation_candidate),
+        "historical_inputs": dict(closure.historical_inputs),
+        "protected_v12": dict(closure.protected_v12),
+        "realization_policy": dict(closure.realization_policy),
+        "composite_provider_accounting": dict(
+            closure.composite_provider_accounting
+        ),
+        "realized_metrics": dict(closure.realized_metrics),
+        "mechanism_inventory": dict(closure.mechanism_inventory),
+        "approved_downloads": dict(closure.approved_downloads),
+        "release_readiness": dict(closure.release_readiness),
+        "release_identity_sha256": release_identity,
+        "physical_snapshot_identity_sha256": _physical_snapshot_identity(
+            release_hashes
+        ),
+        "production_deploy_eligible": True,
+        "artifact_sha256": dict(sorted(release_hashes.items())),
+    }
+    if set(document) != _RELEASE_CONTRACT_V13_FIELDS:
+        raise ConcurrentRobustnessReleaseError("v13 release contract fields are crossed")
+    return document
+
+
+def _promote_full_pool_v13_release(
+    *,
+    repo_root: str | Path,
+    full_pool_source_root: str | Path,
+    full_pool_manifest_sha256: str,
+    full_pool_source_identity: str | None,
+    historical_formal_root: str | Path,
+    historical_study_root: str | Path,
+    candidate_dir: str | Path,
+    protected_v12_release_root: str | Path | None,
+    protected_v12_contract_path: str | Path | None,
+    destination_dir: str | Path,
+    release_contract_path: str | Path,
+    release_id: str,
+    implementation_commit: str,
+    presentation_closure_path: str | Path | None,
+    automation_execution_manifest_path: str | Path | None,
+    fresh_execution_manifest_path: str | Path | None,
+    closed_full_pool_formal_facts: FullPoolFormalReleaseFacts | None,
+) -> ConcurrentRobustnessProductionRelease:
+    """Promote only a freshly closed, production-eligible two-stage source."""
+    root = _real_directory(Path(repo_root), "repository root")
+    source = _repo_directory(root, Path(full_pool_source_root), "v13 realized source")
+    if (
+        full_pool_source_identity is None
+        or protected_v12_release_root is None
+        or protected_v12_contract_path is None
+        or presentation_closure_path is not None
+        or automation_execution_manifest_path is not None
+        or fresh_execution_manifest_path is not None
+        or closed_full_pool_formal_facts is not None
+    ):
+        try:
+            closed = read_closed_full_pool_two_stage_source(
+                source,
+                manifest_sha256=full_pool_manifest_sha256,
+            )
+        except (FileNotFoundError, OSError, TypeError, ValueError) as exc:
+            raise ConcurrentRobustnessReleaseError(
+                "v13 realized source failed independent closure"
+            ) from exc
+        if (
+            closed.classification != FULL_POOL_TWO_STAGE_FORMAL_CLASSIFICATION
+            or closed.production_deploy_eligible is not True
+        ):
+            raise ConcurrentRobustnessReleaseError(
+                "v13 production promotion rejects validation or non-formal realized sources"
+            )
+        raise ConcurrentRobustnessReleaseError(
+            "v13 promotion requires exact source identity and v12 baseline and rejects historical promotion inputs"
+        )
+    historical_formal = _repo_directory(
+        root, Path(historical_formal_root), "v13 historical Formal source"
+    )
+    historical_study = _repo_directory(
+        root, Path(historical_study_root), "v13 historical robustness study"
+    )
+    candidate = _repo_directory(root, Path(candidate_dir), "v13 presentation candidate")
+    protected_v12_release = _repo_directory(
+        root, Path(protected_v12_release_root), "v13 protected v12 release"
+    )
+    protected_v12_contract = _repo_file(
+        root, Path(protected_v12_contract_path), "v13 protected v12 contract"
+    )
+    destination = _new_repo_path(root, Path(destination_dir), "v13 production destination")
+    contract_path = _new_repo_path(root, Path(release_contract_path), "v13 release contract")
+    if not _RELEASE_ID.fullmatch(release_id):
+        raise ConcurrentRobustnessReleaseError("v13 release id is not a bounded stable token")
+    if not _COMMIT.fullmatch(implementation_commit):
+        raise ConcurrentRobustnessReleaseError("v13 implementation commit is invalid")
+    if not _SHA256.fullmatch(full_pool_manifest_sha256) or not _SHA256.fullmatch(
+        full_pool_source_identity
+    ):
+        raise ConcurrentRobustnessReleaseError("v13 source identity or manifest hash is invalid")
+    direct_inputs = (
+        source,
+        historical_formal,
+        historical_study,
+        candidate,
+        protected_v12_release,
+        protected_v12_contract,
+    )
+    for index, left in enumerate(direct_inputs):
+        if any(_paths_overlap(left, right) for right in direct_inputs[index + 1 :]):
+            raise ConcurrentRobustnessReleaseError("v13 immutable inputs overlap or are nested")
+    if (
+        any(_paths_overlap(destination, path) for path in direct_inputs)
+        or any(_paths_overlap(contract_path, path) for path in direct_inputs)
+        or _paths_overlap(destination, contract_path)
+    ):
+        raise ConcurrentRobustnessReleaseError("v13 output overlaps immutable input evidence")
+    closure = _close_full_pool_v13_inputs(
+        root=root,
+        source=source,
+        source_manifest_sha256=full_pool_manifest_sha256,
+        source_identity=full_pool_source_identity,
+        historical_formal=historical_formal,
+        historical_study=historical_study,
+        candidate=candidate,
+        protected_v12_release=protected_v12_release,
+        protected_v12_contract=protected_v12_contract,
+        release_id=release_id,
+    )
+
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    contract_path.parent.mkdir(parents=True, exist_ok=True)
+    staging = Path(
+        tempfile.mkdtemp(
+            prefix=f".{destination.name}.v13.",
+            suffix=".staging",
+            dir=destination.parent,
+        )
+    )
+    contract_staging = contract_path.with_name(
+        f".{contract_path.name}.{os.getpid()}.staging"
+    )
+    destination_installed = False
+    contract_installed = False
+    try:
+        shutil.copytree(candidate, staging, dirs_exist_ok=True, copy_function=shutil.copyfile)
+        if _flat_file_hashes(staging) != _flat_file_hashes(candidate):
+            raise ConcurrentRobustnessReleaseError("v13 candidate changed during exact copy")
+        (staging / CONCURRENT_MESSAGE_REPORT_HTML).write_bytes(closure.production_html)
+        evidence = _v13_evidence_document(
+            closure,
+            release_id=release_id,
+            implementation_commit=implementation_commit,
+        )
+        (staging / FULL_POOL_V13_PRODUCTION_EVIDENCE_ARTIFACT).write_bytes(
+            _json_bytes(evidence)
+        )
+        content_hashes = _flat_file_hashes(staging)
+        release_identity = _v13_release_identity(
+            closure,
+            release_id=release_id,
+            implementation_commit=implementation_commit,
+            content_hashes=content_hashes,
+        )
+        manifest = _v13_manifest_document(
+            staging,
+            closure,
+            release_id=release_id,
+            implementation_commit=implementation_commit,
+            content_hashes=content_hashes,
+            release_identity=release_identity,
+        )
+        (staging / CONCURRENT_MESSAGE_ARTIFACT_MANIFEST_JSON).write_bytes(
+            _json_bytes(manifest)
+        )
+        release_hashes = _validate_full_pool_v13_release_dir(
+            staging,
+            closure=closure,
+            release_id=release_id,
+            implementation_commit=implementation_commit,
+            release_identity=release_identity,
+        )
+        contract_document = _v13_contract_document(
+            root=root,
+            destination=destination,
+            closure=closure,
+            release_id=release_id,
+            implementation_commit=implementation_commit,
+            release_identity=release_identity,
+            release_hashes=release_hashes,
+        )
+        contract_staging.write_bytes(_json_bytes(contract_document))
+        if destination.exists() or contract_path.exists():
+            raise ConcurrentRobustnessReleaseError(
+                "v13 production destination or contract appeared during staging"
+            )
+        os.replace(staging, destination)
+        destination_installed = True
+        os.replace(contract_staging, contract_path)
+        contract_installed = True
+        final_hashes = _flat_file_hashes(destination)
+        if (
+            final_hashes != release_hashes
+            or _physical_snapshot_identity(final_hashes)
+            != contract_document["physical_snapshot_identity_sha256"]
+        ):
+            raise ConcurrentRobustnessReleaseError(
+                "v13 physical snapshot drifted after publication"
+            )
+        round_trip = _validate_full_pool_v13_production_release(
+            repo_root=root,
+            contract_document=contract_document,
+            source_dir=destination,
+        )
+        if (
+            round_trip.get("production_deploy_eligible") is not True
+            or round_trip.get("report_sha256")
+            != final_hashes[CONCURRENT_MESSAGE_REPORT_HTML]
+        ):
+            raise ConcurrentRobustnessReleaseError(
+                "v13 standalone round-trip facts are crossed"
+            )
+        _assert_v8_input_snapshots(closure.snapshots)
+    except Exception:
+        if staging.exists():
+            shutil.rmtree(staging, ignore_errors=True)
+        if contract_staging.exists():
+            contract_staging.unlink(missing_ok=True)
+        if contract_installed:
+            contract_path.unlink(missing_ok=True)
+        if destination_installed:
+            shutil.rmtree(destination, ignore_errors=True)
+        raise
+    return ConcurrentRobustnessProductionRelease(
+        source_dir=destination,
+        contract_path=contract_path,
+        release_id=release_id,
+        report_sha256=final_hashes[CONCURRENT_MESSAGE_REPORT_HTML],
+        manifest_sha256=final_hashes[CONCURRENT_MESSAGE_ARTIFACT_MANIFEST_JSON],
+        release_identity_sha256=release_identity,
+    )
+
+
 def _promote_full_pool_v12_release(
     *,
     repo_root: str | Path,
@@ -3722,6 +4685,242 @@ def _validate_full_pool_v12_production_release(
     )
 
 
+def _validate_full_pool_v13_production_release(
+    *,
+    repo_root: str | Path,
+    contract_document: Mapping[str, object],
+    source_dir: str | Path,
+    snapshot_dir: str | Path | None = None,
+) -> dict[str, object]:
+    root = _real_directory(Path(repo_root), "repository root")
+    if (
+        contract_document.get("schema_version")
+        != ROBUSTNESS_RELEASE_CONTRACT_SCHEMA_V13
+        or set(contract_document) != _RELEASE_CONTRACT_V13_FIELDS
+    ):
+        raise ConcurrentRobustnessReleaseError(
+            "v13 release contract fields are missing, unexpected, or schema-confused"
+        )
+    release_id = _string(contract_document.get("release_id"), "v13 release id")
+    implementation_commit = _string(
+        contract_document.get("implementation_commit"),
+        "v13 implementation commit",
+    )
+    if not _RELEASE_ID.fullmatch(release_id) or not _COMMIT.fullmatch(
+        implementation_commit
+    ):
+        raise ConcurrentRobustnessReleaseError(
+            "v13 release or implementation identity is invalid"
+        )
+    expected_source = _repo_directory(
+        root,
+        Path(
+            _canonical_relative_path(
+                contract_document.get("source_directory"),
+                "v13 source directory",
+            )
+        ),
+        "v13 contract source directory",
+    )
+    supplied_source = _real_directory(Path(source_dir), "v13 supplied source directory")
+    if supplied_source != expected_source:
+        raise ConcurrentRobustnessReleaseError(
+            "v13 supplied source directory differs from the frozen contract"
+        )
+    evidence_dir = (
+        _real_directory(Path(snapshot_dir), "v13 release snapshot")
+        if snapshot_dir is not None
+        else expected_source
+    )
+    realized_source = _object_mapping(
+        contract_document.get("realized_source"),
+        "v13 realized source facts",
+    )
+    presentation_candidate = _object_mapping(
+        contract_document.get("presentation_candidate"),
+        "v13 presentation candidate facts",
+    )
+    historical_inputs = _object_mapping(
+        contract_document.get("historical_inputs"),
+        "v13 historical input facts",
+    )
+    protected_v12 = _object_mapping(
+        contract_document.get("protected_v12"),
+        "v13 protected v12 facts",
+    )
+    source = _repo_directory(
+        root,
+        Path(
+            _canonical_relative_path(
+                realized_source.get("directory"),
+                "v13 realized source directory",
+            )
+        ),
+        "v13 realized source directory",
+    )
+    candidate = _repo_directory(
+        root,
+        Path(
+            _canonical_relative_path(
+                presentation_candidate.get("directory"),
+                "v13 presentation candidate directory",
+            )
+        ),
+        "v13 presentation candidate directory",
+    )
+    historical_formal = _repo_directory(
+        root,
+        Path(
+            _canonical_relative_path(
+                historical_inputs.get("formal_directory"),
+                "v13 historical Formal directory",
+            )
+        ),
+        "v13 historical Formal directory",
+    )
+    historical_study = _repo_directory(
+        root,
+        Path(
+            _canonical_relative_path(
+                historical_inputs.get("study_directory"),
+                "v13 historical study directory",
+            )
+        ),
+        "v13 historical study directory",
+    )
+    v12_release = _repo_directory(
+        root,
+        Path(
+            _canonical_relative_path(
+                protected_v12.get("release_directory"),
+                "v13 protected v12 release directory",
+            )
+        ),
+        "v13 protected v12 release directory",
+    )
+    v12_contract = _repo_file(
+        root,
+        Path(
+            _canonical_relative_path(
+                protected_v12.get("contract_path"),
+                "v13 protected v12 contract path",
+            )
+        ),
+        "v13 protected v12 contract",
+    )
+    closure = _close_full_pool_v13_inputs(
+        root=root,
+        source=source,
+        source_manifest_sha256=_string(
+            realized_source.get("manifest_sha256"),
+            "v13 realized manifest SHA-256",
+        ),
+        source_identity=_string(
+            realized_source.get("source_identity"),
+            "v13 realized source identity",
+        ),
+        historical_formal=historical_formal,
+        historical_study=historical_study,
+        candidate=candidate,
+        protected_v12_release=v12_release,
+        protected_v12_contract=v12_contract,
+        release_id=release_id,
+    )
+    expected_documents: dict[str, object] = {
+        "realized_source": dict(closure.realized_source),
+        "upstream_source": dict(closure.upstream_source),
+        "presentation_candidate": dict(closure.presentation_candidate),
+        "historical_inputs": dict(closure.historical_inputs),
+        "protected_v12": dict(closure.protected_v12),
+        "realization_policy": dict(closure.realization_policy),
+        "composite_provider_accounting": dict(
+            closure.composite_provider_accounting
+        ),
+        "realized_metrics": dict(closure.realized_metrics),
+        "mechanism_inventory": dict(closure.mechanism_inventory),
+        "approved_downloads": dict(closure.approved_downloads),
+        "release_readiness": dict(closure.release_readiness),
+    }
+    for field, expected in expected_documents.items():
+        supplied = contract_document.get(field)
+        if supplied != expected:
+            raise ConcurrentRobustnessReleaseError(
+                f"v13 persisted {field} facts are crossed"
+            )
+    if (
+        contract_document.get("release_purpose") != FULL_POOL_V13_RELEASE_PURPOSE
+        or contract_document.get("sampling_status") != FULL_POOL_V13_SAMPLING_STATUS
+        or contract_document.get("canonical_endpoint") != ROBUSTNESS_CANONICAL_ENDPOINT
+        or contract_document.get("release_manifest_schema_version")
+        != FULL_POOL_V13_PRODUCTION_MANIFEST_SCHEMA
+        or contract_document.get("release_evidence_schema_version")
+        != FULL_POOL_V13_PRODUCTION_EVIDENCE_SCHEMA
+        or contract_document.get("live_api_triggered") is not True
+        or contract_document.get("formal_research_evidence") is not True
+        or contract_document.get("realization_provider_calls") != 0
+        or contract_document.get("realization_live_api_triggered") is not False
+        or contract_document.get("production_deploy_eligible") is not True
+    ):
+        raise ConcurrentRobustnessReleaseError(
+            "v13 purpose, status, schema, endpoint, or eligibility is crossed"
+        )
+    expected_hashes = _string_mapping(
+        contract_document.get("artifact_sha256"),
+        "v13 artifact SHA-256",
+    )
+    actual_hashes = _flat_file_hashes(evidence_dir)
+    snapshot_identity = _string(
+        contract_document.get("physical_snapshot_identity_sha256"),
+        "v13 physical snapshot identity",
+    )
+    if (
+        actual_hashes != expected_hashes
+        or not _SHA256.fullmatch(snapshot_identity)
+        or _physical_snapshot_identity(actual_hashes) != snapshot_identity
+    ):
+        raise ConcurrentRobustnessReleaseError(
+            "v13 physical release inventory, snapshot identity, or hashes differ"
+        )
+    release_identity = _string(
+        contract_document.get("release_identity_sha256"),
+        "v13 release identity",
+    )
+    if not _SHA256.fullmatch(release_identity):
+        raise ConcurrentRobustnessReleaseError("v13 release identity is invalid")
+    validated_hashes = _validate_full_pool_v13_release_dir(
+        evidence_dir,
+        closure=closure,
+        release_id=release_id,
+        implementation_commit=implementation_commit,
+        release_identity=release_identity,
+    )
+    if validated_hashes != actual_hashes:
+        raise ConcurrentRobustnessReleaseError(
+            "v13 release validator observed crossed artifact hashes"
+        )
+    _assert_v8_input_snapshots(closure.snapshots)
+    accounting = closure.composite_provider_accounting
+    return {
+        "schema_version": ROBUSTNESS_RELEASE_CONTRACT_SCHEMA_V13,
+        "release_purpose": FULL_POOL_V13_RELEASE_PURPOSE,
+        "release_id": release_id,
+        "source_directory": contract_document["source_directory"],
+        "sampling_method": FULL_POOL_MEMBERSHIP_METHOD,
+        "sampling_status": FULL_POOL_V13_SAMPLING_STATUS,
+        "decision_execution_mode": "upstream_live_provider_plus_zero_call_realization",
+        "live_api_triggered": True,
+        "upstream_live_api_triggered": True,
+        "realization_provider_calls": 0,
+        "realization_live_api_triggered": False,
+        "logical_judgments": accounting["upstream_logical_judgments"],
+        "physical_attempts": accounting["upstream_charged_physical_attempts"],
+        "report_sha256": actual_hashes[CONCURRENT_MESSAGE_REPORT_HTML],
+        "artifact_count": len(actual_hashes),
+        "release_identity_sha256": release_identity,
+        "production_deploy_eligible": True,
+    }
+
+
 def validate_concurrent_robustness_production_release(
     *,
     repo_root: str | Path,
@@ -3731,6 +4930,13 @@ def validate_concurrent_robustness_production_release(
 ) -> dict[str, object]:
     """Fail-closed validator used by the production deployment gate."""
     schema_version = contract_document.get("schema_version")
+    if schema_version == ROBUSTNESS_RELEASE_CONTRACT_SCHEMA_V13:
+        return _validate_full_pool_v13_production_release(
+            repo_root=repo_root,
+            contract_document=contract_document,
+            source_dir=source_dir,
+            snapshot_dir=snapshot_dir,
+        )
     if schema_version == ROBUSTNESS_RELEASE_CONTRACT_SCHEMA_V12:
         return _validate_full_pool_v12_production_release(
             repo_root=repo_root,

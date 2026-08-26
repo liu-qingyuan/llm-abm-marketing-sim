@@ -47,6 +47,9 @@ from .full_pool_presentation import (
     compose_full_pool_presentation_bundle as _compose_full_pool_presentation_bundle,
 )
 from .full_pool_presentation import (
+    render_full_pool_two_stage_production_html as _render_full_pool_two_stage_production_html,
+)
+from .full_pool_presentation import (
     validate_full_pool_presentation_bundle as _validate_full_pool_presentation_bundle,
 )
 from .full_pool_segmented_continuation import (
@@ -59,7 +62,9 @@ from .full_pool_source_v3 import (
 )
 from .full_pool_source_v4 import FULL_POOL_SOURCE_V4_SCHEMA, StrictFullPoolSourceFacts
 from .full_pool_two_stage_replay import (
+    FULL_POOL_TWO_STAGE_FORMAL_CLASSIFICATION,
     FULL_POOL_TWO_STAGE_SOURCE_SCHEMA,
+    FULL_POOL_TWO_STAGE_VALIDATION_CLASSIFICATION,
     ClosedFullPoolTwoStageSource,
     read_closed_full_pool_two_stage_source,
 )
@@ -127,6 +132,8 @@ _FULL_POOL_TRACE_PARTITION_DOCUMENT_FIELDS = frozenset(
     }
 )
 _IMPLEMENTATION_COMMIT_PATTERN = re.compile(r"^[0-9a-f]{7,40}$")
+_RELEASE_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,159}$")
+_RELEASE_CONTRACT_PATTERN = re.compile(r"^abm-report-release-contract-v[1-9][0-9]*$")
 _REPORT_PAYLOAD_V1_FIELDS = frozenset(
     {
         "schema_version",
@@ -945,6 +952,16 @@ class _FullPoolProductionPresentationFacts:
 
 
 @dataclass(frozen=True)
+class _FullPoolTwoStageProductionPresentationFacts:
+    """Release-approved identity facts; Report owns only their HTML projection."""
+
+    release_id: str
+    release_contract_schema: str
+    source_identity: str
+    source_manifest_sha256: str
+
+
+@dataclass(frozen=True)
 class _PresentationBundle:
     report_payload: bytes
     report_html: bytes
@@ -972,6 +989,14 @@ class _CandidateProjection:
     prompt_model_presentation: _PromptModelPresentation
     report_payload: dict[str, Any]
     payloads: dict[str, bytes]
+
+
+@dataclass(frozen=True)
+class _FullPoolTwoStageProductionInputs:
+    source: ClosedFullPoolTwoStageSource
+    candidate: Path
+    historical_projection: _CandidateProjection
+    snapshots: Mapping[Path, Mapping[str, str]]
 
 
 @dataclass(frozen=True)
@@ -1025,6 +1050,23 @@ def _read_full_pool_presentation_source(
             manifest_sha256=manifest_sha256,
         ),
     )
+
+
+def _validate_full_pool_two_stage_production_stage_facts(
+    stage_facts: _FullPoolTwoStageProductionPresentationFacts,
+    *,
+    source: ClosedFullPoolTwoStageSource,
+) -> None:
+    if (
+        not _RELEASE_ID_PATTERN.fullmatch(stage_facts.release_id)
+        or not _RELEASE_CONTRACT_PATTERN.fullmatch(stage_facts.release_contract_schema)
+        or stage_facts.source_identity != source.source_identity
+        or stage_facts.source_manifest_sha256 != source.manifest_sha256
+        or not _is_sha256(stage_facts.source_manifest_sha256)
+    ):
+        raise _RobustnessReportClosureError(
+            "two-stage production presentation facts are invalid or crossed"
+        )
 
 
 class _ReportPresentationInterface:
@@ -1166,11 +1208,19 @@ class _ReportPresentationInterface:
             strict_facts = getattr(source, "facts", None)
             if isinstance(source, ClosedFullPoolTwoStageSource):
                 validation_source = (
-                    source.classification == "nonproduction_two_stage_validation"
+                    source.classification
+                    == FULL_POOL_TWO_STAGE_VALIDATION_CLASSIFICATION
                     and source.production_deploy_eligible is False
-                    and source.manifest.get("schema_version") == FULL_POOL_TWO_STAGE_SOURCE_SCHEMA
+                    and source.manifest.get("schema_version")
+                    == FULL_POOL_TWO_STAGE_SOURCE_SCHEMA
                 )
-                formal_source = False
+                formal_source = (
+                    source.classification == FULL_POOL_TWO_STAGE_FORMAL_CLASSIFICATION
+                    and source.formal_research_evidence is True
+                    and source.production_deploy_eligible is True
+                    and source.manifest.get("schema_version")
+                    == FULL_POOL_TWO_STAGE_SOURCE_SCHEMA
+                )
             elif isinstance(strict_facts, StrictFullPoolSourceFacts):
                 validation_source = (
                     source.manifest.get("schema_version") == FULL_POOL_SOURCE_V4_SCHEMA
@@ -1343,6 +1393,216 @@ class _ReportPresentationInterface:
             raise _RobustnessReportClosureError(
                 "Full-Pool presentation bundle failed validation"
             ) from exc
+
+    def materialize_full_pool_two_stage_production(
+        self,
+        *,
+        presentation_bundle_dir: str | Path,
+        full_pool_source_root: str | Path,
+        full_pool_manifest_sha256: str,
+        historical_formal_root: str | Path,
+        historical_study_root: str | Path,
+        stage_facts: _FullPoolTwoStageProductionPresentationFacts,
+    ) -> bytes:
+        """Project one source-bound candidate into deterministic production HTML."""
+        inputs = self._prepare_full_pool_two_stage_production_inputs(
+            presentation_bundle_dir=presentation_bundle_dir,
+            full_pool_source_root=full_pool_source_root,
+            full_pool_manifest_sha256=full_pool_manifest_sha256,
+            historical_formal_root=historical_formal_root,
+            historical_study_root=historical_study_root,
+            stage_facts=stage_facts,
+        )
+        _validate_full_pool_two_stage_production_stage_facts(
+            stage_facts,
+            source=inputs.source,
+        )
+        production_html = _render_full_pool_two_stage_production_html(
+            inputs.candidate,
+            source=inputs.source,
+            historical_candidate=inputs.candidate / _HISTORICAL_DIR,
+            release_id=stage_facts.release_id,
+            release_contract_schema=stage_facts.release_contract_schema,
+        )
+        self._validate_full_pool_two_stage_production_bytes(
+            production_html,
+            inputs=inputs,
+            stage_facts=stage_facts,
+        )
+        self._assert_full_pool_two_stage_production_inputs_unchanged(inputs)
+        return production_html
+
+    def validate_full_pool_two_stage_production(
+        self,
+        production_html: bytes,
+        *,
+        presentation_bundle_dir: str | Path,
+        full_pool_source_root: str | Path,
+        full_pool_manifest_sha256: str,
+        historical_formal_root: str | Path,
+        historical_study_root: str | Path,
+        stage_facts: _FullPoolTwoStageProductionPresentationFacts,
+    ) -> None:
+        """Reread inputs and validate production HTML without trusting caller facts."""
+        inputs = self._prepare_full_pool_two_stage_production_inputs(
+            presentation_bundle_dir=presentation_bundle_dir,
+            full_pool_source_root=full_pool_source_root,
+            full_pool_manifest_sha256=full_pool_manifest_sha256,
+            historical_formal_root=historical_formal_root,
+            historical_study_root=historical_study_root,
+            stage_facts=stage_facts,
+        )
+        self._validate_full_pool_two_stage_production_bytes(
+            production_html,
+            inputs=inputs,
+            stage_facts=stage_facts,
+        )
+        self._assert_full_pool_two_stage_production_inputs_unchanged(inputs)
+
+    def _prepare_full_pool_two_stage_production_inputs(
+        self,
+        *,
+        presentation_bundle_dir: str | Path,
+        full_pool_source_root: str | Path,
+        full_pool_manifest_sha256: str,
+        historical_formal_root: str | Path,
+        historical_study_root: str | Path,
+        stage_facts: _FullPoolTwoStageProductionPresentationFacts,
+    ) -> _FullPoolTwoStageProductionInputs:
+        try:
+            source = _read_full_pool_presentation_source(
+                full_pool_source_root,
+                manifest_sha256=full_pool_manifest_sha256,
+            )
+            if not isinstance(source, ClosedFullPoolTwoStageSource):
+                raise ValueError("two-stage production requires a realized source")
+            if (
+                source.source_identity != stage_facts.source_identity
+                or source.manifest_sha256 != stage_facts.source_manifest_sha256
+            ):
+                raise ValueError("two-stage production facts are crossed with the source")
+            candidate = Path(presentation_bundle_dir).resolve(strict=True)
+            historical_candidate = candidate / _HISTORICAL_DIR
+            formal_path = Path(historical_formal_root)
+            study_path = Path(historical_study_root)
+            workspace_path = _workspace_root_for_study(study_path)
+            manifest, manifest_payload, manifest_sha256 = _load_study_manifest(study_path)
+            _, projection = self._validate_candidate_from_inputs(
+                formal_root=formal_path,
+                study_root=study_path,
+                workspace_root=workspace_path,
+                manifest=manifest,
+                manifest_payload=manifest_payload,
+                manifest_sha256=manifest_sha256,
+                candidate_dir=historical_candidate,
+            )
+            _validate_full_pool_presentation_bundle(
+                candidate,
+                source=source,
+                historical_candidate=historical_candidate,
+            )
+            roots = (
+                source.root,
+                projection.formal.run_dir,
+                projection.study.root,
+                workspace_path.resolve(strict=True),
+                candidate,
+            )
+            snapshots = {root: _directory_file_hashes(root) for root in roots}
+            return _FullPoolTwoStageProductionInputs(
+                source=source,
+                candidate=candidate,
+                historical_projection=projection,
+                snapshots=snapshots,
+            )
+        except _RobustnessReportClosureError:
+            raise
+        except (
+            FileNotFoundError,
+            FullPoolExperimentError,
+            _FullPoolPresentationError,
+            OSError,
+            TypeError,
+            ValueError,
+            json.JSONDecodeError,
+        ) as exc:
+            raise _RobustnessReportClosureError(
+                "two-stage production presentation inputs failed closure"
+            ) from exc
+
+    def _validate_full_pool_two_stage_production_bytes(
+        self,
+        production_html: bytes,
+        *,
+        inputs: _FullPoolTwoStageProductionInputs,
+        stage_facts: _FullPoolTwoStageProductionPresentationFacts,
+    ) -> None:
+        _validate_full_pool_two_stage_production_stage_facts(
+            stage_facts,
+            source=inputs.source,
+        )
+        expected = _render_full_pool_two_stage_production_html(
+            inputs.candidate,
+            source=inputs.source,
+            historical_candidate=inputs.candidate / _HISTORICAL_DIR,
+            release_id=stage_facts.release_id,
+            release_contract_schema=stage_facts.release_contract_schema,
+        )
+        if not isinstance(production_html, bytes) or production_html != expected:
+            raise _RobustnessReportClosureError(
+                "two-stage production HTML differs from deterministic materialization"
+            )
+        if len(production_html) >= 3 * 1024 * 1024:
+            raise _RobustnessReportClosureError(
+                "two-stage production report exceeds the 3 MiB gate"
+            )
+        try:
+            report = production_html.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise _RobustnessReportClosureError(
+                "two-stage production report is not UTF-8"
+            ) from exc
+        root_marker = (
+            '<main class="full-pool-presentation" data-testid="full-pool-presentation" '
+        )
+        production_marker = 'data-production-deploy-eligible="true"'
+        release_id_meta = (
+            f'<meta name="abm-release-id" content="{html.escape(stage_facts.release_id, quote=True)}">'
+        )
+        release_contract_meta = (
+            '<meta name="abm-release-contract" '
+            f'content="{html.escape(stage_facts.release_contract_schema, quote=True)}">'
+        )
+        root_start = report.find(root_marker)
+        root_end = report.find(">", root_start)
+        root_open = report[root_start : root_end + 1]
+        if (
+            report.count(root_marker) != 1
+            or root_start < 0
+            or root_end < 0
+            or root_open.count(production_marker) != 1
+            or 'data-production-deploy-eligible="false"' in root_open
+            or report.count(release_id_meta) != 1
+            or report.count(release_contract_meta) != 1
+            or 'data-provider-calls-during-composition="0"' not in report
+            or 'data-canonical-deployment-triggered="false"' not in report
+            or "Formal Research Release v13" not in report
+            or "Two-Stage Validation" in report
+            or "not deployable" in report
+        ):
+            raise _RobustnessReportClosureError(
+                "two-stage production report markers are missing or crossed"
+            )
+
+    def _assert_full_pool_two_stage_production_inputs_unchanged(
+        self,
+        inputs: _FullPoolTwoStageProductionInputs,
+    ) -> None:
+        for root, expected in inputs.snapshots.items():
+            if _directory_file_hashes(root) != dict(expected):
+                raise _RobustnessReportClosureError(
+                    "two-stage production materialization mutated immutable input evidence"
+                )
 
     def compose_full_pool_candidate(
         self,

@@ -42,6 +42,7 @@ from .full_pool_source_v4 import (
     compose_strict_full_pool_result_projection,
 )
 from .full_pool_two_stage_replay import (
+    FULL_POOL_TWO_STAGE_FORMAL_CLASSIFICATION,
     FULL_POOL_TWO_STAGE_SOURCE_SCHEMA,
     ClosedFullPoolTwoStageSource,
 )
@@ -1215,7 +1216,7 @@ def _mechanism_html(catalog: dict[str, dict[str, str]]) -> str:
     )
 
 
-def _realized_catalog() -> dict[str, dict[str, str]]:
+def _realized_catalog(*, production: bool = False) -> dict[str, dict[str, str]]:
     catalog = _full_pool_catalog()
     catalog["zh-CN"].update(
         {
@@ -1339,6 +1340,21 @@ def _realized_catalog() -> dict[str, dict[str, str]]:
             "history.copy": "The Primary-Shadow, Ranking Weight, and Prompt-Model evidence below remains bound to its original 1,000-user denominator and historical direct-action mechanism; it is not the current realized result.",
         }
     )
+    if production:
+        catalog["zh-CN"].update(
+            {
+                "shell.status": "Formal Research Release v13 · 待部署授权",
+                "scope.copy": "当前production presentation只消费independently closed formal realized source、evidence与projection；页面仍不表示已完成canonical deployment或public acceptance。",
+                "downloads.copy": "下载全部来自同一formal realized source；upstream live lineage保留在manifest与realization evidence中。Historical 1,000-User artifacts按原bytes复制。",
+            }
+        )
+        catalog["en-US"].update(
+            {
+                "shell.status": "Formal Research Release v13 · awaiting deployment authorization",
+                "scope.copy": "This production presentation consumes only the independently closed formal realized source, evidence, and projection. It does not claim canonical deployment or public acceptance.",
+                "downloads.copy": "Every download comes from the same formal realized source; upstream live lineage remains in the manifest and realization evidence. Historical 1,000-User artifacts are copied byte-for-byte.",
+            }
+        )
     if set(catalog["zh-CN"]) != set(catalog["en-US"]):
         raise _FullPoolPresentationError("realized Full-Pool bilingual catalog parity is crossed")
     return catalog
@@ -1555,8 +1571,9 @@ def _render_realized_full_pool_main(
     projection: _RealizedPresentationProjection,
     *,
     index_sha256: str,
+    production: bool = False,
 ) -> tuple[str, dict[str, dict[str, str]]]:
-    catalog = _realized_catalog()
+    catalog = _realized_catalog(production=production)
     counts = source.counts
     overall = projection.overall
     exposures = _strict_int(overall.get("exposures"), "overall realized exposures")
@@ -1800,6 +1817,11 @@ def _render_realized_full_pool_main(
         for relative_path in source_artifacts
     )
     mechanism = _two_stage_mechanism_html(catalog)
+    presentation_eligibility = (
+        "presentation_release_production_deploy_eligible=true"
+        if production
+        else "presentation_candidate_production_deploy_eligible=false"
+    )
 
     main = f"""
 <section id="full-pool-main" class="full-pool-hero" data-testid="full-pool-main-experiment">
@@ -1832,7 +1854,7 @@ def _render_realized_full_pool_main(
   {_i18n(catalog, "scope.title", tag="h2")}
   {_i18n(catalog, "scope.copy", tag="p")}
   <dl class="full-pool-provider-grid">{actual_facts}</dl>
-  <code class="full-pool-source-facts">source-schema={FULL_POOL_TWO_STAGE_SOURCE_SCHEMA} source-classification={html.escape(source.classification)} formal_research_evidence={str(source.formal_research_evidence).lower()} production_deploy_eligible=false realization_provider_calls=0</code>
+  <code class="full-pool-source-facts">source-schema={FULL_POOL_TWO_STAGE_SOURCE_SCHEMA} source-classification={html.escape(source.classification)} formal_research_evidence={str(source.formal_research_evidence).lower()} source_production_deploy_eligible={str(source.production_deploy_eligible).lower()} {presentation_eligibility} realization_provider_calls=0</code>
   <aside class="full-pool-claim-boundary" data-testid="full-pool-claim-boundary">
     {_i18n(catalog, "claims.title", tag="h3")}
     <ul><li>{_i18n(catalog, "claims.order")}</li><li>{_i18n(catalog, "claims.change")}</li><li>{_i18n(catalog, "claims.limit")}</li></ul>
@@ -2274,6 +2296,7 @@ def _compose_html(
     *,
     source: _ClosedFullPoolSource | ClosedFullPoolTwoStageSource,
     index_sha256: str,
+    production_release: tuple[str, str] | None = None,
 ) -> bytes:
     try:
         document = historical_html.decode("utf-8")
@@ -2324,10 +2347,11 @@ def _compose_html(
         if isinstance(source, ClosedFullPoolTwoStageSource)
         else ""
     )
+    presentation_eligibility = "true" if production_release is not None else "false"
     wrapper = (
         '<main class="full-pool-presentation" data-testid="full-pool-presentation" '
         f'{realized_attributes}'
-        'data-production-deploy-eligible="false" '
+        f'data-production-deploy-eligible="{presentation_eligibility}" '
         'data-provider-calls-during-composition="0" '
         'data-image-generation-triggered="false" '
         'data-canonical-deployment-triggered="false" '
@@ -2343,9 +2367,16 @@ def _compose_html(
         .replace("__TRACE_INDEX_SHA256__", index_sha256)
         .replace("__TRACE_INDEX_PATH__", _TRACE_INDEX_PATH)
     )
+    release_metadata = ""
+    if production_release is not None:
+        release_id, release_contract_schema = production_release
+        release_metadata = (
+            f'<meta name="abm-release-id" content="{html.escape(release_id, quote=True)}">'
+            f'<meta name="abm-release-contract" content="{html.escape(release_contract_schema, quote=True)}">\n'
+        )
     rendered = rendered.replace(
         "</head>",
-        f'<link rel="icon" href="data:,"><style>{_FULL_POOL_CSS}</style>\n</head>',
+        f'{release_metadata}<link rel="icon" href="data:,"><style>{_FULL_POOL_CSS}</style>\n</head>',
         1,
     )
     rendered = rendered.replace("</body>", f"<script>{script}</script>\n</body>", 1)
@@ -2444,6 +2475,61 @@ def compose_full_pool_presentation_bundle(
         if staging.is_dir() and not staging.is_symlink():
             shutil.rmtree(staging)
         raise
+
+
+def render_full_pool_two_stage_production_html(
+    bundle_root: Path,
+    *,
+    source: ClosedFullPoolTwoStageSource,
+    historical_candidate: Path,
+    release_id: str,
+    release_contract_schema: str,
+) -> bytes:
+    """Regenerate production HTML from persisted facts; never relabel candidate bytes."""
+    if (
+        source.classification != FULL_POOL_TWO_STAGE_FORMAL_CLASSIFICATION
+        or source.formal_research_evidence is not True
+        or source.production_deploy_eligible is not True
+    ):
+        raise _FullPoolPresentationError(
+            "production rendering requires a formal realized source"
+        )
+    root = _require_real_directory(bundle_root, "formal Full-Pool presentation candidate")
+    historical = _require_real_directory(
+        historical_candidate,
+        "historical presentation candidate",
+    )
+    validate_full_pool_presentation_bundle(
+        root,
+        source=source,
+        historical_candidate=historical,
+    )
+    realized_projection = _realized_trace_projection(
+        source,
+        partition_sink=lambda relative_path, payload: _compare_partition(
+            root,
+            relative_path,
+            payload,
+        ),
+    )
+    full_pool_main, catalog = _render_realized_full_pool_main(
+        source,
+        realized_projection,
+        index_sha256=realized_projection.trace.index_sha256,
+        production=True,
+    )
+    historical_hashes = _file_hashes(historical)
+    historical_report = historical / "report.html"
+    _require_regular_file(historical_report, "historical report.html")
+    return _compose_html(
+        historical_report.read_bytes(),
+        historical_hashes,
+        full_pool_main,
+        catalog,
+        source=source,
+        index_sha256=realized_projection.trace.index_sha256,
+        production_release=(release_id, release_contract_schema),
+    )
 
 
 def _strict_projection_schema_from_bundle(bundle_root: Path) -> str:
@@ -2667,7 +2753,7 @@ def validate_full_pool_presentation_bundle(
         )
     if (
         'data-production-deploy-eligible="true"' in report
-        or "production_deploy_eligible=true" in report
+        or "presentation_candidate_production_deploy_eligible=true" in report
         or re.search(
             r"<(?:script|link|img)\b[^>]*(?:src|href)=[\"']https?://",
             report,

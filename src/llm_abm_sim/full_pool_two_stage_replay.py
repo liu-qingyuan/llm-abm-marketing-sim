@@ -55,6 +55,8 @@ from .safe_serialization import safe_data
 FULL_POOL_TWO_STAGE_SOURCE_SCHEMA = "full-pool-two-stage-realized-source-v1"
 FULL_POOL_TWO_STAGE_EVIDENCE_SCHEMA = "full-pool-two-stage-realization-evidence-v1"
 FULL_POOL_TWO_STAGE_PROJECTION_SCHEMA = "full-pool-two-stage-realized-projection-v1"
+FULL_POOL_TWO_STAGE_VALIDATION_CLASSIFICATION = "nonproduction_two_stage_validation"
+FULL_POOL_TWO_STAGE_FORMAL_CLASSIFICATION = "formal_two_stage_realized"
 
 _ENVIRONMENTAL_FIELD = "concurrent_environmental_consciousness_coef"
 _MESSAGE_CODES = {"message_1": "M1", "message_2": "M2", "message_3": "M3"}
@@ -189,6 +191,25 @@ _MANIFEST_FIELDS = frozenset(
         "production_deploy_eligible",
         "artifacts",
     }
+)
+
+
+@dataclass(frozen=True)
+class _ReplayClosureProfile:
+    classification: Literal[
+        "nonproduction_two_stage_validation",
+        "formal_two_stage_realized",
+    ]
+    production_deploy_eligible: bool
+
+
+_VALIDATION_CLOSURE_PROFILE = _ReplayClosureProfile(
+    classification=FULL_POOL_TWO_STAGE_VALIDATION_CLASSIFICATION,
+    production_deploy_eligible=False,
+)
+_FORMAL_CLOSURE_PROFILE = _ReplayClosureProfile(
+    classification=FULL_POOL_TWO_STAGE_FORMAL_CLASSIFICATION,
+    production_deploy_eligible=True,
 )
 
 
@@ -607,6 +628,22 @@ class FullPoolTwoStageReplay:
         self,
         request: FullPoolTwoStageReplayRequest,
     ) -> FullPoolTwoStageReplayResult:
+        """Close a validation source without changing the historical Interface."""
+        return self._run_and_close(request, closure_profile=_VALIDATION_CLOSURE_PROFILE)
+
+    def run_and_close_formal(
+        self,
+        request: FullPoolTwoStageReplayRequest,
+    ) -> FullPoolTwoStageReplayResult:
+        """Close an authoritative source only from persisted production Source-v4 facts."""
+        return self._run_and_close(request, closure_profile=_FORMAL_CLOSURE_PROFILE)
+
+    def _run_and_close(
+        self,
+        request: FullPoolTwoStageReplayRequest,
+        *,
+        closure_profile: _ReplayClosureProfile,
+    ) -> FullPoolTwoStageReplayResult:
         source_snapshot = _source_snapshot(request.source_root)
         closed = read_closed_strict_full_pool_source(
             request.source_root,
@@ -616,20 +653,33 @@ class FullPoolTwoStageReplay:
             raise ValueError("immutable Source-v4 bytes changed during source verification")
         if closed.source_identity != request.source_identity:
             raise ValueError("Source-v4 identity differs from the explicit replay binding")
+        if closure_profile.production_deploy_eligible and (
+            closed.facts.profile != "production"
+            or closed.facts.production_deploy_eligible is not True
+            or closed.facts.production_topology is not True
+            or closed.aggregates.get("evidence_profile") != "formal_live"
+            or closed.facts.external_request_invocations <= 0
+        ):
+            raise ValueError(
+                "formal two-stage replay requires an exact production-eligible Source-v4"
+            )
         config, prepared, dataset_lineage = _prepare_replay_runtime(closed)
-        replay_identity = _json_sha256(
-            {
-                "schema_version": "full-pool-two-stage-replay-identity-v1",
-                "upstream_source_identity": closed.source_identity,
-                "upstream_manifest_sha256": closed.manifest_sha256,
-                "realization_rule_version": request.realization_rule_version,
-                "realization_seed": request.realization_seed,
-                "sample_user_ids": sorted(prepared.cohort.sample_user_ids),
-                "message_ids": [message.message_id for message in config.messages],
-                "horizon": config.horizon,
-                "delivery_capacity": config.delivery_capacity,
-            }
-        )
+        replay_identity_document: dict[str, object] = {
+            "schema_version": "full-pool-two-stage-replay-identity-v1",
+            "upstream_source_identity": closed.source_identity,
+            "upstream_manifest_sha256": closed.manifest_sha256,
+            "realization_rule_version": request.realization_rule_version,
+            "realization_seed": request.realization_seed,
+            "sample_user_ids": sorted(prepared.cohort.sample_user_ids),
+            "message_ids": [message.message_id for message in config.messages],
+            "horizon": config.horizon,
+            "delivery_capacity": config.delivery_capacity,
+        }
+        if closure_profile.production_deploy_eligible:
+            replay_identity_document["closure_classification"] = (
+                closure_profile.classification
+            )
+        replay_identity = _json_sha256(replay_identity_document)
 
         request.output_dir.parent.mkdir(parents=True, exist_ok=True)
         staging = Path(
@@ -668,6 +718,7 @@ class FullPoolTwoStageReplay:
                 runtime=runtime,
                 replay_identity=replay_identity,
                 dataset_lineage=dataset_lineage,
+                closure_profile=closure_profile,
             )
             shutil.rmtree(runtime.workspace)
             manifest_sha256 = _sha256_file(staging / "manifest.json")
@@ -702,7 +753,7 @@ class FullPoolTwoStageReplay:
                 counts.get("batch_commits"), "realized batch commits"
             ),
             realization_provider_calls=0,
-            production_deploy_eligible=False,
+            production_deploy_eligible=closure_profile.production_deploy_eligible,
         )
 
 
@@ -1372,6 +1423,7 @@ def _write_closed_source(
     runtime: _ReplayRuntimeResult,
     replay_identity: str,
     dataset_lineage: Mapping[str, object],
+    closure_profile: _ReplayClosureProfile,
 ) -> None:
     streamed = _stream_runtime_artifacts(
         staging=staging,
@@ -1495,7 +1547,7 @@ def _write_closed_source(
     }
     evidence_body = {
         "schema_version": FULL_POOL_TWO_STAGE_EVIDENCE_SCHEMA,
-        "classification": "nonproduction_two_stage_validation",
+        "classification": closure_profile.classification,
         "replay_identity": replay_identity,
         "upstream_lineage": {
             "source_root": str(closed.root),
@@ -1518,7 +1570,7 @@ def _write_closed_source(
         "realization_status_counts": status_counts,
         "artifact_hashes": core_artifact_hashes,
         "formal_research_evidence": upstream_formal_research_evidence,
-        "production_deploy_eligible": False,
+        "production_deploy_eligible": closure_profile.production_deploy_eligible,
     }
     evidence = {**evidence_body, "evidence_identity": _json_sha256(evidence_body)}
     _write_json(staging / _EVIDENCE_FILE, evidence)
@@ -1548,7 +1600,7 @@ def _write_closed_source(
         "schema_version": FULL_POOL_TWO_STAGE_SOURCE_SCHEMA,
         "source_identity": source_identity,
         "replay_identity": replay_identity,
-        "classification": "nonproduction_two_stage_validation",
+        "classification": closure_profile.classification,
         "upstream_source": {
             "source_root": str(closed.root),
             "schema_version": closed.manifest.get("schema_version"),
@@ -1576,7 +1628,7 @@ def _write_closed_source(
         },
         "source_hash": source_hash,
         "formal_research_evidence": upstream_formal_research_evidence,
-        "production_deploy_eligible": False,
+        "production_deploy_eligible": closure_profile.production_deploy_eligible,
         "artifacts": artifacts,
     }
     _write_json(staging / "manifest.json", manifest)
@@ -1980,12 +2032,19 @@ def _validate_closed_source(source: Path, *, manifest_sha256: str) -> dict[str, 
     manifest = _json_object(manifest_path, "realized source manifest")
     if set(manifest) != _MANIFEST_FIELDS or manifest.get("schema_version") != FULL_POOL_TWO_STAGE_SOURCE_SCHEMA:
         raise ValueError("realized source manifest schema or fields are not exact")
+    classification = manifest.get("classification")
+    if classification == FULL_POOL_TWO_STAGE_VALIDATION_CLASSIFICATION:
+        expected_production_eligibility = False
+    elif classification == FULL_POOL_TWO_STAGE_FORMAL_CLASSIFICATION:
+        expected_production_eligibility = True
+    else:
+        raise ValueError("realized source classification is unsupported")
     if (
-        manifest.get("classification") != "nonproduction_two_stage_validation"
-        or not isinstance(manifest.get("formal_research_evidence"), bool)
-        or manifest.get("production_deploy_eligible") is not False
+        not isinstance(manifest.get("formal_research_evidence"), bool)
+        or manifest.get("production_deploy_eligible")
+        is not expected_production_eligibility
     ):
-        raise ValueError("realized validation source cannot be production eligible")
+        raise ValueError("realized source classification and production eligibility are crossed")
     artifacts = _artifact_inventory(root, manifest)
     if set(artifacts) != {
         _CANDIDATE_FILE,
@@ -2053,6 +2112,7 @@ def _validate_closed_source(source: Path, *, manifest_sha256: str) -> dict[str, 
         or manifest.get("formal_research_evidence")
         is not upstream_accounting.get("formal_research_evidence")
         or accounting.get("composite_zero_provider_formal") is not False
+        or (expected_production_eligibility and expected_upstream_formal is not True)
     ):
         raise ValueError("realized source accounting is crossed")
 
@@ -2172,9 +2232,11 @@ def _validate_closed_source(source: Path, *, manifest_sha256: str) -> dict[str, 
         or evidence_accounting.get("composite_zero_provider_formal") is not False
         or evidence.get("accounting") != manifest.get("accounting")
         or evidence.get("artifact_hashes") != expected_evidence_artifacts
+        or evidence.get("classification") != classification
         or evidence.get("formal_research_evidence")
         is not manifest.get("formal_research_evidence")
-        or evidence.get("production_deploy_eligible") is not False
+        or evidence.get("production_deploy_eligible")
+        is not expected_production_eligibility
     ):
         raise ValueError("realization evidence closure is crossed")
     evidence_ref = _mapping(manifest.get("evidence"), "realization evidence reference")
