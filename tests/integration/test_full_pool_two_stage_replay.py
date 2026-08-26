@@ -15,6 +15,11 @@ import pytest
 from llm_abm_sim.concurrent_execution_journal import (
     CONCURRENT_MESSAGE_EXECUTION_RUN_IDENTITY_JSON,
 )
+from llm_abm_sim.concurrent_message_experiment import _ConcurrentRuntimeKernel
+from llm_abm_sim.concurrent_robustness_release import (
+    ConcurrentRobustnessReleaseError,
+    promote_concurrent_robustness_release,
+)
 from llm_abm_sim.decision import DecisionInput, EngageDecision, LLMDecisionAdapter
 from llm_abm_sim.full_pool_source_v4 import _ClosedStrictFullPoolSource
 from llm_abm_sim.full_pool_strict_replay import (
@@ -192,9 +197,20 @@ def test_two_stage_replay_closes_realized_feedback_source_without_provider_calls
     assert manifest["production_deploy_eligible"] is False
     assert evidence["schema_version"] == FULL_POOL_TWO_STAGE_EVIDENCE_SCHEMA
     assert projection["schema_version"] == FULL_POOL_TWO_STAGE_PROJECTION_SCHEMA
-    assert evidence["accounting"]["upstream"]["logical_judgments"] == 24
-    assert evidence["accounting"]["upstream"]["observed_model_counts"] == {"gpt-5.6-sol": 24}
-    assert evidence["accounting"]["upstream"]["evidence_profile"] == "validation"
+    upstream_accounting = evidence["accounting"]["upstream"]
+    assert upstream_accounting["logical_judgments"] == 24
+    assert upstream_accounting["requested_model"] == "gpt-5.6-sol"
+    assert upstream_accounting["observed_model_counts"] == {"gpt-5.6-sol": 24}
+    assert upstream_accounting["provider_accounting"]["total_tokens"] == (
+        upstream_accounting["provider_accounting"]["input_tokens"]
+        + upstream_accounting["provider_accounting"]["output_tokens"]
+    )
+    assert upstream_accounting["original_dispatch_count"] == 24
+    assert upstream_accounting["charged_physical_attempts"] == (
+        upstream_accounting["settled_actual_attempts"]
+        + upstream_accounting["dispatched_without_settlement_uncertainty"]
+    )
+    assert upstream_accounting["evidence_profile"] == "validation"
     assert evidence["accounting"]["upstream"]["live_api_triggered"] is False
     assert evidence["accounting"]["upstream"]["formal_research_evidence"] is False
     assert evidence["formal_research_evidence"] is False
@@ -282,6 +298,117 @@ def test_two_stage_replay_closes_realized_feedback_source_without_provider_calls
         if path.is_file()
     }
     assert upstream_hashes_after == upstream_hashes_before
+
+    with pytest.raises(ConcurrentRobustnessReleaseError, match="rejects"):
+        promote_concurrent_robustness_release(
+            repo_root=tmp_path,
+            formal_root=tmp_path / "unused-historical-formal",
+            study_root=tmp_path / "unused-historical-study",
+            candidate_dir=tmp_path / "unused-candidate",
+            destination_dir=tmp_path / "must-not-exist-release",
+            release_contract_path=tmp_path / "must-not-exist-contract.json",
+            release_id="two-stage-validation-must-not-promote",
+            presentation_closure_path=tmp_path / "unused-closure.json",
+            full_pool_source_root=output,
+            full_pool_manifest_sha256=result.manifest_sha256,
+            implementation_commit="0" * 40,
+            fresh_execution_manifest_path=tmp_path / "unused-fresh-manifest.json",
+        )
+    assert not (tmp_path / "must-not-exist-release").exists()
+    assert not (tmp_path / "must-not-exist-contract.json").exists()
+
+
+def test_replay_streams_spooled_rows_without_materializing_the_trajectory(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source_root, source_manifest_sha256, source_identity = _source_v4(tmp_path)
+    output = tmp_path / "streamed-two-stage-validation"
+
+    def forbid_materialization(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("the full replay trajectory must not be materialized")
+
+    monkeypatch.setattr(_ConcurrentRuntimeKernel, "materialize_spool", forbid_materialization)
+
+    FullPoolTwoStageReplay().run_and_close(
+        FullPoolTwoStageReplayRequest(
+            source_root=source_root,
+            source_manifest_sha256=source_manifest_sha256,
+            source_identity=source_identity,
+            output_dir=output,
+        )
+    )
+
+    manifest = json.loads((output / "manifest.json").read_text(encoding="utf-8"))
+    counts = manifest["counts"]
+    assert counts["candidate_rows"] == 36
+    assert counts["pairs"] == counts["realized_terminals"] == 24
+    assert counts["runtime_resident_row_high_water"] < (
+        counts["candidate_rows"] + counts["pairs"] + counts["realized_terminals"]
+    )
+    assert not any(path.name.startswith(".") for path in output.iterdir())
+
+
+def test_replay_removes_published_output_if_post_publish_source_check_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source_root, source_manifest_sha256, source_identity = _source_v4(tmp_path)
+    output = tmp_path / "post-publish-source-drift"
+    import llm_abm_sim.full_pool_two_stage_replay as replay_module
+
+    snapshot = replay_module._source_snapshot
+    calls = 0
+
+    def drift_after_publish(root: Path) -> dict[str, tuple[str, int]]:
+        nonlocal calls
+        calls += 1
+        current = snapshot(root)
+        if calls >= 4:
+            return {**current, "simulated-drift": ("0" * 64, 0)}
+        return current
+
+    monkeypatch.setattr(replay_module, "_source_snapshot", drift_after_publish)
+
+    with pytest.raises(ValueError, match="immutable Source-v4 bytes changed"):
+        FullPoolTwoStageReplay().run_and_close(
+            FullPoolTwoStageReplayRequest(
+                source_root=source_root,
+                source_manifest_sha256=source_manifest_sha256,
+                source_identity=source_identity,
+                output_dir=output,
+            )
+        )
+
+    assert not output.exists()
+    assert not list(tmp_path.glob(f".{output.name}.staging-*"))
+
+
+def test_replay_removes_staging_when_the_one_shot_run_is_interrupted(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source_root, source_manifest_sha256, source_identity = _source_v4(tmp_path)
+    output = tmp_path / "interrupted-two-stage-validation"
+    import llm_abm_sim.full_pool_two_stage_replay as replay_module
+
+    def interrupt(**_kwargs: object) -> None:
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(replay_module, "_run_replay_runtime", interrupt)
+
+    with pytest.raises(KeyboardInterrupt):
+        FullPoolTwoStageReplay().run_and_close(
+            FullPoolTwoStageReplayRequest(
+                source_root=source_root,
+                source_manifest_sha256=source_manifest_sha256,
+                source_identity=source_identity,
+                output_dir=output,
+            )
+        )
+
+    assert not output.exists()
+    assert not list(tmp_path.glob(f".{output.name}.staging-*"))
 
 
 def test_replay_fails_closed_on_wrong_source_binding_or_schema(tmp_path: Path) -> None:
