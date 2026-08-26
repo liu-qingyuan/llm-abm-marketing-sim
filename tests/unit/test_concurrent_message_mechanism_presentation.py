@@ -264,6 +264,69 @@ def test_full_pool_master_is_additive_bilingual_and_keeps_historical_bytes_exact
     } == _HISTORICAL_APPROVED_HASHES
 
 
+def test_two_stage_full_pool_master_has_one_bilingual_semantic_owner_and_new_bytes() -> None:
+    historical_before = {
+        filename: (_ASSET_ROOT / filename).read_bytes()
+        for filename in _HISTORICAL_APPROVED_HASHES
+    }
+    legacy = _MECHANISM_PRESENTATION.build_full_pool_master()
+
+    first = _MECHANISM_PRESENTATION.build_full_pool_two_stage_master()
+    second = _MECHANISM_PRESENTATION.build_full_pool_two_stage_master()
+
+    assert first == second
+    assert first.schema_version == "full-pool-two-stage-mechanism-presentation-v1"
+    assert tuple(diagram.filename for diagram in first.diagrams) == (_FULL_POOL_FILENAME,)
+    assert tuple(artifact.filename for artifact in first.mermaid_artifacts) == (_FULL_POOL_FILENAME,)
+    diagram = first.diagrams[0]
+    artifact = first.mermaid_artifacts[0]
+    node_ids = {node.semantic_id for node in diagram.nodes}
+    edge_by_id = {edge.semantic_id: (edge.source, edge.target) for edge in diagram.edges}
+    assert node_ids == {
+        "full_eligible_pool_36400",
+        "eligible_pairs_109200",
+        "independent_queues_30_batches",
+        "exposure_gate",
+        "provider_judgment",
+        "judgment_gate",
+        "stable_probability_draw",
+        "realized_outcome",
+        "full_batch_barrier",
+        "realized_feedback",
+        "next_batch_ranking_context",
+        "realized_projection",
+    }
+    assert edge_by_id == {
+        "full_pool_to_pairs": ("full_eligible_pool_36400", "eligible_pairs_109200"),
+        "pairs_to_queues": ("eligible_pairs_109200", "independent_queues_30_batches"),
+        "queues_to_exposure": ("independent_queues_30_batches", "exposure_gate"),
+        "exposure_to_provider_judgment": ("exposure_gate", "provider_judgment"),
+        "judgment_to_gate": ("provider_judgment", "judgment_gate"),
+        "provider_ignore_to_outcome": ("judgment_gate", "realized_outcome"),
+        "positive_gate_to_draw": ("judgment_gate", "stable_probability_draw"),
+        "draw_to_outcome": ("stable_probability_draw", "realized_outcome"),
+        "outcome_to_barrier": ("realized_outcome", "full_batch_barrier"),
+        "barrier_to_realized_feedback": ("full_batch_barrier", "realized_feedback"),
+        "feedback_to_next_batch": ("realized_feedback", "next_batch_ranking_context"),
+        "next_batch_feedback": ("next_batch_ranking_context", "independent_queues_30_batches"),
+        "next_batch_to_projection": ("next_batch_ranking_context", "realized_projection"),
+    }
+    assert diagram.stage_count == 12
+    assert diagram.node_budget == 12
+    assert {projection.language for projection in diagram.projections} == {"zh-CN", "en-US"}
+    assert artifact.payload != legacy.mermaid_artifacts[0].payload
+    assert artifact.sha256 == hashlib.sha256(artifact.payload).hexdigest()
+    assert b"Provider Judgment" in artifact.payload
+    assert b"Stable Probability Draw" in artifact.payload
+    assert b"Realized Feedback" in artifact.payload
+    assert b"Realized Projection" in artifact.payload
+    assert b"realized_reason" not in artifact.payload
+    assert {
+        filename: (_ASSET_ROOT / filename).read_bytes()
+        for filename in _HISTORICAL_APPROVED_HASHES
+    } == historical_before
+
+
 def test_module_has_one_package_internal_interface_and_no_public_export() -> None:
     interface_types = [
         name

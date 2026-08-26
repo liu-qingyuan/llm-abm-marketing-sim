@@ -7,6 +7,7 @@ from dataclasses import dataclass
 
 _SCHEMA_VERSION = "concurrent-message-mechanism-presentation-v1"
 _FULL_POOL_SCHEMA_VERSION = "full-pool-mechanism-presentation-v1"
+_FULL_POOL_TWO_STAGE_SCHEMA_VERSION = "full-pool-two-stage-mechanism-presentation-v1"
 _SEMANTIC_SET_SCHEMA_VERSION = "mechanism-semantic-set-v1"
 _LANE_ORDER = (
     "historical_data",
@@ -1158,6 +1159,309 @@ def _full_pool_definition() -> _DiagramDefinition:
     )
 
 
+def _full_pool_two_stage_definition() -> _DiagramDefinition:
+    return _DiagramDefinition(
+        diagram_id="full_pool_two_stage_main",
+        filename="full-pool-mechanism.mmd",
+        navigation_anchor="full-pool-main",
+        title=_text(
+            "full_pool_two_stage_main.title",
+            "全池两阶段互动实现机制",
+            "Full-Pool Two-Stage Engagement Realization",
+        ),
+        description=_text(
+            "full_pool_two_stage_main.description",
+            "36,400 位用户与三条消息形成 109,200 次单次曝光。Provider Judgment 只表达互动意向；ABM 通过稳定概率抽样形成 realized action，只有 realized positive 在完整批次屏障后进入下一批反馈。",
+            "36,400 users and three messages form 109,200 single exposures. Provider Judgment expresses engagement intent only; the ABM uses a stable probability draw to form the realized action, and only realized positives enter next-batch feedback after the full-batch barrier.",
+        ),
+        nodes=(
+            _node(
+                "full_eligible_pool_36400",
+                "full_pool_two_stage_main.node.full_eligible_pool_36400",
+                "36,400 位完整合格用户",
+                "36,400 Full Eligible Users",
+                lane="historical_data",
+                stage=1,
+            ),
+            _node(
+                "eligible_pairs_109200",
+                "full_pool_two_stage_main.node.eligible_pairs_109200",
+                "109,200 个 user × message 配对",
+                "109,200 User × Message Pairs",
+                lane="platform_recommendation",
+                stage=2,
+            ),
+            _node(
+                "independent_queues_30_batches",
+                "full_pool_two_stage_main.node.independent_queues_30_batches",
+                "三条独立队列 · 30 批 · 1,214 / 1,194",
+                "Three Independent Queues · 30 Batches · 1,214 / 1,194",
+                lane="platform_recommendation",
+                stage=3,
+                shape="rounded",
+            ),
+            _node(
+                "exposure_gate",
+                "full_pool_two_stage_main.node.exposure_gate",
+                "曝光闸门 · 每个配对仅一次",
+                "Exposure Gate · One Exposure per Pair",
+                lane="platform_recommendation",
+                stage=4,
+                shape="diamond",
+            ),
+            _node(
+                "provider_judgment",
+                "full_pool_two_stage_main.node.provider_judgment",
+                "Provider Judgment · 互动意向与概率",
+                "Provider Judgment · Intent and Probability",
+                lane="simulated_user_decision",
+                stage=5,
+            ),
+            _node(
+                "judgment_gate",
+                "full_pool_two_stage_main.node.judgment_gate",
+                "ignore 或正向意向闸门",
+                "Ignore or Positive-Intent Gate",
+                lane="simulated_user_decision",
+                stage=6,
+                shape="diamond",
+            ),
+            _node(
+                "stable_probability_draw",
+                "full_pool_two_stage_main.node.stable_probability_draw",
+                "稳定概率抽样 · source × user × message",
+                "Stable Probability Draw · Source × User × Message",
+                lane="simulated_user_decision",
+                stage=7,
+                shape="rounded",
+            ),
+            _node(
+                "realized_outcome",
+                "full_pool_two_stage_main.node.realized_outcome",
+                "Realized action 或 ignore",
+                "Realized Action or Ignore",
+                lane="simulated_user_decision",
+                stage=8,
+            ),
+            _node(
+                "full_batch_barrier",
+                "full_pool_two_stage_main.node.full_batch_barrier",
+                "完整批次屏障",
+                "Full-Batch Barrier",
+                lane="platform_recommendation",
+                stage=9,
+                shape="hexagon",
+            ),
+            _node(
+                "realized_feedback",
+                "full_pool_two_stage_main.node.realized_feedback",
+                "Realized Feedback · 仅提交正向用户",
+                "Realized Feedback · Positive Users Only",
+                lane="platform_recommendation",
+                stage=10,
+            ),
+            _node(
+                "next_batch_ranking_context",
+                "full_pool_two_stage_main.node.next_batch_ranking_context",
+                "下一批重新排序上下文",
+                "Next-Batch Reranking Context",
+                lane="platform_recommendation",
+                stage=11,
+            ),
+            _node(
+                "realized_projection",
+                "full_pool_two_stage_main.node.realized_projection",
+                "单次曝光 realized projection",
+                "Single-Exposure Realized Projection",
+                lane="platform_recommendation",
+                stage=12,
+                shape="stadium",
+            ),
+        ),
+        edges=(
+            _edge(
+                "full_pool_to_pairs",
+                "full_eligible_pool_36400",
+                "eligible_pairs_109200",
+                label=_text(
+                    "full_pool_two_stage_main.edge.full_pool_to_pairs",
+                    "每位用户 × 三条消息",
+                    "Each User × Three Messages",
+                ),
+            ),
+            _edge(
+                "pairs_to_queues",
+                "eligible_pairs_109200",
+                "independent_queues_30_batches",
+                label=_text(
+                    "full_pool_two_stage_main.edge.pairs_to_queues",
+                    "按消息维护剩余配对",
+                    "Maintain Remaining Pairs per Message",
+                ),
+            ),
+            _edge(
+                "queues_to_exposure",
+                "independent_queues_30_batches",
+                "exposure_gate",
+                label=_text(
+                    "full_pool_two_stage_main.edge.queues_to_exposure",
+                    "排序决定曝光批次与顺序",
+                    "Ranking Sets Exposure Batch and Order",
+                ),
+            ),
+            _edge(
+                "exposure_to_provider_judgment",
+                "exposure_gate",
+                "provider_judgment",
+                label=_text(
+                    "full_pool_two_stage_main.edge.exposure_to_provider_judgment",
+                    "曝光后形成结构化 Judgment",
+                    "Form Structured Judgment After Exposure",
+                ),
+            ),
+            _edge(
+                "judgment_to_gate",
+                "provider_judgment",
+                "judgment_gate",
+                label=_text(
+                    "full_pool_two_stage_main.edge.judgment_to_gate",
+                    "读取 engage、action 与 probability",
+                    "Read Engage, Action, and Probability",
+                ),
+            ),
+            _edge(
+                "provider_ignore_to_outcome",
+                "judgment_gate",
+                "realized_outcome",
+                label=_text(
+                    "full_pool_two_stage_main.edge.provider_ignore_to_outcome",
+                    "Provider ignore · 不抽样",
+                    "Provider Ignore · No Draw",
+                ),
+                style="dashed",
+            ),
+            _edge(
+                "positive_gate_to_draw",
+                "judgment_gate",
+                "stable_probability_draw",
+                label=_text(
+                    "full_pool_two_stage_main.edge.positive_gate_to_draw",
+                    "正向意向才进入概率闸门",
+                    "Positive Intent Enters Probability Gate",
+                ),
+            ),
+            _edge(
+                "draw_to_outcome",
+                "stable_probability_draw",
+                "realized_outcome",
+                label=_text(
+                    "full_pool_two_stage_main.edge.draw_to_outcome",
+                    "pass 保留 action；fail 变为 ignore",
+                    "Pass Keeps Action; Fail Becomes Ignore",
+                ),
+            ),
+            _edge(
+                "outcome_to_barrier",
+                "realized_outcome",
+                "full_batch_barrier",
+                label=_text(
+                    "full_pool_two_stage_main.edge.outcome_to_barrier",
+                    "整批 outcomes 全部关闭",
+                    "Close Every Outcome in the Batch",
+                ),
+            ),
+            _edge(
+                "barrier_to_realized_feedback",
+                "full_batch_barrier",
+                "realized_feedback",
+                label=_text(
+                    "full_pool_two_stage_main.edge.barrier_to_realized_feedback",
+                    "按 user_id 去重提交",
+                    "Commit Deduplicated by user_id",
+                ),
+            ),
+            _edge(
+                "feedback_to_next_batch",
+                "realized_feedback",
+                "next_batch_ranking_context",
+                label=_text(
+                    "full_pool_two_stage_main.edge.feedback_to_next_batch",
+                    "仅影响下一批",
+                    "Affects the Next Batch Only",
+                ),
+            ),
+            _edge(
+                "next_batch_feedback",
+                "next_batch_ranking_context",
+                "independent_queues_30_batches",
+                label=_text(
+                    "full_pool_two_stage_main.edge.next_batch_feedback",
+                    "下一批重新排序",
+                    "Rerank the Next Batch",
+                ),
+                style="dashed",
+            ),
+            _edge(
+                "next_batch_to_projection",
+                "next_batch_ranking_context",
+                "realized_projection",
+                label=_text(
+                    "full_pool_two_stage_main.edge.next_batch_to_projection",
+                    "30 批关闭后投影 realized facts",
+                    "Project Realized Facts After 30 Batches Close",
+                ),
+                style="thick",
+            ),
+        ),
+        fallback=(
+            _text(
+                "full_pool_two_stage_main.fallback.denominator",
+                "36,400 位用户与三条消息形成 109,200 个 user × message exposures；每个配对只曝光一次。",
+                "36,400 users and three messages form 109,200 user × message exposures; every pair is exposed once.",
+            ),
+            _text(
+                "full_pool_two_stage_main.fallback.judgment",
+                "Provider Judgment 记录互动意向、概率、action、confidence 与意向理由，但不等于已经实现的行动。",
+                "Provider Judgment records engagement intent, probability, action, confidence, and an intent reason; it is not an already realized action.",
+            ),
+            _text(
+                "full_pool_two_stage_main.fallback.ignore",
+                "Provider ignore 不生成 draw，并直接成为 realized ignore。",
+                "Provider ignore creates no draw and directly becomes realized ignore.",
+            ),
+            _text(
+                "full_pool_two_stage_main.fallback.draw",
+                "Provider 正向 Judgment 才按 source、user、message 稳定键抽样；pass 保留原 action，fail 变为 ignore。",
+                "Only a positive Provider Judgment is drawn using the stable source, user, and message key; pass keeps the original action and fail becomes ignore.",
+            ),
+            _text(
+                "full_pool_two_stage_main.fallback.feedback",
+                "完整批次关闭后只提交 realized-positive 用户；Provider ignore 与 draw fail 都不进入下一批反馈。",
+                "After the full batch closes, only realized-positive users are committed; Provider ignore and draw fail never enter next-batch feedback.",
+            ),
+            _text(
+                "full_pool_two_stage_main.fallback.projection",
+                "当前 Primary 结果只按单次 exposure 的 realized like、comment、share 与 ignore 投影。",
+                "The current Primary result projects realized like, comment, share, and ignore by single exposure only.",
+            ),
+        ),
+        node_budget=12,
+        image_brief=_image_brief(
+            "Provide one deterministic end-to-end two-stage Full-Pool semantic master without generating a raster asset.",
+            "A visible chain from the full denominator through Provider Judgment, stable realization, full-batch feedback, next-batch ranking, and realized projection.",
+            (
+                "exactly twelve semantic nodes",
+                "Provider Judgment distinct from ABM Realization",
+                "Provider ignore bypasses the draw",
+                "stable source-user-message draw",
+                "realized-positive feedback after the full-batch barrier",
+                "single-exposure realized projection",
+            ),
+            generate_raster=False,
+        ),
+    )
+
+
 def _projection(definition: _DiagramDefinition, language: str) -> _MechanismLanguageProjection:
     texts: list[_BilingualText] = [
         definition.title,
@@ -1351,6 +1655,38 @@ def _validate_full_pool_definition(definition: _DiagramDefinition) -> None:
         raise ValueError("Full-Pool mechanism bilingual projection is incomplete")
 
 
+def _validate_full_pool_two_stage_definition(definition: _DiagramDefinition) -> None:
+    if (
+        definition.diagram_id != "full_pool_two_stage_main"
+        or definition.filename != "full-pool-mechanism.mmd"
+        or definition.node_budget != 12
+        or definition.image_brief.generate_raster
+    ):
+        raise ValueError("two-stage Full-Pool mechanism identity or raster boundary is crossed")
+    nodes = {node.semantic_id: node for node in definition.nodes}
+    edges = {edge.semantic_id: edge for edge in definition.edges}
+    if len(nodes) != 12 or len(edges) != len(definition.edges):
+        raise ValueError("two-stage Full-Pool mechanism semantic IDs are incomplete")
+    if any(_STABLE_ID.fullmatch(semantic_id) is None for semantic_id in (*nodes, *edges)):
+        raise ValueError("two-stage Full-Pool mechanism has an unstable semantic ID")
+    if {node.stage for node in definition.nodes} != set(range(1, 13)):
+        raise ValueError("two-stage Full-Pool mechanism stages are not complete")
+    if any(node.lane not in _LANE_ORDER for node in definition.nodes):
+        raise ValueError("two-stage Full-Pool mechanism has unknown lane ownership")
+    if any(edge.source not in nodes or edge.target not in nodes for edge in definition.edges):
+        raise ValueError("two-stage Full-Pool mechanism edge endpoint is missing")
+    texts = (
+        definition.title,
+        definition.description,
+        *(_LANE_LABELS[lane] for lane in _LANE_ORDER),
+        *(node.label for node in definition.nodes),
+        *(edge.label for edge in definition.edges if edge.label is not None),
+        *definition.fallback,
+    )
+    if any(not text.key or not text.zh_cn.strip() or not text.en_us.strip() for text in texts):
+        raise ValueError("two-stage Full-Pool mechanism bilingual projection is incomplete")
+
+
 def _semantic_set_identity(artifacts: tuple[_MechanismArtifact, ...]) -> str:
     identity_document = {
         "schema_version": _SEMANTIC_SET_SCHEMA_VERSION,
@@ -1396,6 +1732,40 @@ class _MechanismPresentationInterface:
         )
         return _MechanismPresentation(
             schema_version=_FULL_POOL_SCHEMA_VERSION,
+            lane_order=_LANE_ORDER,
+            diagrams=(diagram,),
+            mermaid_artifacts=(artifact,),
+            semantic_set_identity_sha256=_semantic_set_identity((artifact,)),
+        )
+
+    def build_full_pool_two_stage_master(self) -> _MechanismPresentation:
+        """Build v13 two-stage semantics without changing the legacy Full-Pool master."""
+        definition = _full_pool_two_stage_definition()
+        _validate_full_pool_two_stage_definition(definition)
+        diagram = _MechanismDiagram(
+            diagram_id=definition.diagram_id,
+            filename=definition.filename,
+            navigation_anchor=definition.navigation_anchor,
+            title_key=definition.title.key,
+            description_key=definition.description.key,
+            lane_order=_LANE_ORDER,
+            stage_count=max(node.stage for node in definition.nodes),
+            node_budget=definition.node_budget,
+            nodes=definition.nodes,
+            edges=definition.edges,
+            projections=tuple(
+                _projection(definition, language) for language in ("zh-CN", "en-US")
+            ),
+            image_brief=definition.image_brief,
+        )
+        payload = _mermaid_bytes(definition)
+        artifact = _MechanismArtifact(
+            filename=definition.filename,
+            payload=payload,
+            sha256=hashlib.sha256(payload).hexdigest(),
+        )
+        return _MechanismPresentation(
+            schema_version=_FULL_POOL_TWO_STAGE_SCHEMA_VERSION,
             lane_order=_LANE_ORDER,
             diagrams=(diagram,),
             mermaid_artifacts=(artifact,),

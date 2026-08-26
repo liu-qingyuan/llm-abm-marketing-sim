@@ -56,6 +56,18 @@ source、evidence 和 projection 分别使用：
 
 manifest 关闭 users、messages、pairs、exposures、terminals、batch commits、candidate rows、membership、projection rows、action/status counts、row hashes、artifact inventory、upstream identity/hash与 realization policy。projection 继续以 one-based delivery round、Message 和 Segment 输出 Likes、Comments、Shares 与 Exposure；Exposure 包含 realized ignore，Segment 只通过冻结 membership 的 `user_id` join 获得。
 
+## Realized presentation candidate
+
+`Report Presentation Interface` 会先按 manifest schema 分派到 realized persisted reader，再从已复验的 terminal、pair、batch commit 与 projection 重算 headline、总体、Message、Segment、Segment × Message 九格、batch trajectory、realized feedback 和概率口径。调用方仍只提交显式 source path、manifest SHA-256、历史 Formal/study/candidate 与新 destination，不能注入 metric 或 claim。
+
+页面以单次 `user × message` exposure 作为唯一 Primary engagement 单位。`Exposure` 包含 realized ignore，`like + comment + share` 精确等于 realized engagements。raw `provider_probability` mean 与 `sum(provider_engage × provider_probability) / exposures` 分栏展示；后者只表示固定 Judgment 分组下的 effective gate expectation，不解释为 trajectory expectation 或多-seed 区间。
+
+trace partition 同时投影 `provider_judgment` 与 `abm_realization`：Provider reason 明确属于互动意向，realization 只展示 rule、seed、draw、status、engage 与 action。页面不创建新的心理理由。浏览器继续先验证 index，再按 message 与 batch 加载一个分区；加载失败保持可访问的 fail-closed 状态。
+
+`Mechanism Presentation Module` 新增独立的 two-stage Full-Pool master builder。旧 Full-Pool master Interface 与 Historical 1,000-User master bytes保持不变；新 builder以稳定 node/edge IDs拥有 Provider Judgment、ignore/positive gate、stable draw、realized outcome、full-batch barrier、realized feedback、next-batch ranking和realized projection语义。Report只从该语义对象生成 deterministic inline SVG、双语DOM fallback与同字节 `.mmd`，不会成为第二个机制语义所有者。
+
+当前 presentation继承 source的`nonproduction_two_stage_validation`与`production_deploy_eligible=false`分类。它复制同源 realized source/projection、upstream lineage和历史candidate原字节，composition阶段 Provider calls为0，且不触发 canonical、release promotion或secrets访问。
+
 ## Evidence 与失败模式
 
 evidence 分开保存 upstream Provider accounting 与 realization accounting。upstream requested/observed model、responses、usage、settled/charged attempts、`validation/formal_live` evidence profile和production eligibility来自Source-v4 persisted consumer；`upstream_live_api_triggered`与`formal_research_evidence`只投影该closed profile，不从realization零调用或caller声明推断。realization固定记录`provider_calls=0`与`live_api_triggered=false`。复合研究不能因为replay零调用而被标成整体zero-Provider Formal。

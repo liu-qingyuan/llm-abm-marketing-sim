@@ -44,38 +44,29 @@ mkdir -p ${JSON.stringify(root)}
 cat > ${JSON.stringify(path.join(root, 'compose_source_v4_fixture_test.py'))} <<'PY'
 from pathlib import Path
 from llm_abm_sim import concurrent_robustness_report as report
-from llm_abm_sim.full_pool_strict_operator import (
-    StrictFreshAutomationOperator,
-    StrictFreshLiveGates,
-    create_strict_fresh_execution_manifest,
+from llm_abm_sim.full_pool_two_stage_replay import (
+    FullPoolTwoStageReplay,
+    FullPoolTwoStageReplayRequest,
 )
 from tests.integration.test_full_pool_presentation_bundle import _historical_candidate
-from tests.integration.test_full_pool_strict_operator import _manifest_request
-from tests.integration.test_full_pool_strict_replay import _CompleteEvidenceStrictAdapter
+from tests.integration.test_full_pool_two_stage_replay import _source_v4
 
 
-def test_compose_source_v4_fixture() -> None:
+def test_compose_two_stage_realized_fixture() -> None:
     root = Path(${JSON.stringify(root)}).resolve()
-    request = _manifest_request(root / 'strict-inputs')
-    manifest = create_strict_fresh_execution_manifest(request)
-    result = StrictFreshAutomationOperator().run(
-        manifest,
-        gates=StrictFreshLiveGates(
-            explicit_live_authorization=True,
-            external_requests_allowed=True,
-            credentials_available=True,
-            provider_transport='openai-codex',
-            requested_model='gpt-5.6-sol',
-            subscription_billed_cost_usd=0.0,
-        ),
-        adapter_factory=lambda lane_id: _CompleteEvidenceStrictAdapter(lane_id),
+    upstream_root, upstream_manifest_sha256, upstream_identity = _source_v4(root / 'strict-inputs')
+    realized = FullPoolTwoStageReplay().run_and_close(
+        FullPoolTwoStageReplayRequest(
+            source_root=upstream_root,
+            source_manifest_sha256=upstream_manifest_sha256,
+            source_identity=upstream_identity,
+            output_dir=root / 'realized-source',
+        )
     )
-    assert result.source_root is not None
-    assert result.source_manifest_sha256 is not None
     formal, study, historical = _historical_candidate(root / 'historical')
     report._REPORT_PRESENTATION.compose_full_pool_presentation_bundle(
-        full_pool_source_root=result.source_root,
-        full_pool_manifest_sha256=result.source_manifest_sha256,
+        full_pool_source_root=realized.output_dir,
+        full_pool_manifest_sha256=realized.manifest_sha256,
         historical_formal_root=formal,
         historical_study_root=study,
         historical_candidate_dir=historical,
@@ -185,16 +176,7 @@ function stopServer(server: ChildProcess): void {
 test('Full-Pool report is bilingual, responsive, lazy, filterable, and keyboard accessible', async ({ page, request }, testInfo) => {
   test.setTimeout(180_000);
   const fixture = generateFullPoolFixture(testInfo.outputDir);
-  const resultLineageText = readFileSync(
-    path.join(fixture.bundleDir, 'full-pool-segment-lineage.md'),
-    'utf8',
-  );
-  const usesDeliveryRunProjection = resultLineageText.includes(
-    'full-pool-segment-result-projection-v2',
-  );
-  const deliveryRunCount = usesDeliveryRunProjection
-    ? new Set(fixture.index.partitions.map((entry) => entry.time_step)).size
-    : 1;
+  const deliveryRunCount = 1;
   const firstPartition = fixture.synthetic
     ? expandFirstPartitionForPagination(fixture)
     : fixture.index.partitions.find(
@@ -246,90 +228,70 @@ test('Full-Pool report is bilingual, responsive, lazy, filterable, and keyboard 
     await page.emulateMedia({ reducedMotion: 'reduce' });
     await page.goto(`${baseURL}/report.html`);
 
-    await expect(page).toHaveTitle('Full-Pool 主实验');
+    await expect(page).toHaveTitle('Full-Pool 两阶段互动实现');
     await expect(page.locator('html')).toHaveAttribute('lang', 'zh-CN');
     await expect(page.getByTestId('full-pool-presentation')).toHaveAttribute(
       'data-production-deploy-eligible',
       'false',
     );
-    await expect(page.getByTestId('full-pool-main-experiment').getByRole('heading', { level: 1 })).toContainText('Full-Pool 主实验');
-    await expect(page.getByTestId('full-pool-run-evidence')).toContainText('36,400');
-    await expect(page.getByTestId('full-pool-run-evidence')).toContainText('109,200');
-    await expect(page.getByTestId('full-pool-run-evidence')).toContainText('实际值');
-    await expect(page.getByTestId('full-pool-claim-boundary')).toContainText('排序只改变曝光批次与顺序');
+    await expect(page.getByTestId('full-pool-presentation')).toHaveAttribute(
+      'data-presentation-semantics',
+      'two_stage_realized',
+    );
+    await expect(page.getByTestId('full-pool-main-experiment').getByRole('heading', { level: 1 })).toContainText('Full-Pool 两阶段互动实现');
+    await expect(page.getByTestId('full-pool-realized-headline')).toContainText('/');
+    await expect(page.getByTestId('full-pool-run-evidence')).toContainText('同源 realized 运行口径');
+    await expect(page.getByTestId('full-pool-claim-boundary')).toContainText('单次 user × message exposure');
+    await expect(page.getByTestId('full-pool-result-conclusion')).toContainText('S1 尚未形成 M1 偏好证据');
+    await expect(page.getByTestId('full-pool-probability-contract')).toContainText('effective gate expectation');
+    await expect(page.getByTestId('full-pool-feedback-trajectory')).toContainText('Realized feedback barrier');
     await expect(page.getByTestId('historical-sensitivity-1000')).toContainText(
       'Historical Sensitivity · 1,000 users',
     );
-    await expect(page.getByTestId('full-pool-mechanism-section').locator('[data-mechanism-node-id]')).toHaveCount(8);
-    await expect(page.getByTestId('full-pool-mechanism-section').locator('[data-mechanism-edge-id]')).toHaveCount(8);
-    await expect(page.getByTestId('full-pool-mechanism-section')).toContainText('Primary-only');
+    const mechanism = page.getByTestId('full-pool-mechanism-section');
+    const mechanismSvg = page.getByTestId('full-pool-mechanism-svg');
+    await expect(mechanismSvg).toBeVisible();
+    await expect(mechanismSvg).toHaveAttribute('role', 'img');
+    await expect(mechanismSvg.locator('[data-mechanism-node-id]')).toHaveCount(12);
+    await expect(mechanismSvg.locator('[data-mechanism-edge-id]')).toHaveCount(13);
+    await expect(mechanism.getByTestId('full-pool-mechanism-fallback').locator('[data-mechanism-node-id]')).toHaveCount(12);
+    await expect(mechanism.getByTestId('full-pool-mechanism-fallback').locator('[data-mechanism-edge-id]')).toHaveCount(13);
+    await expect(mechanism).toContainText('Provider Judgment');
+    const firstMechanismNode = mechanismSvg.locator('[data-mechanism-node-id]').first();
+    await firstMechanismNode.focus();
+    await expect(firstMechanismNode).toBeFocused();
+
     const segmentTable = page.getByTestId('full-pool-segment-table');
     await expect(segmentTable).toBeVisible();
     await expect(segmentTable.locator('thead th')).toHaveText([
-      'Run',
-      'Message',
-      'Segment',
-      'Total Likes',
-      'Total Comments',
-      'Total Shares',
+      'Group',
       'Exposure',
+      'Likes',
+      'Comments',
+      'Shares',
+      'Realized ignores',
+      'Realized engagements',
+      '单次曝光 realized engagement',
     ]);
     const segmentRows = segmentTable.locator('tbody tr');
     await expect(segmentRows).toHaveCount(deliveryRunCount * 9);
-    expect(
-      await segmentRows.evaluateAll((rows) =>
-        rows.map((row) => {
-          const cells = [...row.querySelectorAll('td')].map((cell) => cell.textContent ?? '');
-          return `${cells[2]}:${cells[1]}:${cells[0]}`;
-        }),
-      ),
-    ).toEqual(
+    expect(await segmentRows.locator('th').allTextContents()).toEqual(
       ['S1', 'S2', 'S3'].flatMap((segment) =>
-        ['M1', 'M2', 'M3'].flatMap((message) =>
-          Array.from(
-            { length: deliveryRunCount },
-            (_, index) => `${segment}:${message}:${index + 1}`,
-          ),
-        ),
+        ['M1', 'M2', 'M3'].map((message) => `${segment} × ${message}`),
       ),
     );
-    if (usesDeliveryRunProjection) {
-      await expect(page.getByTestId('full-pool-segment-results')).toContainText(
-        'Run is the one-based delivery round',
-      );
-    }
-    await expect(page.getByTestId('strict-trajectory-disclosure')).toContainText(
-      'three historical Provider failures',
+    const resultCsv = await request.get(
+      `${baseURL}/full-pool-source/full-pool-realized-projection.csv`,
     );
-    const messageSort = segmentTable.getByRole('button', { name: 'Sort by Message' });
-    await messageSort.focus();
-    await messageSort.press('Enter');
-    await expect(messageSort).toHaveAttribute('aria-sort', 'ascending');
-    expect(await segmentRows.locator('td:nth-child(2)').allTextContents()).toEqual([
-      ...Array(deliveryRunCount * 3).fill('M1'),
-      ...Array(deliveryRunCount * 3).fill('M2'),
-      ...Array(deliveryRunCount * 3).fill('M3'),
-    ]);
-    await messageSort.press('Enter');
-    await expect(messageSort).toHaveAttribute('aria-sort', 'descending');
-    expect(await segmentRows.locator('td:nth-child(2)').allTextContents()).toEqual([
-      ...Array(deliveryRunCount * 3).fill('M3'),
-      ...Array(deliveryRunCount * 3).fill('M2'),
-      ...Array(deliveryRunCount * 3).fill('M1'),
-    ]);
-    const resultCsv = await request.get(`${baseURL}/full-pool-segment-results.csv`);
     expect(resultCsv.status()).toBe(200);
     expect(await resultCsv.text()).toContain(
       'Run,Message,Segment,Total Likes,Total Comments,Total Shares,Exposure',
     );
-    const resultLineage = await request.get(`${baseURL}/full-pool-segment-lineage.md`);
-    expect(resultLineage.status()).toBe(200);
-    const resultLineageBody = await resultLineage.text();
-    expect(resultLineageBody).toContain('population and model both change');
-    if (usesDeliveryRunProjection) {
-      expect(resultLineageBody).toContain('one-based delivery round');
-      expect(resultLineageBody).toContain('time_step + 1');
-    }
+    const realizedEvidence = await request.get(
+      `${baseURL}/full-pool-source/realization-evidence.json`,
+    );
+    expect(realizedEvidence.status()).toBe(200);
+    expect((await realizedEvidence.json()).production_deploy_eligible).toBe(false);
 
     const traceState = page.getByTestId('full-pool-trace-state');
     await expect(traceState).toHaveAttribute('data-trace-state', 'ready');
@@ -430,6 +392,9 @@ test('Full-Pool report is bilingual, responsive, lazy, filterable, and keyboard 
     const drawer = page.getByTestId('full-pool-trace-drawer');
     await expect(drawer).toBeVisible();
     await expect(drawer.getByTestId('full-pool-trace-detail')).toContainText(userId);
+    await expect(drawer.getByTestId('full-pool-trace-detail')).toContainText('provider_judgment');
+    await expect(drawer.getByTestId('full-pool-trace-detail')).toContainText('abm_realization');
+    await expect(drawer.getByTestId('full-pool-trace-detail')).not.toContainText('realized_reason');
     await expect(drawer.getByTestId('full-pool-trace-drawer-close')).toBeFocused();
     await page.keyboard.press('Tab');
     await expect(drawer.getByTestId('full-pool-trace-drawer-close')).toBeFocused();
@@ -447,9 +412,15 @@ test('Full-Pool report is bilingual, responsive, lazy, filterable, and keyboard 
 
     await page.locator('[data-full-pool-language="en-US"]').click();
     await expect(page.locator('html')).toHaveAttribute('lang', 'en-US');
-    await expect(page.getByTestId('full-pool-main-experiment').getByRole('heading', { level: 1 })).toHaveText('Full-Pool Main Experiment');
+    await expect(page.getByTestId('full-pool-main-experiment').getByRole('heading', { level: 1 })).toHaveText('Full-Pool Two-Stage Engagement Realization');
     await expect(page.getByTestId('full-pool-claim-boundary')).toContainText(
-      'ranking changes exposure timing and order only',
+      'single user × message exposure',
+    );
+    await expect(page.getByTestId('full-pool-result-conclusion')).toContainText(
+      'S1 does not evidence a preference for M1',
+    );
+    await expect(page.getByTestId('full-pool-probability-contract')).toContainText(
+      'fixed Judgment group',
     );
     await expect(page.getByTestId('full-pool-trace-state')).toContainText('ready');
     await expect(page.getByTestId('full-pool-trace-page-status')).toContainText('Page 1 of 1');
@@ -482,7 +453,7 @@ test('Full-Pool report is bilingual, responsive, lazy, filterable, and keyboard 
     await expect(page.getByTestId('full-pool-run-evidence')).toBeVisible();
     await expect(page.getByTestId('full-pool-trace-reader')).toBeVisible();
     await expect(page.getByTestId('full-pool-segment-results')).toBeVisible();
-    const mobileColumns = await page.locator('.full-pool-scope-grid').evaluate(
+    const mobileColumns = await page.getByTestId('full-pool-run-evidence').locator('.full-pool-provider-grid').evaluate(
       (element) => getComputedStyle(element).gridTemplateColumns.split(' ').length,
     );
     expect(mobileColumns).toBe(1);

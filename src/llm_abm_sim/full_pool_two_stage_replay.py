@@ -233,6 +233,53 @@ class FullPoolTwoStageReplayResult:
 
 
 @dataclass(frozen=True)
+class ClosedFullPoolTwoStageSource:
+    """Independently revalidated persisted facts for downstream consumers."""
+
+    root: Path
+    manifest_sha256: str
+    source_identity: str
+    classification: str
+    production_deploy_eligible: bool
+    formal_research_evidence: bool
+    manifest: Mapping[str, object]
+    evidence: Mapping[str, object]
+    projection: Mapping[str, object]
+    counts: Mapping[str, int]
+    artifact_hashes: Mapping[str, str]
+    projection_rows: tuple[Mapping[str, object], ...]
+
+    @property
+    def message_ids(self) -> tuple[str, ...]:
+        return tuple(_MESSAGE_CODES)
+
+    @property
+    def horizon(self) -> int:
+        return self.counts["batch_commits"]
+
+    def iter_pair_terminal_rows(
+        self,
+    ) -> Iterator[tuple[Mapping[str, object], Mapping[str, object]]]:
+        pairs = _iter_canonical_jsonl(self.root / _PAIR_FILE)
+        terminals = _iter_canonical_jsonl(self.root / _REALIZED_TERMINAL_FILE)
+        for pair, terminal in zip_longest(pairs, terminals):
+            if pair is None or terminal is None:
+                raise ValueError("realized pair and terminal streams have crossed denominators")
+            if (
+                pair.get("replay_pair_id") != terminal.get("replay_pair_id")
+                or pair.get("realized_terminal_id") != terminal.get("realized_terminal_id")
+                or pair.get("user_id") != terminal.get("user_id")
+                or pair.get("message_id") != terminal.get("message_id")
+                or pair.get("replay_time_step") != terminal.get("replay_time_step")
+            ):
+                raise ValueError("realized pair and terminal stream identities are crossed")
+            yield pair, terminal
+
+    def iter_batch_commits(self) -> Iterator[Mapping[str, object]]:
+        yield from _iter_canonical_jsonl(self.root / _COMMIT_FILE)
+
+
+@dataclass(frozen=True)
 class _ProviderJudgment:
     terminal_row_id: str
     pair_id: str
@@ -657,6 +704,57 @@ class FullPoolTwoStageReplay:
             realization_provider_calls=0,
             production_deploy_eligible=False,
         )
+
+
+def read_closed_full_pool_two_stage_source(
+    source_root: str | Path,
+    *,
+    manifest_sha256: str,
+) -> ClosedFullPoolTwoStageSource:
+    """Validate one explicit realized source and expose only persisted source-bound facts."""
+    root = _explicit_directory(Path(source_root), "realized source")
+    before = _source_snapshot(root)
+    manifest = _validate_closed_source(root, manifest_sha256=manifest_sha256)
+    if _source_snapshot(root) != before:
+        raise ValueError("immutable realized source bytes changed during persisted read")
+    evidence = _json_object(root / _EVIDENCE_FILE, "realization evidence")
+    projection = _json_object(root / _PROJECTION_JSON, "realized projection")
+    counts_raw = _mapping(manifest.get("counts"), "realized source counts")
+    counts = {
+        field: _non_negative_int(counts_raw.get(field), f"realized {field}")
+        for field in sorted(_COUNT_FIELDS)
+    }
+    artifacts = {
+        _non_empty(row.get("relative_path"), "realized artifact path"): _digest(
+            row.get("sha256"), "realized artifact SHA-256"
+        )
+        for raw in _sequence(manifest.get("artifacts"), "realized artifacts")
+        for row in (_mapping(raw, "realized artifact"),)
+    }
+    projection_rows = tuple(
+        _mapping(row, "realized projection row")
+        for row in _sequence(projection.get("rows"), "realized projection rows")
+    )
+    return ClosedFullPoolTwoStageSource(
+        root=root,
+        manifest_sha256=_digest(manifest_sha256, "realized manifest SHA-256"),
+        source_identity=_non_empty(manifest.get("source_identity"), "realized source identity"),
+        classification=_non_empty(manifest.get("classification"), "realized source classification"),
+        production_deploy_eligible=_canonical_bool(
+            manifest.get("production_deploy_eligible"),
+            "realized production eligibility",
+        ),
+        formal_research_evidence=_canonical_bool(
+            manifest.get("formal_research_evidence"),
+            "realized Formal classification",
+        ),
+        manifest=manifest,
+        evidence=evidence,
+        projection=projection,
+        counts=counts,
+        artifact_hashes=artifacts,
+        projection_rows=projection_rows,
+    )
 
 
 def _prepare_replay_runtime(

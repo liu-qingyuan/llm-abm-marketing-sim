@@ -58,6 +58,11 @@ from .full_pool_source_v3 import (
     FULL_POOL_SOURCE_V3_SCHEMA,
 )
 from .full_pool_source_v4 import FULL_POOL_SOURCE_V4_SCHEMA, StrictFullPoolSourceFacts
+from .full_pool_two_stage_replay import (
+    FULL_POOL_TWO_STAGE_SOURCE_SCHEMA,
+    ClosedFullPoolTwoStageSource,
+    read_closed_full_pool_two_stage_source,
+)
 from .prompt_contracts import CONCURRENT_ROBUSTNESS_PROMPT_REGISTRY
 
 if TYPE_CHECKING:
@@ -998,6 +1003,30 @@ class _FullPoolCandidateFacts:
     approved_downloads: Mapping[str, str]
 
 
+def _read_full_pool_presentation_source(
+    source_root: str | Path,
+    *,
+    manifest_sha256: str,
+) -> _ClosedFullPoolSource | ClosedFullPoolTwoStageSource:
+    source = Path(source_root)
+    try:
+        manifest = _read_json(source / "manifest.json")
+    except (FileNotFoundError, OSError, TypeError, ValueError, json.JSONDecodeError):
+        manifest = {}
+    if manifest.get("schema_version") == FULL_POOL_TWO_STAGE_SOURCE_SCHEMA:
+        return read_closed_full_pool_two_stage_source(
+            source,
+            manifest_sha256=manifest_sha256,
+        )
+    return cast(
+        _ClosedFullPoolSource,
+        _read_closed_full_pool_source(
+            source,
+            manifest_sha256=manifest_sha256,
+        ),
+    )
+
+
 class _ReportPresentationInterface:
     """Package-internal seam for deterministic report composition and presentation stages."""
 
@@ -1130,15 +1159,19 @@ class _ReportPresentationInterface:
         study_path = Path(historical_study_root)
         workspace_path = _workspace_root_for_study(study_path)
         try:
-            source = cast(
-                _ClosedFullPoolSource,
-                _read_closed_full_pool_source(
-                    full_pool_path,
-                    manifest_sha256=full_pool_manifest_sha256,
-                ),
+            source = _read_full_pool_presentation_source(
+                full_pool_path,
+                manifest_sha256=full_pool_manifest_sha256,
             )
             strict_facts = getattr(source, "facts", None)
-            if isinstance(strict_facts, StrictFullPoolSourceFacts):
+            if isinstance(source, ClosedFullPoolTwoStageSource):
+                validation_source = (
+                    source.classification == "nonproduction_two_stage_validation"
+                    and source.production_deploy_eligible is False
+                    and source.manifest.get("schema_version") == FULL_POOL_TWO_STAGE_SOURCE_SCHEMA
+                )
+                formal_source = False
+            elif isinstance(strict_facts, StrictFullPoolSourceFacts):
                 validation_source = (
                     source.manifest.get("schema_version") == FULL_POOL_SOURCE_V4_SCHEMA
                     and strict_facts.profile == "validation"
@@ -1276,12 +1309,9 @@ class _ReportPresentationInterface:
     ) -> None:
         """Validate one materialized Full-Pool bundle against explicit immutable inputs."""
         try:
-            source = cast(
-                _ClosedFullPoolSource,
-                _read_closed_full_pool_source(
-                    full_pool_source_root,
-                    manifest_sha256=full_pool_manifest_sha256,
-                ),
+            source = _read_full_pool_presentation_source(
+                full_pool_source_root,
+                manifest_sha256=full_pool_manifest_sha256,
             )
             candidate = Path(historical_candidate_dir)
             historical_payload = _read_json(candidate / _REPORT_PAYLOAD)
@@ -1537,13 +1567,14 @@ class _ReportPresentationInterface:
         presentation_bundle_dir: str | Path,
     ) -> _FullPoolCandidateInputs:
         try:
-            source = cast(
-                _ClosedFullPoolSource,
-                _read_closed_full_pool_source(
-                    full_pool_source_root,
-                    manifest_sha256=full_pool_manifest_sha256,
-                ),
+            source = _read_full_pool_presentation_source(
+                full_pool_source_root,
+                manifest_sha256=full_pool_manifest_sha256,
             )
+            if isinstance(source, ClosedFullPoolTwoStageSource):
+                raise ValueError(
+                    "two-stage realized presentation requires the additive v13 candidate contract"
+                )
             formal_path = Path(historical_formal_root)
             study_path = Path(historical_study_root)
             workspace_path = _workspace_root_for_study(study_path)

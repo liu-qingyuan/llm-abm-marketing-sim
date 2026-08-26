@@ -292,6 +292,10 @@ Provider Judgment之后的ABM行动实现步骤。Provider `ignore`不生成draw
 
 从显式path、manifest SHA-256和source identity绑定的closed Strict Source-v4读取全部Provider Judgments，从Batch 0重建Per-Message Ranking与full-batch feedback trajectory，并关闭独立realized source、evidence和projection的零新增Provider调用Replay。Judgment按`source_identity × user_id × message_id × primary`唯一解析；realization key不含upstream/replay batch或time step。只有整批完成后的realized-positive users进入下一批Campaign Engagement Ranking Signal。
 
+### Full-Pool Two-Stage Realized Presentation Candidate
+
+从 independently closed two-stage realized source 与既有 Historical 1,000-User candidate 形成的非部署展示产物。当前 Full-Pool headline、总体/Message/Segment/Segment × Message 九格、batch trajectory、feedback与trace只投影 realized facts；单次 `user × message` exposure是唯一Primary engagement单位，Exposure包含realized ignore。Mechanism Presentation Module继续唯一拥有two-stage Full-Pool节点、边、双语fallback与`.mmd`语义，Report只把同一语义渲染为deterministic inline SVG。candidate继承输入的validation/nondeployable分类，不构成v13 release或canonical cutover授权。
+
 ### LLM-Visible Decision Context
 
 LLM 在一次具体 User-Video Interaction 获得曝光后实际可见的 allowlisted 语义输入。message 一侧只提供当前视频原文，不提供 Intended Audience Segment 或内部六维 `0/1` 向量；Primary 用户侧只提供三个可观测代理指标、环保意识、全部六个有符号价值系数、入住酒店类型和出行目的，不提供 `latent_class`。Primary 与 Demographic Shadow 的 PeerContext 均保持全 0，PlatformContext 全部留在 runtime/trace；Ranking、holdout、campaign feedback 和竞争视频分数不属于该上下文。

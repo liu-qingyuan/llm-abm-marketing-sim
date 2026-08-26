@@ -34,6 +34,7 @@ from llm_abm_sim.full_pool_two_stage_replay import (
     FullPoolTwoStageReplay,
     FullPoolTwoStageReplayRequest,
     _provider_judgment_inventory,
+    read_closed_full_pool_two_stage_source,
 )
 from llm_abm_sim.prompt_field_summary import build_prompt_field_summary
 from llm_abm_sim.provider_accounting import (
@@ -316,6 +317,56 @@ def test_two_stage_replay_closes_realized_feedback_source_without_provider_calls
         )
     assert not (tmp_path / "must-not-exist-release").exists()
     assert not (tmp_path / "must-not-exist-contract.json").exists()
+
+
+def test_closed_two_stage_source_reader_exposes_validated_persisted_facts(
+    tmp_path: Path,
+) -> None:
+    source_root, source_manifest_sha256, source_identity = _source_v4(tmp_path)
+    output = tmp_path / "reader-two-stage-validation"
+    replay = FullPoolTwoStageReplay().run_and_close(
+        FullPoolTwoStageReplayRequest(
+            source_root=source_root,
+            source_manifest_sha256=source_manifest_sha256,
+            source_identity=source_identity,
+            output_dir=output,
+        )
+    )
+
+    closed = read_closed_full_pool_two_stage_source(
+        output,
+        manifest_sha256=replay.manifest_sha256,
+    )
+
+    assert closed.root == output.resolve()
+    assert closed.manifest_sha256 == replay.manifest_sha256
+    assert closed.source_identity == replay.source_identity
+    assert closed.classification == "nonproduction_two_stage_validation"
+    assert closed.production_deploy_eligible is False
+    assert closed.formal_research_evidence is False
+    assert closed.counts["users"] == 8
+    assert closed.counts["realized_terminals"] == 24
+    assert len(closed.projection_rows) == 18
+    pair_terminals = list(closed.iter_pair_terminal_rows())
+    assert len(pair_terminals) == 24
+    assert all(
+        pair["replay_pair_id"] == terminal["replay_pair_id"]
+        and pair["realized_terminal_id"] == terminal["realized_terminal_id"]
+        for pair, terminal in pair_terminals
+    )
+    commits = list(closed.iter_batch_commits())
+    assert [row["replay_time_step"] for row in commits] == [0, 1]
+    assert set(closed.artifact_hashes) == {
+        "candidate-rows.jsonl",
+        "pair-rows.jsonl",
+        "realized-terminal-rows.jsonl",
+        "batch-commits.jsonl",
+        "latent-membership.csv",
+        "realized-projection.json",
+        "full-pool-realized-projection.csv",
+        "realization-evidence.json",
+        "schema.json",
+    }
 
 
 def test_replay_streams_spooled_rows_without_materializing_the_trajectory(

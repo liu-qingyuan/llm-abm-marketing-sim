@@ -11,6 +11,10 @@ from llm_abm_sim import ConcurrentRobustnessStudy
 from llm_abm_sim import concurrent_robustness_report as report_module
 from llm_abm_sim.concurrent_message_mechanism_presentation import _MECHANISM_PRESENTATION
 from llm_abm_sim.full_pool_formal_experiment import FullPoolFormalExperiment, FullPoolRunStatus
+from llm_abm_sim.full_pool_two_stage_replay import (
+    FullPoolTwoStageReplay,
+    FullPoolTwoStageReplayRequest,
+)
 from tests.integration.test_concurrent_message_experiment_runner import (
     _install_deterministic_robustness_cell_fixture,
     _make_validation_report_source,
@@ -24,6 +28,7 @@ from tests.integration.test_full_pool_formal_experiment import (
     _formal_validation_adapter,
     _FormalValidationProviderClient,
 )
+from tests.integration.test_full_pool_two_stage_replay import _source_v4
 
 _HISTORICAL_MERMAID = {
     "mechanism-sample-first.mmd",
@@ -72,6 +77,20 @@ def _full_pool_source(root: Path) -> tuple[Path, str]:
     assert result.status is FullPoolRunStatus.COMPLETE
     assert result.manifest_sha256 is not None
     return source, result.manifest_sha256
+
+
+def _realized_full_pool_source(root: Path) -> tuple[Path, str]:
+    upstream, manifest_sha256, source_identity = _source_v4(root / "upstream")
+    output = root / "realized-source"
+    result = FullPoolTwoStageReplay().run_and_close(
+        FullPoolTwoStageReplayRequest(
+            source_root=upstream,
+            source_manifest_sha256=manifest_sha256,
+            source_identity=source_identity,
+            output_dir=output,
+        )
+    )
+    return output, result.manifest_sha256
 
 
 def _formal_shaped_full_pool_source(root: Path) -> tuple[Path, str, Path, Path]:
@@ -190,6 +209,198 @@ def test_report_interface_composes_a_closed_non_promotable_full_pool_bundle(tmp_
         full_pool_manifest_sha256=full_pool_manifest_sha256,
         historical_candidate_dir=historical_candidate,
     )
+
+
+def test_report_interface_composes_realized_facts_and_two_stage_mechanism(
+    tmp_path: Path,
+) -> None:
+    realized_source, realized_manifest_sha256 = _realized_full_pool_source(
+        tmp_path / "full-pool-realized"
+    )
+    historical_formal, historical_study, historical_candidate = _historical_candidate(
+        tmp_path / "historical-realized"
+    )
+    destination = tmp_path / "realized-presentation-bundle"
+    protected = (realized_source, historical_formal, historical_study, historical_candidate)
+    before = {root: _snapshot(root) for root in protected}
+
+    created = report_module._REPORT_PRESENTATION.compose_full_pool_presentation_bundle(
+        full_pool_source_root=realized_source,
+        full_pool_manifest_sha256=realized_manifest_sha256,
+        historical_formal_root=historical_formal,
+        historical_study_root=historical_study,
+        historical_candidate_dir=historical_candidate,
+        destination_dir=destination,
+    )
+
+    assert created == destination.resolve()
+    assert all(before[root] == _snapshot(root) for root in protected)
+    assert _snapshot(destination / "full-pool-source") == before[realized_source]
+    assert _snapshot(destination / "historical-1000") == before[historical_candidate]
+
+    two_stage_master = _MECHANISM_PRESENTATION.build_full_pool_two_stage_master().mermaid_artifacts[0]
+    legacy_master = _MECHANISM_PRESENTATION.build_full_pool_master().mermaid_artifacts[0]
+    assert (destination / "full-pool-mechanism.mmd").read_bytes() == two_stage_master.payload
+    assert two_stage_master.payload != legacy_master.payload
+
+    terminals = [
+        json.loads(line)
+        for line in (realized_source / "realized-terminal-rows.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    pairs = [
+        json.loads(line)
+        for line in (realized_source / "pair-rows.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    commits = [
+        json.loads(line)
+        for line in (realized_source / "batch-commits.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    realized_engagements = sum(row["realized_engage"] is True for row in terminals)
+    exposures = len(terminals)
+    report_html = (destination / "report.html").read_text(encoding="utf-8")
+    assert 'data-presentation-semantics="two_stage_realized"' in report_html
+    assert 'data-source-classification="nonproduction_two_stage_validation"' in report_html
+    assert 'data-production-deploy-eligible="false"' in report_html
+    assert 'data-testid="full-pool-realized-headline"' in report_html
+    assert f"{realized_engagements} / {exposures}" in report_html
+    assert 'data-testid="full-pool-overall-result"' in report_html
+    assert 'data-testid="full-pool-message-result-table"' in report_html
+    assert 'data-testid="full-pool-segment-result-table"' in report_html
+    assert 'data-testid="full-pool-segment-table"' in report_html
+    assert report_html.count('data-result-scope="segment-message"') == 9
+    assert 'data-testid="full-pool-probability-contract"' in report_html
+    assert "raw provider_probability mean" in report_html
+    assert "sum(provider_engage × provider_probability) / exposures" in report_html
+    s1_m1 = [
+        terminal
+        for pair, terminal in zip(pairs, terminals, strict=True)
+        if pair["latent_class"] == "class_1" and pair["message_id"] == "message_1"
+    ]
+    raw_probability = sum(float(row["provider_probability"]) for row in s1_m1) / len(s1_m1)
+    effective_expectation = sum(
+        float(row["provider_probability"]) if row["provider_engage"] else 0.0
+        for row in s1_m1
+    ) / len(s1_m1)
+    assert (
+        f'data-probability-group="segment-message" data-segment="S1" data-message="M1">'
+        f'<th scope="row">S1 × M1</th><td>{raw_probability * 100:.2f}%</td>'
+        f'<td>{effective_expectation * 100:.2f}%</td>'
+    ) in report_html
+    assert 'data-testid="full-pool-feedback-trajectory"' in report_html
+    first_commit = commits[0]
+    first_batch_engagements = sum(
+        row["realized_engage"] is True and row["replay_time_step"] == 0
+        for row in terminals
+    )
+    assert (
+        f'data-frozen-users="{len(first_commit["frozen_realized_positive_user_ids"])}" '
+        f'data-committed-users="{len(first_commit["committed_realized_positive_user_ids"])}" '
+        f'data-realized-engagements="{first_batch_engagements}"'
+    ) in report_html
+    assert "S1 does not evidence a preference for M1" in report_html
+    assert "not a calibrated Douyin absolute engagement rate" in report_html
+    assert "not a causal market effect" in report_html
+    assert 'data-testid="full-pool-mechanism-svg"' in report_html
+    assert '<svg' in report_html and 'role="img"' in report_html
+    assert report_html.count('data-mechanism-node-id="') == 24
+    assert report_html.count('data-mechanism-edge-id="') == 26
+    assert 'data-testid="full-pool-mechanism-fallback"' in report_html
+    assert 'data-trace-semantics="two_stage_realized"' in report_html
+    assert "realized_reason" not in report_html
+    for download in (
+        "full-pool-source/manifest.json",
+        "full-pool-source/realization-evidence.json",
+        "full-pool-source/realized-projection.json",
+        "full-pool-source/full-pool-realized-projection.csv",
+        "full-pool-mechanism.mmd",
+    ):
+        assert f'href="{download}"' in report_html
+
+    index = json.loads(
+        (destination / "trace" / "full-pool-trace-index.json").read_text(encoding="utf-8")
+    )
+    assert index["source_manifest_sha256"] == realized_manifest_sha256
+    assert index["trace_semantics"] == "two_stage_realized"
+    assert index["terminal_count"] == exposures
+    first_partition = json.loads(
+        (destination / index["partitions"][0]["relative_path"]).read_text(encoding="utf-8")
+    )
+    first_trace = first_partition["rows"][0]
+    assert set(first_trace["provider_judgment"]) == {
+        "engage",
+        "probability",
+        "action",
+        "reason",
+        "confidence",
+        "decision_source",
+        "reason_role",
+    }
+    assert set(first_trace["abm_realization"]) == {
+        "rule_version",
+        "seed",
+        "status",
+        "uniform_draw",
+        "engage",
+        "action",
+    }
+    assert "realized_reason" not in first_trace
+
+    report_module._REPORT_PRESENTATION.validate_full_pool_presentation_bundle(
+        destination,
+        full_pool_source_root=realized_source,
+        full_pool_manifest_sha256=realized_manifest_sha256,
+        historical_candidate_dir=historical_candidate,
+    )
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    ("caller-metric", "direct-action-mechanism", "crossed-realized-projection"),
+)
+def test_realized_bundle_validator_rejects_crossed_report_mechanism_and_source(
+    tmp_path: Path,
+    mutation: str,
+) -> None:
+    realized_source, manifest_sha256 = _realized_full_pool_source(tmp_path / "realized-input")
+    historical_formal, historical_study, historical_candidate = _historical_candidate(
+        tmp_path / "realized-history"
+    )
+    destination = tmp_path / "realized-bundle"
+    report_module._REPORT_PRESENTATION.compose_full_pool_presentation_bundle(
+        full_pool_source_root=realized_source,
+        full_pool_manifest_sha256=manifest_sha256,
+        historical_formal_root=historical_formal,
+        historical_study_root=historical_study,
+        historical_candidate_dir=historical_candidate,
+        destination_dir=destination,
+    )
+
+    if mutation == "caller-metric":
+        report_path = destination / "report.html"
+        document = report_path.read_text(encoding="utf-8")
+        report_path.write_text(
+            document.replace("S1 does not evidence a preference for M1", "S1 prefers M1", 1),
+            encoding="utf-8",
+        )
+    elif mutation == "direct-action-mechanism":
+        legacy = _MECHANISM_PRESENTATION.build_full_pool_master().mermaid_artifacts[0]
+        (destination / "full-pool-mechanism.mmd").write_bytes(legacy.payload)
+    else:
+        projection_path = realized_source / "realized-projection.json"
+        projection = json.loads(projection_path.read_text(encoding="utf-8"))
+        projection["rows"][0]["Total Likes"] += 1
+        projection_path.write_text(json.dumps(projection, sort_keys=True) + "\n", encoding="utf-8")
+
+    with pytest.raises(
+        report_module._RobustnessReportClosureError,
+        match="failed validation",
+    ):
+        report_module._REPORT_PRESENTATION.validate_full_pool_presentation_bundle(
+            destination,
+            full_pool_source_root=realized_source,
+            full_pool_manifest_sha256=manifest_sha256,
+            historical_candidate_dir=historical_candidate,
+        )
 
 
 def test_formal_shaped_validation_source_composes_without_operational_or_external_artifacts(
