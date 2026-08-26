@@ -291,9 +291,24 @@ async function expectFullPoolReport(page: Page): Promise<void> {
     'Historical Sensitivity · 1,000 users',
   );
   const mechanism = page.getByTestId('full-pool-mechanism-section');
-  await expect(mechanism.locator('[data-mechanism-node-id]')).toHaveCount(8);
-  await expect(mechanism.locator('[data-mechanism-edge-id]')).toHaveCount(8);
-  await expect(mechanism).toContainText('Primary-only');
+  const isV13 = releaseContractSchema === 'abm-report-release-contract-v13';
+  if (isV13) {
+    await expect(root).toHaveAttribute('data-presentation-semantics', 'two_stage_realized');
+    await expect(page.getByTestId('full-pool-realized-headline')).toBeVisible();
+    const mechanismSvg = page.getByTestId('full-pool-mechanism-svg');
+    await expect(mechanismSvg).toBeVisible();
+    await expect(mechanismSvg).toHaveAttribute('role', 'img');
+    await expect(mechanismSvg.locator('[data-mechanism-node-id]')).toHaveCount(12);
+    await expect(mechanismSvg.locator('[data-mechanism-edge-id]')).toHaveCount(13);
+    await expect(mechanism).toContainText('Provider Judgment');
+    await expect(mechanism).toContainText('Stable Probability Draw');
+    await expect(page.getByTestId('full-pool-downloads').locator('a[href="full-pool-mechanism.mmd"]')).toBeVisible();
+    await expect(page.getByTestId('full-pool-downloads').locator('a[href="full-pool-source/full-pool-realized-projection.csv"]')).toBeVisible();
+  } else {
+    await expect(mechanism.locator('[data-mechanism-node-id]')).toHaveCount(8);
+    await expect(mechanism.locator('[data-mechanism-edge-id]')).toHaveCount(8);
+    await expect(mechanism).toContainText('Primary-only');
+  }
 
   if (releaseContractSchema === 'abm-report-release-contract-v12') {
     const segmentResults = page.getByTestId('full-pool-segment-results');
@@ -357,9 +372,15 @@ async function expectFullPoolReport(page: Page): Promise<void> {
   await expect(page.locator('html')).toHaveAttribute('lang', 'en-US');
   await expect(
     page.getByTestId('full-pool-main-experiment').getByRole('heading', { level: 1 }),
-  ).toHaveText('Full-Pool Main Experiment');
+  ).toHaveText(
+    isV13
+      ? 'Full-Pool Two-Stage Engagement Realization'
+      : 'Full-Pool Main Experiment',
+  );
   await expect(page.getByTestId('full-pool-claim-boundary')).toContainText(
-    'ranking changes exposure timing and order only',
+    isV13
+      ? 'single user × message exposure'
+      : 'ranking changes exposure timing and order only',
   );
   await expect(page.getByTestId('full-pool-trace-page-status')).toContainText('Page 1 of');
 }

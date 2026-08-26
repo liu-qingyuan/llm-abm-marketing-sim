@@ -304,6 +304,14 @@ Provider Judgment之后的ABM行动实现步骤。Provider `ignore`不生成draw
 
 只接受exact Full-Pool Two-Stage Formal Realized Source、同源evidence/projection、Report验证的nondeployable formal candidate、Historical Formal/study artifacts及显式v12 baseline的immutable production release。Release Module唯一拥有`abm-report-release-contract-v13`、purpose `full_pool_two_stage_realization_formal_research`、status `persisted_two_stage_realized_full_pool_formal_run`、composite Provider accounting、promotion eligibility、inventory与pre-deployment readiness。Report Module只拥有deterministic production HTML bytes；standalone validator通过Release Interface从persisted bytes重建facts。Release v13不记录public acceptance，也不授予deployment或canonical cutover。
 
+### V13 Operational Deployment Authorization
+
+Release v13之后、任何remote连接之前由Deployment Module消费的独立operational artifact。它精确绑定v13 contract hash、release ID与identity、realized source identity、canonical endpoint、host、remote root、container/port/image及`immutable-releases-atomic-current-v1` topology，并携带Fresh Rollback Identity。Spec、label、commit、release readiness或普通collaborator confirmation都不能替代该artifact；缺失时Module只输出`ready-for-human` readiness facts。
+
+### Fresh Rollback Identity
+
+V13 deployment authorization预先批准、并由部署事务第一次read-only SSH重新读取和核对的旧canonical identity。它由managed旧release ID/path、report SHA-256与manifest SHA-256组成；candidate write前必须exact匹配，candidate、switch或public acceptance失败时也必须恢复并重新验证同一identity。它不能从latest扫描、公网单一hash或陈旧本地记录推定。
+
 ### LLM-Visible Decision Context
 
 LLM 在一次具体 User-Video Interaction 获得曝光后实际可见的 allowlisted 语义输入。message 一侧只提供当前视频原文，不提供 Intended Audience Segment 或内部六维 `0/1` 向量；Primary 用户侧只提供三个可观测代理指标、环保意识、全部六个有符号价值系数、入住酒店类型和出行目的，不提供 `latent_class`。Primary 与 Demographic Shadow 的 PeerContext 均保持全 0，PlatformContext 全部留在 runtime/trace；Ranking、holdout、campaign feedback 和竞争视频分数不属于该上下文。

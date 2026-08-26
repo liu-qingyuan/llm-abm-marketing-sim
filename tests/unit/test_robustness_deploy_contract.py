@@ -5,6 +5,7 @@ import hashlib
 import importlib.util
 import json
 import os
+import shlex
 import shutil
 import subprocess
 import sys
@@ -367,6 +368,73 @@ def test_formal_production_gate_accepts_only_matching_live_deployable_facts(
         validator._require_formal_production(valid_v8 | {"schema_version": "unknown-v9"})
 
 
+def test_formal_production_gate_accepts_only_the_release_owned_v13_composite_profile() -> None:
+    validator = _load_validator()
+    readiness = {
+        "schema_version": "full-pool-v13-release-readiness-v1",
+        "release_id": "formal-two-stage-v13",
+        "release_contract_schema": "abm-report-release-contract-v13",
+        "realized_source_identity": "a" * 64,
+        "canonical_endpoint": "https://abm.q1ngyuan.top/",
+        "provider_calls_during_promotion": 0,
+        "image_generation_triggered": False,
+        "canonical_deployment_triggered": False,
+        "operational_authorization_required": True,
+        "deployment_authorized": False,
+        "public_acceptance_recorded": False,
+    }
+    accounting = {
+        "schema_version": "full-pool-two-stage-provider-accounting-v1",
+        "upstream_live_api_triggered": True,
+        "upstream_formal_research_evidence": True,
+        "upstream_production_deploy_eligible": True,
+        "realization_provider_calls": 0,
+        "realization_live_api_triggered": False,
+        "composite_live_api_triggered": True,
+        "composite_zero_provider_formal": False,
+    }
+    valid = {
+        "schema_version": "abm-report-release-contract-v13",
+        "release_purpose": "full_pool_two_stage_realization_formal_research",
+        "release_id": "formal-two-stage-v13",
+        "sampling_status": "persisted_two_stage_realized_full_pool_formal_run",
+        "decision_execution_mode": "upstream_live_provider_plus_zero_call_realization",
+        "live_api_triggered": True,
+        "formal_research_evidence": True,
+        "realized_source_identity": "a" * 64,
+        "release_readiness": readiness,
+        "composite_provider_accounting": accounting,
+        "realization_provider_calls": 0,
+        "realization_live_api_triggered": False,
+        "production_deploy_eligible": True,
+    }
+
+    validator._require_formal_production(valid)
+    for mutation in (
+        {"sampling_status": "validation_run"},
+        {"decision_execution_mode": "live_provider"},
+        {"live_api_triggered": False},
+        {"formal_research_evidence": False},
+        {"realization_provider_calls": 1},
+        {"realization_live_api_triggered": True},
+        {"production_deploy_eligible": False},
+        {
+            "composite_provider_accounting": {
+                **accounting,
+                "composite_zero_provider_formal": True,
+            }
+        },
+        {
+            "release_readiness": {
+                **readiness,
+                "realized_source_identity": "b" * 64,
+            }
+        },
+    ):
+        with pytest.raises(validator.ReleaseValidationError, match="formal production deployment"):
+            validator._require_formal_production(valid | mutation)
+
+
 def test_v7_deployment_facts_bind_full_mermaid_inventory_and_explicit_identity(
     tmp_path: Path,
 ) -> None:
@@ -663,7 +731,7 @@ def _write_executable(path: Path, content: str) -> None:
     path.chmod(0o755)
 
 
-@pytest.mark.parametrize("failure_mode", ["candidate-health", "post-switch"])
+@pytest.mark.parametrize("failure_mode", ["candidate-health", "switch-failure"])
 def test_remote_transaction_failures_preserve_fresh_rollback_identity(
     tmp_path: Path,
     failure_mode: str,
@@ -775,7 +843,7 @@ case "${command_name}" in
       [[ ! -f "${FAKE_COMPOSE_COUNT}" ]] || count="$(<"${FAKE_COMPOSE_COUNT}")"
       count=$((count + 1))
       printf '%s' "${count}" > "${FAKE_COMPOSE_COUNT}"
-      if [[ "${FAKE_DOCKER_MODE}" == "post-switch" && "${count}" == "1" ]]; then
+      if [[ "${FAKE_DOCKER_MODE}" == "switch-failure" && "${count}" == "1" ]]; then
         exit 72
       fi
     fi
@@ -855,14 +923,14 @@ fi
         == previous_manifest_sha
     )
     assert "remote rollback identity verification failed" not in completed.stderr
-    if failure_mode == "post-switch":
+    if failure_mode == "switch-failure":
         assert compose_count.exists(), completed.stderr
         assert compose_count.read_text(encoding="utf-8") == "2"
     else:
         assert not compose_count.exists()
 
 
-def test_deploy_accepts_v12_only_through_existing_validated_atomic_contract() -> None:
+def test_deploy_accepts_v13_through_authorized_atomic_contract() -> None:
     script = (REPO_ROOT / "scripts" / "deploy_abm_report.sh").read_text(
         encoding="utf-8"
     )
@@ -873,8 +941,8 @@ def test_deploy_accepts_v12_only_through_existing_validated_atomic_contract() ->
         encoding="utf-8"
     )
 
-    assert "^abm-report-release-contract-v([2-9]|10|11|12)$" in script
-    assert "^abm-report-release-contract-v([2-9]|10|11|12)$" in remote
+    assert "^abm-report-release-contract-v([2-9]|10|11|12|13)$" in script
+    assert "^abm-report-release-contract-v([2-9]|10|11|12|13)$" in remote
     assert script.index("--require-formal-production") < script.index(
         'printf \'Uploading %s to %s:%s\\n\''
     )
@@ -890,6 +958,9 @@ def test_deploy_accepts_v12_only_through_existing_validated_atomic_contract() ->
     assert 'ABM_DEPLOY_RELEASE_CONTRACT_SCHEMA="${RELEASE_CONTRACT_SCHEMA}"' in script
     assert "process.env.ABM_DEPLOY_RELEASE_CONTRACT_SCHEMA" in acceptance
     assert "releaseContractSchema ?? 'abm-report-release-contract-v8'" in acceptance
+    assert "releaseContractSchema === 'abm-report-release-contract-v13'" in acceptance
+    assert "full-pool-mechanism-svg" in acceptance
+    assert "full-pool-source/full-pool-realized-projection.csv" in acceptance
 
 
 def test_deploy_consumes_validated_facts_and_checks_the_snapshot_before_ssh() -> None:
@@ -902,7 +973,7 @@ def test_deploy_consumes_validated_facts_and_checks_the_snapshot_before_ssh() ->
     assert "--deployment-release-id" in script
     assert "--deployment-domain" in script
     assert "PUBLIC_ACCEPTANCE_ARTIFACTS_JSON" in script
-    assert "^abm-report-release-contract-v([2-9]|10|11|12)$" in script
+    assert "^abm-report-release-contract-v([2-9]|10|11|12|13)$" in script
     assert "ARTIFACT_CHECKSUMS_B64" in script
     assert "Path(sys.argv[1]).read_text" not in script
 
@@ -934,6 +1005,38 @@ def test_remote_candidate_closes_contract_inventory_and_nginx_before_atomic_swit
         in remote
     )
     assert "validated_contract_sha" in remote
+
+
+def test_public_acceptance_failure_adapter_always_invokes_rollback(tmp_path: Path) -> None:
+    script = (REPO_ROOT / "scripts" / "deploy_abm_report.sh").read_text(encoding="utf-8")
+    start = script.index("rollback_on_failure() {")
+    stop = script.index("trap rollback_on_failure EXIT", start)
+    rollback_function = script[start:stop]
+    harness = tmp_path / "public-failure-adapter.sh"
+    marker = tmp_path / "rollback-invoked"
+    _write_executable(
+        harness,
+        "#!/usr/bin/env bash\n"
+        "set -euo pipefail\n"
+        "cutover_complete=1\n"
+        "PREVIOUS_RELEASE=/remote/releases/previous\n"
+        f"ROLLBACK_MARKER={shlex.quote(str(marker))}\n"
+        "rollback_remote() { printf invoked > \"${ROLLBACK_MARKER}\"; }\n"
+        "cleanup_local_snapshot() { return 0; }\n"
+        f"{rollback_function}\n"
+        "rollback_on_failure 1\n",
+    )
+
+    completed = subprocess.run(
+        [str(harness)],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert completed.returncode == 1
+    assert marker.read_text(encoding="utf-8") == "invoked"
+    assert "Public acceptance failed; restoring previous release" in completed.stderr
 
 
 def test_public_failure_rollback_revalidates_fresh_report_and_manifest_identity() -> None:

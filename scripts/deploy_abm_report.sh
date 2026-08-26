@@ -14,12 +14,15 @@ IMAGE="${ABM_DEPLOY_IMAGE:-nginx:1.27-alpine}"
 PYTHON="${ABM_DEPLOY_PYTHON:-python3}"
 SOURCE_DIR=""
 RELEASE_ID=""
+DEPLOYMENT_AUTHORIZATION=""
 LOCAL_SNAPSHOT_DIR=""
 DEPLOYMENT_FACTS_FILE=""
+DEPLOYMENT_PLAN_FILE=""
+ROLLBACK_READBACK_FILE=""
 LOCAL_CHECKSUMS_FILE=""
 
 usage() {
-  printf 'Usage: %s --contract <formal-release-contract> --source-dir <approved-run-directory> --release-id <release-id>\n' "$0" >&2
+  printf 'Usage: %s --contract <formal-release-contract> --source-dir <approved-run-directory> --release-id <release-id> [--authorization <v13-operational-authorization>]\n' "$0" >&2
 }
 
 fail() {
@@ -42,6 +45,11 @@ while (( $# > 0 )); do
     --release-id)
       (( $# >= 2 )) || { usage; fail "--release-id requires a value"; }
       RELEASE_ID="$2"
+      shift 2
+      ;;
+    --authorization)
+      (( $# >= 2 )) || { usage; fail "--authorization requires a value"; }
+      DEPLOYMENT_AUTHORIZATION="$2"
       shift 2
       ;;
     --help|-h)
@@ -72,8 +80,12 @@ cleanup_local_snapshot() {
   local snapshot_dir="${LOCAL_SNAPSHOT_DIR}"
   local cleanup_status=0
   [[ -z "${DEPLOYMENT_FACTS_FILE}" ]] || rm -f -- "${DEPLOYMENT_FACTS_FILE}" || cleanup_status=1
+  [[ -z "${DEPLOYMENT_PLAN_FILE}" ]] || rm -f -- "${DEPLOYMENT_PLAN_FILE}" || cleanup_status=1
+  [[ -z "${ROLLBACK_READBACK_FILE}" ]] || rm -f -- "${ROLLBACK_READBACK_FILE}" || cleanup_status=1
   [[ -z "${LOCAL_CHECKSUMS_FILE}" ]] || rm -f -- "${LOCAL_CHECKSUMS_FILE}" || cleanup_status=1
   DEPLOYMENT_FACTS_FILE=""
+  DEPLOYMENT_PLAN_FILE=""
+  ROLLBACK_READBACK_FILE=""
   LOCAL_CHECKSUMS_FILE=""
   if [[ -n "${snapshot_dir}" && -d "${snapshot_dir}" ]]; then
     if command -v chflags >/dev/null 2>&1; then
@@ -123,6 +135,7 @@ PY
 
 VALIDATED_RELEASE_ID="$(deployment_fact release_id)" || fail "cannot read validated release id"
 VALIDATED_DOMAIN="$(deployment_fact canonical_domain)" || fail "cannot read validated canonical domain"
+VALIDATED_ENDPOINT="$(deployment_fact canonical_endpoint)" || fail "cannot read validated canonical endpoint"
 PUBLIC_ACCEPTANCE_REPORT_KIND="$(deployment_fact report_kind)" || fail "cannot read validated report kind"
 RELEASE_CONTRACT_SCHEMA="$(deployment_fact release_contract_schema_version)" || fail "cannot read validated release contract schema"
 CONTRACT_SHA="$(deployment_fact contract_sha256)" || fail "cannot read validated contract identity"
@@ -168,7 +181,7 @@ PY
 [[ "${VALIDATED_DOMAIN}" == "${DOMAIN}" ]] || fail "validated canonical domain is crossed"
 [[ "${ARTIFACT_COUNT}" =~ ^[1-9][0-9]*$ ]] || fail "validated artifact count is invalid"
 [[ "${CONTRACT_SHA}" =~ ^[a-f0-9]{64}$ ]] || fail "validated contract identity is invalid"
-[[ "${RELEASE_CONTRACT_SCHEMA}" =~ ^abm-report-release-contract-v([2-9]|10|11|12)$ ]] || fail "validated release contract schema is invalid"
+[[ "${RELEASE_CONTRACT_SCHEMA}" =~ ^abm-report-release-contract-v([2-9]|10|11|12|13)$ ]] || fail "validated release contract schema is invalid"
 [[ -z "${RELEASE_IDENTITY_SHA}" || "${RELEASE_IDENTITY_SHA}" =~ ^[a-f0-9]{64}$ ]] || fail "validated release identity is invalid"
 SOURCE_DIR="${LOCAL_SNAPSHOT_DIR}"
 find "${SOURCE_DIR}" -type d -exec chmod a-w {} +
@@ -194,6 +207,26 @@ for artifact in facts["public_acceptance_artifacts"]:
 PY
 )
 (( ${#PUBLIC_ACCEPTANCE_ARTIFACTS[@]} == ARTIFACT_COUNT )) || fail "validated public acceptance artifact list is incomplete"
+if [[ "${RELEASE_CONTRACT_SCHEMA}" == "abm-report-release-contract-v13" ]]; then
+  DEPLOYMENT_PLAN_FILE="$(mktemp "${TMPDIR:-/tmp}/abm-report-deployment-plan.XXXXXX")"
+  DEPLOYMENT_PLAN_ARGS=(
+    preflight
+    --deployment-facts "${DEPLOYMENT_FACTS_FILE}"
+    --canonical-endpoint "${VALIDATED_ENDPOINT}"
+    --host "${DEPLOY_HOST}"
+    --remote-root "${REMOTE_ROOT}"
+    --port "${PORT}"
+    --container-name "${CONTAINER_NAME}"
+    --image "${IMAGE}"
+    --plan-output "${DEPLOYMENT_PLAN_FILE}"
+  )
+  if [[ -n "${DEPLOYMENT_AUTHORIZATION}" ]]; then
+    DEPLOYMENT_PLAN_ARGS+=(--authorization "${DEPLOYMENT_AUTHORIZATION}")
+  fi
+  "${PYTHON}" "${SCRIPT_DIR}/validate_abm_report_deployment.py" "${DEPLOYMENT_PLAN_ARGS[@]}"
+elif [[ -n "${DEPLOYMENT_AUTHORIZATION}" ]]; then
+  fail "--authorization is only valid for abm-report-release-contract-v13"
+fi
 REMOTE_RELEASE="${REMOTE_ROOT}/releases/${RELEASE_ID}"
 
 PREVIOUS_RELEASE_FILE="$(mktemp "${TMPDIR:-/tmp}/abm-report-previous-release.XXXXXX")"
@@ -234,6 +267,43 @@ if [[ -n "${PREVIOUS_RELEASE_RECORD}" ]]; then
   IFS=$'\t' read -r PREVIOUS_RELEASE PREVIOUS_REPORT_SHA PREVIOUS_MANIFEST_SHA <<< "${PREVIOUS_RELEASE_RECORD}"
   [[ -n "${PREVIOUS_RELEASE}" && "${PREVIOUS_REPORT_SHA}" =~ ^[a-f0-9]{64}$ && "${PREVIOUS_MANIFEST_SHA}" =~ ^[a-f0-9]{64}$ ]] || \
     fail "current managed release identity is incomplete"
+fi
+if [[ "${RELEASE_CONTRACT_SCHEMA}" == "abm-report-release-contract-v13" ]]; then
+  [[ -n "${PREVIOUS_RELEASE}" ]] || fail "v13 requires a fresh managed rollback identity"
+  ROLLBACK_READBACK_FILE="$(mktemp "${TMPDIR:-/tmp}/abm-report-rollback-readback.XXXXXX")"
+  "${PYTHON}" - \
+    "${ROLLBACK_READBACK_FILE}" \
+    "${REMOTE_ROOT}" \
+    "${PREVIOUS_RELEASE}" \
+    "${PREVIOUS_REPORT_SHA}" \
+    "${PREVIOUS_MANIFEST_SHA}" <<'PY'
+import json
+import re
+import sys
+from pathlib import Path
+
+output, remote_root, remote_release, report_sha256, manifest_sha256 = sys.argv[1:]
+release_id = remote_release.rsplit("/", 1)[-1]
+if remote_release != f"{remote_root}/releases/{release_id}":
+    raise SystemExit("fresh rollback release path is outside the authorized topology")
+if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,159}", release_id):
+    raise SystemExit("fresh rollback release id is invalid")
+document = {
+    "schema_version": "abm-report-fresh-rollback-identity-v1",
+    "release_id": release_id,
+    "remote_release": remote_release,
+    "report_sha256": report_sha256,
+    "manifest_sha256": manifest_sha256,
+}
+Path(output).write_text(
+    json.dumps(document, sort_keys=True, separators=(",", ":")) + "\n",
+    encoding="utf-8",
+)
+PY
+  "${PYTHON}" "${SCRIPT_DIR}/validate_abm_report_deployment.py" \
+    verify-readback \
+    --plan "${DEPLOYMENT_PLAN_FILE}" \
+    --readback "${ROLLBACK_READBACK_FILE}"
 fi
 PREVIOUS_RELEASE_ARG="${PREVIOUS_RELEASE:-__ABM_NO_PREVIOUS_RELEASE__}"
 PREVIOUS_REPORT_SHA_ARG="${PREVIOUS_REPORT_SHA:-__ABM_NO_PREVIOUS_REPORT_SHA__}"
@@ -476,7 +546,7 @@ install -d -m 755 "${remote_root}/nginx" "${remote_root}/tls" "${remote_root}/re
   printf 'deploy error: invalid validated contract identity\n' >&2
   exit 1
 }
-[[ "${release_contract_schema}" =~ ^abm-report-release-contract-v([2-9]|10|11|12)$ ]] || {
+[[ "${release_contract_schema}" =~ ^abm-report-release-contract-v([2-9]|10|11|12|13)$ ]] || {
   printf 'deploy error: invalid validated release contract schema\n' >&2
   exit 1
 }

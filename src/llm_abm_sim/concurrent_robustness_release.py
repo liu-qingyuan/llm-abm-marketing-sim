@@ -4909,15 +4909,82 @@ def _validate_full_pool_v13_production_release(
         "sampling_status": FULL_POOL_V13_SAMPLING_STATUS,
         "decision_execution_mode": "upstream_live_provider_plus_zero_call_realization",
         "live_api_triggered": True,
+        "formal_research_evidence": True,
         "upstream_live_api_triggered": True,
         "realization_provider_calls": 0,
         "realization_live_api_triggered": False,
+        "realized_source_identity": closure.source.source_identity,
+        "release_readiness": dict(closure.release_readiness),
+        "composite_provider_accounting": dict(accounting),
         "logical_judgments": accounting["upstream_logical_judgments"],
         "physical_attempts": accounting["upstream_charged_physical_attempts"],
         "report_sha256": actual_hashes[CONCURRENT_MESSAGE_REPORT_HTML],
         "artifact_count": len(actual_hashes),
         "release_identity_sha256": release_identity,
         "production_deploy_eligible": True,
+    }
+
+
+def require_full_pool_v13_deployment_profile(
+    result: Mapping[str, object],
+) -> dict[str, object]:
+    """Return Release-owned v13 facts only when the composite Formal profile closes."""
+    source_identity = result.get("realized_source_identity")
+    readiness = result.get("release_readiness")
+    accounting = result.get("composite_provider_accounting")
+    if (
+        result.get("schema_version") != ROBUSTNESS_RELEASE_CONTRACT_SCHEMA_V13
+        or result.get("release_purpose") != FULL_POOL_V13_RELEASE_PURPOSE
+        or result.get("sampling_status") != FULL_POOL_V13_SAMPLING_STATUS
+        or result.get("decision_execution_mode")
+        != "upstream_live_provider_plus_zero_call_realization"
+        or result.get("live_api_triggered") is not True
+        or result.get("formal_research_evidence") is not True
+        or result.get("realization_provider_calls") != 0
+        or result.get("realization_live_api_triggered") is not False
+        or result.get("production_deploy_eligible") is not True
+        or not isinstance(source_identity, str)
+        or not _SHA256.fullmatch(source_identity)
+        or not isinstance(readiness, Mapping)
+        or not isinstance(accounting, Mapping)
+    ):
+        raise ConcurrentRobustnessReleaseError(
+            "v13 deployment requires the exact deploy-eligible composite Formal profile"
+        )
+    if (
+        readiness.get("schema_version") != FULL_POOL_V13_READINESS_SCHEMA
+        or readiness.get("release_id") != result.get("release_id")
+        or readiness.get("release_contract_schema")
+        != ROBUSTNESS_RELEASE_CONTRACT_SCHEMA_V13
+        or readiness.get("realized_source_identity") != source_identity
+        or readiness.get("canonical_endpoint") != ROBUSTNESS_CANONICAL_ENDPOINT
+        or readiness.get("provider_calls_during_promotion") != 0
+        or readiness.get("image_generation_triggered") is not False
+        or readiness.get("canonical_deployment_triggered") is not False
+        or readiness.get("operational_authorization_required") is not True
+        or readiness.get("deployment_authorized") is not False
+        or readiness.get("public_acceptance_recorded") is not False
+    ):
+        raise ConcurrentRobustnessReleaseError(
+            "v13 deployment release readiness facts are crossed"
+        )
+    if (
+        accounting.get("schema_version") != FULL_POOL_V13_ACCOUNTING_SCHEMA
+        or accounting.get("upstream_live_api_triggered") is not True
+        or accounting.get("upstream_formal_research_evidence") is not True
+        or accounting.get("upstream_production_deploy_eligible") is not True
+        or accounting.get("realization_provider_calls") != 0
+        or accounting.get("realization_live_api_triggered") is not False
+        or accounting.get("composite_live_api_triggered") is not True
+        or accounting.get("composite_zero_provider_formal") is not False
+    ):
+        raise ConcurrentRobustnessReleaseError(
+            "v13 deployment composite Provider accounting is crossed"
+        )
+    return {
+        "realized_source_identity": source_identity,
+        "release_readiness": dict(readiness),
+        "composite_provider_accounting": dict(accounting),
     }
 
 

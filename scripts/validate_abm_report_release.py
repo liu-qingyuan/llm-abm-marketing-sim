@@ -26,6 +26,7 @@ from llm_abm_sim.concurrent_message_report import (
 from llm_abm_sim.concurrent_robustness_release import (
     ROBUSTNESS_RELEASE_CONTRACT_SCHEMA_V13,
     ConcurrentRobustnessReleaseError,
+    require_full_pool_v13_deployment_profile,
     validate_concurrent_robustness_production_release,
 )
 from llm_abm_sim.final_research_reason_context import ReasonContextDiagnostics
@@ -1868,6 +1869,7 @@ _DEPLOYMENT_REPORT_KINDS = {
     "abm-report-release-contract-v10": "full-pool",
     "abm-report-release-contract-v11": "full-pool",
     "abm-report-release-contract-v12": "full-pool",
+    ROBUSTNESS_RELEASE_CONTRACT_SCHEMA_V13: "full-pool",
 }
 _DEPLOYMENT_RELEASE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,159}$")
 _DEPLOYMENT_DOMAIN = re.compile(r"^[A-Za-z0-9.-]+$")
@@ -1962,6 +1964,7 @@ def _build_deployment_facts(
         "abm-report-release-contract-v10",
         "abm-report-release-contract-v11",
         "abm-report-release-contract-v12",
+        ROBUSTNESS_RELEASE_CONTRACT_SCHEMA_V13,
     }:
         if manifest.get("release_id") != deployment_release_id:
             raise ReleaseValidationError("deployment manifest release id is crossed")
@@ -1970,7 +1973,7 @@ def _build_deployment_facts(
     elif not isinstance(release_identity, str):
         release_identity = ""
 
-    return {
+    facts: dict[str, object] = {
         "schema_version": "abm-report-deployment-facts-v1",
         "release_contract_schema_version": schema_version,
         "report_kind": report_kind,
@@ -1985,10 +1988,27 @@ def _build_deployment_facts(
         "approved_downloads": sorted(approved_downloads),
         "public_acceptance_artifacts": sorted(artifact_hashes),
     }
+    if schema_version == ROBUSTNESS_RELEASE_CONTRACT_SCHEMA_V13:
+        try:
+            profile = require_full_pool_v13_deployment_profile(result)
+        except ConcurrentRobustnessReleaseError as exc:
+            raise ReleaseValidationError(
+                "deployment facts require the exact v13 composite Formal profile"
+            ) from exc
+        facts.update(profile)
+    return facts
 
 
 def _require_formal_production(result: dict[str, object]) -> None:
     schema_version = result.get("schema_version")
+    if schema_version == ROBUSTNESS_RELEASE_CONTRACT_SCHEMA_V13:
+        try:
+            require_full_pool_v13_deployment_profile(result)
+        except ConcurrentRobustnessReleaseError as exc:
+            raise ReleaseValidationError(
+                "formal production deployment requires the exact v13 composite Formal profile"
+            ) from exc
+        return
     if schema_version in {
         "abm-report-release-contract-v8",
         "abm-report-release-contract-v9",
@@ -2042,8 +2062,8 @@ def _require_formal_production(result: dict[str, object]) -> None:
         or result.get("production_deploy_eligible") is not True
     ):
         raise ReleaseValidationError(
-            "formal production deployment requires abm-report-release-contract-v2 through v12 "
-            "with matching deploy-eligible persisted live-provider Formal research evidence"
+            "formal production deployment requires abm-report-release-contract-v2 through v13 "
+            "with matching deploy-eligible persisted Formal research evidence"
         )
 
 
@@ -2060,7 +2080,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--require-formal-production",
         action="store_true",
-        help="Reject validated evidence unless it is a deploy-eligible v2-v12 Formal research release",
+        help="Reject validated evidence unless it is a deploy-eligible v2-v13 Formal research release",
     )
     parser.add_argument(
         "--deployment-facts-output",

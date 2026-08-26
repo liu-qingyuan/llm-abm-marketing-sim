@@ -350,12 +350,28 @@ def test_v13_materializes_and_round_trips_only_persisted_formal_facts(
     assert validated["realization_provider_calls"] == 0
     assert validated["report_sha256"] == promoted.report_sha256
 
-    cli_validated = _load_validator().validate_release(
+    standalone = _load_validator()
+    cli_validated = standalone.validate_release(
         repo_root=tmp_path,
         contract_path=contract_path,
         source_dir=destination,
     )
     assert cli_validated == validated
+    standalone._require_formal_production(cli_validated)
+
+    deployment_facts = standalone._build_deployment_facts(
+        contract_path=contract_path,
+        contract=contract,
+        result=cli_validated,
+        evidence_dir=destination,
+        deployment_release_id="formal-two-stage-v13",
+        deployment_domain="abm.q1ngyuan.top",
+    )
+    assert deployment_facts["release_contract_schema_version"] == "abm-report-release-contract-v13"
+    assert deployment_facts["report_kind"] == "full-pool"
+    assert deployment_facts["realized_source_identity"] == source_identity
+    assert deployment_facts["release_readiness"] == contract["release_readiness"]
+    assert deployment_facts["composite_provider_accounting"] == accounting
 
 
 def test_v13_publication_removes_both_outputs_when_round_trip_fails(
