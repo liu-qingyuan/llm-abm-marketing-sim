@@ -291,7 +291,7 @@ test('Full-Pool report is bilingual, responsive, lazy, filterable, and keyboard 
       `${baseURL}/full-pool-source/realization-evidence.json`,
     );
     expect(realizedEvidence.status()).toBe(200);
-    expect((await realizedEvidence.json()).production_deploy_eligible).toBe(false);
+    expect((await realizedEvidence.json()).production_deploy_eligible).toBe(!fixture.synthetic);
 
     const traceState = page.getByTestId('full-pool-trace-state');
     await expect(traceState).toHaveAttribute('data-trace-state', 'ready');

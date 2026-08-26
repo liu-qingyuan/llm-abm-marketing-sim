@@ -276,7 +276,8 @@ async function expectConcurrentMessageReport(page: Page): Promise<void> {
 }
 
 async function expectFullPoolReport(page: Page): Promise<void> {
-  await expect(page).toHaveTitle('Full-Pool 主实验');
+  const isV13 = releaseContractSchema === 'abm-report-release-contract-v13';
+  await expect(page).toHaveTitle(isV13 ? 'Full-Pool 两阶段互动实现' : 'Full-Pool 主实验');
   await expect(page.locator('html')).toHaveAttribute('lang', 'zh-CN');
   await expect(page.locator('meta[name="abm-release-contract"]')).toHaveAttribute(
     'content',
@@ -291,7 +292,6 @@ async function expectFullPoolReport(page: Page): Promise<void> {
     'Historical Sensitivity · 1,000 users',
   );
   const mechanism = page.getByTestId('full-pool-mechanism-section');
-  const isV13 = releaseContractSchema === 'abm-report-release-contract-v13';
   if (isV13) {
     await expect(root).toHaveAttribute('data-presentation-semantics', 'two_stage_realized');
     await expect(page.getByTestId('full-pool-realized-headline')).toBeVisible();
@@ -301,7 +301,7 @@ async function expectFullPoolReport(page: Page): Promise<void> {
     await expect(mechanismSvg.locator('[data-mechanism-node-id]')).toHaveCount(12);
     await expect(mechanismSvg.locator('[data-mechanism-edge-id]')).toHaveCount(13);
     await expect(mechanism).toContainText('Provider Judgment');
-    await expect(mechanism).toContainText('Stable Probability Draw');
+    await expect(mechanism).toContainText('稳定概率抽样');
     await expect(page.getByTestId('full-pool-downloads').locator('a[href="full-pool-mechanism.mmd"]')).toBeVisible();
     await expect(page.getByTestId('full-pool-downloads').locator('a[href="full-pool-source/full-pool-realized-projection.csv"]')).toBeVisible();
   } else {
@@ -382,6 +382,7 @@ async function expectFullPoolReport(page: Page): Promise<void> {
       ? 'single user × message exposure'
       : 'ranking changes exposure timing and order only',
   );
+  if (isV13) await expect(mechanism).toContainText('Stable Probability Draw');
   await expect(page.getByTestId('full-pool-trace-page-status')).toContainText('Page 1 of');
 }
 
