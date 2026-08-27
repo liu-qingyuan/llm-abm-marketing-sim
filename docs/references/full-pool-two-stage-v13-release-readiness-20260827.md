@@ -1,5 +1,7 @@
 # Full-Pool 两阶段 v13 Release Readiness（2026-08-27）
 
+> **后续状态：** 本页冻结部署前readiness；维护者随后在#237授权，v13已完成canonical部署与public acceptance。当前发布事实见[Full-Pool 两阶段 v13 Canonical 发布记录](full-pool-two-stage-v13-canonical-release-20260827.md)。下文保留当时尚未授权、canonical仍为v12的历史状态，不作回写。
+
 ## 状态
 
 - parent Spec：[GitHub #228](https://github.com/liu-qingyuan/llm-abm-marketing-sim/issues/228)

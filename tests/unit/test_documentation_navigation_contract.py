@@ -39,6 +39,7 @@ EXPECTED_REFERENCE_FILES = {
     "docs/references/jinjiang-concurrent-robustness-v7-canonical-release-20260813.md",
     "docs/references/full-pool-two-stage-authoritative-replay-gate-20260826.md",
     "docs/references/full-pool-two-stage-v13-release-readiness-20260827.md",
+    "docs/references/full-pool-two-stage-v13-canonical-release-20260827.md",
     "docs/references/concurrent-message-mechanism-semantic-masters-v4-review.md",
     "docs/references/concurrent-message-mechanism-images-v4-review.md",
     "docs/references/concurrent-message-legend-visual-semantics-audit-20260803.md",
@@ -138,7 +139,7 @@ def test_current_entrypoints_are_discoverable_from_the_single_index() -> None:
         DOCS_ROOT / "architecture" / "retention-audit.md",
         DOCS_ROOT / "references" / "jinjiang-final-dataset-audit-20260624.md",
         DOCS_ROOT / "references" / "retention-cleanup-final-evidence-20260730.md",
-        DOCS_ROOT / "references" / "jinjiang-concurrent-robustness-v7-canonical-release-20260813.md",
+        DOCS_ROOT / "references" / "full-pool-two-stage-v13-canonical-release-20260827.md",
         DOCS_ROOT / "weekly" / "README.md",
         DOCS_ROOT / "agents" / "README.md",
     ]
@@ -256,7 +257,7 @@ def test_references_reading_order_and_root_navigation_contract() -> None:
     assert root_reference_targets == {
         (DOCS_ROOT / "references" / "README.md").resolve(),
         (DOCS_ROOT / "references" / "jinjiang-final-dataset-audit-20260624.md").resolve(),
-        (DOCS_ROOT / "references" / "jinjiang-concurrent-robustness-v7-canonical-release-20260813.md").resolve(),
+        (DOCS_ROOT / "references" / "full-pool-two-stage-v13-canonical-release-20260827.md").resolve(),
         (DOCS_ROOT / "references" / "retention-cleanup-final-evidence-20260730.md").resolve(),
     }
 

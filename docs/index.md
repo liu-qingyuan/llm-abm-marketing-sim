@@ -4,10 +4,11 @@
 
 ## Current Research
 
-- **Canonical endpoint：** [Concurrent Robustness Formal Research Report](https://abm.q1ngyuan.top/)。
-- **Current architecture：** [Concurrent Message Competition Experiment](architecture/concurrent-message-competition-experiment.md)。
+- **Canonical endpoint：** [Full-Pool Two-Stage Formal Research Report](https://abm.q1ngyuan.top/)。
+- **Current architecture：** [Full-Pool Two-Stage Engagement Realization](architecture/full-pool-two-stage-realization.md)。
+- **Historical architecture：** [Concurrent Message Competition Experiment](architecture/concurrent-message-competition-experiment.md)。
 
-当前 v7 release 在既有 1,000 位 Research Sample users、3 条 message、30 个 batch、历史 Primary + Shadow evidence、19-point Ranking Weight Sensitivity 与 Primary-only `4 Prompt × 4 model` Formal Robustness Study 上，发布六张已批准的 Mermaid mechanism masters 与完整双语语义投影。默认 toy/realistic fixture、offline/mock validation 和 rule-based run 都不能替代 persisted Formal evidence 或 canonical release。
+当前 v13 release 在 36,400 位 Full-Pool users、3 条 message、30 个 full-batch commits 与 109,200 次 `user × message` exposures 上，把 Provider Judgment 与 ABM Realization 分层；nested-v1 realization 得到 63,614 次 realized engagements（58.254579%）。页面发布新 Full-Pool 两阶段机制总图，并保持 Historical 1,000-user 六图及其 evidence bytes 隔离不变。默认 toy/realistic fixture、offline/mock validation 和 rule-based run 都不能替代 persisted Formal evidence 或 canonical release。
 
 ## 运行与演示
 
@@ -40,7 +41,7 @@ Architecture 描述当前 Module、数据边界和稳定运行语义；ADR 记�
 
 - [References 总览](references/README.md)
 - [current dataset：锦江 final dataset 审计](references/jinjiang-final-dataset-audit-20260624.md)
-- [current Formal release：Concurrent Robustness v7 canonical 发布记录](references/jinjiang-concurrent-robustness-v7-canonical-release-20260813.md)
+- [current Formal release：Full-Pool 两阶段 v13 canonical 发布记录](references/full-pool-two-stage-v13-canonical-release-20260827.md)
 - [current Retention：Retention final evidence](references/retention-cleanup-final-evidence-20260730.md)
 
 References README 使用决策表区分默认读取、按需 research、按需 rollback 和 forensic-only evidence。Editorial v1/v2/v3 mechanism source PNG 由 `src/llm_abm_sim/report_assets/` 统一拥有；generated WebP 和 renderer compatibility contract 继续由代码与测试保护。
