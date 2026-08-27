@@ -110,3 +110,16 @@ v12目录与hash在成功后继续保留为managed rollback target。
 - post-deployment public verification SHA-256：`99d0c3eb2321837c6db57deb47d8488c9b90e6884abd21976ca7a6329a02862d`
 
 这些operational artifacts不属于immutable Release inventory，不改变Release identity。首次失败、手工verified rollback与第二次成功均保留，不覆盖失败历史。
+
+## Post-release local cleanup
+
+Canonical闭合后，对Ralph留下的四个146-file presentation目录逐文件重算SHA-256。三个未发布目录与#236 accepted presentation candidate的路径、bytes和全部file hashes exact match，共用audit inventory identity `281793feacbf510aae60d9b515abbd3fdfa25eec1bcc3f40d38e70660787232d`。随后只删除三个重复payload目录：
+
+- `runs/full-pool-two-stage-v13-ticket-236-20260826T134039Z/presentation-bundle/`
+- `runs/full-pool-two-stage-v13-ticket-236-20260826T140318Z/presentation-candidate/`
+- `runs/full-pool-two-stage-v13-release-ticket-236-20260826T152738Z/presentation-candidate/`
+
+清理438 files、5,289,774,177 payload bytes；保留三个run的operator/materialization metadata、accepted `142827Z` presentation candidate、immutable v13 Release/contract、authoritative realized source和#237 operational root。清理后source manifest、Release contract/report/manifest、Release operation record与Deployment operation record hashes均保持不变；没有连接remote或修改canonical。
+
+- cleanup audit SHA-256：`7715208c7b7196bcc4d11a6fa57897eb49962a8d17a6be63a7193b0aac781d64`
+- cleanup record SHA-256：`0ec38f6ef4c2dcb00879bb1ba5f1c1e0a6bcbdeeda30beee172f57393230fc5c`
