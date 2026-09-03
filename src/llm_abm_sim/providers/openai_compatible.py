@@ -5,7 +5,7 @@ import json
 import time
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Protocol, cast
+from typing import Any, Literal, Protocol, cast
 
 from llm_abm_sim.decision import (
     DecisionInput,
@@ -314,6 +314,7 @@ class _OpenAISDKClient:
         *,
         reasoning_effort: ReasoningEffortValue | None = None,
         output_token_ceiling: int | None = None,
+        thinking_mode: Literal["disabled"] | None = None,
     ) -> ProviderResponseEnvelope:
         sdk_messages = cast(Any, messages)
         if self._wire_api == "chat":
@@ -327,6 +328,8 @@ class _OpenAISDKClient:
             }
             if output_token_ceiling is not None:
                 chat_request["max_completion_tokens"] = output_token_ceiling
+            if thinking_mode == "disabled":
+                chat_request["extra_body"] = {"thinking": {"type": "disabled"}}
             chat_response = self._client.chat.completions.create(**chat_request)
             return normalize_provider_response_envelope(
                 decision_text=_chat_decision_text(chat_response),
@@ -336,6 +339,8 @@ class _OpenAISDKClient:
                 output_tokens_field="completion_tokens",
                 cached_details_field="prompt_tokens_details",
             )
+        if thinking_mode is not None:
+            raise ProviderConfigurationError("thinking_mode is supported only by the chat wire")
         responses_request: dict[str, Any] = {
             "model": model,
             "input": sdk_messages,

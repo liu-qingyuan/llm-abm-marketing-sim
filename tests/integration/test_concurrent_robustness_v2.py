@@ -26,6 +26,13 @@ from llm_abm_sim.concurrent_robustness_v2 import (
 )
 from llm_abm_sim.decision import EngagementAction, ProviderResponseProvenanceUnknown
 from llm_abm_sim.prompt_contracts import CONCURRENT_ROBUSTNESS_PROMPT_REGISTRY
+from llm_abm_sim.provider_accounting import ProviderResponseEnvelope
+from llm_abm_sim.providers.robustness import (
+    AntigravityGeminiDecisionAdapter,
+    DeepSeekV4FlashDecisionAdapter,
+    PiKimiDecisionAdapter,
+    PiOpenAIDecisionAdapter,
+)
 from tests.integration.test_concurrent_message_experiment_runner import (
     _make_validation_report_source,
     _robustness_manifest_for_source,
@@ -271,12 +278,320 @@ def _v2_adapters(
     return dict(typed), typed
 
 
-def _jsonl(path: Path) -> list[dict[str, object]]:
+class _HTTPError(RuntimeError):
+    def __init__(self, status_code: int, *, retry_after: str | None = None) -> None:
+        super().__init__(f"HTTP {status_code}")
+        self.status_code = status_code
+        self.headers = {} if retry_after is None else {"Retry-After": retry_after}
+
+
+class _SequenceProviderTransport:
+    def __init__(
+        self,
+        *,
+        observed_model: str,
+        sequence: list[object] | None = None,
+        provider_fee_cny_per_response: float | None = None,
+        maximum_provider_fee_cny_per_attempt: float | None = None,
+    ) -> None:
+        self.observed_model = observed_model
+        self.sequence = list(sequence or [])
+        self.provider_fee_cny_per_response = provider_fee_cny_per_response
+        self.maximum_provider_fee_cny_per_attempt = maximum_provider_fee_cny_per_attempt
+        self.last_provider_fee_cny: float | None = None
+        self.calls: list[tuple[list[dict[str, str]], str, dict[str, object]]] = []
+
+    def create_response(
+        self,
+        messages: list[dict[str, str]],
+        model: str,
+        **settings: object,
+    ) -> ProviderResponseEnvelope:
+        self.calls.append((messages, model, settings))
+        self.last_provider_fee_cny = None
+        if self.sequence:
+            result = self.sequence.pop(0)
+            if isinstance(result, Exception):
+                raise result
+            if isinstance(result, ProviderResponseEnvelope):
+                self.last_provider_fee_cny = self.provider_fee_cny_per_response
+                return result
+        self.last_provider_fee_cny = self.provider_fee_cny_per_response
+        return ProviderResponseEnvelope(
+            decision_text=(
+                '{"engage":true,"probability":0.72,"reason":"fit",'
+                '"confidence":0.81,"action":"like"}'
+            ),
+            observed_model=self.observed_model,
+            observed_model_status="reported",
+            usage_status="complete",
+            input_tokens=20,
+            output_tokens=10,
+            total_tokens=30,
+            cached_input_tokens=0,
+        )
+
+
+def _provider_adapter_for_cell(cell: Any, transport: _SequenceProviderTransport) -> LLMDecisionAdapter:
+    if cell.requested_model == "deepseek-v4-flash":
+        return DeepSeekV4FlashDecisionAdapter(prompt_version=cell.prompt_version, client=transport)
+    if cell.requested_model in {"gemini-3.1-pro", "gemini-3.8-flash-high"}:
+        return AntigravityGeminiDecisionAdapter(
+            requested_model=cell.requested_model,
+            prompt_version=cell.prompt_version,
+            client=transport,
+        )
+    if cell.requested_model == "kimi-coding/k3-256k":
+        return PiKimiDecisionAdapter(prompt_version=cell.prompt_version, client=transport)
+    return PiOpenAIDecisionAdapter(prompt_version=cell.prompt_version, client=transport)
+
+
+def _provider_adapters(
+    manifest: ConcurrentRobustnessManifestV2,
+    *,
+    first_sequence: list[object] | None = None,
+    first_provider_fee_cny: float | None = None,
+    first_maximum_provider_fee_cny: float | None = None,
+) -> tuple[dict[str, LLMDecisionAdapter], dict[str, _SequenceProviderTransport]]:
+    adapters: dict[str, LLMDecisionAdapter] = {}
+    transports: dict[str, _SequenceProviderTransport] = {}
+    for index, cell in enumerate(manifest.prompt_model_cells):
+        assert cell.required_observed_model is not None
+        transport = _SequenceProviderTransport(
+            observed_model=cell.required_observed_model,
+            sequence=first_sequence if index == 0 else None,
+            provider_fee_cny_per_response=first_provider_fee_cny if index == 0 else None,
+            maximum_provider_fee_cny_per_attempt=(
+                first_maximum_provider_fee_cny if index == 0 else None
+            ),
+        )
+        transports[cell.cell_id] = transport
+        adapters[cell.cell_id] = _provider_adapter_for_cell(cell, transport)
+    return adapters, transports
+
+
+def _jsonl(path: Path) -> list[dict[str, Any]]:
     return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
 
 
 def _snapshot(root: Path) -> dict[str, bytes]:
     return {path.relative_to(root).as_posix(): path.read_bytes() for path in sorted(root.rglob("*")) if path.is_file()}
+
+
+def test_v2_private_model_lane_retries_allowlisted_failures_with_durable_attempt_evidence(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = _make_validation_report_source(tmp_path, "v2-provider-lane-source")
+    manifest = _v2_manifest(source, output_identity="v2-provider-lane-validation")
+    malformed = ProviderResponseEnvelope(
+        decision_text="not-json",
+        observed_model="deepseek-v4-flash",
+        observed_model_status="reported",
+        usage_status="complete",
+        input_tokens=10,
+        output_tokens=2,
+        total_tokens=12,
+        cached_input_tokens=0,
+    )
+    adapters, transports = _provider_adapters(
+        manifest,
+        first_sequence=[_HTTPError(429, retry_after="7"), malformed],
+    )
+    delays: list[float] = []
+    now = [0.0]
+
+    def sleep(delay: float) -> None:
+        delays.append(delay)
+        now[0] += delay
+
+    monkeypatch.setattr(v2_module, "_V2_SLEEP", sleep, raising=False)
+    monkeypatch.setattr(v2_module, "_V2_MONOTONIC", lambda: now[0], raising=False)
+    workspace = tmp_path / "v2-provider-lane-workspace"
+
+    result = ConcurrentRobustnessStudy().run(manifest, adapters, workspace)
+
+    assert result.status == ConcurrentRobustnessStudyStatus.CELLS_COMPLETE
+    assert result.logical_provider_attempts == 1_200
+    assert result.physical_provider_attempts == 1_202
+    assert delays[:2] == [7.0, 1.0]
+    first_cell = manifest.prompt_model_cells[0]
+    first_transport = transports[first_cell.cell_id]
+    assert len(first_transport.calls) == 62
+    judgment_records = [
+        row
+        for row in _jsonl(
+            workspace.parent
+            / f".{workspace.name}.two-stage-v2-operational"
+            / "cell-00"
+            / "pair_lifecycle.jsonl"
+        )
+        if row["state"] == "judgment_persisted"
+    ]
+    first_judgment = judgment_records[0]["payload"]["judgment"]
+    assert first_judgment["request_invocations"] == 3
+    assert [row["outcome"] for row in first_judgment["attempt_evidence"]] == [
+        "retryable_failure",
+        "retryable_failure",
+        "succeeded",
+    ]
+    assert first_judgment["attempt_evidence"][0]["wait_source"] == "retry_after"
+    assert first_judgment["attempt_evidence"][0]["wait_seconds"] == 7.0
+    assert first_judgment["attempt_evidence"][0]["lane_cooldown"] is True
+    assert first_judgment["attempt_evidence"][1]["failure_category"] == "malformed_structured_response"
+    assert first_judgment["attempt_evidence"][1]["wait_source"] == "exponential_backoff"
+
+
+@pytest.mark.parametrize(
+    ("sequence", "expected_attempts", "expected_outcomes"),
+    [
+        ([_HTTPError(401)], 1, ["nonretryable_failure"]),
+        ([_HTTPError(500), _HTTPError(500), _HTTPError(500)], 3, [
+            "retryable_failure",
+            "retryable_failure",
+            "attempts_exhausted",
+        ]),
+    ],
+)
+def test_v2_private_model_lane_stops_on_nonretryable_or_three_exhausted_attempts(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    sequence: list[object],
+    expected_attempts: int,
+    expected_outcomes: list[str],
+) -> None:
+    source = _make_validation_report_source(tmp_path, f"v2-stop-{expected_attempts}-source")
+    manifest = _v2_manifest(source, output_identity=f"v2-stop-{expected_attempts}")
+    adapters, transports = _provider_adapters(manifest, first_sequence=sequence)
+    monkeypatch.setattr(v2_module, "_V2_SLEEP", lambda _delay: None)
+    result = ConcurrentRobustnessStudy().run(
+        manifest,
+        adapters,
+        tmp_path / f"v2-stop-{expected_attempts}-workspace",
+    )
+
+    assert result.status == ConcurrentRobustnessStudyStatus.STOPPED
+    first_cell = manifest.prompt_model_cells[0]
+    assert len(transports[first_cell.cell_id].calls) == expected_attempts
+    assert result.physical_provider_attempts == expected_attempts
+    assert result.logical_provider_attempts == 1
+    ledger = _jsonl(
+        tmp_path
+        / f".v2-stop-{expected_attempts}-workspace.two-stage-v2-operational"
+        / "cell-00"
+        / "pair_lifecycle.jsonl"
+    )
+    stopped = next(row for row in ledger if row["state"] == "stopped")
+    assert stopped["payload"]["request_invocations"] == expected_attempts
+    assert [row["outcome"] for row in stopped["payload"]["attempt_evidence"]] == expected_outcomes
+
+
+def test_v2_deepseek_cny_ceiling_stops_safely_before_dispatch_and_stays_separate(
+    tmp_path: Path,
+) -> None:
+    source = _make_validation_report_source(tmp_path, "v2-deepseek-cap-source")
+    manifest = _v2_manifest(source, output_identity="v2-deepseek-cap")
+    adapters, transports = _provider_adapters(
+        manifest,
+        first_provider_fee_cny=15.0,
+        first_maximum_provider_fee_cny=15.0,
+    )
+    workspace = tmp_path / "v2-deepseek-cap-workspace"
+
+    result = ConcurrentRobustnessStudy().run(manifest, adapters, workspace)
+
+    assert result.status == ConcurrentRobustnessStudyStatus.RESUMABLE
+    assert result.logical_provider_attempts == 2
+    assert result.physical_provider_attempts == 1
+    first_cell = manifest.prompt_model_cells[0]
+    assert len(transports[first_cell.cell_id].calls) == 1
+    operational = workspace.parent / f".{workspace.name}.two-stage-v2-operational"
+    ledger = _jsonl(operational / "cell-00" / "pair_lifecycle.jsonl")
+    judgment = next(row for row in ledger if row["state"] == "judgment_persisted")
+    attempt = judgment["payload"]["judgment"]["attempt_evidence"][0]
+    assert attempt["provider_fee_cny"] == 15.0
+    assert attempt["billing_currency"] == "CNY"
+    assert attempt["fee_ceiling"] == 25.0
+    latest = ledger[-1]
+    assert latest["state"] == "attempting"
+    assert latest["payload"]["phase"] == "pre_dispatch"
+    assert latest["payload"]["attempt_evidence"] == []
+
+    resume_adapters, resume_transports = _provider_adapters(
+        manifest,
+        first_provider_fee_cny=15.0,
+        first_maximum_provider_fee_cny=15.0,
+    )
+    resumed = ConcurrentRobustnessStudy().run(manifest, resume_adapters, workspace)
+    assert resumed == result
+    assert len(resume_transports[first_cell.cell_id].calls) == 0
+
+
+def test_v2_retry_wait_is_durable_and_resumes_only_the_remaining_attempt_budget(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = _make_validation_report_source(tmp_path, "v2-retry-resume-source")
+    manifest = _v2_manifest(source, output_identity="v2-retry-resume")
+    adapters, first_transports = _provider_adapters(
+        manifest,
+        first_sequence=[_HTTPError(500)],
+    )
+    workspace = tmp_path / "v2-retry-resume-workspace"
+
+    def interrupt_safe_wait(_delay: float) -> None:
+        raise KeyboardInterrupt("controlled interruption before retry dispatch")
+
+    monkeypatch.setattr(v2_module, "_V2_SLEEP", interrupt_safe_wait)
+    with pytest.raises(KeyboardInterrupt):
+        ConcurrentRobustnessStudy().run(manifest, adapters, workspace)
+
+    first_cell = manifest.prompt_model_cells[0]
+    assert len(first_transports[first_cell.cell_id].calls) == 1
+    operational = workspace.parent / f".{workspace.name}.two-stage-v2-operational"
+    interrupted_ledger = _jsonl(operational / "cell-00" / "pair_lifecycle.jsonl")
+    latest = interrupted_ledger[-1]
+    assert latest["state"] == "attempting"
+    assert latest["payload"]["phase"] == "retry_wait"
+    assert latest["payload"]["next_attempt_number"] == 2
+    assert len(latest["payload"]["attempt_evidence"]) == 1
+
+    resume_adapters, resume_transports = _provider_adapters(manifest)
+    resumed_delays: list[float] = []
+    monkeypatch.setattr(v2_module, "_V2_SLEEP", resumed_delays.append)
+    resumed = ConcurrentRobustnessStudy().run(manifest, resume_adapters, workspace)
+
+    assert resumed.status == ConcurrentRobustnessStudyStatus.CELLS_COMPLETE
+    assert resumed.logical_provider_attempts == 1_200
+    assert resumed.physical_provider_attempts == 1_201
+    assert resumed_delays == [0.5]
+    assert len(resume_transports[first_cell.cell_id].calls) == 60
+    completed_ledger = _jsonl(operational / "cell-00" / "pair_lifecycle.jsonl")
+    first_judgment = next(row for row in completed_ledger if row["state"] == "judgment_persisted")
+    assert first_judgment["payload"]["judgment"]["request_invocations"] == 2
+    assert [
+        row["outcome"] for row in first_judgment["payload"]["judgment"]["attempt_evidence"]
+    ] == ["retryable_failure", "succeeded"]
+
+
+def test_v2_private_model_lane_never_retries_unknown_post_dispatch_provenance(tmp_path: Path) -> None:
+    source = _make_validation_report_source(tmp_path, "v2-unknown-provider-source")
+    manifest = _v2_manifest(source, output_identity="v2-unknown-provider")
+    adapters, transports = _provider_adapters(
+        manifest,
+        first_sequence=[ProviderResponseProvenanceUnknown("unknown post-dispatch state")],
+    )
+
+    result = ConcurrentRobustnessStudy().run(
+        manifest,
+        adapters,
+        tmp_path / "v2-unknown-provider-workspace",
+    )
+
+    assert result.status == ConcurrentRobustnessStudyStatus.RECONCILIATION_REQUIRED
+    first_cell = manifest.prompt_model_cells[0]
+    assert len(transports[first_cell.cell_id].calls) == 1
+    assert result.physical_provider_attempts == 1
 
 
 def test_v2_study_runs_twenty_two_stage_cells_and_replays_without_calls(tmp_path: Path) -> None:
@@ -492,7 +807,7 @@ def test_v2_unknown_dispatched_attempt_requires_reconciliation_without_replay(
 
     assert result.status == ConcurrentRobustnessStudyStatus.RECONCILIATION_REQUIRED
     assert result.logical_provider_attempts == 1
-    assert result.physical_provider_attempts == 0
+    assert result.physical_provider_attempts == 1
     operational = tmp_path / f".{workspace.name}.two-stage-v2-operational"
     ledger = _jsonl(operational / "cell-00" / "pair_lifecycle.jsonl")
     assert [row["state"] for row in ledger] == ["pending", "reserved", "attempting"]

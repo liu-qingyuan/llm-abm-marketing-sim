@@ -19,12 +19,29 @@ applyHttpProxySettings(settings.getGlobalSettings().httpProxy);
 configureHttpDispatcher(settings.getHttpIdleTimeoutMs());
 const runtime = await ModelRuntime.create();
 
-const modelAliases = Object.freeze({
-  "gpt-5.4-mini": "gpt-5.4-mini",
-  "gpt-5.4-2026-03-05": "gpt-5.4",
-  "gpt-5.5-2026-04-23": "gpt-5.5",
-  "gpt-5.6-sol": "gpt-5.6-sol",
+const subscriptionProfiles = Object.freeze({
+  "openai-codex": Object.freeze({
+    provider: "openai-codex",
+    modelAliases: Object.freeze({
+      "gpt-5.4-mini": "gpt-5.4-mini",
+      "gpt-5.4-2026-03-05": "gpt-5.4",
+      "gpt-5.5-2026-04-23": "gpt-5.5",
+      "gpt-5.6-sol": "gpt-5.6-sol",
+    }),
+  }),
+  "kimi-coding": Object.freeze({
+    provider: "kimi-coding",
+    modelAliases: Object.freeze({
+      "kimi-coding/k3-256k": "k3-256k",
+    }),
+  }),
 });
+const profileName = process.env.LLM_ABM_PI_SUBSCRIPTION_PROFILE ?? "openai-codex";
+const subscriptionProfile = subscriptionProfiles[profileName];
+if (!subscriptionProfile) {
+  throw new Error("unsupported Pi subscription profile");
+}
+const { provider, modelAliases } = subscriptionProfile;
 
 const decisionFormat = Object.freeze({
   type: "json_schema",
@@ -51,7 +68,25 @@ function emit(payload) {
 function safeError(error) {
   const name = error instanceof Error ? error.name : "Error";
   const message = error instanceof Error ? error.message : String(error);
-  return `${name}: ${message}`.slice(0, 500);
+  const explicitStatus = Number(error?.status ?? error?.statusCode ?? error?.response?.status);
+  const statusMatch = message.match(/\b(?:HTTP(?:\s+status)?|status(?:\s+code)?)[ :=]+(4\d\d|5\d\d)\b/i);
+  const statusCode = Number.isSafeInteger(explicitStatus)
+    ? explicitStatus
+    : statusMatch
+      ? Number(statusMatch[1])
+      : null;
+  const headerWait = Number(error?.headers?.["retry-after"] ?? error?.response?.headers?.["retry-after"]);
+  const waitMatch = message.match(/\bWait\s+([0-9]+(?:\.[0-9]+)?)\s*s\b/i);
+  const waitSeconds = Number.isFinite(headerWait) && headerWait >= 0
+    ? headerWait
+    : waitMatch
+      ? Number(waitMatch[1])
+      : null;
+  return {
+    category: name.slice(0, 120),
+    status_code: statusCode,
+    wait_seconds: waitSeconds,
+  };
 }
 
 function textContent(message) {
@@ -62,12 +97,12 @@ function textContent(message) {
 }
 
 async function status(command) {
-  const auth = await runtime.checkAuth("openai-codex");
-  const models = Object.values(modelAliases).filter((id) => runtime.getModel("openai-codex", id));
+  const auth = await runtime.checkAuth(provider);
+  const models = Object.values(modelAliases).filter((id) => runtime.getModel(provider, id));
   return {
     id: command.id,
     ok: Boolean(auth) && models.length === Object.keys(modelAliases).length,
-    provider: "openai-codex",
+    provider,
     auth_type: auth?.type ?? null,
     models,
     requested_model_aliases: modelAliases,
@@ -93,7 +128,7 @@ async function request(command) {
   if (!system || userMessages.length !== 1) {
     throw new Error("subscription request requires one system and one user message");
   }
-  const model = runtime.getModel("openai-codex", upstreamModel);
+  const model = runtime.getModel(provider, upstreamModel);
   if (!model) {
     throw new Error(`subscription model unavailable: ${upstreamModel}`);
   }

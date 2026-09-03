@@ -8,7 +8,7 @@ import subprocess
 import threading
 from collections.abc import Callable
 from pathlib import Path
-from typing import IO, Any
+from typing import IO, Any, Literal
 
 from llm_abm_sim.decision import ProviderResponseProvenanceUnknown
 from llm_abm_sim.provider_accounting import ProviderResponseEnvelope
@@ -22,10 +22,27 @@ PI_SUBSCRIPTION_MODEL_ALIASES: dict[str, str] = {
     "gpt-5.5-2026-04-23": "gpt-5.5",
     "gpt-5.6-sol": "gpt-5.6-sol",
 }
+PI_KIMI_SUBSCRIPTION_ADAPTER_IDENTITY = "kimi-coding-subscription-client-v1"
+PI_KIMI_SUBSCRIPTION_PROVIDER = "kimi-coding"
+PI_KIMI_SUBSCRIPTION_MODEL_ALIASES: dict[str, str] = {
+    "kimi-coding/k3-256k": "k3-256k",
+}
 
 
 class PiSubscriptionProviderError(RuntimeError):
     """Raised when the explicit Pi subscription transport fails closed."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        status_code: int | None = None,
+        wait_seconds: float | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.status_code = status_code
+        self.wait_seconds = wait_seconds
+        self.wait_source = "provider_wait" if wait_seconds is not None else None
 
 
 class PiSubscriptionProviderClient:
@@ -38,6 +55,9 @@ class PiSubscriptionProviderClient:
 
     external_provider_client = True
     provider_transport = PI_SUBSCRIPTION_PROVIDER
+    adapter_identity = PI_SUBSCRIPTION_ADAPTER_IDENTITY
+    requested_model_aliases = PI_SUBSCRIPTION_MODEL_ALIASES
+    worker_profile = PI_SUBSCRIPTION_PROVIDER
     output_token_ceiling_enforcement = "application_fail_closed"
 
     def __init__(
@@ -74,9 +94,9 @@ class PiSubscriptionProviderClient:
     def safe_metadata(self) -> dict[str, object]:
         return {
             "provider_transport": self.provider_transport,
-            "adapter_identity": PI_SUBSCRIPTION_ADAPTER_IDENTITY,
+            "adapter_identity": self.adapter_identity,
             "authentication": "local_oauth_subscription",
-            "requested_model_aliases": dict(PI_SUBSCRIPTION_MODEL_ALIASES),
+            "requested_model_aliases": dict(self.requested_model_aliases),
             "output_token_ceiling_enforcement": self.output_token_ceiling_enforcement,
         }
 
@@ -87,12 +107,15 @@ class PiSubscriptionProviderClient:
         *,
         reasoning_effort: ReasoningEffortValue | None = None,
         output_token_ceiling: int | None = None,
+        thinking_mode: Literal["disabled"] | None = None,
     ) -> ProviderResponseEnvelope:
+        if thinking_mode is not None:
+            raise PiSubscriptionProviderError("Pi subscription transport does not accept thinking_mode")
         if reasoning_effort != "low":
             raise PiSubscriptionProviderError("Pi subscription robustness requests require reasoning_effort=low")
         if output_token_ceiling is None or output_token_ceiling < 1:
             raise PiSubscriptionProviderError("Pi subscription robustness requests require an output-token ceiling")
-        upstream_model = PI_SUBSCRIPTION_MODEL_ALIASES.get(model)
+        upstream_model = self.requested_model_aliases.get(model)
         if upstream_model is None:
             raise PiSubscriptionProviderError("Pi subscription requested model is outside the approved allowlist")
         if not self.ready:
@@ -112,7 +135,7 @@ class PiSubscriptionProviderClient:
         if not isinstance(usage, dict):
             raise PiSubscriptionProviderError("Pi subscription response is missing usage evidence")
         if (
-            response.get("provider") != PI_SUBSCRIPTION_PROVIDER
+            response.get("provider") != self.provider_transport
             or response.get("requested_model") != model
             or response.get("upstream_model") != upstream_model
             or response.get("output_token_ceiling_enforcement") != self.output_token_ceiling_enforcement
@@ -182,6 +205,7 @@ class PiSubscriptionProviderClient:
         package_root = Path(pi_executable).resolve().parents[1]
         env = dict(os.environ)
         env["PI_CODING_AGENT_PACKAGE_ROOT"] = str(package_root)
+        env["LLM_ABM_PI_SUBSCRIPTION_PROFILE"] = self.worker_profile
         env.setdefault("PI_AGENT_DIR", str(Path.home() / ".pi" / "agent"))
         try:
             process = self._process_factory(
@@ -203,16 +227,16 @@ class PiSubscriptionProviderClient:
         status = self._rpc({"type": "status"})
         models = status.get("models")
         if (
-            status.get("provider") != PI_SUBSCRIPTION_PROVIDER
+            status.get("provider") != self.provider_transport
             or status.get("auth_type") != "oauth"
-            or status.get("requested_model_aliases") != PI_SUBSCRIPTION_MODEL_ALIASES
+            or status.get("requested_model_aliases") != self.requested_model_aliases
             or not isinstance(models, list)
         ):
             self.close()
             raise PiSubscriptionProviderError("Pi subscription worker returned invalid OAuth readiness evidence")
-        if tuple(models) != tuple(PI_SUBSCRIPTION_MODEL_ALIASES.values()):
+        if tuple(models) != tuple(self.requested_model_aliases.values()):
             self.close()
-            raise PiSubscriptionProviderError("Pi subscription worker does not expose the four required models")
+            raise PiSubscriptionProviderError("Pi subscription worker does not expose the exact profile models")
         self._ready = True
 
     def _rpc(self, payload: dict[str, object]) -> dict[str, Any]:
@@ -269,8 +293,23 @@ class PiSubscriptionProviderClient:
                 raise PiSubscriptionProviderError("Pi subscription worker response identity is crossed")
             if response.get("ok") is not True:
                 error = response.get("error")
-                detail = str(error)[:500] if error else "unknown external Provider failure"
-                raise PiSubscriptionProviderError(detail)
+                if isinstance(error, dict):
+                    status_code = error.get("status_code")
+                    wait_seconds = error.get("wait_seconds")
+                    safe_status = status_code if isinstance(status_code, int) and not isinstance(status_code, bool) else None
+                    safe_wait = (
+                        float(wait_seconds)
+                        if isinstance(wait_seconds, (int, float))
+                        and not isinstance(wait_seconds, bool)
+                        and 0.0 <= float(wait_seconds) < float("inf")
+                        else None
+                    )
+                    raise PiSubscriptionProviderError(
+                        "Pi subscription Provider returned a known failure",
+                        status_code=safe_status,
+                        wait_seconds=safe_wait,
+                    )
+                raise PiSubscriptionProviderError("Pi subscription Provider returned a known failure")
             return response
 
     def _discard_process(self, process: subprocess.Popen[str]) -> None:
@@ -293,6 +332,15 @@ class PiSubscriptionProviderClient:
             self.close()
         except Exception:
             pass
+
+
+class PiKimiSubscriptionProviderClient(PiSubscriptionProviderClient):
+    """Separate Pi-authenticated profile for the frozen Kimi 256K condition."""
+
+    provider_transport = PI_KIMI_SUBSCRIPTION_PROVIDER
+    adapter_identity = PI_KIMI_SUBSCRIPTION_ADAPTER_IDENTITY
+    requested_model_aliases = PI_KIMI_SUBSCRIPTION_MODEL_ALIASES
+    worker_profile = PI_KIMI_SUBSCRIPTION_PROVIDER
 
 
 def _default_worker_path() -> Path:

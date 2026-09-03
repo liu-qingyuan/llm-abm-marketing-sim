@@ -486,6 +486,39 @@ def test_responses_wire_normalizes_safe_model_and_usage_envelope():
     assert "must-not-persist" not in envelope.model_dump_json()
 
 
+def test_chat_wire_can_explicitly_disable_deepseek_thinking_without_changing_prompt_messages():
+    decision_text = '{"engage": false, "probability": 0.1, "reason": "low", "confidence": 0.8, "action": "ignore"}'
+    captured: dict[str, object] = {}
+
+    def create(**kwargs: object):
+        captured.update(kwargs)
+        return SimpleNamespace(
+            choices=[SimpleNamespace(message=SimpleNamespace(content=decision_text))],
+            model="deepseek-v4-flash",
+            usage=SimpleNamespace(prompt_tokens=14, completion_tokens=6, total_tokens=20),
+        )
+
+    sdk_client = object.__new__(_OpenAISDKClient)
+    sdk_client._wire_api = "chat"
+    sdk_client._extra_headers = None
+    sdk_client._client = cast(
+        Any,
+        SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=create))),
+    )
+    messages = [{"role": "user", "content": "same canonical Prompt bytes"}]
+
+    sdk_client.create_response(
+        messages,
+        "deepseek-v4-flash",
+        output_token_ceiling=256,
+        thinking_mode="disabled",
+    )
+
+    assert captured["messages"] == messages
+    assert captured["extra_body"] == {"thinking": {"type": "disabled"}}
+    assert captured["max_completion_tokens"] == 256
+
+
 def test_chat_wire_normalizes_usage_without_synthesizing_cached_tokens():
     decision_text = '{"engage": true, "probability": 0.7, "reason": "fit", "confidence": 0.8, "action": "share"}'
     sdk_response = SimpleNamespace(

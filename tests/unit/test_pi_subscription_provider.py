@@ -6,11 +6,27 @@ from pathlib import Path
 import pytest
 
 import llm_abm_sim.providers.pi_subscription as pi_subscription_module
-from llm_abm_sim.decision import ProviderResponseProvenanceUnknown
-from llm_abm_sim.prompt_contracts import CONCURRENT_ROBUSTNESS_PROMPT_TOKENS
+from llm_abm_sim.decision import ProviderDecisionError, ProviderResponseProvenanceUnknown
+from llm_abm_sim.prompt_contracts import (
+    CONCURRENT_ROBUSTNESS_PROMPT_REGISTRY,
+    CONCURRENT_ROBUSTNESS_PROMPT_TOKENS,
+)
 from llm_abm_sim.providers.openai_compatible import OpenAICompatibleDecisionAdapter
-from llm_abm_sim.providers.pi_subscription import PiSubscriptionProviderClient, PiSubscriptionProviderError
-from llm_abm_sim.schemas import PeerContext, PostContent, ProviderLLMConfig, ReasoningEffort, UserProfile
+from llm_abm_sim.providers.pi_subscription import (
+    PI_SUBSCRIPTION_MODEL_ALIASES,
+    PiKimiSubscriptionProviderClient,
+    PiSubscriptionProviderClient,
+    PiSubscriptionProviderError,
+)
+from llm_abm_sim.providers.robustness import PiKimiDecisionAdapter
+from llm_abm_sim.schemas import (
+    PeerContext,
+    PlatformContext,
+    PostContent,
+    ProviderLLMConfig,
+    ReasoningEffort,
+    UserProfile,
+)
 
 
 def _fake_worker(path: Path) -> Path:
@@ -74,6 +90,104 @@ process.stdin.on("data", chunk => {
     return path
 
 
+def _fake_kimi_worker(path: Path) -> Path:
+    path.write_text(
+        """
+let buffer = "";
+function emit(value) { process.stdout.write(JSON.stringify(value) + "\\n"); }
+process.stdin.setEncoding("utf8");
+process.stdin.on("data", chunk => {
+  buffer += chunk;
+  while (true) {
+    const index = buffer.indexOf("\\n");
+    if (index < 0) break;
+    const line = buffer.slice(0, index);
+    buffer = buffer.slice(index + 1);
+    if (!line) continue;
+    const command = JSON.parse(line);
+    if (command.type === "status") {
+      emit({
+        id: command.id,
+        ok: true,
+        provider: "kimi-coding",
+        auth_type: "oauth",
+        models: ["k3-256k"],
+        requested_model_aliases: {"kimi-coding/k3-256k": "k3-256k"}
+      });
+    } else if (command.type === "request") {
+      emit({
+        id: command.id,
+        ok: true,
+        provider: "kimi-coding",
+        requested_model: command.model,
+        upstream_model: "k3-256k",
+        observed_model: "k3-256k",
+        decision_text: "{\\"engage\\":true,\\"probability\\":0.8,\\"reason\\":\\"fit\\",\\"confidence\\":0.9,\\"action\\":\\"like\\"}",
+        usage: {
+          input_tokens: 20,
+          output_tokens: 10,
+          total_tokens: 30,
+          cached_input_tokens: 0,
+          subscription_nominal_cost_usd: 0
+        },
+        output_token_ceiling_enforcement: "application_fail_closed"
+      });
+    } else if (command.type === "close") {
+      emit({id: command.id, ok: true, closing: true});
+      process.exit(0);
+    }
+  }
+});
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    return path
+
+
+def _fake_kimi_failure_worker(path: Path) -> Path:
+    path.write_text(
+        """
+let buffer = "";
+function emit(value) { process.stdout.write(JSON.stringify(value) + "\\n"); }
+process.stdin.setEncoding("utf8");
+process.stdin.on("data", chunk => {
+  buffer += chunk;
+  while (true) {
+    const index = buffer.indexOf("\\n");
+    if (index < 0) break;
+    const line = buffer.slice(0, index);
+    buffer = buffer.slice(index + 1);
+    if (!line) continue;
+    const command = JSON.parse(line);
+    if (command.type === "status") {
+      emit({
+        id: command.id,
+        ok: true,
+        provider: "kimi-coding",
+        auth_type: "oauth",
+        models: ["k3-256k"],
+        requested_model_aliases: {"kimi-coding/k3-256k": "k3-256k"}
+      });
+    } else if (command.type === "request") {
+      emit({
+        id: command.id,
+        ok: false,
+        error: {category: "APIError", status_code: 429, wait_seconds: 13}
+      });
+    } else if (command.type === "close") {
+      emit({id: command.id, ok: true, closing: true});
+      process.exit(0);
+    }
+  }
+});
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    return path
+
+
 def _profile() -> UserProfile:
     return UserProfile.model_validate(
         {
@@ -92,6 +206,71 @@ def _profile() -> UserProfile:
             "concurrent_travel_purpose": "leisure",
         }
     )
+
+
+def test_kimi_subscription_uses_an_independent_profile_without_widening_openai_allowlist(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LLM_ABM_RUN_LIVE_LLM", "1")
+    client = PiKimiSubscriptionProviderClient(worker_path=_fake_kimi_worker(tmp_path / "kimi-worker.mjs"))
+    try:
+        response = client.create_response(
+            [{"role": "user", "content": "bounded test"}],
+            "kimi-coding/k3-256k",
+            reasoning_effort="low",
+            output_token_ceiling=256,
+        )
+    finally:
+        client.close()
+
+    assert PI_SUBSCRIPTION_MODEL_ALIASES == {
+        "gpt-5.4-mini": "gpt-5.4-mini",
+        "gpt-5.4-2026-03-05": "gpt-5.4",
+        "gpt-5.5-2026-04-23": "gpt-5.5",
+        "gpt-5.6-sol": "gpt-5.6-sol",
+    }
+    assert response.observed_model == "k3-256k"
+    assert client.safe_metadata == {
+        "provider_transport": "kimi-coding",
+        "adapter_identity": "kimi-coding-subscription-client-v1",
+        "authentication": "local_oauth_subscription",
+        "requested_model_aliases": {"kimi-coding/k3-256k": "k3-256k"},
+        "output_token_ceiling_enforcement": "application_fail_closed",
+    }
+
+
+def test_kimi_worker_known_quota_failure_preserves_only_typed_retry_facts(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LLM_ABM_RUN_LIVE_LLM", "1")
+    client = PiKimiSubscriptionProviderClient(
+        worker_path=_fake_kimi_failure_worker(tmp_path / "kimi-failure-worker.mjs")
+    )
+    adapter = PiKimiDecisionAdapter(
+        prompt_version=CONCURRENT_ROBUSTNESS_PROMPT_REGISTRY.resolve("P0").prompt_version,
+        client=client,
+    )
+    try:
+        with pytest.raises(ProviderDecisionError) as captured:
+            adapter.decide(
+                post=PostContent(post_id="m1", text="content"),
+                profile=_profile(),
+                peer_context=PeerContext(),
+                platform_context=PlatformContext(),
+                time_step=0,
+            )
+    finally:
+        client.close()
+
+    assert captured.value.failure_category == "http_status"
+    assert captured.value.status_code == 429
+    assert captured.value.retryable is True
+    assert captured.value.lane_cooldown is True
+    assert captured.value.wait_seconds == 13.0
+    assert captured.value.wait_source == "provider_wait"
+    assert "APIError" not in str(captured.value)
 
 
 def test_subscription_client_requires_explicit_live_gate(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

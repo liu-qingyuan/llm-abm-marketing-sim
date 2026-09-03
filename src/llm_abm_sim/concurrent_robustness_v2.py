@@ -2,12 +2,15 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 import shutil
 import stat
 import tempfile
+import threading
+import time
 from collections import Counter
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal, cast
@@ -38,8 +41,10 @@ from .concurrent_message_experiment import (
     _primary_variant_context,
     _PrimaryOnlyConcurrentRuntimeConsumer,
     _unwrap_adapter,
+    _VariantAttemptAccounting,
 )
 from .concurrent_robustness_study import (
+    _MODEL_ID_PATTERN,
     _OUTPUT_IDENTITY_PATTERN,
     _ROBUSTNESS_MESSAGE_IDS,
     ConcurrentRobustnessError,
@@ -64,6 +69,7 @@ from .decision import (
     EngageDecision,
     EngagementAction,
     LLMDecisionAdapter,
+    ProviderDecisionError,
     ProviderResponseProvenanceUnknown,
 )
 from .engagement_realization import (
@@ -74,6 +80,7 @@ from .engagement_realization import (
 )
 from .final_research import VALIDATION_RUN_STATUS
 from .prompt_contracts import CONCURRENT_ROBUSTNESS_PROMPT_REGISTRY
+from .provider_accounting import ProviderAccounting, provider_accounting_delta
 
 CONCURRENT_ROBUSTNESS_MANIFEST_V2_SCHEMA = "concurrent-robustness-manifest-v2"
 CONCURRENT_ROBUSTNESS_REALIZATION_SOURCE_SCHEMA = "concurrent-robustness-realization-source-v1"
@@ -99,6 +106,9 @@ _V2_FORMAL_LOGICAL_PER_CELL = 1_800
 _V2_FORMAL_LOGICAL_CAP = 36_000
 _V2_FORMAL_PHYSICAL_CAP = 108_000
 _V2_MAXIMUM_ATTEMPTS = 3
+_V2_BACKOFF_CEILING_SECONDS = 60.0
+_V2_SLEEP = time.sleep
+_V2_MONOTONIC = time.monotonic
 
 
 class _V2FrozenModel(BaseModel):
@@ -453,16 +463,144 @@ _V2_PAIR_STATES = (
     "realized_persisted",
     "settled",
 )
+_V2_ATTEMPT_BILLING_PROFILES: Mapping[
+    str,
+    tuple[str, Literal["CNY"] | None, float | None],
+] = {
+    "deepseek_official": ("provider_fee_cny", "CNY", 25.0),
+    "antigravity_openai_compatible_gateway": ("gateway_quota_usage", None, None),
+    "pi_kimi_oauth_subscription": (
+        "subscription_quota_with_nominal_usd_reference",
+        None,
+        None,
+    ),
+    "pi_openai_oauth_subscription": (
+        "subscription_quota_with_nominal_usd_reference",
+        None,
+        None,
+    ),
+    "injected_deterministic_validation": ("none", None, None),
+}
 _V2_ALLOWED_TRANSITIONS: Mapping[str | None, set[str]] = {
     None: {"pending"},
     "pending": {"reserved"},
     "reserved": {"attempting"},
-    "attempting": {"judgment_persisted", "stopped"},
+    "attempting": {"attempting", "judgment_persisted", "stopped"},
     "judgment_persisted": {"realized_persisted"},
     "realized_persisted": {"settled"},
     "settled": set(),
     "stopped": set(),
 }
+
+
+class _V2AttemptEvidence(_V2FrozenModel):
+    schema_version: Literal["concurrent-robustness-provider-attempt-v2"]
+    attempt_number: int = Field(ge=1, le=_V2_MAXIMUM_ATTEMPTS)
+    outcome: Literal["succeeded", "retryable_failure", "nonretryable_failure", "attempts_exhausted"]
+    failure_category: str | None = None
+    status_code: int | None = Field(default=None, ge=100, le=599)
+    wait_source: Literal["retry_after", "provider_wait", "exponential_backoff"] | None = None
+    wait_seconds: float | None = Field(default=None, ge=0.0)
+    lane_cooldown: bool
+    request_invocations: Literal[1]
+    provider_response_count: int = Field(ge=0, le=1)
+    successful_decision_count: int = Field(ge=0, le=1)
+    observed_model_counts: dict[str, int]
+    observed_model_missing_response_count: int = Field(ge=0, le=1)
+    observed_model_malformed_response_count: int = Field(ge=0, le=1)
+    usage_complete_response_count: int = Field(ge=0, le=1)
+    usage_missing_response_count: int = Field(ge=0, le=1)
+    usage_malformed_response_count: int = Field(ge=0, le=1)
+    input_usage: int | None = Field(default=None, ge=0)
+    output_usage: int | None = Field(default=None, ge=0)
+    total_usage: int | None = Field(default=None, ge=0)
+    cached_input_usage: int | None = Field(default=None, ge=0)
+    provider_route: str
+    billing_semantics: str
+    billing_currency: Literal["CNY"] | None
+    provider_fee_cny: float | None = Field(default=None, ge=0.0)
+    subscription_nominal_cost_usd: float | None = Field(default=None, ge=0.0)
+    fee_ceiling: float | None = Field(default=None, ge=0.0)
+
+    @model_validator(mode="after")
+    def _validate_attempt(self) -> _V2AttemptEvidence:
+        if self.outcome == "succeeded":
+            if self.failure_category is not None or self.successful_decision_count != 1:
+                raise ValueError("successful attempt evidence cannot carry a failure")
+            if self.wait_source is not None or self.wait_seconds is not None or self.lane_cooldown:
+                raise ValueError("successful attempt evidence cannot carry retry timing")
+        else:
+            if not self.failure_category or self.successful_decision_count != 0:
+                raise ValueError("failed attempt evidence requires a safe failure category")
+        if (self.wait_source is None) != (self.wait_seconds is None):
+            raise ValueError("attempt retry source and delay must be present together")
+        if self.wait_seconds is not None and not math.isfinite(self.wait_seconds):
+            raise ValueError("attempt retry delay must be finite")
+        if self.provider_fee_cny is not None and not math.isfinite(self.provider_fee_cny):
+            raise ValueError("attempt Provider fee must be finite")
+        if self.subscription_nominal_cost_usd is not None and not math.isfinite(
+            self.subscription_nominal_cost_usd
+        ):
+            raise ValueError("attempt nominal USD reference must be finite")
+        if (self.billing_currency == "CNY") != (self.fee_ceiling is not None):
+            raise ValueError("CNY attempt evidence requires its independent fee ceiling")
+        if self.billing_currency != "CNY" and self.provider_fee_cny is not None:
+            raise ValueError("non-CNY Provider attempt cannot carry a CNY fee")
+        if (
+            self.subscription_nominal_cost_usd is not None
+            and self.billing_semantics != "subscription_quota_with_nominal_usd_reference"
+        ):
+            raise ValueError("nominal USD reference belongs only to a subscription route")
+        if _V2_ATTEMPT_BILLING_PROFILES.get(self.provider_route) != (
+            self.billing_semantics,
+            self.billing_currency,
+            self.fee_ceiling,
+        ):
+            raise ValueError("attempt Provider route and billing semantics are crossed")
+        if any(
+            not _MODEL_ID_PATTERN.fullmatch(model) or type(count) is not int or count < 0
+            for model, count in self.observed_model_counts.items()
+        ):
+            raise ValueError("attempt observed-model counts are malformed")
+        if self.outcome == "retryable_failure":
+            if self.wait_seconds is None or self.failure_category not in {
+                "connection",
+                "timeout",
+                "http_status",
+                "malformed_structured_response",
+            }:
+                raise ValueError("retryable attempt is outside the frozen failure allowlist")
+        elif self.wait_seconds is not None:
+            raise ValueError("terminal attempt failure cannot carry another retry delay")
+        if self.outcome == "attempts_exhausted" and self.attempt_number != _V2_MAXIMUM_ATTEMPTS:
+            raise ValueError("attempt exhaustion is valid only at the physical-attempt cap")
+        if self.failure_category == "http_status" and self.status_code is None:
+            raise ValueError("HTTP attempt failure requires a status code")
+        if self.lane_cooldown != (self.status_code in {429, 503}):
+            raise ValueError("model-lane cooldown must be caused only by 429 or 503")
+        observed_total = (
+            sum(self.observed_model_counts.values())
+            + self.observed_model_missing_response_count
+            + self.observed_model_malformed_response_count
+        )
+        usage_total = (
+            self.usage_complete_response_count
+            + self.usage_missing_response_count
+            + self.usage_malformed_response_count
+        )
+        if observed_total != self.provider_response_count or usage_total != self.provider_response_count:
+            raise ValueError("attempt response evidence must close model and usage denominators")
+        required_usage = (self.input_usage, self.output_usage, self.total_usage)
+        if self.usage_complete_response_count == 0:
+            if any(value is not None for value in (*required_usage, self.cached_input_usage)):
+                raise ValueError("attempt without complete usage cannot carry token counters")
+        elif any(value is None for value in required_usage):
+            raise ValueError("attempt complete usage requires input, output, and total counters")
+        if self.total_usage is not None and self.total_usage != (self.input_usage or 0) + (self.output_usage or 0):
+            raise ValueError("attempt token usage is crossed")
+        if self.cached_input_usage is not None and self.cached_input_usage > (self.input_usage or 0):
+            raise ValueError("attempt cached-input usage exceeds total input usage")
+        return self
 
 
 class _V2Judgment(_V2FrozenModel):
@@ -496,6 +634,7 @@ class _V2Judgment(_V2FrozenModel):
     output_usage: int | None = Field(default=None, ge=0)
     total_usage: int | None = Field(default=None, ge=0)
     cached_input_usage: int | None = Field(default=None, ge=0)
+    attempt_evidence: tuple[_V2AttemptEvidence, ...]
 
     @field_validator("judgment_id", "judgment_source_identity")
     @classmethod
@@ -508,14 +647,48 @@ class _V2Judgment(_V2FrozenModel):
             raise ValueError("Provider Judgment engage and action are inconsistent")
         if self.provider_response_count < self.successful_decision_count:
             raise ValueError("Provider Judgment response accounting is inconsistent")
-        usage_values = (
-            self.input_usage,
-            self.output_usage,
-            self.total_usage,
-            self.cached_input_usage,
-        )
-        if self.usage_complete != all(value is not None for value in usage_values):
+        if (
+            len(self.attempt_evidence) != self.request_invocations
+            or tuple(row.attempt_number for row in self.attempt_evidence)
+            != tuple(range(1, self.request_invocations + 1))
+            or self.attempt_evidence[-1].outcome != "succeeded"
+            or any(row.outcome == "succeeded" for row in self.attempt_evidence[:-1])
+        ):
+            raise ValueError("Provider Judgment attempt evidence is incomplete or reordered")
+        observed = Counter[str]()
+        for attempt in self.attempt_evidence:
+            observed.update(attempt.observed_model_counts)
+        if (
+            sum(row.provider_response_count for row in self.attempt_evidence)
+            != self.provider_response_count
+            or sum(row.successful_decision_count for row in self.attempt_evidence)
+            != self.successful_decision_count
+            or observed != Counter({self.observed_model: self.provider_response_count})
+        ):
+            raise ValueError("Provider Judgment is crossed with physical-attempt response evidence")
+
+        def attempt_token_sum(field: str) -> int | None:
+            values = [
+                getattr(attempt, field)
+                for attempt in self.attempt_evidence
+                if getattr(attempt, field) is not None
+            ]
+            return sum(cast(list[int], values)) if values else None
+
+        if (
+            attempt_token_sum("input_usage") != self.input_usage
+            or attempt_token_sum("output_usage") != self.output_usage
+            or attempt_token_sum("total_usage") != self.total_usage
+            or attempt_token_sum("cached_input_usage") != self.cached_input_usage
+        ):
+            raise ValueError("Provider Judgment token usage is crossed with physical attempts")
+        required_usage = (self.input_usage, self.output_usage, self.total_usage)
+        if self.usage_complete != all(value is not None for value in required_usage):
             raise ValueError("Provider Judgment usage completeness is inconsistent")
+        if self.total_usage is not None and self.total_usage != (self.input_usage or 0) + (self.output_usage or 0):
+            raise ValueError("Provider Judgment token usage total is crossed")
+        if self.cached_input_usage is not None and self.cached_input_usage > (self.input_usage or 0):
+            raise ValueError("Provider Judgment cached-input usage exceeds input usage")
         payload = self.model_dump(mode="json")
         payload.pop("judgment_id")
         if self.judgment_id != _json_sha256(payload):
@@ -808,9 +981,50 @@ class _V2PairLedger:
         payload = record.get("payload")
         if not isinstance(payload, Mapping):
             raise ValueError("v2 pair lifecycle payload must be an object")
-        if state in {"pending", "attempting"}:
+        if state == "pending":
             if payload:
-                raise ValueError("pre-Judgment lifecycle stages cannot carry a payload")
+                raise ValueError("pending lifecycle stage cannot carry a payload")
+        elif state == "attempting":
+            if payload:
+                expected_attempt_keys = {
+                    "phase",
+                    "next_attempt_number",
+                    "attempt_evidence",
+                    "retry_delay_seconds",
+                }
+                if set(payload) != expected_attempt_keys or payload.get("phase") not in {
+                    "pre_dispatch",
+                    "dispatching",
+                    "retry_wait",
+                }:
+                    raise ValueError("attempting lifecycle payload schema is invalid")
+                next_attempt = payload.get("next_attempt_number")
+                raw_attempts = payload.get("attempt_evidence")
+                retry_delay = payload.get("retry_delay_seconds")
+                if (
+                    not isinstance(next_attempt, int)
+                    or not 1 <= next_attempt <= _V2_MAXIMUM_ATTEMPTS
+                    or not isinstance(raw_attempts, list)
+                ):
+                    raise ValueError("attempting lifecycle attempt cursor is invalid")
+                attempts = tuple(_V2AttemptEvidence.model_validate(row) for row in raw_attempts)
+                if (
+                    tuple(row.attempt_number for row in attempts) != tuple(range(1, len(attempts) + 1))
+                    or next_attempt != len(attempts) + 1
+                    or any(row.outcome == "succeeded" for row in attempts)
+                ):
+                    raise ValueError("attempting lifecycle evidence is incomplete or crossed")
+                phase = payload.get("phase")
+                if phase == "retry_wait":
+                    if (
+                        not attempts
+                        or attempts[-1].outcome != "retryable_failure"
+                        or not isinstance(retry_delay, (int, float))
+                        or float(retry_delay) < 0.0
+                    ):
+                        raise ValueError("retry-wait lifecycle evidence is invalid")
+                elif retry_delay is not None:
+                    raise ValueError("non-waiting attempt lifecycle cannot carry a delay")
         elif state == "reserved":
             if payload != {"maximum_physical_attempts": _V2_MAXIMUM_ATTEMPTS}:
                 raise ValueError("reserved lifecycle payload does not freeze the attempt cap")
@@ -862,7 +1076,7 @@ class _V2PairLedger:
     ) -> None:
         del record
         if (
-            set(payload) != {"terminal_status", "failure_type", "request_invocations"}
+            set(payload) != {"terminal_status", "failure_type", "request_invocations", "attempt_evidence"}
             or payload.get("terminal_status") != "provider_failed"
             or not isinstance(payload.get("failure_type"), str)
         ):
@@ -870,6 +1084,16 @@ class _V2PairLedger:
         request_invocations = payload.get("request_invocations")
         if not isinstance(request_invocations, int) or request_invocations < 0:
             raise ValueError("stopped lifecycle payload has invalid physical-attempt evidence")
+        raw_attempts = payload.get("attempt_evidence")
+        if not isinstance(raw_attempts, list):
+            raise ValueError("stopped lifecycle payload requires an attempt evidence list")
+        attempts = tuple(_V2AttemptEvidence.model_validate(row) for row in raw_attempts)
+        if attempts and (
+            len(attempts) != request_invocations
+            or tuple(row.attempt_number for row in attempts) != tuple(range(1, request_invocations + 1))
+            or any(row.outcome == "succeeded" for row in attempts)
+        ):
+            raise ValueError("stopped lifecycle physical-attempt evidence is incomplete")
 
     @staticmethod
     def _validate_terminal_judgment(
@@ -954,6 +1178,10 @@ class _V2PublishedExecution:
 
 
 class _V2ReconciliationRequired(RuntimeError):
+    pass
+
+
+class _V2SafePreCallStop(RuntimeError):
     pass
 
 
@@ -1369,6 +1597,372 @@ def _runtime_identity(
     )
 
 
+@dataclass(frozen=True)
+class _V2AdapterAttemptSnapshot:
+    request_invocations: int
+    accounting: ProviderAccounting
+    provider_fee_cny_total: float | None
+    subscription_nominal_cost_usd_total: float | None
+
+
+def _v2_adapter_snapshot(adapter: LLMDecisionAdapter) -> _V2AdapterAttemptSnapshot:
+    request_invocations = getattr(adapter, "request_invocations", None)
+    accounting = getattr(adapter, "provider_accounting", None)
+    if type(request_invocations) is not int or request_invocations < 0 or not isinstance(accounting, ProviderAccounting):
+        raise ValueError("v2 Provider Adapter counters are unavailable")
+    provider_fee = getattr(adapter, "provider_fee_cny_total", None)
+    if provider_fee is not None and (
+        isinstance(provider_fee, bool)
+        or not isinstance(provider_fee, (int, float))
+        or not math.isfinite(float(provider_fee))
+        or float(provider_fee) < 0.0
+    ):
+        raise ValueError("v2 Provider Adapter CNY accounting is invalid")
+    nominal_cost = getattr(adapter, "subscription_nominal_cost_usd_total", None)
+    if nominal_cost is not None and (
+        isinstance(nominal_cost, bool)
+        or not isinstance(nominal_cost, (int, float))
+        or not math.isfinite(float(nominal_cost))
+        or float(nominal_cost) < 0.0
+    ):
+        raise ValueError("v2 subscription nominal USD accounting is invalid")
+    return _V2AdapterAttemptSnapshot(
+        request_invocations=request_invocations,
+        accounting=accounting,
+        provider_fee_cny_total=float(provider_fee) if provider_fee is not None else None,
+        subscription_nominal_cost_usd_total=(
+            float(nominal_cost) if nominal_cost is not None else None
+        ),
+    )
+
+
+def _v2_attempt_evidence(
+    *,
+    adapter: LLMDecisionAdapter,
+    before: _V2AdapterAttemptSnapshot,
+    attempt_number: int,
+    outcome: str,
+    error: ProviderDecisionError | None,
+    wait_seconds: float | None,
+    wait_source: str | None,
+) -> _V2AttemptEvidence:
+    after = _v2_adapter_snapshot(adapter)
+    request_delta = after.request_invocations - before.request_invocations
+    accounting = provider_accounting_delta(after.accounting, before.accounting)
+    if request_delta != 1 or accounting.external_request_invocations not in {0, 1}:
+        raise ValueError("v2 concrete Adapter must execute exactly one physical attempt per decide call")
+    request_evidence = getattr(adapter, "request_evidence", None)
+    if not isinstance(request_evidence, Mapping):
+        raise ValueError("v2 concrete Adapter is missing its safe request evidence")
+    provider_fee_cny: float | None = None
+    if before.provider_fee_cny_total is not None or after.provider_fee_cny_total is not None:
+        if before.provider_fee_cny_total is None or after.provider_fee_cny_total is None:
+            raise ValueError("v2 Provider CNY accounting disappeared during an attempt")
+        provider_fee_cny = after.provider_fee_cny_total - before.provider_fee_cny_total
+        if provider_fee_cny < 0.0:
+            raise ValueError("v2 Provider CNY accounting is not monotonic")
+    nominal_cost_usd: float | None = None
+    if (
+        before.subscription_nominal_cost_usd_total is not None
+        or after.subscription_nominal_cost_usd_total is not None
+    ):
+        if (
+            before.subscription_nominal_cost_usd_total is None
+            or after.subscription_nominal_cost_usd_total is None
+        ):
+            raise ValueError("v2 subscription nominal cost disappeared during an attempt")
+        nominal_cost_usd = (
+            after.subscription_nominal_cost_usd_total
+            - before.subscription_nominal_cost_usd_total
+        )
+        if nominal_cost_usd < 0.0:
+            raise ValueError("v2 subscription nominal cost is not monotonic")
+    payload = {
+        "schema_version": "concurrent-robustness-provider-attempt-v2",
+        "attempt_number": attempt_number,
+        "outcome": outcome,
+        "failure_category": None if error is None else error.failure_category,
+        "status_code": None if error is None else error.status_code,
+        "wait_source": wait_source,
+        "wait_seconds": wait_seconds,
+        "lane_cooldown": bool(error is not None and error.lane_cooldown),
+        "request_invocations": 1,
+        "provider_response_count": accounting.provider_response_count,
+        "successful_decision_count": accounting.successful_decision_count,
+        "observed_model_counts": accounting.observed_model_counts,
+        "observed_model_missing_response_count": accounting.observed_model_missing_response_count,
+        "observed_model_malformed_response_count": accounting.observed_model_malformed_response_count,
+        "usage_complete_response_count": accounting.usage_complete_response_count,
+        "usage_missing_response_count": accounting.usage_missing_response_count,
+        "usage_malformed_response_count": accounting.usage_malformed_response_count,
+        "input_usage": accounting.input_tokens,
+        "output_usage": accounting.output_tokens,
+        "total_usage": accounting.total_tokens,
+        "cached_input_usage": accounting.cached_input_tokens,
+        "provider_route": request_evidence.get("provider_route"),
+        "billing_semantics": request_evidence.get("billing_semantics"),
+        "billing_currency": request_evidence.get("billing_currency"),
+        "provider_fee_cny": provider_fee_cny,
+        "subscription_nominal_cost_usd": nominal_cost_usd,
+        "fee_ceiling": request_evidence.get("fee_ceiling"),
+    }
+    return _V2AttemptEvidence.model_validate(payload)
+
+
+class _V2ModelLane:
+    """Private per-model serialization, retry, and cooldown policy."""
+
+    def __init__(
+        self,
+        *,
+        requested_model: str,
+        backoff_seconds: float,
+        provider_fee_cny_spent: float = 0.0,
+    ) -> None:
+        self.requested_model = requested_model
+        self.backoff_seconds = backoff_seconds
+        self.cooldown_until = 0.0
+        self.provider_fee_cny_spent = provider_fee_cny_spent
+        self._lock = threading.Lock()
+
+    def _enforce_pre_call_ceiling(self, adapter: LLMDecisionAdapter) -> None:
+        request_evidence = getattr(adapter, "request_evidence", None)
+        if not isinstance(request_evidence, Mapping) or request_evidence.get("billing_currency") != "CNY":
+            return
+        ceiling = request_evidence.get("fee_ceiling")
+        maximum_attempt_fee = getattr(adapter, "maximum_provider_fee_cny_per_attempt", None)
+        if (
+            isinstance(ceiling, bool)
+            or not isinstance(ceiling, (int, float))
+            or maximum_attempt_fee is None
+        ):
+            raise _V2SafePreCallStop("DeepSeek CNY dispatch lacks a safe fee reservation")
+        if self.provider_fee_cny_spent + float(maximum_attempt_fee) > float(ceiling):
+            raise _V2SafePreCallStop("DeepSeek CNY fee ceiling reached before dispatch")
+
+    def _record_provider_fee(self, attempt: _V2AttemptEvidence) -> None:
+        if attempt.provider_fee_cny is None:
+            return
+        self.provider_fee_cny_spent += attempt.provider_fee_cny
+        if attempt.fee_ceiling is None or self.provider_fee_cny_spent > attempt.fee_ceiling:
+            raise ValueError("DeepSeek CNY fee evidence exceeded its independent ceiling")
+
+    def execute(
+        self,
+        adapter: LLMDecisionAdapter,
+        decide: Callable[[], EngageDecision],
+        *,
+        prior_evidence: tuple[_V2AttemptEvidence, ...] = (),
+        observer: Callable[[str, int, tuple[_V2AttemptEvidence, ...], float | None], None] | None = None,
+    ) -> tuple[EngageDecision, tuple[_V2AttemptEvidence, ...]]:
+        evidence = list(prior_evidence)
+        if tuple(row.attempt_number for row in evidence) != tuple(range(1, len(evidence) + 1)):
+            raise ValueError("v2 resumed attempt evidence is incomplete")
+        with self._lock:
+            for attempt_number in range(len(evidence) + 1, _V2_MAXIMUM_ATTEMPTS + 1):
+                remaining_cooldown = self.cooldown_until - _V2_MONOTONIC()
+                if remaining_cooldown > 0.0:
+                    _V2_SLEEP(remaining_cooldown)
+                self._enforce_pre_call_ceiling(adapter)
+                if observer is not None:
+                    observer("dispatching", attempt_number, tuple(evidence), None)
+                before = _v2_adapter_snapshot(adapter)
+                try:
+                    decision = decide()
+                except ProviderResponseProvenanceUnknown:
+                    raise
+                except ProviderDecisionError as exc:
+                    has_retry = exc.retryable and attempt_number < _V2_MAXIMUM_ATTEMPTS
+                    wait_seconds: float | None = None
+                    wait_source: str | None = None
+                    if has_retry:
+                        if exc.wait_seconds is not None:
+                            wait_seconds = exc.wait_seconds
+                            wait_source = exc.wait_source or "provider_wait"
+                        else:
+                            wait_seconds = min(
+                                self.backoff_seconds * (2 ** (attempt_number - 1)),
+                                _V2_BACKOFF_CEILING_SECONDS,
+                            )
+                            wait_source = "exponential_backoff"
+                    outcome = (
+                        "retryable_failure"
+                        if has_retry
+                        else ("attempts_exhausted" if exc.retryable else "nonretryable_failure")
+                    )
+                    attempt_evidence = _v2_attempt_evidence(
+                        adapter=adapter,
+                        before=before,
+                        attempt_number=attempt_number,
+                        outcome=outcome,
+                        error=exc,
+                        wait_seconds=wait_seconds,
+                        wait_source=wait_source,
+                    )
+                    self._record_provider_fee(attempt_evidence)
+                    evidence.append(attempt_evidence)
+                    if not has_retry:
+                        exc.attempt_evidence = tuple(evidence)
+                        raise
+                    assert wait_seconds is not None
+                    if observer is not None:
+                        observer("retry_wait", attempt_number + 1, tuple(evidence), wait_seconds)
+                    if exc.lane_cooldown:
+                        self.cooldown_until = max(self.cooldown_until, _V2_MONOTONIC() + wait_seconds)
+                    else:
+                        _V2_SLEEP(wait_seconds)
+                    continue
+                attempt_evidence = _v2_attempt_evidence(
+                    adapter=adapter,
+                    before=before,
+                    attempt_number=attempt_number,
+                    outcome="succeeded",
+                    error=None,
+                    wait_seconds=None,
+                    wait_source=None,
+                )
+                self._record_provider_fee(attempt_evidence)
+                evidence.append(attempt_evidence)
+                return decision, tuple(evidence)
+        raise RuntimeError("v2 model lane exhausted without a terminal result")
+
+
+class _V2LaneDecisionAdapter(LLMDecisionAdapter):
+    """Private Adapter wrapper that keeps Provider policy outside the runtime kernel."""
+
+    def __init__(self, adapter: LLMDecisionAdapter, lane: _V2ModelLane) -> None:
+        self._adapter = adapter
+        self._lane = lane
+        self.prompt_version = str(cast(Any, adapter).prompt_version)
+        self.last_attempt_evidence: tuple[_V2AttemptEvidence, ...] = ()
+        self._prior_attempt_evidence: tuple[_V2AttemptEvidence, ...] = ()
+        self._attempt_observer: (
+            Callable[[str, int, tuple[_V2AttemptEvidence, ...], float | None], None] | None
+        ) = None
+
+    def prepare_attempt(
+        self,
+        *,
+        prior_evidence: tuple[_V2AttemptEvidence, ...],
+        observer: Callable[[str, int, tuple[_V2AttemptEvidence, ...], float | None], None],
+    ) -> None:
+        self._prior_attempt_evidence = prior_evidence
+        self._attempt_observer = observer
+        self.last_attempt_evidence = prior_evidence
+
+    @property
+    def request_invocations(self) -> int:
+        return _v2_adapter_snapshot(self._adapter).request_invocations
+
+    @property
+    def external_request_invocations(self) -> int:
+        return _adapter_external_request_invocations(self._adapter)
+
+    @property
+    def provider_accounting(self) -> ProviderAccounting:
+        return _v2_adapter_snapshot(self._adapter).accounting
+
+    @property
+    def live_api_triggered(self) -> bool:
+        return _adapter_live_api_triggered(self._adapter)
+
+    def decide(
+        self,
+        post: Any,
+        profile: Any,
+        peer_context: Any,
+        platform_context: Any = None,
+        time_step: int = 0,
+    ) -> EngageDecision:
+        try:
+            decision, evidence = self._lane.execute(
+                self._adapter,
+                lambda: self._adapter.decide(post, profile, peer_context, platform_context, time_step),
+                prior_evidence=self._prior_attempt_evidence,
+                observer=self._attempt_observer,
+            )
+        except ProviderDecisionError as exc:
+            self.last_attempt_evidence = cast(tuple[_V2AttemptEvidence, ...], getattr(exc, "attempt_evidence", ()))
+            raise
+        self.last_attempt_evidence = evidence
+        return decision
+
+
+def _attempting_payload(
+    *,
+    phase: Literal["pre_dispatch", "dispatching", "retry_wait"],
+    next_attempt_number: int,
+    evidence: tuple[_V2AttemptEvidence, ...],
+    retry_delay_seconds: float | None,
+) -> dict[str, object]:
+    return {
+        "phase": phase,
+        "next_attempt_number": next_attempt_number,
+        "attempt_evidence": [row.model_dump(mode="json") for row in evidence],
+        "retry_delay_seconds": retry_delay_seconds,
+    }
+
+
+def _safe_resumable_attempts(
+    record: Mapping[str, object] | None,
+) -> tuple[tuple[_V2AttemptEvidence, ...], float] | None:
+    if record is None:
+        return None
+    payload = record.get("payload")
+    if not isinstance(payload, Mapping) or payload.get("phase") not in {"pre_dispatch", "retry_wait"}:
+        return None
+    raw_attempts = payload.get("attempt_evidence")
+    if not isinstance(raw_attempts, list):
+        return None
+    attempts = tuple(_V2AttemptEvidence.model_validate(row) for row in raw_attempts)
+    next_attempt = payload.get("next_attempt_number")
+    if (
+        type(next_attempt) is not int
+        or next_attempt != len(attempts) + 1
+        or next_attempt > _V2_MAXIMUM_ATTEMPTS
+    ):
+        return None
+    retry_delay = payload.get("retry_delay_seconds")
+    return attempts, (float(retry_delay) if isinstance(retry_delay, (int, float)) else 0.0)
+
+
+def _variant_accounting_from_attempts(
+    attempts: tuple[_V2AttemptEvidence, ...],
+) -> _VariantAttemptAccounting:
+    if not attempts:
+        raise ValueError("v2 logical pair has no physical-attempt evidence")
+    observed: Counter[str] = Counter()
+    for attempt in attempts:
+        observed.update(attempt.observed_model_counts)
+
+    def token_sum(field: str) -> int | None:
+        values = [getattr(attempt, field) for attempt in attempts if getattr(attempt, field) is not None]
+        return sum(cast(list[int], values)) if values else None
+
+    provider_responses = sum(attempt.provider_response_count for attempt in attempts)
+    usage_complete_responses = sum(attempt.usage_complete_response_count for attempt in attempts)
+    return _VariantAttemptAccounting(
+        request_invocations=len(attempts),
+        provider_response_count=provider_responses,
+        successful_decision_count=sum(attempt.successful_decision_count for attempt in attempts),
+        observed_model_counts=dict(observed),
+        observed_model_missing_response_count=sum(
+            attempt.observed_model_missing_response_count for attempt in attempts
+        ),
+        observed_model_malformed_response_count=sum(
+            attempt.observed_model_malformed_response_count for attempt in attempts
+        ),
+        usage_complete=provider_responses > 0 and usage_complete_responses == provider_responses,
+        usage_complete_response_count=usage_complete_responses,
+        usage_missing_response_count=sum(attempt.usage_missing_response_count for attempt in attempts),
+        usage_malformed_response_count=sum(attempt.usage_malformed_response_count for attempt in attempts),
+        input_usage=token_sum("input_usage"),
+        output_usage=token_sum("output_usage"),
+        total_usage=token_sum("total_usage"),
+        cached_input_usage=token_sum("cached_input_usage"),
+    )
+
+
 def _preflight_adapters(
     manifest: ConcurrentRobustnessManifestV2,
     adapters_by_cell: Mapping[str, LLMDecisionAdapter],
@@ -1430,6 +2024,38 @@ def _preflight_adapters(
                 ConcurrentRobustnessErrorCode.UNSUPPORTED_ADAPTERS,
                 f"v2 validation Adapter is not fresh, offline, or Prompt-bound for {cell.cell_id}",
             )
+        if bool(getattr(adapter, "robustness_provider_adapter", False)):
+            request_evidence = getattr(adapter, "request_evidence", None)
+            expected_route = {
+                "deepseek-v4-flash": "deepseek_official",
+                "gemini-3.1-pro": "antigravity_openai_compatible_gateway",
+                "gemini-3.8-flash-high": "antigravity_openai_compatible_gateway",
+                "kimi-coding/k3-256k": "pi_kimi_oauth_subscription",
+                "openai-codex/gpt-5.6-sol": "pi_openai_oauth_subscription",
+            }[cell.requested_model]
+            if not isinstance(request_evidence, Mapping) or any(
+                request_evidence.get(key) != value
+                for key, value in {
+                    "requested_model": cell.requested_model,
+                    "required_observed_model": cell.required_observed_model,
+                    "prompt_version": cell.prompt_version,
+                    "prompt_canonical_hash": cell.prompt_canonical_hash,
+                    "provider_route": expected_route,
+                    "structured_output_schema_version": "engage-decision-output-v1",
+                    "maximum_physical_attempts_per_logical_pair": _V2_MAXIMUM_ATTEMPTS,
+                }.items()
+            ):
+                raise ConcurrentRobustnessError(
+                    ConcurrentRobustnessErrorCode.UNSUPPORTED_ADAPTERS,
+                    f"v2 concrete Provider profile is crossed for {cell.cell_id}",
+                )
+            try:
+                _v2_adapter_snapshot(adapter)
+            except ValueError as exc:
+                raise ConcurrentRobustnessError(
+                    ConcurrentRobustnessErrorCode.UNSUPPORTED_ADAPTERS,
+                    f"v2 concrete Provider accounting is unavailable for {cell.cell_id}",
+                ) from exc
         adapters.append((cell, adapter))
     return tuple(adapters)
 
@@ -1443,6 +2069,7 @@ def _build_judgment(
     plan: _PairExecutionPlan,
     decision: EngageDecision,
     accounting: Any,
+    attempt_evidence: tuple[_V2AttemptEvidence, ...] | None = None,
 ) -> _V2Judgment:
     required_observed_model = cell.required_observed_model
     if required_observed_model is None:
@@ -1455,6 +2082,36 @@ def _build_judgment(
         or accounting.observed_model_malformed_response_count != 0
     ):
         raise ValueError("v2 Judgment observed model drifted from the frozen cell")
+    if attempt_evidence is None:
+        attempt_evidence = (
+            _V2AttemptEvidence(
+                schema_version="concurrent-robustness-provider-attempt-v2",
+                attempt_number=1,
+                outcome="succeeded",
+                failure_category=None,
+                status_code=None,
+                wait_source=None,
+                wait_seconds=None,
+                lane_cooldown=False,
+                request_invocations=1,
+                provider_response_count=accounting.provider_response_count,
+                successful_decision_count=accounting.successful_decision_count,
+                observed_model_counts=accounting.observed_model_counts,
+                observed_model_missing_response_count=accounting.observed_model_missing_response_count,
+                observed_model_malformed_response_count=accounting.observed_model_malformed_response_count,
+                usage_complete_response_count=accounting.usage_complete_response_count,
+                usage_missing_response_count=accounting.usage_missing_response_count,
+                usage_malformed_response_count=accounting.usage_malformed_response_count,
+                input_usage=accounting.input_usage,
+                output_usage=accounting.output_usage,
+                total_usage=accounting.total_usage,
+                cached_input_usage=accounting.cached_input_usage,
+                provider_route="injected_deterministic_validation",
+                billing_semantics="none",
+                billing_currency=None,
+                fee_ceiling=None,
+            ),
+        )
     payload: dict[str, object] = {
         "schema_version": _V2_JUDGMENT_SCHEMA,
         "judgment_source_identity": judgment_source_identity,
@@ -1485,6 +2142,7 @@ def _build_judgment(
         "output_usage": accounting.output_usage,
         "total_usage": accounting.total_usage,
         "cached_input_usage": accounting.cached_input_usage,
+        "attempt_evidence": [row.model_dump(mode="json") for row in attempt_evidence],
     }
     payload["judgment_id"] = _json_sha256(payload)
     return _V2Judgment.model_validate(payload)
@@ -1678,6 +2336,7 @@ def _run_cell(
     cell_index: int,
     cell: _PromptModelCell,
     adapter: LLMDecisionAdapter,
+    lane: _V2ModelLane | None,
     operational_root: Path,
 ) -> _V2CellResult:
     cell_scope = operational_root / f"cell-{cell_index:02d}"
@@ -1732,7 +2391,8 @@ def _run_cell(
         journal=journal,
     )
     commits: list[dict[str, object]] = []
-    external_baseline = _adapter_external_request_invocations(adapter)
+    execution_adapter: LLMDecisionAdapter = _V2LaneDecisionAdapter(adapter, lane) if lane is not None else adapter
+    external_baseline = _adapter_external_request_invocations(execution_adapter)
     policy = EngagementRealizationPolicy(
         source_identity=manifest.realization_source.source_identity,
     )
@@ -1749,7 +2409,15 @@ def _run_cell(
         if "stopped" in ledger.state_by_pair.values():
             raise _V2CellStopped(f"cell {cell.cell_id} is durably stopped")
         if "attempting" in ledger.state_by_pair.values():
-            raise _V2ReconciliationRequired(f"cell {cell.cell_id} contains an unresolved dispatched attempt")
+            for pair_id, pair_state in ledger.state_by_pair.items():
+                if pair_state != "attempting":
+                    continue
+                if not isinstance(execution_adapter, _V2LaneDecisionAdapter) or _safe_resumable_attempts(
+                    ledger.latest(pair_id)
+                ) is None:
+                    raise _V2ReconciliationRequired(
+                        f"cell {cell.cell_id} contains an unresolved dispatched attempt"
+                    )
         while state.next_time_step < config.horizon:
             if kernel.active_batch is None:
                 kernel.plan_batch()
@@ -1777,26 +2445,75 @@ def _run_cell(
                             payload={"maximum_physical_attempts": _V2_MAXIMUM_ATTEMPTS},
                         )
                         lifecycle = "reserved"
+                    prior_attempt_evidence: tuple[_V2AttemptEvidence, ...] = ()
                     if lifecycle == "reserved":
                         kernel.start_pair(plan)
-                        ledger.append_state(plan, "attempting")
+                        ledger.append_state(
+                            plan,
+                            "attempting",
+                            payload=(
+                                _attempting_payload(
+                                    phase="pre_dispatch",
+                                    next_attempt_number=1,
+                                    evidence=(),
+                                    retry_delay_seconds=None,
+                                )
+                                if isinstance(execution_adapter, _V2LaneDecisionAdapter)
+                                else None
+                            ),
+                        )
                         lifecycle = "attempting"
-                        should_dispatch = True
-                    elif lifecycle == "attempting":
-                        should_dispatch = False
+                    if lifecycle == "attempting" and isinstance(execution_adapter, _V2LaneDecisionAdapter):
+                        resumable = _safe_resumable_attempts(ledger.latest(plan.pair_id))
+                        should_dispatch = resumable is not None
+                        if resumable is not None:
+                            prior_attempt_evidence, resume_delay = resumable
+                            if resume_delay > 0.0:
+                                _V2_SLEEP(resume_delay)
                     else:
                         should_dispatch = False
 
                     if lifecycle == "attempting":
+                        if not should_dispatch and isinstance(execution_adapter, _V2LaneDecisionAdapter):
+                            raise _V2ReconciliationRequired(f"pair {plan.pair_id} has an unresolved dispatched attempt")
+                        if not should_dispatch:
+                            should_dispatch = ledger.latest(plan.pair_id) is not None and not isinstance(
+                                execution_adapter, _V2LaneDecisionAdapter
+                            )
                         if not should_dispatch:
                             raise _V2ReconciliationRequired(f"pair {plan.pair_id} has an unresolved dispatched attempt")
+                        if isinstance(execution_adapter, _V2LaneDecisionAdapter):
+
+                            def observe_attempt(
+                                phase: str,
+                                next_attempt_number: int,
+                                evidence: tuple[_V2AttemptEvidence, ...],
+                                retry_delay_seconds: float | None,
+                                *,
+                                bound_plan: _PairExecutionPlan = plan,
+                            ) -> None:
+                                ledger.append_state(
+                                    bound_plan,
+                                    "attempting",
+                                    payload=_attempting_payload(
+                                        phase=cast(Literal["pre_dispatch", "dispatching", "retry_wait"], phase),
+                                        next_attempt_number=next_attempt_number,
+                                        evidence=evidence,
+                                        retry_delay_seconds=retry_delay_seconds,
+                                    ),
+                                )
+
+                            execution_adapter.prepare_attempt(
+                                prior_evidence=prior_attempt_evidence,
+                                observer=observe_attempt,
+                            )
                         context = _primary_variant_context(
                             plan,
                             prompt_token=cell.prompt_version,
                         )
                         try:
                             attempt, accounting = _execute_runtime_variant(
-                                adapter=adapter,
+                                adapter=execution_adapter,
                                 context=context,
                                 pair_schedule_position=plan.pair_schedule_position,
                                 time_step=plan.time_step,
@@ -1808,8 +2525,10 @@ def _run_cell(
                             )
                         except ProviderResponseProvenanceUnknown as exc:
                             if _adapter_external_request_invocations(
-                                adapter
-                            ) != external_baseline or _adapter_live_api_triggered(adapter, baseline=external_baseline):
+                                execution_adapter
+                            ) != external_baseline or _adapter_live_api_triggered(
+                                execution_adapter, baseline=external_baseline
+                            ):
                                 raise ConcurrentRobustnessError(
                                     ConcurrentRobustnessErrorCode.UNSUPPORTED_ADAPTERS,
                                     "deterministic v2 Adapter triggered an external request",
@@ -1819,8 +2538,10 @@ def _run_cell(
                             ) from exc
                         except ValueError as exc:
                             if _adapter_external_request_invocations(
-                                adapter
-                            ) != external_baseline or _adapter_live_api_triggered(adapter, baseline=external_baseline):
+                                execution_adapter
+                            ) != external_baseline or _adapter_live_api_triggered(
+                                execution_adapter, baseline=external_baseline
+                            ):
                                 raise ConcurrentRobustnessError(
                                     ConcurrentRobustnessErrorCode.UNSUPPORTED_ADAPTERS,
                                     "deterministic v2 Adapter triggered an external request",
@@ -1828,9 +2549,18 @@ def _run_cell(
                             raise _V2ReconciliationRequired(
                                 f"pair {plan.pair_id} returned unverifiable response accounting"
                             ) from exc
+                        if (
+                            isinstance(execution_adapter, _V2LaneDecisionAdapter)
+                            and execution_adapter.last_attempt_evidence
+                        ):
+                            accounting = _variant_accounting_from_attempts(
+                                execution_adapter.last_attempt_evidence
+                            )
                         if _adapter_external_request_invocations(
-                            adapter
-                        ) != external_baseline or _adapter_live_api_triggered(adapter, baseline=external_baseline):
+                            execution_adapter
+                        ) != external_baseline or _adapter_live_api_triggered(
+                            execution_adapter, baseline=external_baseline
+                        ):
                             raise ValueError("deterministic v2 Adapter triggered an external request")
                         terminal_row, _, _ = _build_runtime_terminal_row(
                             pair_id=plan.pair_id,
@@ -1854,6 +2584,14 @@ def _run_cell(
                                     "terminal_status": "provider_failed",
                                     "failure_type": terminal_row["failure_type"],
                                     "request_invocations": accounting.request_invocations,
+                                    "attempt_evidence": (
+                                        [
+                                            row.model_dump(mode="json")
+                                            for row in execution_adapter.last_attempt_evidence
+                                        ]
+                                        if isinstance(execution_adapter, _V2LaneDecisionAdapter)
+                                        else []
+                                    ),
                                 },
                             )
                             raise _V2CellStopped(f"cell {cell.cell_id} stopped on Provider failure")
@@ -1867,6 +2605,11 @@ def _run_cell(
                             plan=plan,
                             decision=attempt.decision,
                             accounting=accounting,
+                            attempt_evidence=(
+                                execution_adapter.last_attempt_evidence
+                                if isinstance(execution_adapter, _V2LaneDecisionAdapter)
+                                else None
+                            ),
                         )
                         ledger.append_state(
                             plan,
@@ -2143,9 +2886,10 @@ def _validate_published_lifecycle(
         records_by_cell[cell_index].append(record)
     expected_records_per_cell = manifest.request_caps.logical_judgments_per_cell * len(_V2_PAIR_STATES)
     replayed_terminals: list[_V2RealizedTerminal] = []
+    replayed_judgments: list[_V2Judgment] = []
     for cell_index, cell in enumerate(manifest.prompt_model_cells):
         records = records_by_cell[cell_index]
-        if len(records) != expected_records_per_cell:
+        if len(records) < expected_records_per_cell:
             raise ValueError("v2 published lifecycle cell denominator is incomplete")
         ledger = _V2PairLedger(
             Path("."),
@@ -2165,6 +2909,9 @@ def _validate_published_lifecycle(
         replay = _V2LedgerReplay((), {}, {}, None)
         for record in records:
             replay = ledger._apply_record(replay, record)
+            if record.get("state") == "judgment_persisted":
+                payload = cast(Mapping[str, object], record["payload"])
+                replayed_judgments.append(_V2Judgment.model_validate(payload.get("judgment")))
             if record.get("state") == "realized_persisted":
                 payload = cast(Mapping[str, object], record["payload"])
                 replayed_terminals.append(_V2RealizedTerminal.model_validate(payload.get("terminal")))
@@ -2176,6 +2923,14 @@ def _validate_published_lifecycle(
         row.model_dump(mode="json") for row in terminals
     ]:
         raise ValueError("v2 terminal artifact is crossed with lifecycle evidence")
+    deepseek_fee_cny = sum(
+        attempt.provider_fee_cny or 0.0
+        for judgment in replayed_judgments
+        if judgment.requested_model == "deepseek-v4-flash"
+        for attempt in judgment.attempt_evidence
+    )
+    if deepseek_fee_cny > 25.0:
+        raise ValueError("v2 execution DeepSeek CNY fee exceeds the independent ceiling")
 
 
 def _validate_batch_commits(
@@ -2380,7 +3135,7 @@ def _validate_published_execution(
         commits=commits,
         manifest=manifest,
     )
-    if len(lifecycle) != len(terminals) * len(_V2_PAIR_STATES):
+    if len(lifecycle) < len(terminals) * len(_V2_PAIR_STATES):
         raise ValueError("v2 execution lifecycle evidence is incomplete")
     _validate_published_lifecycle(
         lifecycle=lifecycle,
@@ -2421,12 +3176,24 @@ def _operational_progress(root: Path) -> tuple[int, int, int, str | None, str | 
         judgments = ledger.judgments()
         terminals = ledger.terminals()
         stopped_records = [record for record in ledger.records if record.get("state") == "stopped"]
-        unresolved_attempts = sum(state == "attempting" for state in ledger.state_by_pair.values())
-        logical += len(judgments) + len(stopped_records) + unresolved_attempts
+        unresolved_records: list[Mapping[str, object]] = []
+        for pair_id, state in ledger.state_by_pair.items():
+            latest = ledger.latest(pair_id)
+            if state == "attempting" and latest is not None:
+                unresolved_records.append(latest)
+        logical += len(judgments) + len(stopped_records) + len(unresolved_records)
         physical += sum(judgment.request_invocations for judgment in judgments)
         physical += sum(
             int(str(cast(Mapping[str, object], record["payload"])["request_invocations"])) for record in stopped_records
         )
+        for record in unresolved_records:
+            payload = cast(Mapping[str, object], record["payload"])
+            raw_attempts = payload.get("attempt_evidence")
+            completed_attempts = len(raw_attempts) if isinstance(raw_attempts, list) else 0
+            # A dispatching/legacy marker reserves the in-flight attempt. A
+            # pre-dispatch or retry-wait marker remains safely resumable and
+            # counts only already persisted attempts.
+            physical += completed_attempts + (payload.get("phase") in {None, "dispatching"})
         if len(terminals) == int(str(identity["expected_logical_judgments"])) and all(
             state == "settled" for state in ledger.state_by_pair.values()
         ):
@@ -2435,6 +3202,47 @@ def _operational_progress(root: Path) -> tuple[int, int, int, str | None, str | 
             last_cell = str(identity.get("cell_id"))
             last_pair = str(ledger.records[-1].get("pair_id"))
     return logical, physical, completed, last_cell, last_pair
+
+
+def _operational_provider_fee_cny(root: Path) -> dict[str, float]:
+    totals: dict[str, float] = {}
+    for cell_scope in sorted(root.glob("cell-*")):
+        identity_path = cell_scope / _V2_LEDGER_IDENTITY
+        journal_path = cell_scope / _V2_LEDGER_JSONL
+        if not identity_path.is_file() or not journal_path.is_file():
+            raise ValueError("v2 operational fee evidence is incomplete")
+        identity = json.loads(identity_path.read_text(encoding="utf-8"))
+        cell = identity.get("cell")
+        if not isinstance(cell, Mapping):
+            raise ValueError("v2 operational fee cell identity is malformed")
+        requested_model = cell.get("requested_model")
+        if not isinstance(requested_model, str):
+            raise ValueError("v2 operational fee model identity is malformed")
+        ledger = _V2PairLedger.open(cell_scope, identity=identity)
+        attempts_by_pair: dict[str, tuple[_V2AttemptEvidence, ...]] = {}
+        for record in ledger.records:
+            pair_id = str(record["pair_id"])
+            payload = cast(Mapping[str, object], record["payload"])
+            raw_attempts: object | None = None
+            if record["state"] == "judgment_persisted":
+                judgment = _V2Judgment.model_validate(payload.get("judgment"))
+                attempts_by_pair[pair_id] = judgment.attempt_evidence
+                continue
+            if record["state"] in {"attempting", "stopped"}:
+                raw_attempts = payload.get("attempt_evidence")
+            if isinstance(raw_attempts, list):
+                attempts_by_pair[pair_id] = tuple(
+                    _V2AttemptEvidence.model_validate(attempt) for attempt in raw_attempts
+                )
+        total = sum(
+            attempt.provider_fee_cny or 0.0
+            for attempts in attempts_by_pair.values()
+            for attempt in attempts
+        )
+        totals[requested_model] = totals.get(requested_model, 0.0) + total
+    if totals.get("deepseek-v4-flash", 0.0) > 25.0:
+        raise ValueError("v2 operational DeepSeek CNY fee exceeds the independent ceiling")
+    return totals
 
 
 def _result(
@@ -2561,8 +3369,20 @@ def _run_concurrent_robustness_v2(
             output_path=output_path,
         )
         cells: list[_V2CellResult] = []
+        restored_provider_fees = _operational_provider_fee_cny(root)
+        lanes: dict[str, _V2ModelLane] = {}
         try:
             for cell_index, (cell, adapter) in enumerate(adapters):
+                lane: _V2ModelLane | None = None
+                if bool(getattr(adapter, "robustness_provider_adapter", False)):
+                    lane = lanes.setdefault(
+                        cell.requested_model,
+                        _V2ModelLane(
+                            requested_model=cell.requested_model,
+                            backoff_seconds=manifest.request_contract.retry_backoff_seconds,
+                            provider_fee_cny_spent=restored_provider_fees.get(cell.requested_model, 0.0),
+                        ),
+                    )
                 cell_result = _run_cell(
                     config=config,
                     prepared=prepared,
@@ -2571,6 +3391,7 @@ def _run_concurrent_robustness_v2(
                     cell_index=cell_index,
                     cell=cell,
                     adapter=adapter,
+                    lane=lane,
                     operational_root=root,
                 )
                 cells.append(cell_result)
@@ -2586,14 +3407,15 @@ def _run_concurrent_robustness_v2(
                     last_cell_id=cell.cell_id,
                     last_pair_id=(cell_result.terminals[-1].pair_id if cell_result.terminals else None),
                 )
-        except (_V2ReconciliationRequired, _V2CellStopped) as pause:
+        except (_V2ReconciliationRequired, _V2SafePreCallStop, _V2CellStopped) as pause:
             _assert_source_unchanged(closure)
             logical, physical, completed, last_cell, last_pair = _operational_progress(root)
-            status = (
-                ConcurrentRobustnessStudyStatus.RECONCILIATION_REQUIRED
-                if isinstance(pause, _V2ReconciliationRequired)
-                else ConcurrentRobustnessStudyStatus.STOPPED
-            )
+            if isinstance(pause, _V2ReconciliationRequired):
+                status = ConcurrentRobustnessStudyStatus.RECONCILIATION_REQUIRED
+            elif isinstance(pause, _V2SafePreCallStop):
+                status = ConcurrentRobustnessStudyStatus.RESUMABLE
+            else:
+                status = ConcurrentRobustnessStudyStatus.STOPPED
             _write_operational_status(
                 root,
                 manifest_sha256=manifest_sha256,

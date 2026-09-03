@@ -45,11 +45,45 @@ class ProviderResponseProvenanceUnknown(RuntimeError):
     """Raised when a dispatched request has no verifiable response or readback."""
 
 
+class ProviderAttemptFailure(RuntimeError):
+    """Safe typed facts for one known Provider attempt failure."""
+
+    def __init__(
+        self,
+        *,
+        category: str,
+        retryable: bool,
+        status_code: int | None = None,
+        wait_seconds: float | None = None,
+        wait_source: str | None = None,
+        lane_cooldown: bool = False,
+    ) -> None:
+        self.category = category
+        self.retryable = retryable
+        self.status_code = status_code
+        self.wait_seconds = wait_seconds
+        self.wait_source = wait_source
+        self.lane_cooldown = lane_cooldown
+        super().__init__(f"provider attempt failed: {category}")
+
+
 class ProviderDecisionError(RuntimeError):
-    """Raised when provider attempts are exhausted at the decision seam."""
+    """Raised when a Provider Decision cannot be produced at the decision Seam."""
 
     def __init__(self, cause: Exception) -> None:
         self.failure_type = cause.__class__.__name__
+        self.failure_category = str(getattr(cause, "category", self.failure_type))
+        self.retryable = bool(getattr(cause, "retryable", False))
+        status_code = getattr(cause, "status_code", None)
+        self.status_code = status_code if type(status_code) is int else None
+        wait_seconds = getattr(cause, "wait_seconds", None)
+        self.wait_seconds = float(wait_seconds) if isinstance(wait_seconds, (int, float)) else None
+        wait_source = getattr(cause, "wait_source", None)
+        self.wait_source = wait_source if isinstance(wait_source, str) else None
+        self.lane_cooldown = bool(getattr(cause, "lane_cooldown", False))
+        self.attempt_evidence: tuple[object, ...] = ()
+        # Preserve the historical exception text while exposing typed retry
+        # facts on attributes for the private v2 execution policy.
         super().__init__(f"provider decision retries exhausted: {self.failure_type}")
 
 
