@@ -113,7 +113,10 @@ class ConcurrentRobustnessStudyStatus(str, Enum):
     """Observable lifecycle status of a robustness study workspace."""
 
     RESUMABLE = "resumable"
+    RECONCILIATION_REQUIRED = "reconciliation_required"
+    STOPPED = "stopped"
     READY_FOR_HUMAN = "ready_for_human"
+    CELLS_COMPLETE = "cells_complete"
     COMPLETE = "complete"
 
 
@@ -4296,13 +4299,33 @@ class ConcurrentRobustnessStudy:
 
     def run(
         self,
-        manifest: ConcurrentRobustnessManifest,
+        manifest: BaseModel,
         adapters_by_cell: Mapping[str, LLMDecisionAdapter] | None,
         output_dir: str | Path,
         *,
         report_destination: str | Path | None = None,
     ) -> ConcurrentRobustnessStudyResult:
-        if not isinstance(manifest, ConcurrentRobustnessManifest):
+        schema_version = getattr(manifest, "schema_version", None)
+        if schema_version == "concurrent-robustness-manifest-v2":
+            from .concurrent_robustness_v2 import (
+                ConcurrentRobustnessManifestV2,
+                _run_concurrent_robustness_v2,
+            )
+
+            if not isinstance(manifest, ConcurrentRobustnessManifestV2):
+                raise ConcurrentRobustnessError(
+                    ConcurrentRobustnessErrorCode.INVALID_MANIFEST,
+                    "ConcurrentRobustnessStudy requires a typed immutable v2 manifest",
+                )
+            return _run_concurrent_robustness_v2(
+                manifest=manifest,
+                adapters_by_cell=adapters_by_cell,
+                output_dir=output_dir,
+                report_destination=report_destination,
+            )
+        if schema_version != CONCURRENT_ROBUSTNESS_MANIFEST_SCHEMA or not isinstance(
+            manifest, ConcurrentRobustnessManifest
+        ):
             raise ConcurrentRobustnessError(
                 ConcurrentRobustnessErrorCode.INVALID_MANIFEST,
                 "ConcurrentRobustnessStudy requires a typed immutable manifest",

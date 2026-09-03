@@ -15,6 +15,7 @@ from .concurrent_robustness_study import (
     ConcurrentRobustnessStudyResult,
     ConcurrentRobustnessStudyStatus,
 )
+from .concurrent_robustness_v2 import ConcurrentRobustnessManifestV2
 from .decision import (
     CachedDecisionAdapter,
     DecisionCache,
@@ -41,6 +42,7 @@ __all__ = [
     "ConcurrentRobustnessError",
     "ConcurrentRobustnessErrorCode",
     "ConcurrentRobustnessManifest",
+    "ConcurrentRobustnessManifestV2",
     "ConcurrentRobustnessStudy",
     "ConcurrentRobustnessStudyResult",
     "ConcurrentRobustnessStudyStatus",
