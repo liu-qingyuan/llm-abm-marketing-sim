@@ -220,6 +220,31 @@ Automated Recovery Policy 的 nondeployable 终止状态。second unknown、reco
 
 在固定 1,000-user Research Sample 和三条 Experimental Message Videos 上，对 4 个信息等价 Prompt 与 4 个同 provider 精确模型做完整 categorical factorial。每个 cell 只运行一次 1,800-Primary-Decision 动态轨迹，统一使用 low reasoning contract、fresh calls 和独立 store，不重跑 Shadow、不建立完整 Decision Bank；Batch 0 shared seeds 支持配对 `engage` 比较，其余互动、曝光和传播结果只描述单次 realized path。该研究没有 ground truth，不称为 Calibration，也不单独估计模型随机性。
 
+### Prompt–Model Robustness Extension
+
+在固定 1,000-user 研究边界下分阶段加入精确标识的 Provider 模型，并让每个模型结果显式绑定可核对的完整 Prompt 版本。新的主面板冻结既有 `4 Prompt × 4 OpenAI Model` 历史 cells，只运行 `deepseek-v4-flash × P0–P3`、`gemini-3.1-pro × P0–P3`、`gemini-3.8-flash-high × P0–P3`、`kimi-coding/k3-256k × P0–P3` 与 OpenAI 基线 `openai-codex/gpt-5.6-sol × P0–P3`，共二十个 cells、36,000 个 logical judgments；沿用原 sample、graph 和三条 message，其他历史 OpenAI 模型不重跑。DeepSeek 使用官方 API、关闭 thinking mode、以 ¥25 为 Provider fee ceiling；两个 Gemini 模型使用获准的本地 Antigravity OpenAI-compatible gateway，并按研究口径归入 Gemini 模型条件。Evidence 必须披露 gateway provenance、usage 与不可见 gateway context 限制；`gemini-3.1-pro` 同时记录 observed model `gemini-pro-agent`，`gemini-3.8-flash-high` 则记录 requested/observed identity exact match，二者均不描述为 direct Gemini Developer API。Kimi 使用 Pi 已登录的 `kimi-coding` OAuth 订阅和当前套餐可用的 256K `k3-256k`，固定 low thinking；不可访问的 1M `k3` 不属于实验条件。Kimi 不声明按 token 付费成本，按 subscription quota 记账；quota 型 429/503 触发共享冷却并只续跑 unresolved pairs，401/模型无权限则不可重试并停止该 cell，任何情况都不能切换模型。二十个新 cells 共同形成独立的 Full Two-Stage Robustness Panel：每个 batch 都执行 `Provider Judgment → ABM Realization`，只有 realized-positive 用户进入下一批 ranking feedback；旧 OpenAI 十六个 cells 仅作为 immutable Historical Judgment Reference，不进入新的 Realized 主表或同口径统计。任何阶段都不阻塞或改写已接受 evidence。该扩展只检验结果对 Prompt 与 Model 选择的稳健性，不表示模型准确率、Calibration 或现实平台外部有效性。
+_Avoid_: Model Accuracy Validation, Calibration Study
+
+### Provider-Aware Retry Lane
+
+Prompt–Model Robustness Extension 的每个 Provider/model condition 使用独立调用通道。单个 logical judgment 最多执行三次 physical attempts；连接错误、超时、408/409/429/5xx 与 malformed structured response 才可重试，优先遵守 `Retry-After` 或可解析的 `Wait Ns`，否则使用有界指数退避。429/503 触发该模型通道共享冷却，不能让并发 worker 对同一受限账号盲目重试；成功 terminal 必须先持久化再推进，恢复时只处理 unresolved pair。重试耗尽必须停止相应 cell 并保留失败证据，禁止替换模型，也禁止把 Provider failure 写成用户 `ignore`。
+
+### Shared Deterministic Realization Vector
+
+新的 Full Two-Stage Robustness Panel 从冻结的 sample、graph、三条 message 与 realization policy 派生一个不包含 Prompt、Model、cell 或执行顺序的 shared realization source identity。新 terminal 分别记录 cell-specific Judgment source identity 与 panel-wide realization source identity，`realization_key` 只由后者、`user_id` 和 `message_id` 重算，既有 Full-Pool terminal schema 不改写。所有 cells 对同一 `user_id × message_id` 复用 seed `20260823` 和规则 `sha256-source-user-message-first-53-bits-uniform-v1` 生成的同一 uniform draw；Provider `ignore` 不抽样，positive judgment 仅在 `draw < probability` 时保留原 like/comment/share，否则变为 `ignore`。新增未来模型也复用同一 realization vector，避免随机运气污染 Prompt/Model 比较。
+
+### Canonical Cross-Model Prompt Matrix
+
+P0、P1、P2、P3 各自拥有一个跨全部五个模型复用的 canonical client-submitted Prompt bytes、version 与 hash；同一 Prompt variant 不因 DeepSeek、Gemini、Kimi 或 OpenAI 改写、翻译或优化。Provider 必需的 wire protocol、JSON response format、thinking control 与 output ceiling 属于 request contract，不进入模型专属 Prompt。Gateway 注入的不可见上下文只能作为 limitation 披露，不能据此修改其他模型 Prompt 或声称各 Provider 的完整 effective Prompt 完全相同。
+
+### Teacher-Facing Prompt–Model Results Table
+
+Prompt–Model Extension 的主 Excel 与网页采用 table-first 双层展示，并默认把 ABM Realized 仿真实现作为教师主结果：按 Market Segment `S1–S3` 分组，每组列出 Message `M1–M3`，主表给出 realized `Like count`、`Comment count`、`Share count` 和 `Engagement rate`；Provider Judgment action counts 与 positive judgment rate 只进入独立 audit sheet / 网页切换层，不能与 realized interactions 混列。Prompt 原文可由独立 Prompt catalog artifact 承载，但网页中的每个 Model/Prompt 结果必须能定位并查看对应完整 client-submitted Prompt、版本和 hash；如 gateway 可能注入不可见上下文，必须把该限制紧邻 Prompt 标注，不能把 client-submitted Prompt 误称为完整 effective Prompt。可复算分母与审计字段放在配套明细 sheet，不用逐用户 raw Prompt 挤占教师主表。
+
+### Global Parameter Sensitivity Follow-up
+
+全局参数敏感性是 Prompt–Model Realized Robustness 之后的独立 `needs-info` 研究轨道，不进入当前 20-cell / 36,000-judgment 合同。它以 zero-call offline analysis 为目标，但必须先冻结有限 exact design matrix，并逐参数点、逐 Prompt–Model cell 证明 counterfactual selected pairs 都有唯一 persisted successful Judgment；任何 uncovered pair 都失败关闭，不能插值、跨 cell 借用、写成 `ignore` 或隐式调用 Provider。参数集合、范围/分布、Morris/Sobol/网格方法、目标输出和展示范围尚待后续确认；既有 19-point Ranking Weight sensitivity 保持 immutable。
+
 ### Incremental Robustness Presentation
 
 保留当前 canonical report 的机制、Run Evidence、Demographic Shadow 和 barrier 内容，再增量加入 Ranking Weight 与 Prompt–Model 结果。旧 Shadow evidence 继续绑定原始 Formal source；新增曲线只借鉴批准视觉参考的宽幅、外置图例和 line/dash/marker grammar。
