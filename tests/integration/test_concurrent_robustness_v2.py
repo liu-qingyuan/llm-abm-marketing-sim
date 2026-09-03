@@ -3,6 +3,9 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import os
+import shutil
+from collections import Counter
 from pathlib import Path
 from typing import Any
 
@@ -18,11 +21,17 @@ from llm_abm_sim import (
     ProviderDecisionError,
 )
 from llm_abm_sim import concurrent_robustness_v2 as v2_module
+from llm_abm_sim import concurrent_robustness_v2_evidence as v2_evidence_module
 from llm_abm_sim.concurrent_robustness_v2 import (
     _V2_MODELS,
     _V2_REQUIRED_OBSERVED_MODELS,
     _derive_v2_realization_source_contract,
     _realization_source_payload,
+)
+from llm_abm_sim.concurrent_robustness_v2_evidence import (
+    ConcurrentRobustnessV2EvidenceError,
+    close_concurrent_robustness_v2_study,
+    read_closed_concurrent_robustness_v2_study,
 )
 from llm_abm_sim.decision import EngagementAction, ProviderResponseProvenanceUnknown
 from llm_abm_sim.prompt_contracts import CONCURRENT_ROBUSTNESS_PROMPT_REGISTRY
@@ -378,6 +387,31 @@ def _snapshot(root: Path) -> dict[str, bytes]:
     return {path.relative_to(root).as_posix(): path.read_bytes() for path in sorted(root.rglob("*")) if path.is_file()}
 
 
+def _canonical_json_bytes(value: object) -> bytes:
+    return (
+        json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False) + "\n"
+    ).encode("utf-8")
+
+
+def _rewrite_v2_execution_integrity(execution: Path) -> None:
+    manifest_path = execution / "execution_manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    for name in ("cell_registry.json", "terminal_rows.jsonl", "batch_commits.jsonl", "pair_lifecycle.jsonl"):
+        payload = (execution / name).read_bytes()
+        manifest["artifacts"][name] = {"sha256": hashlib.sha256(payload).hexdigest(), "bytes": len(payload)}
+    manifest_path.write_bytes(_canonical_json_bytes(manifest))
+    anchor_path = execution / "execution_anchor.json"
+    anchor_facts = {
+        "schema_version": "concurrent-robustness-two-stage-execution-anchor-v1",
+        "manifest_sha256": manifest["manifest_sha256"],
+        "execution_manifest_sha256": hashlib.sha256(manifest_path.read_bytes()).hexdigest(),
+    }
+    anchor = {**anchor_facts, "anchor_identity": hashlib.sha256(_canonical_json_bytes(anchor_facts)).hexdigest()}
+    anchor_path.chmod(0o644)
+    anchor_path.write_bytes(_canonical_json_bytes(anchor))
+    anchor_path.chmod(0o444)
+
+
 def test_v2_private_model_lane_retries_allowlisted_failures_with_durable_attempt_evidence(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -411,7 +445,7 @@ def test_v2_private_model_lane_retries_allowlisted_failures_with_durable_attempt
 
     result = ConcurrentRobustnessStudy().run(manifest, adapters, workspace)
 
-    assert result.status == ConcurrentRobustnessStudyStatus.CELLS_COMPLETE
+    assert result.status == ConcurrentRobustnessStudyStatus.COMPLETE
     assert result.logical_provider_attempts == 1_200
     assert result.physical_provider_attempts == 1_202
     assert delays[:2] == [7.0, 1.0]
@@ -561,7 +595,7 @@ def test_v2_retry_wait_is_durable_and_resumes_only_the_remaining_attempt_budget(
     monkeypatch.setattr(v2_module, "_V2_SLEEP", resumed_delays.append)
     resumed = ConcurrentRobustnessStudy().run(manifest, resume_adapters, workspace)
 
-    assert resumed.status == ConcurrentRobustnessStudyStatus.CELLS_COMPLETE
+    assert resumed.status == ConcurrentRobustnessStudyStatus.COMPLETE
     assert resumed.logical_provider_attempts == 1_200
     assert resumed.physical_provider_attempts == 1_201
     assert resumed_delays == [0.5]
@@ -594,7 +628,9 @@ def test_v2_private_model_lane_never_retries_unknown_post_dispatch_provenance(tm
     assert result.physical_provider_attempts == 1
 
 
-def test_v2_study_runs_twenty_two_stage_cells_and_replays_without_calls(tmp_path: Path) -> None:
+def test_v2_study_closes_twenty_two_stage_cells_into_immutable_root_and_replays_without_calls(
+    tmp_path: Path,
+) -> None:
     source = _make_validation_report_source(tmp_path, "v2-study-source")
     manifest = _v2_manifest(source, output_identity="v2-study-validation")
     adapters, typed_adapters = _v2_adapters(manifest, reverse_insertion_order=True)
@@ -602,9 +638,9 @@ def test_v2_study_runs_twenty_two_stage_cells_and_replays_without_calls(tmp_path
 
     result = ConcurrentRobustnessStudy().run(manifest, adapters, workspace)
 
-    assert result.status == ConcurrentRobustnessStudyStatus.CELLS_COMPLETE
+    assert result.status == ConcurrentRobustnessStudyStatus.COMPLETE
     assert result.workspace_root == workspace.resolve()
-    assert result.study_root is None
+    assert result.study_root == workspace.with_name(f"{workspace.name}.study-root").resolve()
     assert result.report_candidate is None
     assert result.logical_provider_attempts == 1_200
     assert result.physical_provider_attempts == 1_200
@@ -656,6 +692,93 @@ def test_v2_study_runs_twenty_two_stage_cells_and_replays_without_calls(tmp_path
     assert provider_ignore["uniform_draw"] is None
     assert provider_ignore["realized_action"] == "ignore"
 
+    study_root = result.study_root
+    assert study_root is not None
+    assert {path.name for path in study_root.iterdir()} == {
+        "artifact_manifest.json",
+        "study_manifest.json",
+        "execution_manifest.json",
+        "execution_anchor.json",
+        "cell_registry.json",
+        "terminal_rows.jsonl",
+        "batch_commits.jsonl",
+        "pair_lifecycle.jsonl",
+        "sample_membership.json",
+        "realized_analysis.json",
+        "judgment_audit.json",
+        "claim_audit.json",
+        "validation_report.json",
+    }
+    realized = json.loads((study_root / "realized_analysis.json").read_text(encoding="utf-8"))
+    realized_total = next(row for row in realized["group_rows"] if row["scope"] == "total")
+    realized_actions = Counter(row["realized_action"] for row in terminals)
+    assert realized_total == {
+        "scope": "total",
+        "requested_model": None,
+        "prompt_variant": None,
+        "segment": None,
+        "message_id": None,
+        "message_label": None,
+        "like_count": realized_actions["like"],
+        "comment_count": realized_actions["comment"],
+        "share_count": realized_actions["share"],
+        "engagement_count": sum(realized_actions[action] for action in ("like", "comment", "share")),
+        "exposure_count": len(terminals),
+        "engagement_rate": round(
+            sum(realized_actions[action] for action in ("like", "comment", "share")) / len(terminals),
+            12,
+        ),
+    }
+    assert realized["formal_topology"]["logical_judgments_per_cell"] == 1_800
+    assert realized["formal_topology"]["logical_judgments"] == 36_000
+    assert {row["segment"] for row in realized["group_rows"] if row["scope"] == "segment"} == {
+        "S1",
+        "S2",
+        "S3",
+    }
+    detailed_realized = [
+        row for row in realized["group_rows"] if row["scope"] == "model_prompt_segment_message"
+    ]
+    assert len(detailed_realized) == 5 * 4 * 3 * 3
+    assert sum(row["exposure_count"] for row in detailed_realized) == len(terminals)
+    assert all(
+        row["like_count"] + row["comment_count"] + row["share_count"] == row["engagement_count"]
+        for row in realized["group_rows"]
+    )
+    assert len(realized["planned_contrasts"]) == 7
+    assert len(realized["prompt_model_interactions"]) == 12
+    assert len(realized["paired_overlap"]) == (4 * 4) + (5 * 3)
+    assert realized["bootstrap"]["iterations"] == 500
+    assert len(realized["bootstrap"]["rows"]) == 7
+    judgment_audit = json.loads((study_root / "judgment_audit.json").read_text(encoding="utf-8"))
+    assert judgment_audit["scope"] == "provider_judgment_only"
+    assert judgment_audit["counts"] == {
+        "logical_judgments": 1_200,
+        "physical_attempts": 1_200,
+        "provider_calls": 0,
+        "terminal_failures": 0,
+    }
+    judgment_total = next(row for row in judgment_audit["group_rows"] if row["scope"] == "total")
+    assert judgment_total["logical_judgment_count"] == len(terminals)
+    assert judgment_total["physical_attempt_count"] == len(terminals)
+    assert judgment_total["positive_judgment_count"] == sum(row["provider_engage"] for row in terminals)
+    assert judgment_total["provider_fee_cny"] == 0.0
+    assert judgment_total["subscription_nominal_cost_usd_reference"] == 0.0
+    assert judgment_total["usage_complete_judgment_count"] == 1_200
+    assert judgment_total["usage_missing_judgment_count"] == 0
+    assert judgment_total["input_tokens"] == 0
+    assert judgment_total["output_tokens"] == 0
+    assert judgment_total["total_tokens"] == 0
+    assert "realized_action" not in (study_root / "judgment_audit.json").read_text(encoding="utf-8")
+    validation = json.loads((study_root / "validation_report.json").read_text(encoding="utf-8"))
+    assert validation["status"] == "complete"
+    assert validation["counts"]["cells"] == 20
+    assert validation["counts"]["logical_judgments"] == 1_200
+    independently_read = read_closed_concurrent_robustness_v2_study(study_root)
+    assert independently_read.root_path == study_root
+    assert independently_read.logical_judgments == 1_200
+    assert independently_read.provider_calls == 0
+
     first_cell_first_pair = lifecycle[0]["pair_id"]
     assert [
         row["state"]
@@ -676,11 +799,295 @@ def test_v2_study_runs_twenty_two_stage_cells_and_replays_without_calls(tmp_path
     )
 
     before = _snapshot(workspace)
+    root_before = _snapshot(study_root)
     replay_adapters, replay_typed = _v2_adapters(manifest)
     replayed = ConcurrentRobustnessStudy().run(manifest, replay_adapters, workspace)
     assert replayed == result
+    assert replayed.status == ConcurrentRobustnessStudyStatus.COMPLETE
     assert all(adapter.calls == [] for adapter in replay_typed.values())
     assert _snapshot(workspace) == before
+    assert _snapshot(study_root) == root_before
+
+
+@pytest.mark.formal_shape_rehearsal
+def test_v2_manual_zero_provider_formal_shape_closes_exact_36_000_judgments(
+    tmp_path: Path,
+) -> None:
+    source = _make_validation_report_source(tmp_path, "v2-formal-shape-source", report_sized=True)
+    manifest = _v2_manifest(source, output_identity="v2-formal-shape-zero-provider")
+    assert manifest.request_caps.logical_judgments_per_cell == 1_800
+    assert manifest.request_caps.logical_judgment_cap == 36_000
+    adapters, typed_adapters = _v2_adapters(manifest)
+
+    completed = ConcurrentRobustnessStudy().run(
+        manifest,
+        adapters,
+        tmp_path / "v2-formal-shape-workspace",
+    )
+
+    assert completed.status == ConcurrentRobustnessStudyStatus.COMPLETE
+    assert completed.logical_provider_attempts == 36_000
+    assert completed.physical_provider_attempts == 36_000
+    assert all(adapter.external_request_invocations == 0 for adapter in typed_adapters.values())
+    assert completed.study_root is not None
+    validation = json.loads((completed.study_root / "validation_report.json").read_text(encoding="utf-8"))
+    assert validation["counts"]["cells"] == 20
+    assert validation["counts"]["logical_judgments_per_cell"] == 1_800
+    assert validation["counts"]["logical_judgments"] == 36_000
+    assert validation["provider_calls"] == 0
+    assert validation["live_api_triggered"] is False
+
+
+def test_v2_evidence_rejects_rehashed_missing_duplicate_crossed_malformed_and_unsafe_inputs(
+    tmp_path: Path,
+) -> None:
+    source = _make_validation_report_source(tmp_path, "v2-evidence-tamper-source")
+    manifest = _v2_manifest(source, output_identity="v2-evidence-tamper")
+    adapters, _ = _v2_adapters(manifest)
+    workspace = tmp_path / "v2-evidence-tamper-workspace"
+    completed = ConcurrentRobustnessStudy().run(manifest, adapters, workspace)
+    assert completed.status == ConcurrentRobustnessStudyStatus.COMPLETE
+    study_root = completed.study_root
+    assert study_root is not None
+    shutil.rmtree(study_root)
+    workspace_validation = workspace / "validation_report.json"
+    workspace_validation_before = workspace_validation.read_bytes()
+    workspace_validation.write_bytes(workspace_validation_before + b" ")
+    with pytest.raises(ConcurrentRobustnessV2EvidenceError):
+        close_concurrent_robustness_v2_study(workspace)
+    assert not study_root.exists()
+    workspace_validation.write_bytes(workspace_validation_before)
+
+    execution = workspace / "two_stage_execution"
+    original = {
+        path.name: (path.read_bytes(), stat.st_mode)
+        for path in execution.iterdir()
+        if path.is_file()
+        for stat in (path.stat(),)
+    }
+    symlink_target = tmp_path / "symlink-terminal-target.jsonl"
+    symlink_target.write_bytes(original["terminal_rows.jsonl"][0])
+
+    def restore() -> None:
+        shutil.rmtree(execution)
+        execution.mkdir()
+        for name, (payload, mode) in original.items():
+            path = execution / name
+            path.write_bytes(payload)
+            path.chmod(mode)
+
+    def missing_terminal() -> None:
+        terminal_path = execution / "terminal_rows.jsonl"
+        terminal_path.write_bytes(b"\n".join(terminal_path.read_bytes().splitlines()[:-1]) + b"\n")
+        _rewrite_v2_execution_integrity(execution)
+
+    def duplicate_terminal() -> None:
+        terminal_path = execution / "terminal_rows.jsonl"
+        first = terminal_path.read_bytes().splitlines(keepends=True)[0]
+        terminal_path.write_bytes(terminal_path.read_bytes() + first)
+        _rewrite_v2_execution_integrity(execution)
+
+    def crossed_terminal() -> None:
+        terminal_path = execution / "terminal_rows.jsonl"
+        rows = _jsonl(terminal_path)
+        rows[0]["cell_id"] = manifest.prompt_model_cells[1].cell_id
+        identity_payload = dict(rows[0])
+        identity_payload.pop("realized_terminal_id")
+        rows[0]["realized_terminal_id"] = hashlib.sha256(_canonical_json_bytes(identity_payload)).hexdigest()
+        terminal_path.write_bytes(b"".join(_canonical_json_bytes(row) for row in rows))
+        _rewrite_v2_execution_integrity(execution)
+
+    def malformed_terminal() -> None:
+        terminal_path = execution / "terminal_rows.jsonl"
+        terminal_path.write_bytes(b"{}\n" + b"\n".join(terminal_path.read_bytes().splitlines()[1:]) + b"\n")
+        _rewrite_v2_execution_integrity(execution)
+
+    def incomplete_usage() -> None:
+        lifecycle_path = execution / "pair_lifecycle.jsonl"
+        lifecycle = _jsonl(lifecycle_path)
+        judgment_record = next(row for row in lifecycle if row["state"] == "judgment_persisted")
+        judgment = judgment_record["payload"]["judgment"]
+        judgment["usage_complete"] = False
+        judgment["input_usage"] = None
+        judgment["output_usage"] = None
+        judgment["total_usage"] = None
+        judgment["cached_input_usage"] = None
+        for attempt in judgment["attempt_evidence"]:
+            attempt["usage_complete_response_count"] = 0
+            attempt["usage_missing_response_count"] = attempt["provider_response_count"]
+            attempt["usage_malformed_response_count"] = 0
+            attempt["input_usage"] = None
+            attempt["output_usage"] = None
+            attempt["total_usage"] = None
+            attempt["cached_input_usage"] = None
+        judgment_identity = dict(judgment)
+        judgment_identity.pop("judgment_id")
+        judgment["judgment_id"] = hashlib.sha256(_canonical_json_bytes(judgment_identity)).hexdigest()
+        pair_id = judgment_record["pair_id"]
+        realized_record = next(
+            row
+            for row in lifecycle
+            if row["pair_id"] == pair_id and row["state"] == "realized_persisted"
+        )
+        terminal = realized_record["payload"]["terminal"]
+        terminal["judgment_id"] = judgment["judgment_id"]
+        terminal_identity = dict(terminal)
+        terminal_identity.pop("realized_terminal_id")
+        terminal["realized_terminal_id"] = hashlib.sha256(_canonical_json_bytes(terminal_identity)).hexdigest()
+        settled_record = next(
+            row for row in lifecycle if row["pair_id"] == pair_id and row["state"] == "settled"
+        )
+        settled_record["payload"]["realized_terminal_id"] = terminal["realized_terminal_id"]
+        previous_checksum: str | None = None
+        for row in lifecycle:
+            row["previous_checksum"] = previous_checksum
+            checksum_facts = {key: value for key, value in row.items() if key != "checksum"}
+            row["checksum"] = hashlib.sha256(_canonical_json_bytes(checksum_facts)).hexdigest()
+            previous_checksum = row["checksum"]
+        lifecycle_path.write_bytes(b"".join(_canonical_json_bytes(row) for row in lifecycle))
+        terminal_path = execution / "terminal_rows.jsonl"
+        terminals = _jsonl(terminal_path)
+        terminal_row = next(row for row in terminals if row["pair_id"] == pair_id)
+        terminal_row.clear()
+        terminal_row.update(terminal)
+        terminal_path.write_bytes(b"".join(_canonical_json_bytes(row) for row in terminals))
+        _rewrite_v2_execution_integrity(execution)
+
+    def missing_commit() -> None:
+        commit_path = execution / "batch_commits.jsonl"
+        commit_path.write_bytes(b"\n".join(commit_path.read_bytes().splitlines()[:-1]) + b"\n")
+        _rewrite_v2_execution_integrity(execution)
+
+    def extra_artifact() -> None:
+        (execution / "unexpected.json").write_text("{}\n", encoding="utf-8")
+
+    def symlink_artifact() -> None:
+        terminal_path = execution / "terminal_rows.jsonl"
+        terminal_path.unlink()
+        os.symlink(symlink_target, terminal_path)
+
+    for mutate in (
+        missing_terminal,
+        duplicate_terminal,
+        crossed_terminal,
+        malformed_terminal,
+        incomplete_usage,
+        missing_commit,
+        extra_artifact,
+        symlink_artifact,
+    ):
+        restore()
+        mutate()
+        with pytest.raises(ConcurrentRobustnessV2EvidenceError):
+            close_concurrent_robustness_v2_study(workspace)
+        assert not study_root.exists()
+        assert not list(tmp_path.glob(f".{study_root.name}.*.staging"))
+
+    restore()
+
+
+def test_v2_immutable_root_rejects_tamper_without_overwrite_and_revalidates_exact_bytes(
+    tmp_path: Path,
+) -> None:
+    source = _make_validation_report_source(tmp_path, "v2-root-no-overwrite-source")
+    manifest = _v2_manifest(source, output_identity="v2-root-no-overwrite")
+    adapters, _ = _v2_adapters(manifest)
+    workspace = tmp_path / "v2-root-no-overwrite-workspace"
+    completed = ConcurrentRobustnessStudy().run(manifest, adapters, workspace)
+    root = completed.study_root
+    assert root is not None
+    original = {
+        path.name: (path.read_bytes(), path.stat().st_mode)
+        for path in root.iterdir()
+        if path.is_file()
+    }
+
+    def restore() -> None:
+        shutil.rmtree(root)
+        root.mkdir()
+        for name, (payload, mode) in original.items():
+            path = root / name
+            path.write_bytes(payload)
+            path.chmod(mode)
+
+    analysis_path = root / "realized_analysis.json"
+    analysis_path.write_bytes(analysis_path.read_bytes() + b" ")
+    tampered = _snapshot(root)
+    replay_adapters, replay_typed = _v2_adapters(manifest)
+    with pytest.raises(v2_module.ConcurrentRobustnessError) as captured:
+        ConcurrentRobustnessStudy().run(manifest, replay_adapters, workspace)
+    assert captured.value.code == v2_module.ConcurrentRobustnessErrorCode.WORKSPACE_CORRUPT
+    assert all(adapter.calls == [] for adapter in replay_typed.values())
+    assert _snapshot(root) == tampered
+
+    restore()
+    (root / "validation_report.json").unlink()
+    with pytest.raises(ConcurrentRobustnessV2EvidenceError):
+        read_closed_concurrent_robustness_v2_study(root)
+    restore()
+    (root / "unexpected.json").write_text("{}\n", encoding="utf-8")
+    with pytest.raises(ConcurrentRobustnessV2EvidenceError):
+        read_closed_concurrent_robustness_v2_study(root)
+    restore()
+    external = tmp_path / "crossed-claim-audit.json"
+    external.write_bytes((root / "claim_audit.json").read_bytes())
+    (root / "claim_audit.json").unlink()
+    os.symlink(external, root / "claim_audit.json")
+    with pytest.raises(ConcurrentRobustnessV2EvidenceError):
+        read_closed_concurrent_robustness_v2_study(root)
+
+    restore()
+    replayed = ConcurrentRobustnessStudy().run(manifest, None, workspace)
+    assert replayed == completed
+    assert _snapshot(root) == {name: payload for name, (payload, _mode) in original.items()}
+
+
+def test_v2_closure_detects_source_mutation_and_cleans_failed_atomic_staging(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = _make_validation_report_source(tmp_path, "v2-source-mutation-source")
+    manifest = _v2_manifest(source, output_identity="v2-source-mutation")
+    adapters, _ = _v2_adapters(manifest)
+    workspace = tmp_path / "v2-source-mutation-workspace"
+    source_artifact = source / "sample_manifest.json"
+    source_before = source_artifact.read_bytes()
+    original_build = v2_evidence_module._build_root_payloads
+
+    def build_then_mutate(*args: Any, **kwargs: Any) -> dict[str, bytes]:
+        payloads = original_build(*args, **kwargs)
+        source_artifact.write_bytes(source_before + b" ")
+        return payloads
+
+    monkeypatch.setattr(v2_evidence_module, "_build_root_payloads", build_then_mutate)
+    with pytest.raises(v2_module.ConcurrentRobustnessError) as captured:
+        ConcurrentRobustnessStudy().run(manifest, adapters, workspace)
+    assert captured.value.code == v2_module.ConcurrentRobustnessErrorCode.WORKSPACE_CORRUPT
+    root = workspace.with_name(f"{workspace.name}.study-root")
+    assert not root.exists()
+    assert not list(tmp_path.glob(f".{root.name}.*.staging"))
+    assert (workspace / "two_stage_execution").is_dir()
+
+    source_artifact.write_bytes(source_before)
+    monkeypatch.setattr(v2_evidence_module, "_build_root_payloads", original_build)
+    original_replace = v2_evidence_module.os.replace
+
+    def fail_final_install(source_path: str | os.PathLike[str], destination: str | os.PathLike[str]) -> None:
+        if Path(destination) == root:
+            raise OSError("injected root install failure")
+        original_replace(source_path, destination)
+
+    monkeypatch.setattr(v2_evidence_module.os, "replace", fail_final_install)
+    with pytest.raises(v2_module.ConcurrentRobustnessError) as install_failure:
+        ConcurrentRobustnessStudy().run(manifest, None, workspace)
+    assert install_failure.value.code == v2_module.ConcurrentRobustnessErrorCode.WORKSPACE_CORRUPT
+    assert not root.exists()
+    assert not list(tmp_path.glob(f".{root.name}.*.staging"))
+
+    monkeypatch.setattr(v2_evidence_module.os, "replace", original_replace)
+    completed = ConcurrentRobustnessStudy().run(manifest, None, workspace)
+    assert completed.status == ConcurrentRobustnessStudyStatus.COMPLETE
+    assert completed.study_root == root
 
 
 @pytest.mark.parametrize("interrupted_state", ["judgment_persisted", "realized_persisted"])
@@ -721,7 +1128,7 @@ def test_v2_resume_continues_persisted_stage_without_repeating_provider_success(
     resume_adapters, resume_typed = _v2_adapters(manifest)
     result = ConcurrentRobustnessStudy().run(manifest, resume_adapters, workspace)
 
-    assert result.status == ConcurrentRobustnessStudyStatus.CELLS_COMPLETE
+    assert result.status == ConcurrentRobustnessStudyStatus.COMPLETE
     assert len(resume_typed[first_cell_id].calls) == 59
     assert all(len(adapter.calls) == 60 for cell_id, adapter in resume_typed.items() if cell_id != first_cell_id)
     lifecycle = _jsonl(workspace / "two_stage_execution" / "pair_lifecycle.jsonl")
@@ -865,7 +1272,7 @@ def test_v2_completed_execution_rejects_tampering_before_adapter_calls(
     adapters, _ = _v2_adapters(manifest)
     workspace = tmp_path / "v2-tamper-workspace"
     result = ConcurrentRobustnessStudy().run(manifest, adapters, workspace)
-    assert result.status == ConcurrentRobustnessStudyStatus.CELLS_COMPLETE
+    assert result.status == ConcurrentRobustnessStudyStatus.COMPLETE
     execution = workspace / "two_stage_execution"
 
     for relative_path in (

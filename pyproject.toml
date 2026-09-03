@@ -74,5 +74,6 @@ markers = [
   "live_llm: manual live LLM/provider gate; skipped unless explicitly opted in",
   "live_tikhub: manual live TikHub/Douyin API gate; skipped unless explicitly opted in",
   "full_scale_rehearsal: manual 36,400-user zero-Provider rehearsal; skipped in the default suite",
+  "formal_shape_rehearsal: manual 20-cell and 36,000-judgment zero-Provider rehearsal; skipped in the default suite",
 ]
-addopts = "-m 'not live_llm and not live_tikhub and not full_scale_rehearsal'"
+addopts = "-m 'not live_llm and not live_tikhub and not full_scale_rehearsal and not formal_shape_rehearsal'"

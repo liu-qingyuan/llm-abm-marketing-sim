@@ -2082,6 +2082,23 @@ def _build_judgment(
         or accounting.observed_model_malformed_response_count != 0
     ):
         raise ValueError("v2 Judgment observed model drifted from the frozen cell")
+    deterministic_zero_usage = (
+        manifest.execution_profile == "deterministic_validation" and attempt_evidence is None
+    )
+    usage_complete = True if deterministic_zero_usage else accounting.usage_complete
+    usage_complete_responses = (
+        accounting.provider_response_count
+        if deterministic_zero_usage
+        else accounting.usage_complete_response_count
+    )
+    usage_missing_responses = 0 if deterministic_zero_usage else accounting.usage_missing_response_count
+    usage_malformed_responses = (
+        0 if deterministic_zero_usage else accounting.usage_malformed_response_count
+    )
+    input_usage = 0 if deterministic_zero_usage else accounting.input_usage
+    output_usage = 0 if deterministic_zero_usage else accounting.output_usage
+    total_usage = 0 if deterministic_zero_usage else accounting.total_usage
+    cached_input_usage = 0 if deterministic_zero_usage else accounting.cached_input_usage
     if attempt_evidence is None:
         attempt_evidence = (
             _V2AttemptEvidence(
@@ -2099,13 +2116,13 @@ def _build_judgment(
                 observed_model_counts=accounting.observed_model_counts,
                 observed_model_missing_response_count=accounting.observed_model_missing_response_count,
                 observed_model_malformed_response_count=accounting.observed_model_malformed_response_count,
-                usage_complete_response_count=accounting.usage_complete_response_count,
-                usage_missing_response_count=accounting.usage_missing_response_count,
-                usage_malformed_response_count=accounting.usage_malformed_response_count,
-                input_usage=accounting.input_usage,
-                output_usage=accounting.output_usage,
-                total_usage=accounting.total_usage,
-                cached_input_usage=accounting.cached_input_usage,
+                usage_complete_response_count=usage_complete_responses,
+                usage_missing_response_count=usage_missing_responses,
+                usage_malformed_response_count=usage_malformed_responses,
+                input_usage=input_usage,
+                output_usage=output_usage,
+                total_usage=total_usage,
+                cached_input_usage=cached_input_usage,
                 provider_route="injected_deterministic_validation",
                 billing_semantics="none",
                 billing_currency=None,
@@ -2137,11 +2154,11 @@ def _build_judgment(
         "request_invocations": accounting.request_invocations,
         "provider_response_count": accounting.provider_response_count,
         "successful_decision_count": accounting.successful_decision_count,
-        "usage_complete": accounting.usage_complete,
-        "input_usage": accounting.input_usage,
-        "output_usage": accounting.output_usage,
-        "total_usage": accounting.total_usage,
-        "cached_input_usage": accounting.cached_input_usage,
+        "usage_complete": usage_complete,
+        "input_usage": input_usage,
+        "output_usage": output_usage,
+        "total_usage": total_usage,
+        "cached_input_usage": cached_input_usage,
         "attempt_evidence": [row.model_dump(mode="json") for row in attempt_evidence],
     }
     payload["judgment_id"] = _json_sha256(payload)
@@ -3252,16 +3269,46 @@ def _result(
     manifest_sha256: str,
     logical: int,
     physical: int,
+    study_root: Path | None = None,
 ) -> ConcurrentRobustnessStudyResult:
     return ConcurrentRobustnessStudyResult(
         status=status,
         workspace_root=output_path,
-        validation_report=output_path / _V2_WORKSPACE_VALIDATION,
+        validation_report=(
+            study_root / _V2_WORKSPACE_VALIDATION
+            if study_root is not None
+            else output_path / _V2_WORKSPACE_VALIDATION
+        ),
         manifest_sha256=manifest_sha256,
         logical_provider_attempts=logical,
         physical_provider_attempts=physical,
-        study_root=None,
+        study_root=study_root,
         report_candidate=None,
+    )
+
+
+def _close_v2_study_result(
+    *,
+    output_path: Path,
+    manifest_sha256: str,
+    published: _V2PublishedExecution,
+) -> ConcurrentRobustnessStudyResult:
+    from .concurrent_robustness_v2_evidence import close_concurrent_robustness_v2_study
+
+    closed = close_concurrent_robustness_v2_study(output_path)
+    if (
+        closed.manifest_sha256 != manifest_sha256
+        or closed.logical_judgments != published.logical_judgments
+        or closed.physical_attempts != published.physical_attempts
+    ):
+        raise ValueError("v2 Evidence closure is crossed with the completed execution")
+    return _result(
+        status=ConcurrentRobustnessStudyStatus.COMPLETE,
+        output_path=output_path,
+        manifest_sha256=manifest_sha256,
+        logical=closed.logical_judgments,
+        physical=closed.physical_attempts,
+        study_root=closed.root_path,
     )
 
 
@@ -3322,13 +3369,13 @@ def _run_concurrent_robustness_v2(
                 manifest_sha256=manifest_sha256,
             )
             _assert_source_unchanged(closure)
-            return _result(
-                status=ConcurrentRobustnessStudyStatus.CELLS_COMPLETE,
+            result = _close_v2_study_result(
                 output_path=output_path,
                 manifest_sha256=manifest_sha256,
-                logical=published.logical_judgments,
-                physical=published.physical_attempts,
+                published=published,
             )
+            _assert_source_unchanged(closure)
+            return result
         root = _operational_root(output_path)
         if adapters_by_cell is None:
             if not root.exists():
@@ -3451,13 +3498,13 @@ def _run_concurrent_robustness_v2(
             last_pair_id=cells[-1].terminals[-1].pair_id,
         )
         _assert_source_unchanged(closure)
-        return _result(
-            status=ConcurrentRobustnessStudyStatus.CELLS_COMPLETE,
+        result = _close_v2_study_result(
             output_path=output_path,
             manifest_sha256=manifest_sha256,
-            logical=published.logical_judgments,
-            physical=published.physical_attempts,
+            published=published,
         )
+        _assert_source_unchanged(closure)
+        return result
     except ConcurrentRobustnessError:
         raise
     except (FileNotFoundError, OSError, TypeError, ValueError, json.JSONDecodeError) as exc:
