@@ -698,11 +698,32 @@ def _validate_execution_documents(
     live_api_triggered = execution_manifest.get("live_api_triggered")
     if not isinstance(live_api_triggered, bool):
         raise ConcurrentRobustnessV2EvidenceError("execution live-call evidence is malformed")
+    embedded_plan = execution_manifest.get("formal_execution_plan")
     if manifest.execution_profile == "deterministic_validation":
-        if classification != "deterministic_two_stage_validation" or provider_calls != 0 or live_api_triggered:
+        if (
+            classification != "deterministic_two_stage_validation"
+            or provider_calls != 0
+            or live_api_triggered
+            or embedded_plan is not None
+        ):
             raise ConcurrentRobustnessV2EvidenceError("validation execution is crossed with live Provider evidence")
-    elif classification != "formal_two_stage_live" or not live_api_triggered:
-        raise ConcurrentRobustnessV2EvidenceError("Formal execution classification is incomplete")
+    else:
+        if classification != "formal_two_stage_live" or not live_api_triggered:
+            raise ConcurrentRobustnessV2EvidenceError("Formal execution classification is incomplete")
+        from .concurrent_robustness_formal_execution import (
+            ConcurrentRobustnessFormalPreflightError,
+            validate_embedded_formal_execution_plan,
+        )
+
+        try:
+            validate_embedded_formal_execution_plan(
+                embedded_plan,
+                expected_manifest=manifest,
+            )
+        except ConcurrentRobustnessFormalPreflightError as exc:
+            raise ConcurrentRobustnessV2EvidenceError(
+                "Formal execution authorization lineage is invalid"
+            ) from exc
 
     artifacts = execution_manifest.get("artifacts")
     if not isinstance(artifacts, Mapping) or set(artifacts) != _V2_EXECUTION_PAYLOAD_FILES:

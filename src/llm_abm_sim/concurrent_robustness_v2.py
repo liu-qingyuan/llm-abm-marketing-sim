@@ -1360,6 +1360,7 @@ def _operational_identity(
     manifest: ConcurrentRobustnessManifestV2,
     manifest_sha256: str,
     output_path: Path,
+    formal_execution_plan: Mapping[str, object] | None,
 ) -> dict[str, object]:
     return {
         "schema_version": _V2_OPERATIONAL_IDENTITY_SCHEMA,
@@ -1370,6 +1371,16 @@ def _operational_identity(
         "output_root": str(output_path),
         "operational_root": str(_operational_root(output_path)),
         "realization_source_identity": manifest.realization_source.source_identity,
+        "formal_execution_plan_identity_sha256": (
+            formal_execution_plan.get("plan_identity_sha256")
+            if formal_execution_plan is not None
+            else None
+        ),
+        "formal_authorization_sha256": (
+            formal_execution_plan.get("authorization_sha256")
+            if formal_execution_plan is not None
+            else None
+        ),
         "cells": [
             {
                 "cell_index": index,
@@ -1389,6 +1400,7 @@ def _open_operational_root(
     manifest: ConcurrentRobustnessManifestV2,
     manifest_sha256: str,
     output_path: Path,
+    formal_execution_plan: Mapping[str, object] | None,
 ) -> Path:
     root = _operational_root(output_path)
     expected_identity = _canonical_json_bytes(
@@ -1396,6 +1408,7 @@ def _open_operational_root(
             manifest=manifest,
             manifest_sha256=manifest_sha256,
             output_path=output_path,
+            formal_execution_plan=formal_execution_plan,
         )
     )
     allowed_cells = {f"cell-{index:02d}" for index in range(_V2_CELL_COUNT)}
@@ -1468,6 +1481,7 @@ def _write_operational_status(
     root: Path,
     *,
     manifest_sha256: str,
+    execution_profile: Literal["formal", "deterministic_validation"],
     lifecycle: str,
     logical_judgments: int,
     physical_attempts: int,
@@ -1487,8 +1501,12 @@ def _write_operational_status(
                 "completed_cells": completed_cells,
                 "last_cell_id": last_cell_id,
                 "last_pair_id": last_pair_id,
-                "provider_calls": 0,
-                "live_api_triggered": False,
+                "provider_calls": (
+                    physical_attempts if execution_profile == "formal" else 0
+                ),
+                "live_api_triggered": (
+                    execution_profile == "formal" and physical_attempts > 0
+                ),
                 "production_deploy_eligible": False,
             }
         ),
@@ -2012,8 +2030,10 @@ def _preflight_adapters(
                 ConcurrentRobustnessErrorCode.UNSUPPORTED_ADAPTERS,
                 f"v2 validation Adapter metadata is invalid for {cell.cell_id}",
             ) from exc
+        deterministic = getattr(adapter, "deterministic_validation", False)
         if (
-            getattr(adapter, "deterministic_validation", False) is not True
+            not isinstance(deterministic, bool)
+            or deterministic != (manifest.execution_profile == "deterministic_validation")
             or prompt_version != cell.prompt_version
             or not isinstance(request_invocations, int)
             or request_invocations != 0
@@ -2022,9 +2042,22 @@ def _preflight_adapters(
         ):
             raise ConcurrentRobustnessError(
                 ConcurrentRobustnessErrorCode.UNSUPPORTED_ADAPTERS,
-                f"v2 validation Adapter is not fresh, offline, or Prompt-bound for {cell.cell_id}",
+                f"v2 Adapter is not fresh or Prompt-bound for {cell.cell_id}",
             )
-        if bool(getattr(adapter, "robustness_provider_adapter", False)):
+        robustness_adapter = bool(getattr(adapter, "robustness_provider_adapter", False))
+        if manifest.execution_profile == "formal" and not robustness_adapter:
+            raise ConcurrentRobustnessError(
+                ConcurrentRobustnessErrorCode.UNSUPPORTED_ADAPTERS,
+                f"Formal v2 execution requires the frozen Provider profile for {cell.cell_id}",
+            )
+        if manifest.execution_profile == "formal" and not bool(
+            getattr(getattr(adapter, "client", None), "external_provider_client", False)
+        ):
+            raise ConcurrentRobustnessError(
+                ConcurrentRobustnessErrorCode.UNSUPPORTED_ADAPTERS,
+                f"Formal v2 execution requires an external Provider transport for {cell.cell_id}",
+            )
+        if robustness_adapter:
             request_evidence = getattr(adapter, "request_evidence", None)
             expected_route = {
                 "deepseek-v4-flash": "deepseek_official",
@@ -2344,6 +2377,38 @@ def _sync_closed_pairs(
         )
 
 
+def _adapter_request_invocations(adapter: LLMDecisionAdapter) -> int:
+    return _v2_adapter_snapshot(adapter).request_invocations
+
+
+def _assert_adapter_transport_progress(
+    *,
+    manifest: ConcurrentRobustnessManifestV2,
+    adapter: LLMDecisionAdapter,
+    request_baseline: int,
+    external_baseline: int,
+) -> None:
+    external_delta = _adapter_external_request_invocations(adapter) - external_baseline
+    live_api_triggered = _adapter_live_api_triggered(adapter, baseline=external_baseline)
+    if external_delta < 0:
+        raise ValueError("v2 Adapter external-request counter is not monotonic")
+    if manifest.execution_profile == "deterministic_validation":
+        if external_delta != 0 or live_api_triggered:
+            raise ConcurrentRobustnessError(
+                ConcurrentRobustnessErrorCode.UNSUPPORTED_ADAPTERS,
+                "deterministic v2 Adapter triggered an external request",
+            )
+        return
+    request_delta = _adapter_request_invocations(adapter) - request_baseline
+    if request_delta < 0:
+        raise ValueError("v2 Adapter request counter is not monotonic")
+    if request_delta != external_delta or (external_delta > 0) != live_api_triggered:
+        raise ConcurrentRobustnessError(
+            ConcurrentRobustnessErrorCode.UNSUPPORTED_ADAPTERS,
+            "Formal v2 Adapter external-request accounting is incomplete",
+        )
+
+
 def _run_cell(
     *,
     config: Any,
@@ -2409,6 +2474,11 @@ def _run_cell(
     )
     commits: list[dict[str, object]] = []
     execution_adapter: LLMDecisionAdapter = _V2LaneDecisionAdapter(adapter, lane) if lane is not None else adapter
+    request_baseline = (
+        _adapter_request_invocations(execution_adapter)
+        if manifest.execution_profile == "formal"
+        else 0
+    )
     external_baseline = _adapter_external_request_invocations(execution_adapter)
     policy = EngagementRealizationPolicy(
         source_identity=manifest.realization_source.source_identity,
@@ -2536,33 +2606,31 @@ def _run_cell(
                                 time_step=plan.time_step,
                                 message_id=plan.message.message_id,
                                 default_provider_metadata={
-                                    "adapter": "injected-deterministic-v2",
+                                    "adapter": (
+                                        "formal-frozen-provider-v2"
+                                        if manifest.execution_profile == "formal"
+                                        else "injected-deterministic-v2"
+                                    ),
                                     "requested_model": cell.requested_model,
                                 },
                             )
                         except ProviderResponseProvenanceUnknown as exc:
-                            if _adapter_external_request_invocations(
-                                execution_adapter
-                            ) != external_baseline or _adapter_live_api_triggered(
-                                execution_adapter, baseline=external_baseline
-                            ):
-                                raise ConcurrentRobustnessError(
-                                    ConcurrentRobustnessErrorCode.UNSUPPORTED_ADAPTERS,
-                                    "deterministic v2 Adapter triggered an external request",
-                                ) from exc
+                            _assert_adapter_transport_progress(
+                                manifest=manifest,
+                                adapter=execution_adapter,
+                                request_baseline=request_baseline,
+                                external_baseline=external_baseline,
+                            )
                             raise _V2ReconciliationRequired(
                                 f"pair {plan.pair_id} requires explicit reconciliation"
                             ) from exc
                         except ValueError as exc:
-                            if _adapter_external_request_invocations(
-                                execution_adapter
-                            ) != external_baseline or _adapter_live_api_triggered(
-                                execution_adapter, baseline=external_baseline
-                            ):
-                                raise ConcurrentRobustnessError(
-                                    ConcurrentRobustnessErrorCode.UNSUPPORTED_ADAPTERS,
-                                    "deterministic v2 Adapter triggered an external request",
-                                ) from exc
+                            _assert_adapter_transport_progress(
+                                manifest=manifest,
+                                adapter=execution_adapter,
+                                request_baseline=request_baseline,
+                                external_baseline=external_baseline,
+                            )
                             raise _V2ReconciliationRequired(
                                 f"pair {plan.pair_id} returned unverifiable response accounting"
                             ) from exc
@@ -2573,12 +2641,12 @@ def _run_cell(
                             accounting = _variant_accounting_from_attempts(
                                 execution_adapter.last_attempt_evidence
                             )
-                        if _adapter_external_request_invocations(
-                            execution_adapter
-                        ) != external_baseline or _adapter_live_api_triggered(
-                            execution_adapter, baseline=external_baseline
-                        ):
-                            raise ValueError("deterministic v2 Adapter triggered an external request")
+                        _assert_adapter_transport_progress(
+                            manifest=manifest,
+                            adapter=execution_adapter,
+                            request_baseline=request_baseline,
+                            external_baseline=external_baseline,
+                        )
                         terminal_row, _, _ = _build_runtime_terminal_row(
                             pair_id=plan.pair_id,
                             pair_schedule_position=plan.pair_schedule_position,
@@ -2589,7 +2657,11 @@ def _run_cell(
                             attempt=attempt,
                             accounting=accounting,
                             default_provider_metadata={
-                                "adapter": "injected-deterministic-v2",
+                                "adapter": (
+                                    "formal-frozen-provider-v2"
+                                    if manifest.execution_profile == "formal"
+                                    else "injected-deterministic-v2"
+                                ),
                                 "model": cell.required_observed_model,
                             },
                         )
@@ -2727,6 +2799,7 @@ def _publish_execution(
     manifest: ConcurrentRobustnessManifestV2,
     manifest_sha256: str,
     cells: Sequence[_V2CellResult],
+    formal_execution_plan: Mapping[str, object] | None,
 ) -> _V2PublishedExecution:
     destination = output_path / _V2_EXECUTION_DIR
     if destination.exists():
@@ -2734,6 +2807,7 @@ def _publish_execution(
             destination,
             manifest=manifest,
             manifest_sha256=manifest_sha256,
+            expected_formal_execution_plan=formal_execution_plan,
         )
     staging = Path(
         tempfile.mkdtemp(
@@ -2758,6 +2832,10 @@ def _publish_execution(
                     commit_handle.write(_canonical_json_bytes(commit))
                 for record in cell.lifecycle_records:
                     lifecycle_handle.write(_canonical_json_bytes(record))
+        logical = sum(len(cell.terminals) for cell in cells)
+        physical = sum(cell.physical_attempts for cell in cells)
+        provider_calls = physical if manifest.execution_profile == "formal" else 0
+        live_api_triggered = provider_calls > 0
         cell_registry = {
             "schema_version": _V2_CELL_REGISTRY_SCHEMA,
             "manifest_sha256": manifest_sha256,
@@ -2776,13 +2854,11 @@ def _publish_execution(
                 }
                 for cell in cells
             ],
-            "provider_calls": 0,
-            "live_api_triggered": False,
+            "provider_calls": provider_calls,
+            "live_api_triggered": live_api_triggered,
             "production_deploy_eligible": False,
         }
         (staging / "cell_registry.json").write_bytes(_canonical_json_bytes(cell_registry))
-        logical = sum(len(cell.terminals) for cell in cells)
-        physical = sum(cell.physical_attempts for cell in cells)
         artifacts = {}
         for name in sorted(_V2_EXECUTION_PAYLOAD_FILES):
             path = staging / name
@@ -2792,7 +2868,11 @@ def _publish_execution(
             }
         execution_manifest = {
             "schema_version": _V2_EXECUTION_SCHEMA,
-            "classification": "deterministic_two_stage_validation",
+            "classification": (
+                "formal_two_stage_live"
+                if manifest.execution_profile == "formal"
+                else "deterministic_two_stage_validation"
+            ),
             "manifest_sha256": manifest_sha256,
             "realization_source_identity": manifest.realization_source.source_identity,
             "counts": {
@@ -2803,8 +2883,13 @@ def _publish_execution(
                 "batch_commits": sum(len(cell.commits) for cell in cells),
             },
             "artifacts": artifacts,
-            "provider_calls": 0,
-            "live_api_triggered": False,
+            "formal_execution_plan": (
+                dict(formal_execution_plan)
+                if formal_execution_plan is not None
+                else None
+            ),
+            "provider_calls": provider_calls,
+            "live_api_triggered": live_api_triggered,
             "production_deploy_eligible": False,
         }
         execution_manifest_path = staging / "execution_manifest.json"
@@ -2825,6 +2910,7 @@ def _publish_execution(
             staging,
             manifest=manifest,
             manifest_sha256=manifest_sha256,
+            expected_formal_execution_plan=formal_execution_plan,
         )
         if destination.exists():
             raise ValueError("v2 execution appeared during atomic publication")
@@ -2837,6 +2923,7 @@ def _publish_execution(
         destination,
         manifest=manifest,
         manifest_sha256=manifest_sha256,
+        expected_formal_execution_plan=formal_execution_plan,
     )
 
 
@@ -3042,6 +3129,7 @@ def _validate_published_execution(
     *,
     manifest: ConcurrentRobustnessManifestV2,
     manifest_sha256: str,
+    expected_formal_execution_plan: Mapping[str, object] | None = None,
 ) -> _V2PublishedExecution:
     if root.is_symlink() or not root.is_dir():
         raise ValueError("v2 execution root must be a real directory")
@@ -3079,11 +3167,41 @@ def _validate_published_execution(
         or execution_manifest.get("schema_version") != _V2_EXECUTION_SCHEMA
         or execution_manifest.get("manifest_sha256") != manifest_sha256
         or execution_manifest.get("realization_source_identity") != manifest.realization_source.source_identity
-        or execution_manifest.get("provider_calls") != 0
-        or execution_manifest.get("live_api_triggered") is not False
+        or not isinstance(execution_manifest.get("provider_calls"), int)
+        or isinstance(execution_manifest.get("provider_calls"), bool)
+        or not isinstance(execution_manifest.get("live_api_triggered"), bool)
         or execution_manifest.get("production_deploy_eligible") is not False
     ):
         raise ValueError("v2 execution manifest identity is crossed")
+    provider_calls = cast(int, execution_manifest["provider_calls"])
+    live_api_triggered = cast(bool, execution_manifest["live_api_triggered"])
+    embedded_plan = execution_manifest.get("formal_execution_plan")
+    if manifest.execution_profile == "deterministic_validation":
+        if (
+            execution_manifest.get("classification") != "deterministic_two_stage_validation"
+            or provider_calls != 0
+            or live_api_triggered
+            or embedded_plan is not None
+            or expected_formal_execution_plan is not None
+        ):
+            raise ValueError("v2 validation execution is crossed with Formal Provider evidence")
+    else:
+        if execution_manifest.get("classification") != "formal_two_stage_live" or not isinstance(
+            embedded_plan, Mapping
+        ):
+            raise ValueError("v2 Formal execution lacks legal authorization lineage")
+        from .concurrent_robustness_formal_execution import (
+            validate_embedded_formal_execution_plan,
+        )
+
+        validated_plan = validate_embedded_formal_execution_plan(
+            embedded_plan,
+            expected_manifest=manifest,
+        )
+        if expected_formal_execution_plan is not None and validated_plan != dict(
+            expected_formal_execution_plan
+        ):
+            raise ValueError("v2 Formal execution plan changed across execution")
     artifacts = execution_manifest.get("artifacts")
     if not isinstance(artifacts, Mapping) or set(artifacts) != _V2_EXECUTION_PAYLOAD_FILES:
         raise ValueError("v2 execution artifact registry is incomplete")
@@ -3106,8 +3224,8 @@ def _validate_published_execution(
         or registry.get("schema_version") != _V2_CELL_REGISTRY_SCHEMA
         or registry.get("manifest_sha256") != manifest_sha256
         or registry.get("realization_source_identity") != manifest.realization_source.source_identity
-        or registry.get("provider_calls") != 0
-        or registry.get("live_api_triggered") is not False
+        or registry.get("provider_calls") != provider_calls
+        or registry.get("live_api_triggered") is not live_api_triggered
     ):
         raise ValueError("v2 cell registry is crossed")
     expected_cell_ids = [cell.cell_id for cell in manifest.prompt_model_cells]
@@ -3171,6 +3289,11 @@ def _validate_published_execution(
     }
     if counts != expected_counts:
         raise ValueError("v2 execution manifest counts are crossed")
+    if manifest.execution_profile == "deterministic_validation":
+        if provider_calls != 0 or live_api_triggered:
+            raise ValueError("v2 validation execution triggered a Provider call")
+    elif provider_calls != physical_attempts or not live_api_triggered:
+        raise ValueError("v2 Formal Provider-call accounting is incomplete")
     return _V2PublishedExecution(
         logical_judgments=len(terminals),
         physical_attempts=physical_attempts,
@@ -3318,8 +3441,39 @@ def _run_concurrent_robustness_v2(
     adapters_by_cell: Mapping[str, LLMDecisionAdapter] | None,
     output_dir: str | Path,
     report_destination: str | Path | None,
+    formal_execution_plan: str | Path | None,
 ) -> ConcurrentRobustnessStudyResult:
     """Exact v2 dispatch target; v1 execution remains wholly untouched."""
+
+    if manifest.execution_profile == "formal":
+        if formal_execution_plan is None:
+            raise ConcurrentRobustnessError(
+                ConcurrentRobustnessErrorCode.FORMAL_AUTHORIZATION_REQUIRED,
+                "Formal v2 execution requires a preflight-authorized execution plan",
+            )
+        from .concurrent_robustness_formal_execution import (
+            ConcurrentRobustnessFormalPreflightError,
+            validate_formal_execution_plan,
+        )
+
+        try:
+            validated_formal_plan = validate_formal_execution_plan(
+                formal_execution_plan,
+                expected_manifest=manifest,
+                expected_output_root=output_dir,
+            )
+        except ConcurrentRobustnessFormalPreflightError as exc:
+            raise ConcurrentRobustnessError(
+                ConcurrentRobustnessErrorCode.FORMAL_AUTHORIZATION_INVALID,
+                "Formal v2 execution plan failed closed before Provider or workspace access",
+            ) from exc
+    else:
+        if formal_execution_plan is not None:
+            raise ConcurrentRobustnessError(
+                ConcurrentRobustnessErrorCode.FORMAL_AUTHORIZATION_INVALID,
+                "deterministic v2 validation cannot consume a live Formal execution plan",
+            )
+        validated_formal_plan = None
 
     if report_destination is not None:
         raise ConcurrentRobustnessError(
@@ -3367,6 +3521,7 @@ def _run_concurrent_robustness_v2(
                 published_path,
                 manifest=manifest,
                 manifest_sha256=manifest_sha256,
+                expected_formal_execution_plan=validated_formal_plan,
             )
             _assert_source_unchanged(closure)
             result = _close_v2_study_result(
@@ -3390,6 +3545,7 @@ def _run_concurrent_robustness_v2(
                 manifest=manifest,
                 manifest_sha256=manifest_sha256,
                 output_path=output_path,
+                formal_execution_plan=validated_formal_plan,
             )
             logical, physical, _, _, _ = _operational_progress(root)
             return _result(
@@ -3398,11 +3554,6 @@ def _run_concurrent_robustness_v2(
                 manifest_sha256=manifest_sha256,
                 logical=logical,
                 physical=physical,
-            )
-        if manifest.execution_profile != "deterministic_validation":
-            raise ConcurrentRobustnessError(
-                ConcurrentRobustnessErrorCode.UNSUPPORTED_ADAPTERS,
-                "Formal v2 Provider lanes require their independent execution contract",
             )
         if not isinstance(adapters_by_cell, Mapping):
             raise ConcurrentRobustnessError(
@@ -3414,6 +3565,7 @@ def _run_concurrent_robustness_v2(
             manifest=manifest,
             manifest_sha256=manifest_sha256,
             output_path=output_path,
+            formal_execution_plan=validated_formal_plan,
         )
         cells: list[_V2CellResult] = []
         restored_provider_fees = _operational_provider_fee_cny(root)
@@ -3447,6 +3599,7 @@ def _run_concurrent_robustness_v2(
                 _write_operational_status(
                     root,
                     manifest_sha256=manifest_sha256,
+                    execution_profile=manifest.execution_profile,
                     lifecycle="running",
                     logical_judgments=logical,
                     physical_attempts=physical,
@@ -3466,6 +3619,7 @@ def _run_concurrent_robustness_v2(
             _write_operational_status(
                 root,
                 manifest_sha256=manifest_sha256,
+                execution_profile=manifest.execution_profile,
                 lifecycle=status.value,
                 logical_judgments=logical,
                 physical_attempts=physical,
@@ -3486,10 +3640,12 @@ def _run_concurrent_robustness_v2(
             manifest=manifest,
             manifest_sha256=manifest_sha256,
             cells=cells,
+            formal_execution_plan=validated_formal_plan,
         )
         _write_operational_status(
             root,
             manifest_sha256=manifest_sha256,
+            execution_profile=manifest.execution_profile,
             lifecycle="cells_complete",
             logical_judgments=published.logical_judgments,
             physical_attempts=published.physical_attempts,

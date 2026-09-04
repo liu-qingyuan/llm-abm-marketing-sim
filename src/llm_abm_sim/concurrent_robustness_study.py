@@ -131,6 +131,8 @@ class ConcurrentRobustnessErrorCode(str, Enum):
     WORKSPACE_CORRUPT = "workspace_corrupt"
     PATH_VIOLATION = "path_violation"
     ANALYSIS_INVALID = "analysis_invalid"
+    FORMAL_AUTHORIZATION_REQUIRED = "formal_authorization_required"
+    FORMAL_AUTHORIZATION_INVALID = "formal_authorization_invalid"
 
 
 class ConcurrentRobustnessError(ValueError):
@@ -4304,6 +4306,7 @@ class ConcurrentRobustnessStudy:
         output_dir: str | Path,
         *,
         report_destination: str | Path | None = None,
+        formal_execution_plan: str | Path | None = None,
     ) -> ConcurrentRobustnessStudyResult:
         schema_version = getattr(manifest, "schema_version", None)
         if schema_version == "concurrent-robustness-manifest-v2":
@@ -4322,6 +4325,12 @@ class ConcurrentRobustnessStudy:
                 adapters_by_cell=adapters_by_cell,
                 output_dir=output_dir,
                 report_destination=report_destination,
+                formal_execution_plan=formal_execution_plan,
+            )
+        if formal_execution_plan is not None:
+            raise ConcurrentRobustnessError(
+                ConcurrentRobustnessErrorCode.FORMAL_AUTHORIZATION_INVALID,
+                "a Formal execution plan is accepted only by the v2 Formal profile",
             )
         if schema_version != CONCURRENT_ROBUSTNESS_MANIFEST_SCHEMA or not isinstance(
             manifest, ConcurrentRobustnessManifest
