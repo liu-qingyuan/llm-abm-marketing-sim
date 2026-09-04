@@ -102,13 +102,44 @@ _V2_REQUIRED_OBSERVED_MODELS: Mapping[str, str] = {
     "openai-codex/gpt-5.6-sol": "gpt-5.6-sol",
 }
 _V2_CELL_COUNT = 20
+_V2_CELLS_PER_MODEL = 4
 _V2_FORMAL_LOGICAL_PER_CELL = 1_800
+_V2_FORMAL_LOGICAL_PER_MODEL = 7_200
 _V2_FORMAL_LOGICAL_CAP = 36_000
+_V2_FORMAL_PHYSICAL_PER_MODEL = 21_600
 _V2_FORMAL_PHYSICAL_CAP = 108_000
 _V2_MAXIMUM_ATTEMPTS = 3
+_V2_MODEL_EXECUTION_POLICY = "model-major-serial-one-model-per-invocation-v1"
 _V2_BACKOFF_CEILING_SECONDS = 60.0
 _V2_SLEEP = time.sleep
 _V2_MONOTONIC = time.monotonic
+
+
+def _formal_model_batch_end(completed_cells: int) -> int:
+    if not 0 <= completed_cells <= _V2_CELL_COUNT:
+        raise ValueError("v2 completed cell count is outside the panel")
+    if completed_cells == _V2_CELL_COUNT:
+        return _V2_CELL_COUNT
+    return min(
+        ((completed_cells // _V2_CELLS_PER_MODEL) + 1) * _V2_CELLS_PER_MODEL,
+        _V2_CELL_COUNT,
+    )
+
+
+def _model_progress_fields(completed_cells: int) -> dict[str, object]:
+    if not 0 <= completed_cells <= _V2_CELL_COUNT:
+        raise ValueError("v2 completed cell count is outside the panel")
+    completed_model_count = completed_cells // _V2_CELLS_PER_MODEL
+    return {
+        "model_execution_policy": _V2_MODEL_EXECUTION_POLICY,
+        "model_execution_order": list(_V2_MODELS),
+        "completed_models": list(_V2_MODELS[:completed_model_count]),
+        "active_model": (
+            _V2_MODELS[completed_model_count]
+            if completed_model_count < len(_V2_MODELS)
+            else None
+        ),
+    }
 
 
 class _V2FrozenModel(BaseModel):
@@ -260,6 +291,8 @@ class _V2BatchBarrier(_V2FrozenModel):
 class _V2FormalContract(_V2FrozenModel):
     schema_version: Literal["concurrent-robustness-formal-topology-v2"]
     model_count: Literal[5]
+    model_execution_order: tuple[str, ...]
+    execution_policy: Literal["model-major-serial-one-model-per-invocation-v1"]
     prompt_variants: tuple[Literal["P0", "P1", "P2", "P3"], ...]
     cell_count: Literal[20]
     sample_size: Literal[1000]
@@ -273,6 +306,8 @@ class _V2FormalContract(_V2FrozenModel):
 
     @model_validator(mode="after")
     def _validate_prompt_order(self) -> _V2FormalContract:
+        if self.model_execution_order != _V2_MODELS:
+            raise ValueError("v2 Formal models must execute one at a time in canonical order")
         if self.prompt_variants != ("P0", "P1", "P2", "P3"):
             raise ValueError("v2 Formal Prompt variants must remain in canonical order")
         return self
@@ -330,8 +365,8 @@ class ConcurrentRobustnessManifestV2(_V2FrozenModel):
                 model,
                 _V2_REQUIRED_OBSERVED_MODELS[model],
             )
-            for prompt in CONCURRENT_ROBUSTNESS_PROMPT_REGISTRY.all()
             for model in _V2_MODELS
+            for prompt in CONCURRENT_ROBUSTNESS_PROMPT_REGISTRY.all()
         )
         actual_cells = tuple(
             (
@@ -431,8 +466,17 @@ _V2_EXECUTION_ANCHOR_SCHEMA = "concurrent-robustness-two-stage-execution-anchor-
 _V2_CELL_REGISTRY_SCHEMA = "concurrent-robustness-two-stage-cell-registry-v2"
 _V2_WORKSPACE_VALIDATION_SCHEMA = "concurrent-robustness-v2-validation-v1"
 _V2_WORKSPACE_REGISTRY_SCHEMA = "concurrent-robustness-v2-workspace-registry-v1"
-_V2_OPERATIONAL_IDENTITY_SCHEMA = "concurrent-robustness-v2-operational-identity-v1"
-_V2_OPERATIONAL_STATUS_SCHEMA = "concurrent-robustness-v2-operational-status-v1"
+_V2_OPERATIONAL_IDENTITY_SCHEMA = "concurrent-robustness-v2-operational-identity-v2"
+_V2_OPERATIONAL_STATUS_SCHEMA = "concurrent-robustness-v2-operational-status-v2"
+_V2_OPERATIONAL_LIFECYCLES = {
+    "initialized",
+    "running",
+    "model_batch_complete",
+    "resumable",
+    "stopped",
+    "reconciliation_required",
+    "cells_complete",
+}
 
 _V2_WORKSPACE_MANIFEST = "study_manifest.json"
 _V2_WORKSPACE_VALIDATION = "validation_report.json"
@@ -1381,6 +1425,17 @@ def _operational_identity(
             if formal_execution_plan is not None
             else None
         ),
+        "model_execution": {
+            "policy": manifest.formal_contract.execution_policy,
+            "order": list(manifest.formal_contract.model_execution_order),
+            "cells_per_model": _V2_CELLS_PER_MODEL,
+            "logical_judgment_cap_per_model": (
+                manifest.request_caps.logical_judgment_cap // len(_V2_MODELS)
+            ),
+            "physical_attempt_cap_per_model": (
+                manifest.request_caps.physical_attempt_cap // len(_V2_MODELS)
+            ),
+        },
         "cells": [
             {
                 "cell_index": index,
@@ -1435,11 +1490,74 @@ def _open_operational_root(
             not isinstance(status, dict)
             or status.get("schema_version") != _V2_OPERATIONAL_STATUS_SCHEMA
             or status.get("manifest_sha256") != manifest_sha256
+            or status.get("lifecycle") not in _V2_OPERATIONAL_LIFECYCLES
         ):
             raise ValueError("v2 operational status is crossed")
-        for name in set(entries).intersection(allowed_cells):
+        if manifest.execution_profile == "formal":
+            completed_cells = status.get("completed_cells")
+            if (
+                not isinstance(completed_cells, int)
+                or isinstance(completed_cells, bool)
+                or any(
+                    status.get(key) != value
+                    for key, value in _model_progress_fields(completed_cells).items()
+                )
+            ):
+                raise ValueError("v2 operational model checkpoint is crossed")
+        cell_scope_names = set(entries).intersection(allowed_cells)
+        for name in cell_scope_names:
             if entries[name].is_symlink() or not entries[name].is_dir():
                 raise ValueError("v2 operational cell scope is unsafe")
+        logical, physical, completed, last_cell, last_pair = _operational_progress(root)
+        persisted_counts = (
+            status.get("logical_judgments"),
+            status.get("physical_attempts"),
+            status.get("completed_cells"),
+        )
+        actual_counts = (logical, physical, completed)
+        if any(
+            not isinstance(value, int) or isinstance(value, bool)
+            for value in persisted_counts
+        ) or any(
+            cast(int, persisted) > actual
+            for persisted, actual in zip(persisted_counts, actual_counts, strict=True)
+        ):
+            raise ValueError("v2 operational status leads its durable ledgers")
+        counts_match = (
+            tuple(cast(int, value) for value in persisted_counts) == actual_counts
+        )
+        blocked_lifecycle = status.get("lifecycle") in {
+            ConcurrentRobustnessStudyStatus.STOPPED.value,
+            ConcurrentRobustnessStudyStatus.RECONCILIATION_REQUIRED.value,
+        }
+        if blocked_lifecycle and len(cell_scope_names) == completed:
+            raise ValueError("v2 blocked operational status lacks an incomplete ledger")
+        at_model_checkpoint = (
+            manifest.execution_profile == "formal"
+            and completed > 0
+            and completed % _V2_CELLS_PER_MODEL == 0
+            and len(cell_scope_names) == completed
+        )
+        if at_model_checkpoint and not blocked_lifecycle:
+            reconciled_lifecycle = "model_batch_complete"
+        elif counts_match:
+            reconciled_lifecycle = cast(str, status["lifecycle"])
+        else:
+            reconciled_lifecycle = "running"
+        if not counts_match or status.get("lifecycle") != reconciled_lifecycle:
+            if blocked_lifecycle:
+                raise ValueError("v2 blocked operational status is behind its durable ledgers")
+            _write_operational_status(
+                root,
+                manifest_sha256=manifest_sha256,
+                execution_profile=manifest.execution_profile,
+                lifecycle=reconciled_lifecycle,
+                logical_judgments=logical,
+                physical_attempts=physical,
+                completed_cells=completed,
+                last_cell_id=last_cell,
+                last_pair_id=last_pair,
+            )
         return root
 
     root.parent.mkdir(parents=True, exist_ok=True)
@@ -1452,22 +1570,23 @@ def _open_operational_root(
     )
     try:
         (staging / _V2_OPERATIONAL_IDENTITY).write_bytes(expected_identity)
+        initial_status: dict[str, object] = {
+            "schema_version": _V2_OPERATIONAL_STATUS_SCHEMA,
+            "lifecycle": "initialized",
+            "manifest_sha256": manifest_sha256,
+            "logical_judgments": 0,
+            "physical_attempts": 0,
+            "completed_cells": 0,
+            "last_cell_id": None,
+            "last_pair_id": None,
+            "provider_calls": 0,
+            "live_api_triggered": False,
+            "production_deploy_eligible": False,
+        }
+        if manifest.execution_profile == "formal":
+            initial_status.update(_model_progress_fields(0))
         (staging / _V2_OPERATIONAL_STATUS).write_bytes(
-            _canonical_json_bytes(
-                {
-                    "schema_version": _V2_OPERATIONAL_STATUS_SCHEMA,
-                    "lifecycle": "initialized",
-                    "manifest_sha256": manifest_sha256,
-                    "logical_judgments": 0,
-                    "physical_attempts": 0,
-                    "completed_cells": 0,
-                    "last_cell_id": None,
-                    "last_pair_id": None,
-                    "provider_calls": 0,
-                    "live_api_triggered": False,
-                    "production_deploy_eligible": False,
-                }
-            )
+            _canonical_json_bytes(initial_status)
         )
         os.replace(staging, root)
         _fsync_directory(root.parent)
@@ -1489,27 +1608,24 @@ def _write_operational_status(
     last_cell_id: str | None,
     last_pair_id: str | None,
 ) -> None:
+    status: dict[str, object] = {
+        "schema_version": _V2_OPERATIONAL_STATUS_SCHEMA,
+        "lifecycle": lifecycle,
+        "manifest_sha256": manifest_sha256,
+        "logical_judgments": logical_judgments,
+        "physical_attempts": physical_attempts,
+        "completed_cells": completed_cells,
+        "last_cell_id": last_cell_id,
+        "last_pair_id": last_pair_id,
+        "provider_calls": physical_attempts if execution_profile == "formal" else 0,
+        "live_api_triggered": execution_profile == "formal" and physical_attempts > 0,
+        "production_deploy_eligible": False,
+    }
+    if execution_profile == "formal":
+        status.update(_model_progress_fields(completed_cells))
     _atomic_write_bytes(
         root / _V2_OPERATIONAL_STATUS,
-        _canonical_json_bytes(
-            {
-                "schema_version": _V2_OPERATIONAL_STATUS_SCHEMA,
-                "lifecycle": lifecycle,
-                "manifest_sha256": manifest_sha256,
-                "logical_judgments": logical_judgments,
-                "physical_attempts": physical_attempts,
-                "completed_cells": completed_cells,
-                "last_cell_id": last_cell_id,
-                "last_pair_id": last_pair_id,
-                "provider_calls": (
-                    physical_attempts if execution_profile == "formal" else 0
-                ),
-                "live_api_triggered": (
-                    execution_profile == "formal" and physical_attempts > 0
-                ),
-                "production_deploy_eligible": False,
-            }
-        ),
+        _canonical_json_bytes(status),
     )
 
 
@@ -3306,7 +3422,12 @@ def _operational_progress(root: Path) -> tuple[int, int, int, str | None, str | 
     completed = 0
     last_cell: str | None = None
     last_pair: str | None = None
-    for cell_scope in sorted(root.glob("cell-*")):
+    cell_scopes = sorted(root.glob("cell-*"))
+    if [scope.name for scope in cell_scopes] != [
+        f"cell-{index:02d}" for index in range(len(cell_scopes))
+    ]:
+        raise ValueError("v2 operational cells must remain a contiguous prefix")
+    for scope_index, cell_scope in enumerate(cell_scopes):
         identity_path = cell_scope / _V2_LEDGER_IDENTITY
         journal_path = cell_scope / _V2_LEDGER_JSONL
         if not identity_path.is_file() or not journal_path.is_file():
@@ -3334,10 +3455,13 @@ def _operational_progress(root: Path) -> tuple[int, int, int, str | None, str | 
             # pre-dispatch or retry-wait marker remains safely resumable and
             # counts only already persisted attempts.
             physical += completed_attempts + (payload.get("phase") in {None, "dispatching"})
-        if len(terminals) == int(str(identity["expected_logical_judgments"])) and all(
-            state == "settled" for state in ledger.state_by_pair.values()
-        ):
+        cell_complete = len(terminals) == int(
+            str(identity["expected_logical_judgments"])
+        ) and all(state == "settled" for state in ledger.state_by_pair.values())
+        if cell_complete:
             completed += 1
+        elif scope_index != len(cell_scopes) - 1:
+            raise ValueError("v2 operational execution skipped an incomplete cell")
         if ledger.records:
             last_cell = str(identity.get("cell_id"))
             last_pair = str(ledger.records[-1].get("pair_id"))
@@ -3548,8 +3672,17 @@ def _run_concurrent_robustness_v2(
                 formal_execution_plan=validated_formal_plan,
             )
             logical, physical, _, _, _ = _operational_progress(root)
+            operational_status = json.loads(
+                (root / _V2_OPERATIONAL_STATUS).read_text(encoding="utf-8")
+            )
+            lifecycle = operational_status.get("lifecycle")
+            read_status = ConcurrentRobustnessStudyStatus.RESUMABLE
+            if lifecycle == ConcurrentRobustnessStudyStatus.STOPPED.value:
+                read_status = ConcurrentRobustnessStudyStatus.STOPPED
+            elif lifecycle == ConcurrentRobustnessStudyStatus.RECONCILIATION_REQUIRED.value:
+                read_status = ConcurrentRobustnessStudyStatus.RECONCILIATION_REQUIRED
             return _result(
-                status=ConcurrentRobustnessStudyStatus.RESUMABLE,
+                status=read_status,
                 output_path=output_path,
                 manifest_sha256=manifest_sha256,
                 logical=logical,
@@ -3569,6 +3702,12 @@ def _run_concurrent_robustness_v2(
         )
         cells: list[_V2CellResult] = []
         restored_provider_fees = _operational_provider_fee_cny(root)
+        _, _, completed_before, _, _ = _operational_progress(root)
+        invocation_cell_end = (
+            _formal_model_batch_end(completed_before)
+            if manifest.execution_profile == "formal"
+            else _V2_CELL_COUNT
+        )
         lanes: dict[str, _V2ModelLane] = {}
         try:
             for cell_index, (cell, adapter) in enumerate(adapters):
@@ -3607,6 +3746,11 @@ def _run_concurrent_robustness_v2(
                     last_cell_id=cell.cell_id,
                     last_pair_id=(cell_result.terminals[-1].pair_id if cell_result.terminals else None),
                 )
+                if (
+                    manifest.execution_profile == "formal"
+                    and len(cells) == invocation_cell_end
+                ):
+                    break
         except (_V2ReconciliationRequired, _V2SafePreCallStop, _V2CellStopped) as pause:
             _assert_source_unchanged(closure)
             logical, physical, completed, last_cell, last_pair = _operational_progress(root)
@@ -3629,6 +3773,31 @@ def _run_concurrent_robustness_v2(
             )
             return _result(
                 status=status,
+                output_path=output_path,
+                manifest_sha256=manifest_sha256,
+                logical=logical,
+                physical=physical,
+            )
+        if (
+            manifest.execution_profile == "formal"
+            and invocation_cell_end < _V2_CELL_COUNT
+        ):
+            _assert_source_unchanged(closure)
+            logical = sum(len(row.terminals) for row in cells)
+            physical = sum(row.physical_attempts for row in cells)
+            _write_operational_status(
+                root,
+                manifest_sha256=manifest_sha256,
+                execution_profile=manifest.execution_profile,
+                lifecycle="model_batch_complete",
+                logical_judgments=logical,
+                physical_attempts=physical,
+                completed_cells=len(cells),
+                last_cell_id=cells[-1].cell_id,
+                last_pair_id=cells[-1].terminals[-1].pair_id,
+            )
+            return _result(
+                status=ConcurrentRobustnessStudyStatus.RESUMABLE,
                 output_path=output_path,
                 manifest_sha256=manifest_sha256,
                 logical=logical,

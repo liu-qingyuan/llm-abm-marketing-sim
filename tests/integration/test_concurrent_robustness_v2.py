@@ -7,7 +7,7 @@ import os
 import shutil
 from collections import Counter
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pytest
 from pydantic import BaseModel
@@ -20,6 +20,7 @@ from llm_abm_sim import (
     LLMDecisionAdapter,
     ProviderDecisionError,
 )
+from llm_abm_sim import concurrent_robustness_formal_execution as formal_execution_module
 from llm_abm_sim import concurrent_robustness_v2 as v2_module
 from llm_abm_sim import concurrent_robustness_v2_evidence as v2_evidence_module
 from llm_abm_sim.concurrent_robustness_v2 import (
@@ -60,8 +61,8 @@ def _v2_manifest_payload(source_dir: Path, *, output_identity: str) -> dict[str,
             "requested_model": model,
             "required_observed_model": _V2_REQUIRED_OBSERVED_MODELS[model],
         }
-        for prompt in CONCURRENT_ROBUSTNESS_PROMPT_REGISTRY.all()
         for model in _V2_MODELS
+        for prompt in CONCURRENT_ROBUSTNESS_PROMPT_REGISTRY.all()
     ]
     ranking = copy.deepcopy(v1_payload["ranking_contract"])
     logical_per_cell = int(ranking["horizon"]) * int(ranking["delivery_capacity"]) * 3
@@ -83,6 +84,8 @@ def _v2_manifest_payload(source_dir: Path, *, output_identity: str) -> dict[str,
         "formal_contract": {
             "schema_version": "concurrent-robustness-formal-topology-v2",
             "model_count": 5,
+            "model_execution_order": list(_V2_MODELS),
+            "execution_policy": "model-major-serial-one-model-per-invocation-v1",
             "prompt_variants": ["P0", "P1", "P2", "P3"],
             "cell_count": 20,
             "sample_size": 1_000,
@@ -135,8 +138,8 @@ def test_v2_manifest_freezes_exact_twenty_cell_topology_and_caps(tmp_path: Path)
     assert manifest.schema_version == "concurrent-robustness-manifest-v2"
     assert tuple(cell.cell_id for cell in manifest.prompt_model_cells) == tuple(
         f"{prompt.variant_id}::{model}"
-        for prompt in CONCURRENT_ROBUSTNESS_PROMPT_REGISTRY.all()
         for model in _V2_MODELS
+        for prompt in CONCURRENT_ROBUSTNESS_PROMPT_REGISTRY.all()
     )
     assert len(manifest.prompt_model_cells) == 20
     assert manifest.request_caps.logical_judgments_per_cell == 60
@@ -160,6 +163,22 @@ def test_v2_manifest_freezes_exact_twenty_cell_topology_and_caps(tmp_path: Path)
     }
 
 
+def test_v2_manifest_freezes_model_major_serial_execution(tmp_path: Path) -> None:
+    source = _make_validation_report_source(tmp_path, "v2-model-major-source")
+    manifest = _v2_manifest(source, output_identity="v2-model-major")
+
+    assert tuple(cell.cell_id for cell in manifest.prompt_model_cells) == tuple(
+        f"{prompt.variant_id}::{model}"
+        for model in _V2_MODELS
+        for prompt in CONCURRENT_ROBUSTNESS_PROMPT_REGISTRY.all()
+    )
+    assert manifest.formal_contract.model_execution_order == _V2_MODELS
+    assert (
+        manifest.formal_contract.execution_policy
+        == "model-major-serial-one-model-per-invocation-v1"
+    )
+
+
 @pytest.mark.parametrize("corruption", ["missing", "extra", "reordered", "crossed_prompt", "crossed_model"])
 def test_v2_manifest_rejects_noncanonical_or_crossed_cells(tmp_path: Path, corruption: str) -> None:
     source = _make_validation_report_source(tmp_path, f"v2-manifest-{corruption}-source")
@@ -181,6 +200,17 @@ def test_v2_manifest_rejects_noncanonical_or_crossed_cells(tmp_path: Path, corru
         cells[0]["required_observed_model"] = "crossed-observed-model"
 
     with pytest.raises(ValueError, match="20 canonical Prompt-Model cells"):
+        ConcurrentRobustnessManifestV2.model_validate(payload)
+
+
+def test_v2_manifest_rejects_crossed_model_execution_order(tmp_path: Path) -> None:
+    source = _make_validation_report_source(tmp_path, "v2-model-order-source")
+    payload = _v2_manifest_payload(source, output_identity="v2-model-order")
+    formal_contract = payload["formal_contract"]
+    assert isinstance(formal_contract, dict)
+    formal_contract["model_execution_order"] = list(reversed(_V2_MODELS))
+
+    with pytest.raises(ValueError, match="models must execute one at a time"):
         ConcurrentRobustnessManifestV2.model_validate(payload)
 
 
@@ -295,6 +325,8 @@ class _HTTPError(RuntimeError):
 
 
 class _SequenceProviderTransport:
+    external_provider_client = False
+
     def __init__(
         self,
         *,
@@ -377,6 +409,191 @@ def _provider_adapters(
         transports[cell.cell_id] = transport
         adapters[cell.cell_id] = _provider_adapter_for_cell(cell, transport)
     return adapters, transports
+
+
+def test_formal_run_closes_one_model_per_invocation_then_publishes_after_fifth(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = _make_validation_report_source(tmp_path, "v2-formal-model-batch-source")
+    validation_manifest = _v2_manifest(source, output_identity="v2-formal-model-batch")
+    manifest = validation_manifest.model_copy(
+        update={
+            "source": validation_manifest.source.model_copy(update={"kind": "formal"}),
+            "execution_profile": "formal",
+        }
+    )
+    plan = {
+        "plan_identity_sha256": "a" * 64,
+        "authorization_sha256": "b" * 64,
+    }
+    monkeypatch.setattr(
+        formal_execution_module,
+        "validate_formal_execution_plan",
+        lambda *_args, **_kwargs: plan,
+    )
+    monkeypatch.setattr(
+        formal_execution_module,
+        "validate_embedded_formal_execution_plan",
+        lambda embedded, **_kwargs: dict(embedded),
+    )
+    # Exercise the Formal scheduler against the small validation source; the
+    # production-source and final Evidence gates have their own contract tests.
+    monkeypatch.setattr(v2_module, "_validate_source_against_manifest", lambda *_args: None)
+    workspace = tmp_path / "v2-formal-model-batch-workspace"
+    plan_path = tmp_path / "authorized-plan.json"
+    operational_root = workspace.parent / f".{workspace.name}.two-stage-v2-operational"
+    expected_model_calls = (
+        manifest.request_caps.logical_judgments_per_cell
+        * len(CONCURRENT_ROBUSTNESS_PROMPT_REGISTRY.all())
+    )
+
+    def fresh_external_adapters() -> tuple[
+        dict[str, LLMDecisionAdapter],
+        dict[str, _SequenceProviderTransport],
+    ]:
+        adapters, transports = _provider_adapters(manifest)
+        for cell_id, transport in transports.items():
+            transport.external_provider_client = True
+            if cell_id.endswith("::deepseek-v4-flash"):
+                transport.maximum_provider_fee_cny_per_attempt = 0.01
+                transport.provider_fee_cny_per_response = 0.0
+        for adapter in adapters.values():
+            cast(Any, adapter).deterministic_validation = False
+        return adapters, transports
+
+    for model_index, model in enumerate(_V2_MODELS[:-1]):
+        adapters, transports = fresh_external_adapters()
+        result = ConcurrentRobustnessStudy().run(
+            manifest,
+            adapters,
+            workspace,
+            formal_execution_plan=plan_path,
+        )
+
+        assert result.status == ConcurrentRobustnessStudyStatus.RESUMABLE
+        assert sum(
+            len(transport.calls)
+            for cell_id, transport in transports.items()
+            if cell_id.endswith(f"::{model}")
+        ) == expected_model_calls
+        assert all(
+            not transport.calls
+            for cell_id, transport in transports.items()
+            if not cell_id.endswith(f"::{model}")
+        )
+        assert not (workspace / "two_stage_execution").exists()
+        completed_cells = (model_index + 1) * 4
+        assert sorted(path.name for path in operational_root.glob("cell-*")) == [
+            f"cell-{index:02d}" for index in range(completed_cells)
+        ]
+        status = json.loads(
+            (operational_root / "panel_status.json").read_text(encoding="utf-8")
+        )
+        assert status["lifecycle"] == "model_batch_complete"
+        assert status["completed_models"] == list(_V2_MODELS[: model_index + 1])
+        assert status["active_model"] == _V2_MODELS[model_index + 1]
+        assert status["completed_cells"] == completed_cells
+        if model_index == 0:
+            status_path = operational_root / "panel_status.json"
+            behind = {
+                **status,
+                "lifecycle": "initialized",
+                "logical_judgments": 0,
+                "physical_attempts": 0,
+                "completed_cells": 0,
+                "completed_models": [],
+                "active_model": _V2_MODELS[0],
+                "last_cell_id": None,
+                "last_pair_id": None,
+            }
+            status_path.write_bytes(_canonical_json_bytes(behind))
+
+            inspected = ConcurrentRobustnessStudy().run(
+                manifest,
+                None,
+                workspace,
+                formal_execution_plan=plan_path,
+            )
+
+            assert inspected.logical_provider_attempts == expected_model_calls
+            repaired = json.loads(status_path.read_text(encoding="utf-8"))
+            assert repaired["lifecycle"] == "model_batch_complete"
+            assert repaired["completed_cells"] == 4
+            assert repaired["completed_models"] == [_V2_MODELS[0]]
+            ahead = {
+                **repaired,
+                "logical_judgments": expected_model_calls * 2,
+                "physical_attempts": expected_model_calls * 2,
+                "completed_cells": 8,
+                "completed_models": list(_V2_MODELS[:2]),
+                "active_model": _V2_MODELS[2],
+            }
+            status_path.write_bytes(_canonical_json_bytes(ahead))
+            with pytest.raises(v2_module.ConcurrentRobustnessError) as captured:
+                ConcurrentRobustnessStudy().run(
+                    manifest,
+                    None,
+                    workspace,
+                    formal_execution_plan=plan_path,
+                )
+            assert captured.value.code == v2_module.ConcurrentRobustnessErrorCode.WORKSPACE_CORRUPT
+            status_path.write_bytes(_canonical_json_bytes(repaired))
+
+    def close_without_production_sized_evidence(
+        *,
+        output_path: Path,
+        manifest_sha256: str,
+        published: Any,
+    ) -> Any:
+        return v2_module._result(
+            status=ConcurrentRobustnessStudyStatus.COMPLETE,
+            output_path=output_path,
+            manifest_sha256=manifest_sha256,
+            logical=published.logical_judgments,
+            physical=published.physical_attempts,
+            study_root=output_path,
+        )
+
+    monkeypatch.setattr(
+        v2_module,
+        "_close_v2_study_result",
+        close_without_production_sized_evidence,
+    )
+    final_adapters, final_transports = fresh_external_adapters()
+    final = ConcurrentRobustnessStudy().run(
+        manifest,
+        final_adapters,
+        workspace,
+        formal_execution_plan=plan_path,
+    )
+
+    assert final.status == ConcurrentRobustnessStudyStatus.COMPLETE
+    assert sum(
+        len(transport.calls)
+        for cell_id, transport in final_transports.items()
+        if cell_id.endswith("::openai-codex/gpt-5.6-sol")
+    ) == expected_model_calls
+    assert all(
+        not transport.calls
+        for cell_id, transport in final_transports.items()
+        if not cell_id.endswith("::openai-codex/gpt-5.6-sol")
+    )
+    execution = workspace / "two_stage_execution"
+    assert execution.is_dir()
+    execution_manifest = json.loads(
+        (execution / "execution_manifest.json").read_text(encoding="utf-8")
+    )
+    assert execution_manifest["counts"]["cells"] == 20
+    assert execution_manifest["counts"]["logical_judgments"] == (
+        manifest.request_caps.logical_judgment_cap
+    )
+    final_status = json.loads(
+        (operational_root / "panel_status.json").read_text(encoding="utf-8")
+    )
+    assert final_status["lifecycle"] == "cells_complete"
+    assert final_status["completed_models"] == list(_V2_MODELS)
+    assert final_status["active_model"] is None
 
 
 def _jsonl(path: Path) -> list[dict[str, Any]]:
@@ -498,13 +715,13 @@ def test_v2_private_model_lane_stops_on_nonretryable_or_three_exhausted_attempts
     manifest = _v2_manifest(source, output_identity=f"v2-stop-{expected_attempts}")
     adapters, transports = _provider_adapters(manifest, first_sequence=sequence)
     monkeypatch.setattr(v2_module, "_V2_SLEEP", lambda _delay: None)
-    result = ConcurrentRobustnessStudy().run(
-        manifest,
-        adapters,
-        tmp_path / f"v2-stop-{expected_attempts}-workspace",
-    )
+    workspace = tmp_path / f"v2-stop-{expected_attempts}-workspace"
+    result = ConcurrentRobustnessStudy().run(manifest, adapters, workspace)
 
     assert result.status == ConcurrentRobustnessStudyStatus.STOPPED
+    assert ConcurrentRobustnessStudy().run(manifest, None, workspace).status == (
+        ConcurrentRobustnessStudyStatus.STOPPED
+    )
     first_cell = manifest.prompt_model_cells[0]
     assert len(transports[first_cell.cell_id].calls) == expected_attempts
     assert result.physical_provider_attempts == expected_attempts

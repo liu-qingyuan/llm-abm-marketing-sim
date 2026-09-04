@@ -15,9 +15,12 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 from .concurrent_robustness_study import _OUTPUT_IDENTITY_PATTERN
 from .concurrent_robustness_v2 import (
+    _V2_CELLS_PER_MODEL,
     _V2_FORMAL_LOGICAL_CAP,
     _V2_FORMAL_LOGICAL_PER_CELL,
+    _V2_FORMAL_LOGICAL_PER_MODEL,
     _V2_FORMAL_PHYSICAL_CAP,
+    _V2_FORMAL_PHYSICAL_PER_MODEL,
     _V2_MAXIMUM_ATTEMPTS,
     _V2_MODELS,
     _V2_REQUIRED_OBSERVED_MODELS,
@@ -33,6 +36,8 @@ FORMAL_AUTHORIZATION_SCHEMA = "concurrent-robustness-formal-authorization-v1"
 FORMAL_READINESS_SCHEMA = "concurrent-robustness-formal-readiness-v1"
 FORMAL_EXECUTION_PLAN_SCHEMA = "concurrent-robustness-formal-execution-plan-v1"
 FORMAL_RESUME_POLICY = "unresolved-with-remaining-attempt-budget-only-v1"
+FORMAL_MODEL_BATCH_POLICY = "finish-current-model-before-next-model-v1"
+FORMAL_RUN_SCOPE = "five_serial_model_batches_twenty_cells_thirty_six_thousand_judgments_v1"
 FORMAL_BACKOFF_CEILING_SECONDS = 60.0
 
 _SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
@@ -331,43 +336,26 @@ def _expected_routes() -> tuple[dict[str, object], ...]:
 
 
 def _expected_provider_caps() -> tuple[dict[str, object], ...]:
-    return (
+    route_by_model = {
+        row["requested_model"]: row["provider_route"] for row in _expected_routes()
+    }
+    return tuple(
         {
-            "provider_route": "deepseek_official",
-            "requested_models": ["deepseek-v4-flash"],
-            "logical_judgment_cap": 7_200,
-            "physical_attempt_cap": 21_600,
-            "cap_kind": "provider_fee_cny",
-            "currency": "CNY",
-            "fee_ceiling": 25.0,
-        },
-        {
-            "provider_route": "antigravity_openai_compatible_gateway",
-            "requested_models": ["gemini-3.1-pro", "gemini-3.8-flash-high"],
-            "logical_judgment_cap": 14_400,
-            "physical_attempt_cap": 43_200,
-            "cap_kind": "gateway_quota",
-            "currency": None,
-            "fee_ceiling": None,
-        },
-        {
-            "provider_route": "pi_kimi_oauth_subscription",
-            "requested_models": ["kimi-coding/k3-256k"],
-            "logical_judgment_cap": 7_200,
-            "physical_attempt_cap": 21_600,
-            "cap_kind": "subscription_quota",
-            "currency": None,
-            "fee_ceiling": None,
-        },
-        {
-            "provider_route": "pi_openai_oauth_subscription",
-            "requested_models": ["openai-codex/gpt-5.6-sol"],
-            "logical_judgment_cap": 7_200,
-            "physical_attempt_cap": 21_600,
-            "cap_kind": "subscription_quota",
-            "currency": None,
-            "fee_ceiling": None,
-        },
+            "provider_route": route_by_model[model],
+            "requested_models": [model],
+            "logical_judgment_cap": _V2_FORMAL_LOGICAL_PER_MODEL,
+            "physical_attempt_cap": _V2_FORMAL_PHYSICAL_PER_MODEL,
+            "cap_kind": (
+                "provider_fee_cny"
+                if model == "deepseek-v4-flash"
+                else "gateway_quota"
+                if model.startswith("gemini-")
+                else "subscription_quota"
+            ),
+            "currency": "CNY" if model == "deepseek-v4-flash" else None,
+            "fee_ceiling": 25.0 if model == "deepseek-v4-flash" else None,
+        }
+        for model in _V2_MODELS
     )
 
 
@@ -592,7 +580,7 @@ def _validated_request_identity(
         != request.physical_attempt_cap
     ):
         raise ConcurrentRobustnessFormalPreflightError(
-            "Formal global and per-route caps do not close"
+            "Formal global and per-model caps do not close"
         )
     now = _utc_now()
     qualification_documents = [
@@ -612,17 +600,20 @@ def _validated_request_identity(
         }
         for prompt in CONCURRENT_ROBUSTNESS_PROMPT_REGISTRY.all()
     ]
-    if [
-        {
-            "prompt_variant": cell.prompt_variant,
-            "prompt_version": cell.prompt_version,
-            "prompt_canonical_hash": cell.prompt_canonical_hash,
-        }
-        for cell in manifest.prompt_model_cells[::_V2_MODELS.__len__()]
-    ] != prompt_contracts:
-        raise ConcurrentRobustnessFormalPreflightError(
-            "Formal P0-P3 Prompt hashes are crossed"
-        )
+    for model_index, model in enumerate(_V2_MODELS):
+        start = model_index * _V2_CELLS_PER_MODEL
+        model_cells = manifest.prompt_model_cells[start : start + _V2_CELLS_PER_MODEL]
+        if [
+            {
+                "prompt_variant": cell.prompt_variant,
+                "prompt_version": cell.prompt_version,
+                "prompt_canonical_hash": cell.prompt_canonical_hash,
+            }
+            for cell in model_cells
+        ] != prompt_contracts or any(cell.requested_model != model for cell in model_cells):
+            raise ConcurrentRobustnessFormalPreflightError(
+                "Formal model-major P0-P3 Prompt schedule is crossed"
+            )
     return {
         "schema_version": FORMAL_EXECUTION_REQUEST_IDENTITY_SCHEMA,
         "manifest": request.manifest.model_dump(mode="json"),
@@ -637,13 +628,8 @@ def _validated_request_identity(
         "physical_attempt_cap": request.physical_attempt_cap,
         "output_identity": request.output_identity,
         "output_root": str(request.output_root),
-        "lifecycle_policy": {
-            "resumable": "safe_pre_dispatch_or_persisted_terminal_interruption_with_remaining_budget",
-            "stopped": "attempts_exhausted_or_nonretryable_failure_no_same-output-resume",
-            "reconciliation_required": "unknown_dispatch_provenance_no_automatic_resend",
-            "resume_policy": FORMAL_RESUME_POLICY,
-        },
-        "formal_run_scope": "twenty_cells_thirty_six_thousand_judgments_v1",
+        "lifecycle_policy": _expected_lifecycle_policy(),
+        "formal_run_scope": FORMAL_RUN_SCOPE,
         "release_authorized": False,
         "deployment_authorized": False,
         "production_deploy_eligible": False,
@@ -691,7 +677,8 @@ def _handoff(
             f"- Request identity SHA-256: `{request_identity_sha256}`",
             f"- Source: `{source['source_id']}` / `{source['source_manifest_sha256']}`",
             f"- Output identity: `{request_identity['output_identity']}`",
-            "- Cells: `5 models × P0-P3 = 20`",
+            "- Cells: `5 serial model batches × P0-P3 = 20`",
+            "- Per model: `7,200 logical / 21,600 physical attempts`; next model waits for closure.",
             "- Caps: `36,000 logical / 108,000 physical attempts`",
             (
                 "- Runtime: "
@@ -1088,6 +1075,7 @@ def _expected_lifecycle_policy() -> dict[str, object]:
         "stopped": "attempts_exhausted_or_nonretryable_failure_no_same-output-resume",
         "reconciliation_required": "unknown_dispatch_provenance_no_automatic_resend",
         "resume_policy": FORMAL_RESUME_POLICY,
+        "model_batch_policy": FORMAL_MODEL_BATCH_POLICY,
     }
 
 
@@ -1214,7 +1202,7 @@ def validate_embedded_formal_execution_plan(
         "output_identity": request.output_identity,
         "output_root": str(request.output_root),
         "lifecycle_policy": _expected_lifecycle_policy(),
-        "formal_run_scope": "twenty_cells_thirty_six_thousand_judgments_v1",
+        "formal_run_scope": FORMAL_RUN_SCOPE,
         "release_authorized": False,
         "deployment_authorized": False,
         "production_deploy_eligible": False,

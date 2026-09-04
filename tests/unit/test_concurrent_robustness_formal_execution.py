@@ -100,8 +100,8 @@ def _manifest_payload(source: Path, *, output_identity: str) -> dict[str, object
             "requested_model": model,
             "required_observed_model": _V2_REQUIRED_OBSERVED_MODELS[model],
         }
-        for prompt in CONCURRENT_ROBUSTNESS_PROMPT_REGISTRY.all()
         for model in _V2_MODELS
+        for prompt in CONCURRENT_ROBUSTNESS_PROMPT_REGISTRY.all()
     ]
     return {
         "schema_version": "concurrent-robustness-manifest-v2",
@@ -167,6 +167,8 @@ def _manifest_payload(source: Path, *, output_identity: str) -> dict[str, object
         "formal_contract": {
             "schema_version": "concurrent-robustness-formal-topology-v2",
             "model_count": 5,
+            "model_execution_order": list(_V2_MODELS),
+            "execution_policy": "model-major-serial-one-model-per-invocation-v1",
             "prompt_variants": ["P0", "P1", "P2", "P3"],
             "cell_count": 20,
             "sample_size": 1_000,
@@ -275,9 +277,18 @@ def _request_bundle(tmp_path: Path) -> tuple[ConcurrentRobustnessFormalExecution
             },
             {
                 "provider_route": "antigravity_openai_compatible_gateway",
-                "requested_models": ["gemini-3.1-pro", "gemini-3.8-flash-high"],
-                "logical_judgment_cap": 14_400,
-                "physical_attempt_cap": 43_200,
+                "requested_models": ["gemini-3.1-pro"],
+                "logical_judgment_cap": 7_200,
+                "physical_attempt_cap": 21_600,
+                "cap_kind": "gateway_quota",
+                "currency": None,
+                "fee_ceiling": None,
+            },
+            {
+                "provider_route": "antigravity_openai_compatible_gateway",
+                "requested_models": ["gemini-3.8-flash-high"],
+                "logical_judgment_cap": 7_200,
+                "physical_attempt_cap": 21_600,
                 "cap_kind": "gateway_quota",
                 "currency": None,
                 "fee_ceiling": None,
@@ -365,9 +376,20 @@ def test_missing_authorization_returns_hash_bound_nonproduction_readiness_withou
     assert readiness["status"] == "ready_for_human"
     assert request_identity["allowed_cell_ids"] == [
         f"{prompt.variant_id}::{model}"
-        for prompt in CONCURRENT_ROBUSTNESS_PROMPT_REGISTRY.all()
         for model in _V2_MODELS
+        for prompt in CONCURRENT_ROBUSTNESS_PROMPT_REGISTRY.all()
     ]
+    assert request_identity["formal_run_scope"] == (
+        "five_serial_model_batches_twenty_cells_thirty_six_thousand_judgments_v1"
+    )
+    assert [row["requested_models"] for row in request_identity["provider_caps"]] == [
+        [model] for model in _V2_MODELS
+    ]
+    assert all(
+        row["logical_judgment_cap"] == 7_200
+        and row["physical_attempt_cap"] == 21_600
+        for row in request_identity["provider_caps"]
+    )
     assert request_identity["logical_judgment_cap"] == 36_000
     assert request_identity["physical_attempt_cap"] == 108_000
     assert request_identity["output_identity"] == request.output_identity
@@ -376,6 +398,7 @@ def test_missing_authorization_returns_hash_bound_nonproduction_readiness_withou
         "stopped": "attempts_exhausted_or_nonretryable_failure_no_same-output-resume",
         "reconciliation_required": "unknown_dispatch_provenance_no_automatic_resend",
         "resume_policy": "unresolved-with-remaining-attempt-budget-only-v1",
+        "model_batch_policy": "finish-current-model-before-next-model-v1",
     }
     assert readiness["provider_calls"] == 0
     assert readiness["live_api_triggered"] is False
