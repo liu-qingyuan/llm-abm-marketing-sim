@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 from dataclasses import dataclass, replace
@@ -238,6 +239,98 @@ def _validate_fixture(fixture: _ReportFixture, candidate: Path | None = None) ->
         historical_candidate_dir=fixture.historical_candidate,
         v2_study_root=fixture.v2_study,
     )
+
+
+def test_report_interface_materializes_v14_html_only_from_typed_stage_facts(
+    v2_report_fixture: _ReportFixture,
+) -> None:
+    fixture = v2_report_fixture
+    candidate_before = _snapshot(fixture.destination)
+    candidate_manifest = json.loads(
+        (fixture.destination / "artifact_manifest.json").read_text(encoding="utf-8")
+    )
+    full_pool_manifest = json.loads(
+        (fixture.full_pool / "manifest.json").read_text(encoding="utf-8")
+    )
+    v2_root_manifest = json.loads(
+        (fixture.v2_study / "artifact_manifest.json").read_text(encoding="utf-8")
+    )
+    stage_facts = report_module._V2RealizedProductionPresentationFacts(
+        release_id="prompt-model-realized-v14-test",
+        release_contract_schema="abm-report-release-contract-v14",
+        full_pool_source_identity=full_pool_manifest["source_identity"],
+        full_pool_source_manifest_sha256=fixture.full_pool_manifest_sha256,
+        v2_study_root_identity_sha256=v2_root_manifest["root_identity_sha256"],
+        v2_study_manifest_sha256=v2_root_manifest["manifest_sha256"],
+        candidate_identity_sha256=candidate_manifest["candidate_identity_sha256"],
+        candidate_manifest_sha256=hashlib.sha256(
+            (fixture.destination / "artifact_manifest.json").read_bytes()
+        ).hexdigest(),
+    )
+
+    production_html = report_module._REPORT_PRESENTATION.materialize_v2_realized_production(
+        presentation_candidate_dir=fixture.destination,
+        full_pool_source_root=fixture.full_pool,
+        full_pool_manifest_sha256=fixture.full_pool_manifest_sha256,
+        historical_formal_root=fixture.historical_formal,
+        historical_study_root=fixture.historical_study,
+        historical_candidate_dir=fixture.historical_candidate,
+        v2_study_root=fixture.v2_study,
+        stage_facts=stage_facts,
+    )
+
+    report = production_html.decode("utf-8")
+    assert report.count('name="abm-release-id" content="prompt-model-realized-v14-test"') == 1
+    assert report.count('name="abm-release-contract" content="abm-report-release-contract-v14"') == 1
+    assert "Formal Research Release v14" in report
+    assert (
+        '<section class="robustness-v2-report" data-testid="robustness-v2-report" '
+        'data-v2-state="loading" data-v2-active-view="realized" data-v2-language="zh-CN" '
+        'data-production-deploy-eligible="true"'
+    ) in report
+    assert _snapshot(fixture.destination) == candidate_before
+
+    report_module._REPORT_PRESENTATION.validate_v2_realized_production(
+        production_html,
+        presentation_candidate_dir=fixture.destination,
+        full_pool_source_root=fixture.full_pool,
+        full_pool_manifest_sha256=fixture.full_pool_manifest_sha256,
+        historical_formal_root=fixture.historical_formal,
+        historical_study_root=fixture.historical_study,
+        historical_candidate_dir=fixture.historical_candidate,
+        v2_study_root=fixture.v2_study,
+        stage_facts=stage_facts,
+    )
+
+    crossed = replace(stage_facts, candidate_manifest_sha256="0" * 64)
+    with pytest.raises(report_module._RobustnessReportClosureError, match="stage facts|crossed"):
+        report_module._REPORT_PRESENTATION.validate_v2_realized_production(
+            production_html,
+            presentation_candidate_dir=fixture.destination,
+            full_pool_source_root=fixture.full_pool,
+            full_pool_manifest_sha256=fixture.full_pool_manifest_sha256,
+            historical_formal_root=fixture.historical_formal,
+            historical_study_root=fixture.historical_study,
+            historical_candidate_dir=fixture.historical_candidate,
+            v2_study_root=fixture.v2_study,
+            stage_facts=crossed,
+        )
+
+    legacy_contract = replace(
+        stage_facts,
+        release_contract_schema="abm-report-release-contract-v13",
+    )
+    with pytest.raises(report_module._RobustnessReportClosureError, match="stage facts"):
+        report_module._REPORT_PRESENTATION.materialize_v2_realized_production(
+            presentation_candidate_dir=fixture.destination,
+            full_pool_source_root=fixture.full_pool,
+            full_pool_manifest_sha256=fixture.full_pool_manifest_sha256,
+            historical_formal_root=fixture.historical_formal,
+            historical_study_root=fixture.historical_study,
+            historical_candidate_dir=fixture.historical_candidate,
+            v2_study_root=fixture.v2_study,
+            stage_facts=legacy_contract,
+        )
 
 
 def test_v2_report_candidate_repeats_byte_for_byte(

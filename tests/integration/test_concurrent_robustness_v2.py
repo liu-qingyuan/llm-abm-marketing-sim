@@ -31,6 +31,7 @@ from llm_abm_sim.concurrent_robustness_v2 import (
 )
 from llm_abm_sim.concurrent_robustness_v2_evidence import (
     ConcurrentRobustnessV2EvidenceError,
+    _read_closed_concurrent_robustness_v2_formal_release_source,
     close_concurrent_robustness_v2_study,
     read_closed_concurrent_robustness_v2_study,
 )
@@ -114,6 +115,25 @@ def _v2_manifest(source_dir: Path, *, output_identity: str) -> ConcurrentRobustn
     return ConcurrentRobustnessManifestV2.model_validate(
         _v2_manifest_payload(source_dir, output_identity=output_identity)
     )
+
+
+def test_v2_formal_observed_counts_use_required_response_identities(
+    tmp_path: Path,
+) -> None:
+    source = _make_validation_report_source(tmp_path, "v2-observed-count-source")
+    manifest = _v2_manifest(source, output_identity="v2-observed-counts")
+
+    counts = v2_evidence_module._formal_expected_observed_model_counts(manifest)
+
+    assert sum(counts.values()) == 36_000
+    assert counts == Counter(
+        {
+            _V2_REQUIRED_OBSERVED_MODELS[model]: 7_200
+            for model in _V2_MODELS
+        }
+    )
+    assert "gemini-3.1-pro" not in counts
+    assert counts["gemini-pro-agent"] == 7_200
 
 
 def test_v2_schema_dispatch_rejects_untyped_lookalike(tmp_path: Path) -> None:
@@ -1026,6 +1046,26 @@ def test_v2_study_closes_twenty_two_stage_cells_into_immutable_root_and_replays_
     assert _snapshot(study_root) == root_before
 
 
+def test_v2_formal_release_reader_rejects_validation_evidence_before_promotion(
+    tmp_path: Path,
+) -> None:
+    source = _make_validation_report_source(tmp_path, "v2-release-reader-source")
+    manifest = _v2_manifest(source, output_identity="v2-release-reader-validation")
+    adapters, _ = _v2_adapters(manifest)
+    result = ConcurrentRobustnessStudy().run(
+        manifest,
+        adapters,
+        tmp_path / "v2-release-reader-workspace",
+    )
+    assert result.study_root is not None
+
+    with pytest.raises(
+        ConcurrentRobustnessV2EvidenceError,
+        match="Formal release|formal|live Provider",
+    ):
+        _read_closed_concurrent_robustness_v2_formal_release_source(result.study_root)
+
+
 @pytest.mark.formal_shape_rehearsal
 def test_v2_manual_zero_provider_formal_shape_closes_exact_36_000_judgments(
     tmp_path: Path,
@@ -1053,6 +1093,10 @@ def test_v2_manual_zero_provider_formal_shape_closes_exact_36_000_judgments(
     assert validation["counts"]["logical_judgments"] == 36_000
     assert validation["provider_calls"] == 0
     assert validation["live_api_triggered"] is False
+    with pytest.raises(ConcurrentRobustnessV2EvidenceError, match="Formal release"):
+        _read_closed_concurrent_robustness_v2_formal_release_source(
+            completed.study_root
+        )
 
 
 def test_v2_evidence_rejects_rehashed_missing_duplicate_crossed_malformed_and_unsafe_inputs(

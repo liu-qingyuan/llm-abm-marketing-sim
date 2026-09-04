@@ -1216,7 +1216,11 @@ def _mechanism_html(catalog: dict[str, dict[str, str]]) -> str:
     )
 
 
-def _realized_catalog(*, production: bool = False) -> dict[str, dict[str, str]]:
+def _realized_catalog(
+    *,
+    production: bool = False,
+    release_contract_schema: str = "abm-report-release-contract-v13",
+) -> dict[str, dict[str, str]]:
     catalog = _full_pool_catalog()
     catalog["zh-CN"].update(
         {
@@ -1341,16 +1345,20 @@ def _realized_catalog(*, production: bool = False) -> dict[str, dict[str, str]]:
         }
     )
     if production:
+        match = re.fullmatch(r"abm-report-release-contract-(v[1-9][0-9]*)", release_contract_schema)
+        if match is None:
+            raise _FullPoolPresentationError("production release contract schema is invalid")
+        release_version = match.group(1)
         catalog["zh-CN"].update(
             {
-                "shell.status": "Formal Research Release v13 · 待部署授权",
+                "shell.status": f"Formal Research Release {release_version} · 待部署授权",
                 "scope.copy": "当前production presentation只消费independently closed formal realized source、evidence与projection；页面仍不表示已完成canonical deployment或public acceptance。",
                 "downloads.copy": "下载全部来自同一formal realized source；upstream live lineage保留在manifest与realization evidence中。Historical 1,000-User artifacts按原bytes复制。",
             }
         )
         catalog["en-US"].update(
             {
-                "shell.status": "Formal Research Release v13 · awaiting deployment authorization",
+                "shell.status": f"Formal Research Release {release_version} · awaiting deployment authorization",
                 "scope.copy": "This production presentation consumes only the independently closed formal realized source, evidence, and projection. It does not claim canonical deployment or public acceptance.",
                 "downloads.copy": "Every download comes from the same formal realized source; upstream live lineage remains in the manifest and realization evidence. Historical 1,000-User artifacts are copied byte-for-byte.",
             }
@@ -1572,8 +1580,12 @@ def _render_realized_full_pool_main(
     *,
     index_sha256: str,
     production: bool = False,
+    release_contract_schema: str = "abm-report-release-contract-v13",
 ) -> tuple[str, dict[str, dict[str, str]]]:
-    catalog = _realized_catalog(production=production)
+    catalog = _realized_catalog(
+        production=production,
+        release_contract_schema=release_contract_schema,
+    )
     counts = source.counts
     overall = projection.overall
     exposures = _strict_int(overall.get("exposures"), "overall realized exposures")
@@ -2517,6 +2529,7 @@ def render_full_pool_two_stage_production_html(
         realized_projection,
         index_sha256=realized_projection.trace.index_sha256,
         production=True,
+        release_contract_schema=release_contract_schema,
     )
     historical_hashes = _file_hashes(historical)
     historical_report = historical / "report.html"

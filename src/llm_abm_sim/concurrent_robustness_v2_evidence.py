@@ -39,6 +39,7 @@ from .concurrent_robustness_v2 import (
     _V2_MODELS,
     _V2_PAIR_LEDGER_SCHEMA,
     _V2_REALIZED_TERMINAL_SCHEMA,
+    _V2_REQUIRED_OBSERVED_MODELS,
     _V2_WORKSPACE_MANIFEST,
     ConcurrentRobustnessManifestV2,
     _effective_graph_identity,
@@ -131,6 +132,27 @@ class _ConcurrentRobustnessV2ReportSource:
     batch_commits: tuple[Mapping[str, Any], ...]
     message_snapshot: tuple[Mapping[str, Any], ...]
     artifact_hashes: Mapping[str, str]
+
+
+@dataclass(frozen=True)
+class _ConcurrentRobustnessV2FormalReleaseSource:
+    """Release-only closure of persisted Formal v2 evidence and accounting."""
+
+    report_source: _ConcurrentRobustnessV2ReportSource
+    execution_classification: str
+    execution_manifest_sha256: str
+    formal_execution_plan_identity_sha256: str
+    authorization_sha256: str
+    request_identity_sha256: str
+    counts: Mapping[str, int]
+    prompt_contracts: Mapping[str, Mapping[str, str]]
+    model_conditions: tuple[Mapping[str, str], ...]
+    formal_run_parameters: Mapping[str, Any]
+    formal_provider_caps: tuple[Mapping[str, Any], ...]
+    request_contract: Mapping[str, Any]
+    qualification_artifact_sha256: Mapping[str, str]
+    provider_accounting: Mapping[str, Any]
+    mechanism_facts: Mapping[str, Any]
 
 
 @dataclass(frozen=True)
@@ -1815,6 +1837,336 @@ def _assert_concurrent_robustness_v2_report_source_unchanged(
         raise ConcurrentRobustnessV2EvidenceError(
             "v2 report composition mutated immutable study evidence"
         )
+
+
+def _formal_expected_observed_model_counts(
+    manifest: ConcurrentRobustnessManifestV2,
+) -> Counter[str]:
+    counts: Counter[str] = Counter()
+    for requested_model in _V2_MODELS:
+        counts[_V2_REQUIRED_OBSERVED_MODELS[requested_model]] += (
+            _V2_FORMAL_LOGICAL_PER_CELL
+            * sum(
+                cell.requested_model == requested_model
+                for cell in manifest.prompt_model_cells
+            )
+        )
+    return counts
+
+
+def _read_closed_concurrent_robustness_v2_formal_release_source(
+    root_path: str | Path,
+) -> _ConcurrentRobustnessV2FormalReleaseSource:
+    """Close only genuine persisted Formal evidence for the Release Module."""
+
+    root = _real_directory(Path(root_path), "v2 Formal study root")
+    report_source = _read_closed_concurrent_robustness_v2_report_source(root)
+    documents = _read_root_documents(root)
+    evidence = documents.evidence
+    manifest = evidence.manifest
+    execution = evidence.execution_manifest
+    root_manifest = report_source.root_manifest
+    validation = report_source.validation
+    plan = execution.get("formal_execution_plan")
+    if not isinstance(plan, Mapping):
+        raise ConcurrentRobustnessV2EvidenceError(
+            "Formal release requires persisted authorization lineage"
+        )
+    from .concurrent_robustness_formal_execution import (
+        ConcurrentRobustnessFormalPreflightError,
+        validate_embedded_formal_execution_plan,
+    )
+
+    try:
+        validated_plan = validate_embedded_formal_execution_plan(
+            plan,
+            expected_manifest=manifest,
+        )
+    except ConcurrentRobustnessFormalPreflightError as exc:
+        raise ConcurrentRobustnessV2EvidenceError(
+            "Formal release authorization lineage failed closure"
+        ) from exc
+
+    expected_commits = _V2_CELL_COUNT * manifest.ranking_contract.horizon
+    expected_observed = _formal_expected_observed_model_counts(manifest)
+    requested_models: Counter[str] = Counter()
+    successful_observed_models: Counter[str] = Counter()
+    response_observed_models: Counter[str] = Counter()
+    provider_routes: Counter[str] = Counter()
+    billing_semantics: Counter[str] = Counter()
+    provider_responses = 0
+    usage_complete_responses = 0
+    input_tokens = 0
+    output_tokens = 0
+    total_tokens = 0
+    cached_input_tokens = 0
+    provider_fee_cny = 0.0
+    subscription_nominal_usd = 0.0
+
+    request_identity = validated_plan.get("request_identity")
+    if not isinstance(request_identity, Mapping):
+        raise ConcurrentRobustnessV2EvidenceError(
+            "Formal release request identity is malformed"
+        )
+    raw_conditions = request_identity.get("model_conditions")
+    if not isinstance(raw_conditions, list) or len(raw_conditions) != len(_V2_MODELS):
+        raise ConcurrentRobustnessV2EvidenceError(
+            "Formal release model condition inventory is incomplete"
+        )
+    route_by_model: dict[str, str] = {}
+    model_conditions: list[Mapping[str, str]] = []
+    for model, condition in zip(_V2_MODELS, raw_conditions, strict=True):
+        if (
+            not isinstance(condition, Mapping)
+            or condition.get("requested_model") != model
+            or condition.get("required_observed_model")
+            != _V2_REQUIRED_OBSERVED_MODELS[model]
+            or not isinstance(condition.get("provider_route"), str)
+        ):
+            raise ConcurrentRobustnessV2EvidenceError(
+                "Formal release model identity or Provider route is crossed"
+            )
+        route_by_model[model] = cast(str, condition["provider_route"])
+        model_conditions.append(
+            {
+                key: cast(str, condition[key])
+                for key in (
+                    "requested_model",
+                    "required_observed_model",
+                    "provider_route",
+                    "credential_route",
+                )
+            }
+        )
+    raw_run_parameters = request_identity.get("run_parameters")
+    raw_provider_caps = request_identity.get("provider_caps")
+    if (
+        not isinstance(raw_run_parameters, Mapping)
+        or not isinstance(raw_provider_caps, list)
+        or any(not isinstance(row, Mapping) for row in raw_provider_caps)
+    ):
+        raise ConcurrentRobustnessV2EvidenceError(
+            "Formal release run parameters or Provider caps are malformed"
+        )
+
+    for judgment in evidence.judgments:
+        required_observed = _V2_REQUIRED_OBSERVED_MODELS[judgment.requested_model]
+        if (
+            judgment.observed_model != required_observed
+            or judgment.usage_complete is not True
+            or judgment.input_usage is None
+            or judgment.output_usage is None
+            or judgment.total_usage is None
+        ):
+            raise ConcurrentRobustnessV2EvidenceError(
+                "Formal release observed-model identity or usage is incomplete"
+            )
+        requested_models[judgment.requested_model] += 1
+        successful_observed_models[judgment.observed_model] += 1
+        provider_responses += judgment.provider_response_count
+        input_tokens += cast(int, judgment.input_usage)
+        output_tokens += cast(int, judgment.output_usage)
+        total_tokens += cast(int, judgment.total_usage)
+        cached_input_tokens += judgment.cached_input_usage or 0
+        for attempt in judgment.attempt_evidence:
+            if (
+                attempt.provider_route != route_by_model[judgment.requested_model]
+                or attempt.observed_model_missing_response_count != 0
+                or attempt.observed_model_malformed_response_count != 0
+                or attempt.observed_model_counts
+                != (
+                    {required_observed: attempt.provider_response_count}
+                    if attempt.provider_response_count
+                    else {}
+                )
+                or attempt.usage_missing_response_count != 0
+                or attempt.usage_malformed_response_count != 0
+                or attempt.usage_complete_response_count
+                != attempt.provider_response_count
+            ):
+                raise ConcurrentRobustnessV2EvidenceError(
+                    "Formal release Provider route, observed model, or usage is incomplete"
+                )
+            response_observed_models.update(attempt.observed_model_counts)
+            provider_routes[attempt.provider_route] += 1
+            billing_semantics[attempt.billing_semantics] += 1
+            usage_complete_responses += attempt.usage_complete_response_count
+            provider_fee_cny += attempt.provider_fee_cny or 0.0
+            subscription_nominal_usd += attempt.subscription_nominal_cost_usd or 0.0
+
+    last_state_by_pair: dict[tuple[int, str], str] = {}
+    for row in evidence.lifecycle:
+        last_state_by_pair[
+            (
+                _strict_int(row.get("cell_index"), "Formal lifecycle cell index"),
+                str(row.get("pair_id")),
+            )
+        ] = str(row.get("state"))
+    counts = {
+        "cells": len(manifest.prompt_model_cells),
+        "logical_judgments_per_cell": manifest.request_caps.logical_judgments_per_cell,
+        "logical_judgments": len(evidence.judgments),
+        "realized_terminals": len(evidence.terminals),
+        "physical_attempts": evidence.physical_attempts,
+        "provider_calls": evidence.provider_calls,
+        "provider_responses": provider_responses,
+        "batch_commits": len(evidence.commits),
+        "terminal_failures": 0,
+    }
+    validation_counts = validation.get("counts")
+    validation_checks = validation.get("checks")
+    if (
+        manifest.execution_profile != "formal"
+        or manifest.source.kind != "formal"
+        or execution.get("classification") != "formal_two_stage_live"
+        or execution.get("production_deploy_eligible") is not False
+        or root_manifest.get("production_deploy_eligible") is not False
+        or validation.get("production_deploy_eligible") is not False
+        or validation.get("status") != "complete"
+        or not isinstance(validation_counts, Mapping)
+        or validation_counts.get("cells") != _V2_CELL_COUNT
+        or validation_counts.get("logical_judgments_per_cell")
+        != _V2_FORMAL_LOGICAL_PER_CELL
+        or validation_counts.get("logical_judgments") != _V2_FORMAL_LOGICAL_CAP
+        or validation_counts.get("realized_terminals") != _V2_FORMAL_LOGICAL_CAP
+        or validation_counts.get("batch_commits") != expected_commits
+        or not isinstance(validation_checks, Mapping)
+        or not validation_checks
+        or any(value is not True for value in validation_checks.values())
+        or counts["cells"] != _V2_CELL_COUNT
+        or counts["logical_judgments_per_cell"] != _V2_FORMAL_LOGICAL_PER_CELL
+        or counts["logical_judgments"] != _V2_FORMAL_LOGICAL_CAP
+        or counts["realized_terminals"] != _V2_FORMAL_LOGICAL_CAP
+        or counts["batch_commits"] != expected_commits
+        or counts["physical_attempts"] < _V2_FORMAL_LOGICAL_CAP
+        or counts["physical_attempts"] > _V2_FORMAL_PHYSICAL_CAP
+        or counts["provider_calls"] != counts["physical_attempts"]
+        or counts["provider_calls"] <= 0
+        or evidence.live_api_triggered is not True
+        or requested_models
+        != Counter({model: _V2_FORMAL_LOGICAL_PER_CELL * 4 for model in _V2_MODELS})
+        or successful_observed_models != expected_observed
+        or sum(response_observed_models.values()) != provider_responses
+        or len(last_state_by_pair) != _V2_FORMAL_LOGICAL_CAP
+        or set(last_state_by_pair.values()) != {"settled"}
+        or documents.judgment_audit.get("counts")
+        != {
+            "logical_judgments": _V2_FORMAL_LOGICAL_CAP,
+            "physical_attempts": evidence.physical_attempts,
+            "provider_calls": evidence.provider_calls,
+            "terminal_failures": 0,
+        }
+    ):
+        raise ConcurrentRobustnessV2EvidenceError(
+            "Formal release requires exact live 20-cell evidence with 36,000 successful Judgments"
+        )
+
+    raw_qualifications = request_identity.get("qualification_artifacts")
+    qualification_hashes: dict[str, str] = {}
+    if not isinstance(raw_qualifications, list) or len(raw_qualifications) != len(_V2_MODELS):
+        raise ConcurrentRobustnessV2EvidenceError(
+            "Formal release qualification inventory is incomplete"
+        )
+    for model, row in zip(_V2_MODELS, raw_qualifications, strict=True):
+        if (
+            not isinstance(row, Mapping)
+            or row.get("requested_model") != model
+            or not isinstance(row.get("artifact_sha256"), str)
+            or _HASH_PATTERN.fullmatch(cast(str, row["artifact_sha256"])) is None
+        ):
+            raise ConcurrentRobustnessV2EvidenceError(
+                "Formal release qualification identity is crossed"
+            )
+        qualification_hashes[model] = cast(str, row["artifact_sha256"])
+
+    prompt_contracts: dict[str, Mapping[str, str]] = {}
+    for prompt in manifest.formal_contract.prompt_variants:
+        rows = [cell for cell in manifest.prompt_model_cells if cell.prompt_variant == prompt]
+        identities = {
+            (cell.prompt_version, cell.prompt_canonical_hash) for cell in rows
+        }
+        if len(rows) != len(_V2_MODELS) or len(identities) != 1:
+            raise ConcurrentRobustnessV2EvidenceError(
+                "Formal release Prompt matrix is crossed"
+            )
+        prompt_version, prompt_hash = identities.pop()
+        prompt_contracts[prompt] = {
+            "prompt_version": prompt_version,
+            "prompt_canonical_hash": prompt_hash,
+        }
+
+    plan_identity = validated_plan.get("plan_identity_sha256")
+    authorization_sha256 = validated_plan.get("authorization_sha256")
+    request_identity_sha256 = validated_plan.get("request_identity_sha256")
+    if any(
+        not isinstance(value, str) or _HASH_PATTERN.fullmatch(value) is None
+        for value in (
+            plan_identity,
+            authorization_sha256,
+            request_identity_sha256,
+        )
+    ):
+        raise ConcurrentRobustnessV2EvidenceError(
+            "Formal release authorization identities are invalid"
+        )
+    accounting = {
+        "schema_version": "concurrent-robustness-v2-formal-provider-accounting-v1",
+        "logical_judgments": _V2_FORMAL_LOGICAL_CAP,
+        "successful_judgments": _V2_FORMAL_LOGICAL_CAP,
+        "terminal_failures": 0,
+        "physical_attempts": evidence.physical_attempts,
+        "physical_attempt_cap": _V2_FORMAL_PHYSICAL_CAP,
+        "provider_calls": evidence.provider_calls,
+        "provider_responses": provider_responses,
+        "usage_complete_response_count": usage_complete_responses,
+        "usage_missing_response_count": 0,
+        "usage_malformed_response_count": 0,
+        "successful_judgment_requested_model_counts": dict(
+            sorted(requested_models.items())
+        ),
+        "successful_judgment_observed_model_counts": dict(
+            sorted(successful_observed_models.items())
+        ),
+        "observed_model_counts": dict(sorted(response_observed_models.items())),
+        "observed_model_missing_response_count": 0,
+        "observed_model_malformed_response_count": 0,
+        "provider_route_counts": dict(sorted(provider_routes.items())),
+        "billing_semantics_counts": dict(sorted(billing_semantics.items())),
+        "input_tokens": input_tokens,
+        "output_tokens": output_tokens,
+        "total_tokens": total_tokens,
+        "cached_input_tokens": cached_input_tokens,
+        "provider_fee_cny": round(provider_fee_cny, 12),
+        "subscription_nominal_cost_usd_reference": round(
+            subscription_nominal_usd,
+            12,
+        ),
+        "cross_currency_total_reported": False,
+        "live_api_triggered": True,
+        "formal_research_evidence": True,
+    }
+    return _ConcurrentRobustnessV2FormalReleaseSource(
+        report_source=report_source,
+        execution_classification="formal_two_stage_live",
+        execution_manifest_sha256=evidence.execution_manifest_sha256,
+        formal_execution_plan_identity_sha256=cast(str, plan_identity),
+        authorization_sha256=cast(str, authorization_sha256),
+        request_identity_sha256=cast(str, request_identity_sha256),
+        counts=counts,
+        prompt_contracts=dict(sorted(prompt_contracts.items())),
+        model_conditions=tuple(model_conditions),
+        formal_run_parameters=dict(raw_run_parameters),
+        formal_provider_caps=tuple(
+            dict(cast(Mapping[str, Any], row)) for row in raw_provider_caps
+        ),
+        request_contract=manifest.request_contract.model_dump(mode="json"),
+        qualification_artifact_sha256=dict(sorted(qualification_hashes.items())),
+        provider_accounting=accounting,
+        mechanism_facts={
+            "realization_source": manifest.realization_source.model_dump(mode="json"),
+            "batch_barrier": manifest.batch_barrier.model_dump(mode="json"),
+        },
+    )
 
 
 def read_closed_concurrent_robustness_v2_study(

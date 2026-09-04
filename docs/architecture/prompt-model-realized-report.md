@@ -64,4 +64,23 @@ canonical_deployment_triggered = false
 production_deploy_eligible = false
 ```
 
-因此它是独立、可审阅、可复现的 candidate，不是 canonical release。只有后续取得合法 Formal artifact 并通过当前 Release/Deployment contract，才可能进入 immutable release 与 canonical endpoint 流程。
+因此它是独立、可审阅、可复现的 candidate，不是 canonical release。
+
+## v14 immutable Release 边界
+
+唯一 Release Interface 对 `abm-report-release-contract-v14` 使用独立 exact-field dispatch。调用方必须显式提供 Formal Full-Pool two-stage source、Historical Formal、Historical 16-cell study、Historical candidate、新 v2 Formal study、教师 candidate、protected v13 release/contract、release ID、implementation commit 与全新 destination；不能传入网页指标或 caller 汇总代替持久化证据。
+
+Release Module 会重新读取并闭合全部 schema、identity、classification、count、hash 与 physical inventory。protected v13 不接受调用方任选的同 schema release，而是固定到[当前 canonical v13 发布记录](../references/full-pool-two-stage-v13-canonical-release-20260827.md)中的 release、contract、report、manifest 与 physical snapshot identity。新 v2 evidence 只有同时满足 20 cells、每 cell 1,800 judgments、36,000 个成功 logical judgments、完整 usage、exact requested/observed identity、合法 embedded Formal authorization lineage、无 terminal Provider failure且所有 pair settled，才可提升；Release facts 还显式保存 `concurrent-robustness-formal-topology-v2`、`model-major-serial-one-model-per-invocation-v1`、五模型顺序与 P0–P3 顺序。Validation、mock、rule-based、manual zero-provider Formal shape、partial、stopped 与 reconciliation-required evidence 均不能进入 v14。
+
+Report Module 不决定 release eligibility。Release 仅向 `_REPORT_PRESENTATION.materialize_v2_realized_production(...)` 传递 release/source/study/candidate identity 组成的 typed stage facts；Report 从已关闭输入重新生成 production HTML，原 candidate bytes 和其中的 `production_deploy_eligible=false` 保持不变。v14 release 另行保存 candidate manifest、production evidence、release manifest、workbook、Prompt/provider accounting、mechanism 与 approved-download hashes，并以 staging、完整 inventory validation、原子安装和 standalone round-trip 关闭。
+
+v14 purpose 固定为 `full_pool_two_stage_prompt_model_realized_robustness_formal_research`，sampling status 固定为 `persisted_full_pool_two_stage_and_prompt_model_realized_formal_runs`，readiness schema 固定为 `full-pool-v14-release-readiness-v1`。本地 immutable release 仍固定：
+
+```text
+operational_authorization_required = true
+deployment_authorized = false
+canonical_deployment_triggered = false
+public_acceptance_recorded = false
+```
+
+Release 不连接 Provider、SSH 或公网，也不切换 canonical endpoint；v14 operational authorization、rollback execution 与 public acceptance 属于独立 Deployment contract。

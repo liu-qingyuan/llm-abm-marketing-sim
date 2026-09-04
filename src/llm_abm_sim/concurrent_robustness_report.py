@@ -136,6 +136,7 @@ _FULL_POOL_TRACE_PARTITION_DOCUMENT_FIELDS = frozenset(
 _IMPLEMENTATION_COMMIT_PATTERN = re.compile(r"^[0-9a-f]{7,40}$")
 _RELEASE_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,159}$")
 _RELEASE_CONTRACT_PATTERN = re.compile(r"^abm-report-release-contract-v[1-9][0-9]*$")
+_V2_REALIZED_PRODUCTION_RELEASE_CONTRACT = "abm-report-release-contract-v14"
 _REPORT_PAYLOAD_V1_FIELDS = frozenset(
     {
         "schema_version",
@@ -964,6 +965,20 @@ class _FullPoolTwoStageProductionPresentationFacts:
 
 
 @dataclass(frozen=True)
+class _V2RealizedProductionPresentationFacts:
+    """Release-approved v14 identities; Report owns only production HTML bytes."""
+
+    release_id: str
+    release_contract_schema: str
+    full_pool_source_identity: str
+    full_pool_source_manifest_sha256: str
+    v2_study_root_identity_sha256: str
+    v2_study_manifest_sha256: str
+    candidate_identity_sha256: str
+    candidate_manifest_sha256: str
+
+
+@dataclass(frozen=True)
 class _PresentationBundle:
     report_payload: bytes
     report_html: bytes
@@ -1177,6 +1192,44 @@ def _validate_full_pool_two_stage_production_stage_facts(
     ):
         raise _RobustnessReportClosureError(
             "two-stage production presentation facts are invalid or crossed"
+        )
+
+
+def _validate_v2_realized_production_stage_facts(
+    stage_facts: _V2RealizedProductionPresentationFacts,
+    *,
+    inputs: _V2RealizedReportInputs,
+    candidate_facts: _V2RealizedCandidateFacts,
+) -> None:
+    facts = inputs.v2_source.facts
+    if (
+        not _RELEASE_ID_PATTERN.fullmatch(stage_facts.release_id)
+        or stage_facts.release_contract_schema
+        != _V2_REALIZED_PRODUCTION_RELEASE_CONTRACT
+        or stage_facts.full_pool_source_identity != inputs.source.source_identity
+        or stage_facts.full_pool_source_manifest_sha256
+        != inputs.source.manifest_sha256
+        or stage_facts.v2_study_root_identity_sha256
+        != facts.root_identity_sha256
+        or stage_facts.v2_study_manifest_sha256 != facts.manifest_sha256
+        or stage_facts.candidate_identity_sha256
+        != candidate_facts.candidate_identity_sha256
+        or stage_facts.candidate_manifest_sha256
+        != candidate_facts.manifest_sha256
+        or any(
+            not _is_sha256(value)
+            for value in (
+                stage_facts.full_pool_source_identity,
+                stage_facts.full_pool_source_manifest_sha256,
+                stage_facts.v2_study_root_identity_sha256,
+                stage_facts.v2_study_manifest_sha256,
+                stage_facts.candidate_identity_sha256,
+                stage_facts.candidate_manifest_sha256,
+            )
+        )
+    ):
+        raise _RobustnessReportClosureError(
+            "v2 Realized production stage facts are invalid or crossed"
         )
 
 
@@ -1431,6 +1484,141 @@ class _ReportPresentationInterface:
         ) as exc:
             raise _RobustnessReportClosureError(
                 "v2 Realized report candidate failed independent validation"
+            ) from exc
+
+    def materialize_v2_realized_production(
+        self,
+        *,
+        presentation_candidate_dir: str | Path,
+        full_pool_source_root: str | Path,
+        full_pool_manifest_sha256: str,
+        historical_formal_root: str | Path,
+        historical_study_root: str | Path,
+        historical_candidate_dir: str | Path,
+        v2_study_root: str | Path,
+        stage_facts: _V2RealizedProductionPresentationFacts,
+    ) -> bytes:
+        """Generate production HTML from a validated candidate and typed Release facts."""
+
+        from .concurrent_robustness_v2_report import (
+            ConcurrentRobustnessV2ReportError,
+            materialize_v2_realized_production_html,
+            validate_v2_realized_candidate,
+        )
+
+        inputs = self._prepare_v2_realized_report_inputs(
+            full_pool_source_root=full_pool_source_root,
+            full_pool_manifest_sha256=full_pool_manifest_sha256,
+            historical_formal_root=historical_formal_root,
+            historical_study_root=historical_study_root,
+            historical_candidate_dir=historical_candidate_dir,
+            v2_study_root=v2_study_root,
+        )
+        try:
+            candidate = Path(presentation_candidate_dir).resolve(strict=True)
+            candidate_facts = validate_v2_realized_candidate(
+                candidate,
+                source=inputs.source,
+                historical_candidate=inputs.historical_candidate,
+                v2_source=inputs.v2_source,
+                source_lineage=inputs.source_lineage,
+            )
+            _validate_v2_realized_production_stage_facts(
+                stage_facts,
+                inputs=inputs,
+                candidate_facts=candidate_facts,
+            )
+            production_html = materialize_v2_realized_production_html(
+                candidate,
+                source=inputs.source,
+                historical_candidate=inputs.historical_candidate,
+                v2_source=inputs.v2_source,
+                source_lineage=inputs.source_lineage,
+                release_id=stage_facts.release_id,
+                release_contract_schema=stage_facts.release_contract_schema,
+            )
+            self._assert_v2_realized_report_inputs_unchanged(inputs)
+            return production_html
+        except _RobustnessReportClosureError:
+            raise
+        except (
+            ConcurrentRobustnessV2ReportError,
+            FileNotFoundError,
+            OSError,
+            TypeError,
+            ValueError,
+            json.JSONDecodeError,
+        ) as exc:
+            raise _RobustnessReportClosureError(
+                "v2 Realized production materialization failed closed"
+            ) from exc
+
+    def validate_v2_realized_production(
+        self,
+        production_html: bytes,
+        *,
+        presentation_candidate_dir: str | Path,
+        full_pool_source_root: str | Path,
+        full_pool_manifest_sha256: str,
+        historical_formal_root: str | Path,
+        historical_study_root: str | Path,
+        historical_candidate_dir: str | Path,
+        v2_study_root: str | Path,
+        stage_facts: _V2RealizedProductionPresentationFacts,
+    ) -> None:
+        """Reread all Report inputs and verify deterministic v14 HTML bytes."""
+
+        from .concurrent_robustness_v2_report import (
+            ConcurrentRobustnessV2ReportError,
+            validate_v2_realized_candidate,
+            validate_v2_realized_production_html,
+        )
+
+        inputs = self._prepare_v2_realized_report_inputs(
+            full_pool_source_root=full_pool_source_root,
+            full_pool_manifest_sha256=full_pool_manifest_sha256,
+            historical_formal_root=historical_formal_root,
+            historical_study_root=historical_study_root,
+            historical_candidate_dir=historical_candidate_dir,
+            v2_study_root=v2_study_root,
+        )
+        try:
+            candidate = Path(presentation_candidate_dir).resolve(strict=True)
+            candidate_facts = validate_v2_realized_candidate(
+                candidate,
+                source=inputs.source,
+                historical_candidate=inputs.historical_candidate,
+                v2_source=inputs.v2_source,
+                source_lineage=inputs.source_lineage,
+            )
+            _validate_v2_realized_production_stage_facts(
+                stage_facts,
+                inputs=inputs,
+                candidate_facts=candidate_facts,
+            )
+            validate_v2_realized_production_html(
+                production_html,
+                candidate,
+                source=inputs.source,
+                historical_candidate=inputs.historical_candidate,
+                v2_source=inputs.v2_source,
+                source_lineage=inputs.source_lineage,
+                release_id=stage_facts.release_id,
+                release_contract_schema=stage_facts.release_contract_schema,
+            )
+            self._assert_v2_realized_report_inputs_unchanged(inputs)
+        except _RobustnessReportClosureError:
+            raise
+        except (
+            ConcurrentRobustnessV2ReportError,
+            FileNotFoundError,
+            OSError,
+            TypeError,
+            ValueError,
+            json.JSONDecodeError,
+        ) as exc:
+            raise _RobustnessReportClosureError(
+                "v2 Realized production HTML failed independent validation"
             ) from exc
 
     def _prepare_v2_realized_report_inputs(

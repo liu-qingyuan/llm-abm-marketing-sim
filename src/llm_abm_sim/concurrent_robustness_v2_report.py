@@ -29,6 +29,7 @@ from .concurrent_robustness_v2_evidence import (
 )
 from .full_pool_presentation import (
     compose_full_pool_presentation_bundle,
+    render_full_pool_two_stage_production_html,
     validate_full_pool_presentation_bundle,
 )
 from .full_pool_two_stage_replay import ClosedFullPoolTwoStageSource
@@ -1348,6 +1349,8 @@ _V2_SCRIPT = r"""
 def _report_section(
     projection: _ValidatedReportProjection,
     downloads: Mapping[str, str],
+    *,
+    production: bool = False,
 ) -> str:
     mechanism = _MECHANISM_PRESENTATION.build_robustness_v2_master()
     if mechanism.semantic_set_identity_sha256 != projection.mechanism_identity_sha256:
@@ -1360,10 +1363,11 @@ def _report_section(
         f'<option value="{html.escape(model, quote=True)}">{html.escape(model)}</option>' for model in _V2_MODELS
     )
     prompt_options = "".join(f'<option value="{prompt}">{prompt}</option>' for prompt in _PROMPTS)
+    eligibility = "true" if production else "false"
     section = (
         '<section class="robustness-v2-report" data-testid="robustness-v2-report" '
         'data-v2-state="loading" data-v2-active-view="realized" data-v2-language="zh-CN" '
-        'data-production-deploy-eligible="false" data-provider-calls-during-composition="0" '
+        f'data-production-deploy-eligible="{eligibility}" data-provider-calls-during-composition="0" '
         'data-canonical-deployment-triggered="false">'
         f'<style>{_V2_CSS}</style>'
         '<p class="robustness-v2-kicker">Prompt–Model · Two-Stage Realized · v2</p>'
@@ -1404,6 +1408,8 @@ def _render_report_html(
     base_report: bytes,
     projection: _ValidatedReportProjection,
     downloads: Mapping[str, str],
+    *,
+    production: bool = False,
 ) -> bytes:
     try:
         report = base_report.decode("utf-8")
@@ -1412,7 +1418,7 @@ def _render_report_html(
     main_matches = list(re.finditer(r'<main class="full-pool-presentation"[^>]*>', report))
     if len(main_matches) != 1 or report.count("</body>") != 1:
         raise ConcurrentRobustnessV2ReportError("base Full-Pool report root is missing or duplicated")
-    section = _report_section(projection, downloads)
+    section = _report_section(projection, downloads, production=production)
     match = main_matches[0]
     report = report[: match.end()] + section + report[match.end() :]
     report = report.replace("</body>", f"<script>{_V2_SCRIPT}</script></body>")
@@ -1747,6 +1753,101 @@ def validate_v2_realized_candidate(
         return facts
     finally:
         shutil.rmtree(temporary, ignore_errors=True)
+
+
+def materialize_v2_realized_production_html(
+    candidate: Path,
+    *,
+    source: ClosedFullPoolTwoStageSource,
+    historical_candidate: Path,
+    v2_source: _ConcurrentRobustnessV2ReportSource,
+    source_lineage: Mapping[str, Any],
+    release_id: str,
+    release_contract_schema: str,
+) -> bytes:
+    """Regenerate v14 HTML from closed inputs without relabelling candidate bytes."""
+
+    projection = _build_projection(source=v2_source, source_lineage=source_lineage)
+    temporary, base = _base_bundle(
+        source=source,
+        historical_candidate=historical_candidate,
+        parent=candidate.parent,
+    )
+    try:
+        facts = _validate_candidate_directory(
+            candidate,
+            base_bundle=base,
+            projection=projection,
+        )
+        production_base = render_full_pool_two_stage_production_html(
+            base,
+            source=source,
+            historical_candidate=historical_candidate,
+            release_id=release_id,
+            release_contract_schema=release_contract_schema,
+        )
+        production_html = _render_report_html(
+            production_base,
+            projection,
+            facts.approved_downloads,
+            production=True,
+        )
+        decoded = production_html.decode("utf-8")
+        production_marker = (
+            '<section class="robustness-v2-report" data-testid="robustness-v2-report" '
+            'data-v2-state="loading" data-v2-active-view="realized" '
+            'data-v2-language="zh-CN" data-production-deploy-eligible="true"'
+        )
+        if (
+            decoded.count(production_marker) != 1
+            or 'data-production-deploy-eligible="false"' in decoded[
+                decoded.find(production_marker) : decoded.find(">", decoded.find(production_marker)) + 1
+            ]
+            or decoded.count(
+                f'<meta name="abm-release-id" content="{html.escape(release_id, quote=True)}">'
+            )
+            != 1
+            or decoded.count(
+                '<meta name="abm-release-contract" '
+                f'content="{html.escape(release_contract_schema, quote=True)}">'
+            )
+            != 1
+        ):
+            raise ConcurrentRobustnessV2ReportError(
+                "v2 production report markers are missing or crossed"
+            )
+        _assert_concurrent_robustness_v2_report_source_unchanged(v2_source)
+        return production_html
+    finally:
+        shutil.rmtree(temporary, ignore_errors=True)
+
+
+def validate_v2_realized_production_html(
+    production_html: bytes,
+    candidate: Path,
+    *,
+    source: ClosedFullPoolTwoStageSource,
+    historical_candidate: Path,
+    v2_source: _ConcurrentRobustnessV2ReportSource,
+    source_lineage: Mapping[str, Any],
+    release_id: str,
+    release_contract_schema: str,
+) -> None:
+    """Validate v14 HTML against a fresh deterministic Report materialization."""
+
+    expected = materialize_v2_realized_production_html(
+        candidate,
+        source=source,
+        historical_candidate=historical_candidate,
+        v2_source=v2_source,
+        source_lineage=source_lineage,
+        release_id=release_id,
+        release_contract_schema=release_contract_schema,
+    )
+    if not isinstance(production_html, bytes) or production_html != expected:
+        raise ConcurrentRobustnessV2ReportError(
+            "v2 production HTML differs from deterministic materialization"
+        )
 
 
 __all__: list[str] = []

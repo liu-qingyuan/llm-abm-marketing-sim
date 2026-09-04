@@ -25,6 +25,7 @@ from llm_abm_sim.concurrent_message_report import (
 )
 from llm_abm_sim.concurrent_robustness_release import (
     ROBUSTNESS_RELEASE_CONTRACT_SCHEMA_V13,
+    ROBUSTNESS_RELEASE_CONTRACT_SCHEMA_V14,
     ConcurrentRobustnessReleaseError,
     require_full_pool_v13_deployment_profile,
     validate_concurrent_robustness_production_release,
@@ -1725,6 +1726,26 @@ def _validate_v13(
         ) from exc
 
 
+def _validate_v14(
+    *,
+    repo_root: Path,
+    contract_document: dict[str, object],
+    source_dir: Path,
+    snapshot_dir: Path | None = None,
+) -> dict[str, object]:
+    try:
+        return validate_concurrent_robustness_production_release(
+            repo_root=repo_root,
+            contract_document=contract_document,
+            source_dir=source_dir,
+            snapshot_dir=snapshot_dir,
+        )
+    except (ConcurrentRobustnessReleaseError, OSError, ValidationError) as exc:
+        raise ReleaseValidationError(
+            f"invalid v14 Prompt–Model Realized production release: {exc}"
+        ) from exc
+
+
 def _load_and_validate_release(
     *,
     repo_root: Path,
@@ -1823,6 +1844,14 @@ def _load_and_validate_release(
     elif schema_version == "abm-report-release-contract-v12":
         _safe_contract_file(repo_root, contract_path)
         result = _validate_v12(
+            repo_root=repo_root,
+            contract_document=contract,
+            source_dir=source_dir,
+            snapshot_dir=snapshot_dir,
+        )
+    elif schema_version == ROBUSTNESS_RELEASE_CONTRACT_SCHEMA_V14:
+        _safe_contract_file(repo_root, contract_path)
+        result = _validate_v14(
             repo_root=repo_root,
             contract_document=contract,
             source_dir=source_dir,
@@ -2001,6 +2030,21 @@ def _build_deployment_facts(
 
 def _require_formal_production(result: dict[str, object]) -> None:
     schema_version = result.get("schema_version")
+    if schema_version == ROBUSTNESS_RELEASE_CONTRACT_SCHEMA_V14:
+        if not (
+            result.get("release_purpose")
+            == "full_pool_two_stage_prompt_model_realized_robustness_formal_research"
+            and result.get("sampling_status")
+            == "persisted_full_pool_two_stage_and_prompt_model_realized_formal_runs"
+            and result.get("logical_judgments") == 36_000
+            and result.get("live_api_triggered") is True
+            and result.get("formal_research_evidence") is True
+            and result.get("production_deploy_eligible") is True
+        ):
+            raise ReleaseValidationError(
+                "formal production validation requires the exact v14 Prompt–Model profile"
+            )
+        return
     if schema_version == ROBUSTNESS_RELEASE_CONTRACT_SCHEMA_V13:
         try:
             require_full_pool_v13_deployment_profile(result)
@@ -2080,7 +2124,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--require-formal-production",
         action="store_true",
-        help="Reject validated evidence unless it is a deploy-eligible v2-v13 Formal research release",
+        help="Reject validated evidence unless it is a deploy-eligible v2-v14 Formal research release",
     )
     parser.add_argument(
         "--deployment-facts-output",
