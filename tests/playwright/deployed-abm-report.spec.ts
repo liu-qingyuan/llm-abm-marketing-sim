@@ -276,8 +276,11 @@ async function expectConcurrentMessageReport(page: Page): Promise<void> {
 }
 
 async function expectFullPoolReport(page: Page): Promise<void> {
-  const isV13 = releaseContractSchema === 'abm-report-release-contract-v13';
-  await expect(page).toHaveTitle(isV13 ? 'Full-Pool 两阶段互动实现' : 'Full-Pool 主实验');
+  const isTwoStage = [
+    'abm-report-release-contract-v13',
+    'abm-report-release-contract-v14',
+  ].includes(releaseContractSchema ?? '');
+  await expect(page).toHaveTitle(isTwoStage ? 'Full-Pool 两阶段互动实现' : 'Full-Pool 主实验');
   await expect(page.locator('html')).toHaveAttribute('lang', 'zh-CN');
   await expect(page.locator('meta[name="abm-release-contract"]')).toHaveAttribute(
     'content',
@@ -292,7 +295,7 @@ async function expectFullPoolReport(page: Page): Promise<void> {
     'Historical Sensitivity · 1,000 users',
   );
   const mechanism = page.getByTestId('full-pool-mechanism-section');
-  if (isV13) {
+  if (isTwoStage) {
     await expect(root).toHaveAttribute('data-presentation-semantics', 'two_stage_realized');
     await expect(page.getByTestId('full-pool-realized-headline')).toBeVisible();
     const mechanismSvg = page.getByTestId('full-pool-mechanism-svg');
@@ -323,6 +326,7 @@ async function expectFullPoolReport(page: Page): Promise<void> {
 
   const fallback = page.getByTestId('full-pool-mechanism-fallback');
   const fallbackSummary = fallback.locator('summary');
+  await expect(fallbackSummary).toContainText('完整文本说明');
   await fallbackSummary.focus();
   await fallbackSummary.press('Enter');
   await expect(fallback).toHaveAttribute('open', '');
@@ -368,21 +372,67 @@ async function expectFullPoolReport(page: Page): Promise<void> {
   await expect(drawer).toBeHidden();
   await expect(detailButton).toBeFocused();
 
+  if (releaseContractSchema === 'abm-report-release-contract-v14') {
+    const robustness = page.getByTestId('robustness-v2-report');
+    await expect(robustness).toBeVisible();
+    await expect(robustness).toHaveAttribute('data-v2-state', 'ready');
+    await expect(robustness).toHaveAttribute('data-v2-active-view', 'realized');
+    await expect(page.getByTestId('robustness-v2-realized-view')).toBeVisible();
+    await expect(page.getByTestId('robustness-v2-judgment-view')).toBeHidden();
+
+    await page.locator('[data-v2-view-button="judgment"]').click();
+    await expect(robustness).toHaveAttribute('data-v2-active-view', 'judgment');
+    await expect(page.getByTestId('robustness-v2-judgment-view')).toBeVisible();
+    await expect(page.getByTestId('robustness-v2-realized-view')).toBeHidden();
+    await page.locator('[data-v2-view-button="realized"]').click();
+
+    const promptLink = page.locator('a[href="#prompt-catalog-P0"]').first();
+    await expect(promptLink).toBeVisible();
+    await promptLink.click();
+    await expect(page).toHaveURL(/#prompt-catalog-P0$/);
+    await expect(page.locator('#prompt-catalog-P0')).toBeVisible();
+    await expect(page.getByTestId('robustness-v2-prompt-catalog')).toBeVisible();
+    await expect(
+      page.locator('[data-testid="robustness-v2-mechanism-svg"][data-mechanism-language="zh-CN"]'),
+    ).toBeVisible();
+    await expect(
+      page.locator('[data-testid="robustness-v2-mechanism-fallback"][data-mechanism-language="zh-CN"]'),
+    ).toBeVisible();
+    await page.locator('[data-v2-language-button="en-US"]').click();
+    await expect(robustness).toHaveAttribute('data-v2-language', 'en-US');
+    await expect(
+      page.locator('[data-testid="robustness-v2-mechanism-svg"][data-mechanism-language="en-US"]'),
+    ).toBeVisible();
+    await expect(
+      page.locator('[data-testid="robustness-v2-mechanism-fallback"][data-mechanism-language="en-US"]'),
+    ).toBeVisible();
+    await page.locator('[data-v2-language-button="zh-CN"]').click();
+    await expect(robustness).toHaveAttribute('data-v2-language', 'zh-CN');
+    await expect(page.locator('a[download][href$=".mmd"]').first()).toBeVisible();
+    await expect(page.locator('a[download][href$=".xlsx"]').first()).toBeVisible();
+  }
+
   await page.locator('[data-full-pool-language="en-US"]').click();
   await expect(page.locator('html')).toHaveAttribute('lang', 'en-US');
   await expect(
     page.getByTestId('full-pool-main-experiment').getByRole('heading', { level: 1 }),
   ).toHaveText(
-    isV13
+    isTwoStage
       ? 'Full-Pool Two-Stage Engagement Realization'
       : 'Full-Pool Main Experiment',
   );
   await expect(page.getByTestId('full-pool-claim-boundary')).toContainText(
-    isV13
+    isTwoStage
       ? 'single user × message exposure'
       : 'ranking changes exposure timing and order only',
   );
-  if (isV13) await expect(mechanism).toContainText('Stable Probability Draw');
+  if (isTwoStage) await expect(mechanism).toContainText('Stable Probability Draw');
+  await expect(fallbackSummary).toContainText('Complete text fallback');
+  await fallbackSummary.click();
+  await expect(fallback).toHaveAttribute('open', '');
+  await expect(fallback.locator('[data-mechanism-node-id]').first()).toBeVisible();
+  await fallbackSummary.click();
+  await expect(fallback).not.toHaveAttribute('open', '');
   await expect(page.getByTestId('full-pool-trace-page-status')).toContainText('Page 1 of');
 }
 
@@ -501,7 +551,12 @@ async function expectFullPoolDownloads(page: Page): Promise<void> {
     expect(!href.startsWith('/') && !href.includes('..') && !href.includes('://'), href).toBeTruthy();
     expect(allowed.has(href), href).toBeTruthy();
   }
-  expect(new Set(hrefs.filter((href) => href.endsWith('.mmd'))).size).toBe(8);
+  expect(new Set(hrefs.filter((href) => href.endsWith('.mmd'))).size).toBe(
+    releaseContractSchema === 'abm-report-release-contract-v14' ? 9 : 8,
+  );
+  if (releaseContractSchema === 'abm-report-release-contract-v14') {
+    expect(new Set(hrefs.filter((href) => href.endsWith('.xlsx'))).size).toBe(1);
+  }
 }
 
 async function expectReportByKind(page: Page): Promise<void> {

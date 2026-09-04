@@ -522,6 +522,319 @@ def test_v7_deployment_facts_bind_full_mermaid_inventory_and_explicit_identity(
             )
 
 
+def test_v14_deployment_facts_project_release_owned_identities_and_workbook(
+    tmp_path: Path,
+) -> None:
+    validator = _load_validator()
+    source = tmp_path / "production-v14"
+    source.mkdir()
+    payloads = {
+        "report.html": "<!doctype html><title>v14</title>\n",
+        "artifact_manifest.json": "",
+        "prompt_model_realized_results.xlsx": "workbook\n",
+        "prompt-model-realized-mechanism.mmd": "flowchart LR\n",
+    }
+    release_id = "prompt-model-realized-v14"
+    release_identity = "a" * 64
+    approved = {
+        "teacher_results_xlsx": "prompt_model_realized_results.xlsx",
+        "prompt_model_realized_mechanism_mermaid": (
+            "prompt-model-realized-mechanism.mmd"
+        ),
+    }
+    manifest = {
+        "release_id": release_id,
+        "release_identity_sha256": release_identity,
+        "approved_downloads": approved,
+    }
+    payloads["artifact_manifest.json"] = (
+        json.dumps(manifest, sort_keys=True, separators=(",", ":")) + "\n"
+    )
+    for relative_path, payload in payloads.items():
+        (source / relative_path).write_text(payload, encoding="utf-8")
+    artifact_sha256 = {
+        path.name: hashlib.sha256(path.read_bytes()).hexdigest()
+        for path in source.iterdir()
+        if path.is_file()
+    }
+    full_pool_identity = (
+        "b348c1bd309788df41b2a86106fe5216ce6fc6dc9317a67bc19351d3a249e1d7"
+    )
+    v2_identity = "c" * 64
+    protected_v13_release_id = (
+        "full-pool-two-stage-v13-production-20260826T142827Z"
+    )
+    protected_v13_identity = (
+        "27130adc334502f83a4467aa6e4a89ca9ed5436ed451d43732889eae7a2c1f89"
+    )
+    physical_snapshot_identity = "e" * 64
+    readiness = {
+        "schema_version": "full-pool-v14-release-readiness-v1",
+        "release_id": release_id,
+        "release_contract_schema": "abm-report-release-contract-v14",
+        "v2_study_root_identity_sha256": v2_identity,
+        "protected_v13_release_id": protected_v13_release_id,
+        "protected_v13_release_identity_sha256": protected_v13_identity,
+        "canonical_endpoint": "https://abm.q1ngyuan.top/",
+        "provider_calls_during_promotion": 0,
+        "image_generation_triggered": False,
+        "canonical_deployment_triggered": False,
+        "operational_authorization_required": True,
+        "deployment_authorized": False,
+        "public_acceptance_recorded": False,
+    }
+    prompt_model_accounting = {
+        "schema_version": "concurrent-robustness-v2-formal-provider-accounting-v1",
+        "logical_judgments": 36_000,
+        "successful_judgments": 36_000,
+        "terminal_failures": 0,
+        "physical_attempts": 36_000,
+        "physical_attempt_cap": 108_000,
+        "provider_calls": 36_000,
+        "provider_responses": 36_000,
+        "usage_complete_response_count": 36_000,
+        "usage_missing_response_count": 0,
+        "usage_malformed_response_count": 0,
+        "observed_model_counts": {"observed-model": 36_000},
+        "observed_model_missing_response_count": 0,
+        "observed_model_malformed_response_count": 0,
+        "successful_judgment_requested_model_counts": {
+            "deepseek-v4-flash": 7_200,
+            "gemini-3.1-pro": 7_200,
+            "gemini-3.8-flash-high": 7_200,
+            "kimi-coding/k3-256k": 7_200,
+            "openai-codex/gpt-5.6-sol": 7_200,
+        },
+        "successful_judgment_observed_model_counts": {
+            "observed-model": 36_000
+        },
+        "provider_route_counts": {"test-route": 36_000},
+        "billing_semantics_counts": {"test-billing": 36_000},
+        "input_tokens": 36_000,
+        "output_tokens": 18_000,
+        "total_tokens": 54_000,
+        "cached_input_tokens": 0,
+        "provider_fee_cny": 24.0,
+        "subscription_nominal_cost_usd_reference": 0.0,
+        "cross_currency_total_reported": False,
+        "live_api_triggered": True,
+        "formal_research_evidence": True,
+    }
+    full_pool_accounting = {
+        "schema_version": "full-pool-two-stage-provider-accounting-v1",
+        "upstream_live_api_triggered": True,
+        "upstream_formal_research_evidence": True,
+        "upstream_production_deploy_eligible": True,
+        "upstream_requested_model": "gpt-5.6-sol",
+        "upstream_observed_model_counts": {"gpt-5.6-sol": 109_200},
+        "upstream_logical_judgments": 109_200,
+        "upstream_provider_responses": 109_200,
+        "upstream_successful_decisions": 109_200,
+        "upstream_external_request_invocations": 110_320,
+        "upstream_usage_complete_response_count": 109_200,
+        "upstream_usage_missing_response_count": 0,
+        "upstream_usage_malformed_response_count": 0,
+        "upstream_settled_actual_attempts": 110_320,
+        "upstream_dispatched_without_settlement_uncertainty": 0,
+        "upstream_charged_physical_attempts": 110_320,
+        "upstream_physical_cap": 120_120,
+        "upstream_provider_accounting": {
+            "schema_version": "provider-accounting-v1",
+            "external_request_invocations": 110_320,
+            "provider_response_count": 109_200,
+            "successful_decision_count": 109_200,
+            "usage_complete_response_count": 109_200,
+            "usage_missing_response_count": 0,
+            "usage_malformed_response_count": 0,
+            "observed_model_counts": {"gpt-5.6-sol": 109_200},
+            "observed_model_missing_response_count": 0,
+            "observed_model_malformed_response_count": 0,
+            "input_tokens": 107_373_847,
+            "output_tokens": 13_377_353,
+            "total_tokens": 120_751_200,
+            "cached_input_tokens": 0,
+            "cached_input_tokens_reported_response_count": 109_200,
+        },
+        "realization_provider_calls": 0,
+        "realization_live_api_triggered": False,
+        "composite_live_api_triggered": True,
+        "composite_zero_provider_formal": False,
+    }
+    provider_accounting = {
+        "schema_version": "full-pool-prompt-model-provider-accounting-v1",
+        "full_pool_two_stage": full_pool_accounting,
+        "prompt_model_v2": prompt_model_accounting,
+        "provider_calls_during_promotion": 0,
+        "live_api_triggered_during_promotion": False,
+        "composite_live_api_triggered": True,
+        "cross_currency_total_reported": False,
+    }
+    contract_path = tmp_path / "release-contract-v14.json"
+    contract = {
+        "schema_version": "abm-report-release-contract-v14",
+        "release_id": release_id,
+        "canonical_endpoint": "https://abm.q1ngyuan.top/",
+        "release_identity_sha256": release_identity,
+        "physical_snapshot_identity_sha256": physical_snapshot_identity,
+        "full_pool_source": {"source_identity": full_pool_identity},
+        "v2_study": {"root_identity_sha256": v2_identity},
+        "protected_v13": {
+            "release_id": protected_v13_release_id,
+            "release_identity_sha256": protected_v13_identity,
+        },
+        "workbook": {
+            "relative_path": "prompt_model_realized_results.xlsx",
+            "sha256": artifact_sha256["prompt_model_realized_results.xlsx"],
+        },
+        "artifact_sha256": artifact_sha256,
+    }
+    contract_path.write_text(
+        json.dumps(contract, sort_keys=True, separators=(",", ":")) + "\n",
+        encoding="utf-8",
+    )
+    result = {
+        "schema_version": "abm-report-release-contract-v14",
+        "release_purpose": (
+            "full_pool_two_stage_prompt_model_realized_robustness_formal_research"
+        ),
+        "release_id": release_id,
+        "source_directory": "runs/prompt-model-realized-v14",
+        "sampling_method": "full_pool_no_membership_filter_v1",
+        "sampling_status": (
+            "persisted_full_pool_two_stage_and_prompt_model_realized_formal_runs"
+        ),
+        "decision_execution_mode": "full_pool_upstream_and_prompt_model_two_stage_live",
+        "live_api_triggered": True,
+        "formal_research_evidence": True,
+        "logical_judgments": 36_000,
+        "physical_attempts": 36_000,
+        "provider_calls": 36_000,
+        "provider_responses": 36_000,
+        "usage_complete_response_count": 36_000,
+        "observed_model_counts": {"observed-model": 36_000},
+        "provider_accounting": provider_accounting,
+        "full_pool_source_identity": full_pool_identity,
+        "v2_study_root_identity_sha256": v2_identity,
+        "protected_v13_release_id": protected_v13_release_id,
+        "release_readiness": readiness,
+        "release_identity_sha256": release_identity,
+        "physical_snapshot_identity_sha256": physical_snapshot_identity,
+        "report_sha256": artifact_sha256["report.html"],
+        "manifest_sha256": artifact_sha256["artifact_manifest.json"],
+        "artifact_count": len(artifact_sha256),
+        "production_deploy_eligible": True,
+    }
+
+    validator._require_formal_production(result)
+    crossed_result = dict(result)
+    crossed_result["provider_accounting"] = {
+        **provider_accounting,
+        "provider_calls_during_promotion": 1,
+    }
+    with pytest.raises(
+        validator.ReleaseValidationError,
+        match="exact v14 Prompt–Model profile",
+    ):
+        validator._require_formal_production(crossed_result)
+
+    empty_full_pool = json.loads(json.dumps(result))
+    empty_full_pool["provider_accounting"]["full_pool_two_stage"] = {}
+    with pytest.raises(
+        validator.ReleaseValidationError,
+        match="exact v14 Prompt–Model profile",
+    ):
+        validator._require_formal_production(empty_full_pool)
+
+    crossed_full_pool = json.loads(json.dumps(result))
+    crossed_full_pool["provider_accounting"]["full_pool_two_stage"][
+        "upstream_external_request_invocations"
+    ] = 109_200
+    with pytest.raises(
+        validator.ReleaseValidationError,
+        match="exact v14 Prompt–Model profile",
+    ):
+        validator._require_formal_production(crossed_full_pool)
+
+    crossed_source = {
+        **result,
+        "full_pool_source_identity": "b" * 64,
+    }
+    with pytest.raises(
+        validator.ReleaseValidationError,
+        match="exact v14 Prompt–Model profile",
+    ):
+        validator._require_formal_production(crossed_source)
+
+    crossed_protected = json.loads(json.dumps(result))
+    crossed_protected["protected_v13_release_id"] = "protected-v13"
+    with pytest.raises(
+        validator.ReleaseValidationError,
+        match="exact v14 Prompt–Model profile",
+    ):
+        validator._require_formal_production(crossed_protected)
+
+    facts = validator._build_deployment_facts(
+        contract_path=contract_path,
+        contract=contract,
+        result=result,
+        evidence_dir=source,
+        deployment_release_id=release_id,
+        deployment_domain="abm.q1ngyuan.top",
+    )
+
+    assert facts["release_contract_schema_version"] == (
+        "abm-report-release-contract-v14"
+    )
+    assert facts["full_pool_source_identity"] == full_pool_identity
+    assert facts["v2_study_root_identity_sha256"] == v2_identity
+    assert facts["protected_v13_release_identity_sha256"] == (
+        protected_v13_identity
+    )
+    assert facts["physical_snapshot_identity_sha256"] == (
+        physical_snapshot_identity
+    )
+    assert facts["workbook_relative_path"] == (
+        "prompt_model_realized_results.xlsx"
+    )
+    assert facts["workbook_sha256"] == artifact_sha256[
+        "prompt_model_realized_results.xlsx"
+    ]
+    assert facts["release_readiness"] == readiness
+    assert "provider_accounting" not in facts
+
+    crossed = dict(contract)
+    crossed["workbook"] = {
+        "relative_path": "prompt_model_realized_results.xlsx",
+        "sha256": "0" * 64,
+    }
+    with pytest.raises(
+        validator.ReleaseValidationError,
+        match="workbook|deployment profile",
+    ):
+        validator._build_deployment_facts(
+            contract_path=contract_path,
+            contract=crossed,
+            result=result,
+            evidence_dir=source,
+            deployment_release_id=release_id,
+            deployment_domain="abm.q1ngyuan.top",
+        )
+
+    crossed_result_hash = {**result, "report_sha256": "0" * 64}
+    with pytest.raises(
+        validator.ReleaseValidationError,
+        match="report hash|source or snapshot identity",
+    ):
+        validator._build_deployment_facts(
+            contract_path=contract_path,
+            contract=contract,
+            result=crossed_result_hash,
+            evidence_dir=source,
+            deployment_release_id=release_id,
+            deployment_domain="abm.q1ngyuan.top",
+        )
+
+
 def test_v8_deployment_facts_bind_full_pool_inventory_and_explicit_identity(
     tmp_path: Path,
 ) -> None:
@@ -930,7 +1243,7 @@ fi
         assert not compose_count.exists()
 
 
-def test_deploy_accepts_v13_through_authorized_atomic_contract() -> None:
+def test_deploy_accepts_v13_and_v14_through_authorized_atomic_contract() -> None:
     script = (REPO_ROOT / "scripts" / "deploy_abm_report.sh").read_text(
         encoding="utf-8"
     )
@@ -941,8 +1254,8 @@ def test_deploy_accepts_v13_through_authorized_atomic_contract() -> None:
         encoding="utf-8"
     )
 
-    assert "^abm-report-release-contract-v([2-9]|10|11|12|13)$" in script
-    assert "^abm-report-release-contract-v([2-9]|10|11|12|13)$" in remote
+    assert "^abm-report-release-contract-v([2-9]|10|11|12|13|14)$" in script
+    assert "^abm-report-release-contract-v([2-9]|10|11|12|13|14)$" in remote
     assert script.index("--require-formal-production") < script.index(
         'printf \'Uploading %s to %s:%s\\n\''
     )
@@ -958,7 +1271,10 @@ def test_deploy_accepts_v13_through_authorized_atomic_contract() -> None:
     assert 'ABM_DEPLOY_RELEASE_CONTRACT_SCHEMA="${RELEASE_CONTRACT_SCHEMA}"' in script
     assert "process.env.ABM_DEPLOY_RELEASE_CONTRACT_SCHEMA" in acceptance
     assert "releaseContractSchema ?? 'abm-report-release-contract-v8'" in acceptance
-    assert "releaseContractSchema === 'abm-report-release-contract-v13'" in acceptance
+    assert "'abm-report-release-contract-v13'" in acceptance
+    assert "releaseContractSchema === 'abm-report-release-contract-v14'" in acceptance
+    assert "robustness-v2-realized-view" in acceptance
+    assert "robustness-v2-judgment-view" in acceptance
     assert "full-pool-mechanism-svg" in acceptance
     assert "full-pool-source/full-pool-realized-projection.csv" in acceptance
 
@@ -973,7 +1289,7 @@ def test_deploy_consumes_validated_facts_and_checks_the_snapshot_before_ssh() ->
     assert "--deployment-release-id" in script
     assert "--deployment-domain" in script
     assert "PUBLIC_ACCEPTANCE_ARTIFACTS_JSON" in script
-    assert "^abm-report-release-contract-v([2-9]|10|11|12|13)$" in script
+    assert "^abm-report-release-contract-v([2-9]|10|11|12|13|14)$" in script
     assert "ARTIFACT_CHECKSUMS_B64" in script
     assert "Path(sys.argv[1]).read_text" not in script
 
@@ -1014,12 +1330,16 @@ def test_public_acceptance_failure_adapter_always_invokes_rollback(tmp_path: Pat
     rollback_function = script[start:stop]
     harness = tmp_path / "public-failure-adapter.sh"
     marker = tmp_path / "rollback-invoked"
+    operation_facts = tmp_path / "operation-facts.json"
+    operation_facts.write_text("false-success\n", encoding="utf-8")
     _write_executable(
         harness,
         "#!/usr/bin/env bash\n"
         "set -euo pipefail\n"
         "cutover_complete=1\n"
         "PREVIOUS_RELEASE=/remote/releases/previous\n"
+        "OPERATION_FACTS_WRITE_ATTEMPTED=1\n"
+        f"DEPLOYMENT_OPERATION_FACTS_OUTPUT={shlex.quote(str(operation_facts))}\n"
         f"ROLLBACK_MARKER={shlex.quote(str(marker))}\n"
         "rollback_remote() { printf invoked > \"${ROLLBACK_MARKER}\"; }\n"
         "cleanup_local_snapshot() { return 0; }\n"
@@ -1036,6 +1356,7 @@ def test_public_acceptance_failure_adapter_always_invokes_rollback(tmp_path: Pat
 
     assert completed.returncode == 1
     assert marker.read_text(encoding="utf-8") == "invoked"
+    assert not operation_facts.exists()
     assert "Public acceptance failed; restoring previous release" in completed.stderr
 
 

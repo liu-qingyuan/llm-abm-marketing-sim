@@ -28,6 +28,7 @@ from llm_abm_sim.concurrent_robustness_release import (
     ROBUSTNESS_RELEASE_CONTRACT_SCHEMA_V14,
     ConcurrentRobustnessReleaseError,
     require_full_pool_v13_deployment_profile,
+    require_full_pool_v14_deployment_profile,
     validate_concurrent_robustness_production_release,
 )
 from llm_abm_sim.final_research_reason_context import ReasonContextDiagnostics
@@ -1899,6 +1900,7 @@ _DEPLOYMENT_REPORT_KINDS = {
     "abm-report-release-contract-v11": "full-pool",
     "abm-report-release-contract-v12": "full-pool",
     ROBUSTNESS_RELEASE_CONTRACT_SCHEMA_V13: "full-pool",
+    ROBUSTNESS_RELEASE_CONTRACT_SCHEMA_V14: "full-pool",
 }
 _DEPLOYMENT_RELEASE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,159}$")
 _DEPLOYMENT_DOMAIN = re.compile(r"^[A-Za-z0-9.-]+$")
@@ -1994,6 +1996,7 @@ def _build_deployment_facts(
         "abm-report-release-contract-v11",
         "abm-report-release-contract-v12",
         ROBUSTNESS_RELEASE_CONTRACT_SCHEMA_V13,
+        ROBUSTNESS_RELEASE_CONTRACT_SCHEMA_V14,
     }:
         if manifest.get("release_id") != deployment_release_id:
             raise ReleaseValidationError("deployment manifest release id is crossed")
@@ -2017,7 +2020,63 @@ def _build_deployment_facts(
         "approved_downloads": sorted(approved_downloads),
         "public_acceptance_artifacts": sorted(artifact_hashes),
     }
-    if schema_version == ROBUSTNESS_RELEASE_CONTRACT_SCHEMA_V13:
+    if schema_version == ROBUSTNESS_RELEASE_CONTRACT_SCHEMA_V14:
+        try:
+            profile = require_full_pool_v14_deployment_profile(result)
+        except ConcurrentRobustnessReleaseError as exc:
+            raise ReleaseValidationError(
+                "deployment facts require the exact v14 Prompt–Model Formal profile"
+            ) from exc
+        full_pool = contract.get("full_pool_source")
+        v2_study = contract.get("v2_study")
+        protected_v13 = contract.get("protected_v13")
+        workbook = contract.get("workbook")
+        if (
+            not isinstance(full_pool, dict)
+            or not isinstance(v2_study, dict)
+            or not isinstance(protected_v13, dict)
+            or not isinstance(workbook, dict)
+            or full_pool.get("source_identity")
+            != profile["full_pool_source_identity"]
+            or v2_study.get("root_identity_sha256")
+            != profile["v2_study_root_identity_sha256"]
+            or protected_v13.get("release_id")
+            != profile["protected_v13_release_id"]
+            or protected_v13.get("release_identity_sha256")
+            != profile["protected_v13_release_identity_sha256"]
+            or contract.get("physical_snapshot_identity_sha256")
+            != profile["physical_snapshot_identity_sha256"]
+            or contract.get("release_identity_sha256") != release_identity
+            or result.get("release_identity_sha256") != release_identity
+            or result.get("artifact_count") != len(artifact_hashes)
+            or result.get("report_sha256") != artifact_hashes["report.html"]
+            or result.get("manifest_sha256")
+            != artifact_hashes["artifact_manifest.json"]
+        ):
+            raise ReleaseValidationError(
+                "v14 deployment source or snapshot identity is crossed"
+            )
+        workbook_path = workbook.get("relative_path")
+        workbook_sha256 = workbook.get("sha256")
+        if (
+            not isinstance(workbook_path, str)
+            or not workbook_path.endswith(".xlsx")
+            or workbook_path not in approved_downloads
+            or artifact_hashes.get(workbook_path) != workbook_sha256
+            or not isinstance(workbook_sha256, str)
+            or not _DEPLOYMENT_SHA256.fullmatch(workbook_sha256)
+        ):
+            raise ReleaseValidationError(
+                "v14 deployment workbook identity is crossed"
+            )
+        facts.update(profile)
+        facts.update(
+            {
+                "workbook_relative_path": workbook_path,
+                "workbook_sha256": workbook_sha256,
+            }
+        )
+    elif schema_version == ROBUSTNESS_RELEASE_CONTRACT_SCHEMA_V13:
         try:
             profile = require_full_pool_v13_deployment_profile(result)
         except ConcurrentRobustnessReleaseError as exc:
@@ -2031,19 +2090,12 @@ def _build_deployment_facts(
 def _require_formal_production(result: dict[str, object]) -> None:
     schema_version = result.get("schema_version")
     if schema_version == ROBUSTNESS_RELEASE_CONTRACT_SCHEMA_V14:
-        if not (
-            result.get("release_purpose")
-            == "full_pool_two_stage_prompt_model_realized_robustness_formal_research"
-            and result.get("sampling_status")
-            == "persisted_full_pool_two_stage_and_prompt_model_realized_formal_runs"
-            and result.get("logical_judgments") == 36_000
-            and result.get("live_api_triggered") is True
-            and result.get("formal_research_evidence") is True
-            and result.get("production_deploy_eligible") is True
-        ):
+        try:
+            require_full_pool_v14_deployment_profile(result)
+        except ConcurrentRobustnessReleaseError as exc:
             raise ReleaseValidationError(
                 "formal production validation requires the exact v14 Prompt–Model profile"
-            )
+            ) from exc
         return
     if schema_version == ROBUSTNESS_RELEASE_CONTRACT_SCHEMA_V13:
         try:
@@ -2106,7 +2158,7 @@ def _require_formal_production(result: dict[str, object]) -> None:
         or result.get("production_deploy_eligible") is not True
     ):
         raise ReleaseValidationError(
-            "formal production deployment requires abm-report-release-contract-v2 through v13 "
+            "formal production deployment requires abm-report-release-contract-v2 through v14 "
             "with matching deploy-eligible persisted Formal research evidence"
         )
 

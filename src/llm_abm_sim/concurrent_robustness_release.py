@@ -148,6 +148,9 @@ FULL_POOL_V14_PROTECTED_V13_RELEASE_ID = (
 FULL_POOL_V14_PROTECTED_V13_RELEASE_IDENTITY = (
     "27130adc334502f83a4467aa6e4a89ca9ed5436ed451d43732889eae7a2c1f89"
 )
+FULL_POOL_V14_PROTECTED_FULL_POOL_SOURCE_IDENTITY = (
+    "b348c1bd309788df41b2a86106fe5216ce6fc6dc9317a67bc19351d3a249e1d7"
+)
 FULL_POOL_V14_PROTECTED_V13_CONTRACT_SHA256 = (
     "91d03641c9c18abe62a5551be314cbe1aee304afe9ec8aff483916012318ff5a"
 )
@@ -6519,6 +6522,395 @@ def require_full_pool_v13_deployment_profile(
         "realized_source_identity": source_identity,
         "release_readiness": dict(readiness),
         "composite_provider_accounting": dict(accounting),
+    }
+
+
+def require_full_pool_v14_deployment_profile(
+    result: Mapping[str, object],
+) -> dict[str, object]:
+    """Project only Release-owned identities from an exact deploy-eligible v14 result."""
+    full_pool_identity = result.get("full_pool_source_identity")
+    v2_identity = result.get("v2_study_root_identity_sha256")
+    protected_v13_release_id = result.get("protected_v13_release_id")
+    snapshot_identity = result.get("physical_snapshot_identity_sha256")
+    readiness = result.get("release_readiness")
+    accounting = result.get("provider_accounting")
+    physical_attempts = result.get("physical_attempts")
+    provider_calls = result.get("provider_calls")
+    provider_responses = result.get("provider_responses")
+    usage_complete = result.get("usage_complete_response_count")
+    observed_models = result.get("observed_model_counts")
+    _canonical_relative_path(
+        result.get("source_directory"),
+        "v14 deployment source directory",
+    )
+    if (
+        set(result)
+        != {
+            "schema_version",
+            "release_purpose",
+            "release_id",
+            "source_directory",
+            "sampling_method",
+            "sampling_status",
+            "decision_execution_mode",
+            "live_api_triggered",
+            "formal_research_evidence",
+            "logical_judgments",
+            "physical_attempts",
+            "provider_calls",
+            "provider_responses",
+            "usage_complete_response_count",
+            "observed_model_counts",
+            "provider_accounting",
+            "full_pool_source_identity",
+            "v2_study_root_identity_sha256",
+            "protected_v13_release_id",
+            "release_readiness",
+            "release_identity_sha256",
+            "physical_snapshot_identity_sha256",
+            "report_sha256",
+            "manifest_sha256",
+            "artifact_count",
+            "production_deploy_eligible",
+        }
+        or result.get("schema_version") != ROBUSTNESS_RELEASE_CONTRACT_SCHEMA_V14
+        or result.get("release_purpose") != FULL_POOL_V14_RELEASE_PURPOSE
+        or result.get("sampling_method") != FULL_POOL_MEMBERSHIP_METHOD
+        or result.get("sampling_status") != FULL_POOL_V14_SAMPLING_STATUS
+        or result.get("decision_execution_mode")
+        != "full_pool_upstream_and_prompt_model_two_stage_live"
+        or result.get("live_api_triggered") is not True
+        or result.get("formal_research_evidence") is not True
+        or result.get("logical_judgments") != 36_000
+        or result.get("production_deploy_eligible") is not True
+        or not isinstance(result.get("release_id"), str)
+        or not _RELEASE_ID.fullmatch(cast(str, result.get("release_id")))
+        or full_pool_identity
+        != FULL_POOL_V14_PROTECTED_FULL_POOL_SOURCE_IDENTITY
+        or not isinstance(v2_identity, str)
+        or not _SHA256.fullmatch(v2_identity)
+        or protected_v13_release_id
+        != FULL_POOL_V14_PROTECTED_V13_RELEASE_ID
+        or not isinstance(snapshot_identity, str)
+        or not _SHA256.fullmatch(snapshot_identity)
+        or not isinstance(result.get("release_identity_sha256"), str)
+        or not _SHA256.fullmatch(cast(str, result.get("release_identity_sha256")))
+        or not isinstance(result.get("report_sha256"), str)
+        or not _SHA256.fullmatch(cast(str, result.get("report_sha256")))
+        or not isinstance(result.get("manifest_sha256"), str)
+        or not _SHA256.fullmatch(cast(str, result.get("manifest_sha256")))
+        or type(result.get("artifact_count")) is not int
+        or cast(int, result.get("artifact_count")) <= 0
+        or type(physical_attempts) is not int
+        or not 36_000 <= physical_attempts <= 108_000
+        or provider_calls != physical_attempts
+        or type(provider_responses) is not int
+        or not 36_000 <= provider_responses <= physical_attempts
+        or usage_complete != provider_responses
+        or not isinstance(observed_models, Mapping)
+        or any(
+            not isinstance(model, str)
+            or not model
+            or type(count) is not int
+            or count < 0
+            for model, count in observed_models.items()
+        )
+        or sum(cast(int, count) for count in observed_models.values())
+        != provider_responses
+        or not isinstance(readiness, Mapping)
+        or not isinstance(accounting, Mapping)
+    ):
+        raise ConcurrentRobustnessReleaseError(
+            "v14 deployment requires the exact deploy-eligible Formal profile"
+        )
+    protected_v13_identity = readiness.get(
+        "protected_v13_release_identity_sha256"
+    )
+    if (
+        set(readiness)
+        != {
+            "schema_version",
+            "release_id",
+            "release_contract_schema",
+            "v2_study_root_identity_sha256",
+            "protected_v13_release_id",
+            "protected_v13_release_identity_sha256",
+            "canonical_endpoint",
+            "provider_calls_during_promotion",
+            "image_generation_triggered",
+            "canonical_deployment_triggered",
+            "operational_authorization_required",
+            "deployment_authorized",
+            "public_acceptance_recorded",
+        }
+        or readiness.get("schema_version") != FULL_POOL_V14_READINESS_SCHEMA
+        or readiness.get("release_id") != result.get("release_id")
+        or readiness.get("release_contract_schema")
+        != ROBUSTNESS_RELEASE_CONTRACT_SCHEMA_V14
+        or readiness.get("v2_study_root_identity_sha256") != v2_identity
+        or readiness.get("protected_v13_release_id")
+        != protected_v13_release_id
+        or protected_v13_identity
+        != FULL_POOL_V14_PROTECTED_V13_RELEASE_IDENTITY
+        or readiness.get("canonical_endpoint") != ROBUSTNESS_CANONICAL_ENDPOINT
+        or readiness.get("provider_calls_during_promotion") != 0
+        or readiness.get("image_generation_triggered") is not False
+        or readiness.get("canonical_deployment_triggered") is not False
+        or readiness.get("operational_authorization_required") is not True
+        or readiness.get("deployment_authorized") is not False
+        or readiness.get("public_acceptance_recorded") is not False
+    ):
+        raise ConcurrentRobustnessReleaseError(
+            "v14 deployment release readiness facts are crossed"
+        )
+    full_pool = accounting.get("full_pool_two_stage")
+    prompt_model = accounting.get("prompt_model_v2")
+    if not isinstance(full_pool, Mapping) or not isinstance(prompt_model, Mapping):
+        raise ConcurrentRobustnessReleaseError(
+            "v14 deployment Provider accounting is crossed"
+        )
+    full_pool_observed_models = full_pool.get("upstream_observed_model_counts")
+    full_pool_provider = full_pool.get("upstream_provider_accounting")
+    full_pool_attempts = full_pool.get("upstream_external_request_invocations")
+    expected_requested_models = {
+        "deepseek-v4-flash": 7_200,
+        "gemini-3.1-pro": 7_200,
+        "gemini-3.8-flash-high": 7_200,
+        "kimi-coding/k3-256k": 7_200,
+        "openai-codex/gpt-5.6-sol": 7_200,
+    }
+    successful_observed_models = prompt_model.get(
+        "successful_judgment_observed_model_counts"
+    )
+    provider_routes = prompt_model.get("provider_route_counts")
+    billing_semantics = prompt_model.get("billing_semantics_counts")
+    input_tokens = prompt_model.get("input_tokens")
+    output_tokens = prompt_model.get("output_tokens")
+    total_tokens = prompt_model.get("total_tokens")
+    cached_input_tokens = prompt_model.get("cached_input_tokens")
+    provider_fee_cny = prompt_model.get("provider_fee_cny")
+    subscription_nominal_usd = prompt_model.get(
+        "subscription_nominal_cost_usd_reference"
+    )
+    if (
+        set(accounting)
+        != {
+            "schema_version",
+            "full_pool_two_stage",
+            "prompt_model_v2",
+            "provider_calls_during_promotion",
+            "live_api_triggered_during_promotion",
+            "composite_live_api_triggered",
+            "cross_currency_total_reported",
+        }
+        or set(full_pool)
+        != {
+            "schema_version",
+            "upstream_live_api_triggered",
+            "upstream_formal_research_evidence",
+            "upstream_production_deploy_eligible",
+            "upstream_requested_model",
+            "upstream_observed_model_counts",
+            "upstream_logical_judgments",
+            "upstream_provider_responses",
+            "upstream_successful_decisions",
+            "upstream_external_request_invocations",
+            "upstream_usage_complete_response_count",
+            "upstream_usage_missing_response_count",
+            "upstream_usage_malformed_response_count",
+            "upstream_settled_actual_attempts",
+            "upstream_dispatched_without_settlement_uncertainty",
+            "upstream_charged_physical_attempts",
+            "upstream_physical_cap",
+            "upstream_provider_accounting",
+            "realization_provider_calls",
+            "realization_live_api_triggered",
+            "composite_live_api_triggered",
+            "composite_zero_provider_formal",
+        }
+        or full_pool.get("schema_version") != FULL_POOL_V13_ACCOUNTING_SCHEMA
+        or full_pool.get("upstream_live_api_triggered") is not True
+        or full_pool.get("upstream_formal_research_evidence") is not True
+        or full_pool.get("upstream_production_deploy_eligible") is not True
+        or full_pool.get("upstream_requested_model") != "gpt-5.6-sol"
+        or full_pool_observed_models != {"gpt-5.6-sol": 109_200}
+        or full_pool.get("upstream_logical_judgments") != 109_200
+        or full_pool.get("upstream_provider_responses") != 109_200
+        or full_pool.get("upstream_successful_decisions") != 109_200
+        or full_pool_attempts != 110_320
+        or full_pool.get("upstream_usage_complete_response_count") != 109_200
+        or full_pool.get("upstream_usage_missing_response_count") != 0
+        or full_pool.get("upstream_usage_malformed_response_count") != 0
+        or full_pool.get("upstream_settled_actual_attempts") != full_pool_attempts
+        or full_pool.get("upstream_dispatched_without_settlement_uncertainty")
+        != 0
+        or full_pool.get("upstream_charged_physical_attempts")
+        != full_pool_attempts
+        or full_pool.get("upstream_physical_cap") != 120_120
+        or not isinstance(full_pool_provider, Mapping)
+        or set(full_pool_provider)
+        != {
+            "schema_version",
+            "external_request_invocations",
+            "provider_response_count",
+            "successful_decision_count",
+            "usage_complete_response_count",
+            "usage_missing_response_count",
+            "usage_malformed_response_count",
+            "observed_model_counts",
+            "observed_model_missing_response_count",
+            "observed_model_malformed_response_count",
+            "input_tokens",
+            "output_tokens",
+            "total_tokens",
+            "cached_input_tokens",
+            "cached_input_tokens_reported_response_count",
+        }
+        or full_pool_provider.get("schema_version") != "provider-accounting-v1"
+        or full_pool_provider.get("external_request_invocations")
+        != full_pool_attempts
+        or full_pool_provider.get("provider_response_count") != 109_200
+        or full_pool_provider.get("successful_decision_count") != 109_200
+        or full_pool_provider.get("usage_complete_response_count") != 109_200
+        or full_pool_provider.get("usage_missing_response_count") != 0
+        or full_pool_provider.get("usage_malformed_response_count") != 0
+        or full_pool_provider.get("observed_model_counts")
+        != full_pool_observed_models
+        or full_pool_provider.get("observed_model_missing_response_count") != 0
+        or full_pool_provider.get("observed_model_malformed_response_count")
+        != 0
+        or full_pool_provider.get("input_tokens") != 107_373_847
+        or full_pool_provider.get("output_tokens") != 13_377_353
+        or full_pool_provider.get("total_tokens") != 120_751_200
+        or full_pool_provider.get("cached_input_tokens") != 0
+        or full_pool_provider.get("cached_input_tokens_reported_response_count")
+        != 109_200
+        or full_pool.get("realization_provider_calls") != 0
+        or full_pool.get("realization_live_api_triggered") is not False
+        or full_pool.get("composite_live_api_triggered") is not True
+        or full_pool.get("composite_zero_provider_formal") is not False
+        or accounting.get("schema_version") != FULL_POOL_V14_ACCOUNTING_SCHEMA
+        or accounting.get("provider_calls_during_promotion") != 0
+        or accounting.get("live_api_triggered_during_promotion") is not False
+        or accounting.get("composite_live_api_triggered") is not True
+        or accounting.get("cross_currency_total_reported") is not False
+        or set(prompt_model)
+        != {
+            "schema_version",
+            "logical_judgments",
+            "successful_judgments",
+            "terminal_failures",
+            "physical_attempts",
+            "physical_attempt_cap",
+            "provider_calls",
+            "provider_responses",
+            "usage_complete_response_count",
+            "usage_missing_response_count",
+            "usage_malformed_response_count",
+            "successful_judgment_requested_model_counts",
+            "successful_judgment_observed_model_counts",
+            "observed_model_counts",
+            "observed_model_missing_response_count",
+            "observed_model_malformed_response_count",
+            "provider_route_counts",
+            "billing_semantics_counts",
+            "input_tokens",
+            "output_tokens",
+            "total_tokens",
+            "cached_input_tokens",
+            "provider_fee_cny",
+            "subscription_nominal_cost_usd_reference",
+            "cross_currency_total_reported",
+            "live_api_triggered",
+            "formal_research_evidence",
+        }
+        or prompt_model.get("schema_version")
+        != "concurrent-robustness-v2-formal-provider-accounting-v1"
+        or prompt_model.get("logical_judgments") != 36_000
+        or prompt_model.get("successful_judgments") != 36_000
+        or prompt_model.get("terminal_failures") != 0
+        or prompt_model.get("physical_attempts") != physical_attempts
+        or prompt_model.get("physical_attempt_cap") != 108_000
+        or prompt_model.get("provider_calls") != provider_calls
+        or prompt_model.get("provider_responses") != provider_responses
+        or prompt_model.get("usage_complete_response_count") != usage_complete
+        or prompt_model.get("usage_missing_response_count") != 0
+        or prompt_model.get("usage_malformed_response_count") != 0
+        or prompt_model.get("successful_judgment_requested_model_counts")
+        != expected_requested_models
+        or not isinstance(successful_observed_models, Mapping)
+        or sum(
+            cast(int, count)
+            for count in successful_observed_models.values()
+            if type(count) is int
+        )
+        != 36_000
+        or any(
+            not isinstance(model, str)
+            or not model
+            or type(count) is not int
+            or count < 0
+            for model, count in successful_observed_models.items()
+        )
+        or prompt_model.get("observed_model_counts") != observed_models
+        or prompt_model.get("observed_model_missing_response_count") != 0
+        or prompt_model.get("observed_model_malformed_response_count") != 0
+        or not isinstance(provider_routes, Mapping)
+        or sum(
+            cast(int, count)
+            for count in provider_routes.values()
+            if type(count) is int
+        )
+        != 36_000
+        or any(
+            not isinstance(route, str)
+            or not route
+            or type(count) is not int
+            or count < 0
+            for route, count in provider_routes.items()
+        )
+        or not isinstance(billing_semantics, Mapping)
+        or sum(
+            cast(int, count)
+            for count in billing_semantics.values()
+            if type(count) is int
+        )
+        != 36_000
+        or any(
+            not isinstance(semantics, str)
+            or not semantics
+            or type(count) is not int
+            or count < 0
+            for semantics, count in billing_semantics.items()
+        )
+        or type(input_tokens) is not int
+        or input_tokens < 0
+        or type(output_tokens) is not int
+        or output_tokens < 0
+        or total_tokens != input_tokens + output_tokens
+        or type(cached_input_tokens) is not int
+        or not 0 <= cached_input_tokens <= input_tokens
+        or isinstance(provider_fee_cny, bool)
+        or not isinstance(provider_fee_cny, int | float)
+        or not 0 <= provider_fee_cny <= 25
+        or isinstance(subscription_nominal_usd, bool)
+        or not isinstance(subscription_nominal_usd, int | float)
+        or subscription_nominal_usd < 0
+        or prompt_model.get("cross_currency_total_reported") is not False
+        or prompt_model.get("live_api_triggered") is not True
+        or prompt_model.get("formal_research_evidence") is not True
+    ):
+        raise ConcurrentRobustnessReleaseError(
+            "v14 deployment Provider accounting is crossed"
+        )
+    return {
+        "full_pool_source_identity": full_pool_identity,
+        "v2_study_root_identity_sha256": v2_identity,
+        "protected_v13_release_id": protected_v13_release_id,
+        "protected_v13_release_identity_sha256": protected_v13_identity,
+        "physical_snapshot_identity_sha256": snapshot_identity,
+        "release_readiness": dict(readiness),
     }
 
 

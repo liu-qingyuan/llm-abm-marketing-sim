@@ -22,6 +22,7 @@ _FULL_POOL_BODY_PATHS = frozenset(
     }
 )
 _FULL_POOL_BODY_SUFFIXES = frozenset({".csv", ".md", ".mmd"})
+_V14_RELEASE_CONTRACT_SCHEMA = "abm-report-release-contract-v14"
 _FULL_POOL_MANIFEST_BOUND_NAMES = frozenset({"concurrent_message_decision_trace.json"})
 _BATCH_SIZE = 8
 _CURL_RETRY_SECONDS = 1_800
@@ -104,11 +105,20 @@ def _body_policy(facts: dict[str, object]) -> str:
     return "full-pool-paged-v1" if report_kind == "full-pool" else "default-64mib-v1"
 
 
-def _requires_full_body(artifact: _Artifact, policy: str) -> bool:
+def _requires_full_body(
+    artifact: _Artifact,
+    policy: str,
+    *,
+    v14_workbook: bool,
+) -> bool:
     if policy != "full-pool-paged-v1":
         return artifact.size_bytes <= _BODY_LIMIT_BYTES
     relative = PurePosixPath(artifact.relative_path)
-    if artifact.relative_path in _FULL_POOL_BODY_PATHS or relative.suffix in _FULL_POOL_BODY_SUFFIXES:
+    if (
+        artifact.relative_path in _FULL_POOL_BODY_PATHS
+        or relative.suffix in _FULL_POOL_BODY_SUFFIXES
+        or (v14_workbook and relative.suffix == ".xlsx")
+    ):
         return True
     if (
         relative.parts[0] == "trace"
@@ -231,8 +241,28 @@ def verify(
     release_id = _release_id(facts)
     policy = _body_policy(facts)
     artifacts = _artifacts(facts, snapshot_dir)
-    full_body = [artifact for artifact in artifacts if _requires_full_body(artifact, policy)]
-    manifest_bound = [artifact for artifact in artifacts if not _requires_full_body(artifact, policy)]
+    v14_workbook = (
+        facts.get("release_contract_schema_version")
+        == _V14_RELEASE_CONTRACT_SCHEMA
+    )
+    full_body = [
+        artifact
+        for artifact in artifacts
+        if _requires_full_body(
+            artifact,
+            policy,
+            v14_workbook=v14_workbook,
+        )
+    ]
+    manifest_bound = [
+        artifact
+        for artifact in artifacts
+        if not _requires_full_body(
+            artifact,
+            policy,
+            v14_workbook=v14_workbook,
+        )
+    ]
     batch_count = (len(full_body) + _BATCH_SIZE - 1) // _BATCH_SIZE
     print(f"Public body policy: {policy}", flush=True)
 

@@ -15,6 +15,8 @@ PYTHON="${ABM_DEPLOY_PYTHON:-python3}"
 SOURCE_DIR=""
 RELEASE_ID=""
 DEPLOYMENT_AUTHORIZATION=""
+DEPLOYMENT_OPERATION_FACTS_OUTPUT=""
+OPERATION_FACTS_WRITE_ATTEMPTED=0
 LOCAL_SNAPSHOT_DIR=""
 DEPLOYMENT_FACTS_FILE=""
 DEPLOYMENT_PLAN_FILE=""
@@ -22,7 +24,7 @@ ROLLBACK_READBACK_FILE=""
 LOCAL_CHECKSUMS_FILE=""
 
 usage() {
-  printf 'Usage: %s --contract <formal-release-contract> --source-dir <approved-run-directory> --release-id <release-id> [--authorization <v13-operational-authorization>]\n' "$0" >&2
+  printf 'Usage: %s --contract <formal-release-contract> --source-dir <approved-run-directory> --release-id <release-id> [--authorization <v13-or-v14-operational-authorization>] [--operation-facts-output <v14-operational-evidence>]\n' "$0" >&2
 }
 
 fail() {
@@ -50,6 +52,11 @@ while (( $# > 0 )); do
     --authorization)
       (( $# >= 2 )) || { usage; fail "--authorization requires a value"; }
       DEPLOYMENT_AUTHORIZATION="$2"
+      shift 2
+      ;;
+    --operation-facts-output)
+      (( $# >= 2 )) || { usage; fail "--operation-facts-output requires a value"; }
+      DEPLOYMENT_OPERATION_FACTS_OUTPUT="$2"
       shift 2
       ;;
     --help|-h)
@@ -181,7 +188,7 @@ PY
 [[ "${VALIDATED_DOMAIN}" == "${DOMAIN}" ]] || fail "validated canonical domain is crossed"
 [[ "${ARTIFACT_COUNT}" =~ ^[1-9][0-9]*$ ]] || fail "validated artifact count is invalid"
 [[ "${CONTRACT_SHA}" =~ ^[a-f0-9]{64}$ ]] || fail "validated contract identity is invalid"
-[[ "${RELEASE_CONTRACT_SCHEMA}" =~ ^abm-report-release-contract-v([2-9]|10|11|12|13)$ ]] || fail "validated release contract schema is invalid"
+[[ "${RELEASE_CONTRACT_SCHEMA}" =~ ^abm-report-release-contract-v([2-9]|10|11|12|13|14)$ ]] || fail "validated release contract schema is invalid"
 [[ -z "${RELEASE_IDENTITY_SHA}" || "${RELEASE_IDENTITY_SHA}" =~ ^[a-f0-9]{64}$ ]] || fail "validated release identity is invalid"
 SOURCE_DIR="${LOCAL_SNAPSHOT_DIR}"
 find "${SOURCE_DIR}" -type d -exec chmod a-w {} +
@@ -207,7 +214,7 @@ for artifact in facts["public_acceptance_artifacts"]:
 PY
 )
 (( ${#PUBLIC_ACCEPTANCE_ARTIFACTS[@]} == ARTIFACT_COUNT )) || fail "validated public acceptance artifact list is incomplete"
-if [[ "${RELEASE_CONTRACT_SCHEMA}" == "abm-report-release-contract-v13" ]]; then
+if [[ "${RELEASE_CONTRACT_SCHEMA}" == "abm-report-release-contract-v13" || "${RELEASE_CONTRACT_SCHEMA}" == "abm-report-release-contract-v14" ]]; then
   DEPLOYMENT_PLAN_FILE="$(mktemp "${TMPDIR:-/tmp}/abm-report-deployment-plan.XXXXXX")"
   DEPLOYMENT_PLAN_ARGS=(
     preflight
@@ -224,8 +231,27 @@ if [[ "${RELEASE_CONTRACT_SCHEMA}" == "abm-report-release-contract-v13" ]]; then
     DEPLOYMENT_PLAN_ARGS+=(--authorization "${DEPLOYMENT_AUTHORIZATION}")
   fi
   "${PYTHON}" "${SCRIPT_DIR}/validate_abm_report_deployment.py" "${DEPLOYMENT_PLAN_ARGS[@]}"
-elif [[ -n "${DEPLOYMENT_AUTHORIZATION}" ]]; then
-  fail "--authorization is only valid for abm-report-release-contract-v13"
+  if [[ "${RELEASE_CONTRACT_SCHEMA}" == "abm-report-release-contract-v14" ]]; then
+    [[ -n "${DEPLOYMENT_OPERATION_FACTS_OUTPUT}" ]] || \
+      fail "v14 requires --operation-facts-output for separate operational evidence"
+    [[ ! -L "${DEPLOYMENT_OPERATION_FACTS_OUTPUT}" ]] || \
+      fail "v14 operation facts output must not be a symlink"
+    [[ ! -e "${DEPLOYMENT_OPERATION_FACTS_OUTPUT}" ]] || \
+      fail "v14 operation facts output must be new"
+    [[ -d "$(dirname -- "${DEPLOYMENT_OPERATION_FACTS_OUTPUT}")" ]] || \
+      fail "v14 operation facts output parent does not exist"
+    DEPLOYMENT_OPERATION_FACTS_OUTPUT="$(
+      cd -- "$(dirname -- "${DEPLOYMENT_OPERATION_FACTS_OUTPUT}")" \
+        && printf '%s/%s\n' "$(pwd -P)" "$(basename -- "${DEPLOYMENT_OPERATION_FACTS_OUTPUT}")"
+    )" || fail "cannot resolve v14 operation facts output"
+    case "${DEPLOYMENT_OPERATION_FACTS_OUTPUT}" in
+      "${CANONICAL_SOURCE_DIR}"/*) fail "v14 operation facts must remain outside the immutable Release" ;;
+    esac
+  elif [[ -n "${DEPLOYMENT_OPERATION_FACTS_OUTPUT}" ]]; then
+    fail "--operation-facts-output is only valid for abm-report-release-contract-v14"
+  fi
+elif [[ -n "${DEPLOYMENT_AUTHORIZATION}" || -n "${DEPLOYMENT_OPERATION_FACTS_OUTPUT}" ]]; then
+  fail "--authorization and --operation-facts-output require an authorized v13 or v14 release contract"
 fi
 REMOTE_RELEASE="${REMOTE_ROOT}/releases/${RELEASE_ID}"
 
@@ -268,8 +294,8 @@ if [[ -n "${PREVIOUS_RELEASE_RECORD}" ]]; then
   [[ -n "${PREVIOUS_RELEASE}" && "${PREVIOUS_REPORT_SHA}" =~ ^[a-f0-9]{64}$ && "${PREVIOUS_MANIFEST_SHA}" =~ ^[a-f0-9]{64}$ ]] || \
     fail "current managed release identity is incomplete"
 fi
-if [[ "${RELEASE_CONTRACT_SCHEMA}" == "abm-report-release-contract-v13" ]]; then
-  [[ -n "${PREVIOUS_RELEASE}" ]] || fail "v13 requires a fresh managed rollback identity"
+if [[ "${RELEASE_CONTRACT_SCHEMA}" == "abm-report-release-contract-v13" || "${RELEASE_CONTRACT_SCHEMA}" == "abm-report-release-contract-v14" ]]; then
+  [[ -n "${PREVIOUS_RELEASE}" ]] || fail "v13/v14 requires a fresh managed rollback identity"
   ROLLBACK_READBACK_FILE="$(mktemp "${TMPDIR:-/tmp}/abm-report-rollback-readback.XXXXXX")"
   "${PYTHON}" - \
     "${ROLLBACK_READBACK_FILE}" \
@@ -429,6 +455,8 @@ site_existed=0
 site_written=0
 switched=0
 contract_checksums=""
+deployment_lock_backend=""
+deployment_lock_dir="${remote_root}/.deployment.lock.d"
 
 atomic_current() {
   target="$1"
@@ -473,6 +501,20 @@ validate_previous_identity() {
 rollback() {
   set +e
   rollback_status=0
+  if (( switched == 1 )); then
+    rollback_current="$(readlink -f "${remote_root}/current" 2>/dev/null || true)"
+    if [[ -n "${previous_release}" ]]; then
+      [[ "${rollback_current}" == "${remote_release}" || "${rollback_current}" == "${previous_release}" ]] || {
+        printf 'deploy error: current changed outside this transaction before rollback\n' >&2
+        return 1
+      }
+    else
+      [[ "${rollback_current}" == "${remote_release}" ]] || {
+        printf 'deploy error: current changed outside this transaction before rollback\n' >&2
+        return 1
+      }
+    fi
+  fi
   if [[ -n "${previous_release}" ]]; then
     sed -i \
       "s/X-Artifact-SHA256 \"[a-f0-9]\\{64\\}\"/X-Artifact-SHA256 \"${previous_report_sha}\"/" \
@@ -512,8 +554,30 @@ finish() {
     rollback || printf 'deploy error: remote rollback identity verification failed\n' >&2
   fi
   [[ -z "${site_backup}" ]] || rm -f "${site_backup}"
+  if [[ "${deployment_lock_backend}" == "mkdir" ]]; then
+    rmdir "${deployment_lock_dir}" 2>/dev/null || true
+  fi
   exit "${status}"
 }
+
+[[ -d "${remote_root}" && ! -L "${remote_root}" ]] || {
+  printf 'deploy error: remote root is missing or unsafe\n' >&2
+  exit 1
+}
+if command -v flock >/dev/null 2>&1; then
+  exec 9>"${remote_root}/.deployment.lock"
+  flock -n 9 || {
+    printf 'deploy error: another deployment transaction holds the remote lock\n' >&2
+    exit 1
+  }
+  deployment_lock_backend="flock"
+else
+  mkdir "${deployment_lock_dir}" 2>/dev/null || {
+    printf 'deploy error: another deployment transaction holds the remote lock\n' >&2
+    exit 1
+  }
+  deployment_lock_backend="mkdir"
+fi
 trap finish EXIT
 
 if [[ -e "${site_available}" ]]; then
@@ -546,7 +610,7 @@ install -d -m 755 "${remote_root}/nginx" "${remote_root}/tls" "${remote_root}/re
   printf 'deploy error: invalid validated contract identity\n' >&2
   exit 1
 }
-[[ "${release_contract_schema}" =~ ^abm-report-release-contract-v([2-9]|10|11|12|13)$ ]] || {
+[[ "${release_contract_schema}" =~ ^abm-report-release-contract-v([2-9]|10|11|12|13|14)$ ]] || {
   printf 'deploy error: invalid validated release contract schema\n' >&2
   exit 1
 }
@@ -789,29 +853,44 @@ cutover_complete=1
 rollback_remote() {
   ssh "${DEPLOY_HOST}" bash -s -- \
     "${REMOTE_ROOT}" \
+    "${REMOTE_RELEASE}" \
     "${PREVIOUS_RELEASE_ARG}" \
     "${PREVIOUS_REPORT_SHA_ARG}" \
     "${PREVIOUS_MANIFEST_SHA_ARG}" \
     "${CONTAINER_NAME}" <<'REMOTE_ROLLBACK'
 set -euo pipefail
 remote_root="$1"
-previous_release="$2"
+remote_release="$2"
+previous_release="$3"
 [[ "${previous_release}" != "__ABM_NO_PREVIOUS_RELEASE__" ]] || previous_release=""
-previous_report_sha="$3"
+previous_report_sha="$4"
 [[ "${previous_report_sha}" != "__ABM_NO_PREVIOUS_REPORT_SHA__" ]] || previous_report_sha=""
-previous_manifest_sha="$4"
+previous_manifest_sha="$5"
 [[ "${previous_manifest_sha}" != "__ABM_NO_PREVIOUS_MANIFEST_SHA__" ]] || previous_manifest_sha=""
-container_name="$5"
+container_name="$6"
+[[ -d "${remote_root}" && ! -L "${remote_root}" ]] || exit 1
+rollback_lock_dir="${remote_root}/.deployment.lock.d"
+if command -v flock >/dev/null 2>&1; then
+  exec 9>"${remote_root}/.deployment.lock"
+  flock -n 9 || exit 1
+else
+  mkdir "${rollback_lock_dir}" 2>/dev/null || exit 1
+  trap 'rmdir "${rollback_lock_dir}" 2>/dev/null || true' EXIT
+fi
+current_target="$(readlink -f "${remote_root}/current" 2>/dev/null || true)"
 if [[ -n "${previous_release}" ]]; then
+  [[ "${current_target}" == "${remote_release}" || "${current_target}" == "${previous_release}" ]] || exit 1
   [[ "${previous_report_sha}" =~ ^[a-f0-9]{64}$ && "${previous_manifest_sha}" =~ ^[a-f0-9]{64}$ ]] || exit 1
   [[ "$(sha256sum "${previous_release}/report.html" | awk '{print $1}')" == "${previous_report_sha}" ]] || exit 1
   [[ "$(sha256sum "${previous_release}/artifact_manifest.json" | awk '{print $1}')" == "${previous_manifest_sha}" ]] || exit 1
   sed -i \
     "s/X-Artifact-SHA256 \"[a-f0-9]\\{64\\}\"/X-Artifact-SHA256 \"${previous_report_sha}\"/" \
     "${remote_root}/nginx/default.conf"
-  temporary_link="${remote_root}/.current.rollback.$$.tmp"
-  ln -s "${previous_release}" "${temporary_link}"
-  mv -Tf "${temporary_link}" "${remote_root}/current"
+  if [[ "${current_target}" == "${remote_release}" ]]; then
+    temporary_link="${remote_root}/.current.rollback.$$.tmp"
+    ln -s "${previous_release}" "${temporary_link}"
+    mv -Tf "${temporary_link}" "${remote_root}/current"
+  fi
   docker compose -f "${remote_root}/compose.yml" up -d --force-recreate
   restored_health=""
   for _attempt in 1 2 3 4 5 6 7 8 9 10; do
@@ -827,6 +906,7 @@ if [[ -n "${previous_release}" ]]; then
   [[ "${restored_manifest_sha}" == "${previous_manifest_sha}" ]] || exit 1
   exit 0
 fi
+[[ "${current_target}" == "${remote_release}" ]] || exit 1
 docker compose -f "${remote_root}/compose.yml" down
 rm -f "${remote_root}/current"
 [[ ! -e "${remote_root}/current" && ! -L "${remote_root}/current" ]]
@@ -835,7 +915,11 @@ REMOTE_ROLLBACK
 
 rollback_on_failure() {
   status="${1:-$?}"
+  operation_output="${DEPLOYMENT_OPERATION_FACTS_OUTPUT:-}"
   trap - EXIT
+  if (( status != 0 && ${OPERATION_FACTS_WRITE_ATTEMPTED:-0} == 1 )) && [[ -n "${operation_output}" ]]; then
+    rm -f -- "${operation_output}" || true
+  fi
   if (( status != 0 && cutover_complete == 1 )); then
     printf 'Public acceptance failed; restoring previous release %s\n' "${PREVIOUS_RELEASE:-<none>}" >&2
     rollback_remote || printf 'deploy error: automatic rollback failed\n' >&2
@@ -870,12 +954,14 @@ PUBLIC_REPORT="$(mktemp "${TMPDIR:-/tmp}/abm-report-public-report.XXXXXX")"
 PUBLIC_ARTIFACT_DIR="$(mktemp -d "${TMPDIR:-/tmp}/abm-report-public-artifacts.XXXXXX")"
 PUBLIC_BODY_SUMMARY="$(mktemp "${TMPDIR:-/tmp}/abm-report-public-body-summary.XXXXXX")"
 cleanup_public_artifacts() {
-  rm -f "${PUBLIC_MANIFEST}" "${PUBLIC_REPORT}" "${PUBLIC_BODY_SUMMARY}"
-  rm -r -- "${PUBLIC_ARTIFACT_DIR}"
+  cleanup_status=0
+  rm -f "${PUBLIC_MANIFEST}" "${PUBLIC_REPORT}" "${PUBLIC_BODY_SUMMARY}" || cleanup_status=1
+  rm -r -- "${PUBLIC_ARTIFACT_DIR}" || cleanup_status=1
+  return "${cleanup_status}"
 }
 cleanup_and_rollback_on_failure() {
   status=$?
-  cleanup_public_artifacts
+  cleanup_public_artifacts || true
   rollback_on_failure "${status}"
 }
 trap cleanup_and_rollback_on_failure EXIT
@@ -946,10 +1032,125 @@ ABM_DEPLOY_PUBLIC_ARTIFACTS="${PUBLIC_ACCEPTANCE_ARTIFACTS_JSON}" \
 ABM_DEPLOY_RELEASE_CONTRACT_SCHEMA="${RELEASE_CONTRACT_SCHEMA}" \
   npx playwright test tests/playwright/deployed-abm-report.spec.ts
 
+if [[ "${RELEASE_CONTRACT_SCHEMA}" == "abm-report-release-contract-v14" ]]; then
+  ssh "${DEPLOY_HOST}" bash -s -- \
+    "${REMOTE_ROOT}" \
+    "${REMOTE_RELEASE}" \
+    "${REPORT_SHA}" \
+    "${MANIFEST_SHA}" \
+    "${CONTAINER_NAME}" <<'FINAL_CURRENT_READBACK'
+set -euo pipefail
+remote_root="$1"
+remote_release="$2"
+report_sha="$3"
+manifest_sha="$4"
+container_name="$5"
+[[ -d "${remote_root}" && ! -L "${remote_root}" ]] || exit 1
+readback_lock_dir="${remote_root}/.deployment.lock.d"
+if command -v flock >/dev/null 2>&1; then
+  exec 9>"${remote_root}/.deployment.lock"
+  flock -n 9 || exit 1
+else
+  mkdir "${readback_lock_dir}" 2>/dev/null || exit 1
+  trap 'rmdir "${readback_lock_dir}" 2>/dev/null || true' EXIT
+fi
+[[ -L "${remote_root}/current" ]] || exit 1
+[[ "$(readlink -f "${remote_root}/current")" == "${remote_release}" ]] || exit 1
+[[ "$(sha256sum "${remote_release}/report.html" | awk '{print $1}')" == "${report_sha}" ]] || exit 1
+[[ "$(sha256sum "${remote_release}/artifact_manifest.json" | awk '{print $1}')" == "${manifest_sha}" ]] || exit 1
+[[ "$(docker exec "${container_name}" wget -qO- http://127.0.0.1/report.html | sha256sum | awk '{print $1}')" == "${report_sha}" ]] || exit 1
+[[ "$(docker exec "${container_name}" wget -qO- http://127.0.0.1/artifact_manifest.json | sha256sum | awk '{print $1}')" == "${manifest_sha}" ]] || exit 1
+FINAL_CURRENT_READBACK
+fi
+
+DEPLOYED_AT_UTC="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+if [[ "${RELEASE_CONTRACT_SCHEMA}" == "abm-report-release-contract-v14" ]]; then
+  OPERATION_FACTS_WRITE_ATTEMPTED=1
+  "${PYTHON}" - \
+    "${DEPLOYMENT_PLAN_FILE}" \
+    "${PUBLIC_BODY_SUMMARY}" \
+    "${DEPLOYED_AT_UTC}" \
+    "${DEPLOYMENT_OPERATION_FACTS_OUTPUT}" <<'PY'
+import hashlib
+import json
+import sys
+from pathlib import Path
+
+from llm_abm_sim.report_deployment import (
+    V14_DEPLOYMENT_OPERATION_SCHEMA,
+    V14_PUBLIC_ACCEPTANCE_CHECKS,
+    write_v14_deployment_operation_facts,
+)
+
+plan_path = Path(sys.argv[1])
+summary_path = Path(sys.argv[2])
+operated_at = sys.argv[3]
+output_path = Path(sys.argv[4])
+plan_payload = plan_path.read_bytes()
+summary_payload = summary_path.read_bytes()
+plan = json.loads(plan_payload.decode("utf-8"))
+summary = json.loads(summary_payload.decode("utf-8"))
+if (
+    summary.get("schema_version") != "abm-public-artifact-body-acceptance-v1"
+    or summary.get("artifact_count") != plan.get("artifact_count")
+    or summary.get("full_body_count", -1)
+    + summary.get("manifest_bound_count", -1)
+    != plan.get("artifact_count")
+):
+    raise SystemExit("public body acceptance cannot close v14 operation facts")
+public_acceptance = {name: True for name in V14_PUBLIC_ACCEPTANCE_CHECKS}
+operation = {
+    "schema_version": V14_DEPLOYMENT_OPERATION_SCHEMA,
+    "status": "succeeded",
+    "execution_mode": "authorized_remote_deployment",
+    "remote_connection_authorized": True,
+    "canonical_deployment_triggered": True,
+    "operated_at_utc": operated_at,
+    "release_contract_schema": plan["release_contract_schema"],
+    "contract_sha256": plan["contract_sha256"],
+    "deployment_facts_sha256": plan["deployment_facts_sha256"],
+    "authorization_reference": plan["authorization_reference"],
+    "authorization_sha256": plan["authorization_sha256"],
+    "release_id": plan["release_id"],
+    "release_identity_sha256": plan["release_identity_sha256"],
+    "physical_snapshot_identity_sha256": plan[
+        "physical_snapshot_identity_sha256"
+    ],
+    "full_pool_source_identity": plan["full_pool_source_identity"],
+    "v2_study_root_identity_sha256": plan["v2_study_root_identity_sha256"],
+    "protected_v13_release_id": plan["protected_v13_release_id"],
+    "protected_v13_release_identity_sha256": plan[
+        "protected_v13_release_identity_sha256"
+    ],
+    "canonical_endpoint": plan["canonical_endpoint"],
+    "report_sha256": plan["report_sha256"],
+    "manifest_sha256": plan["manifest_sha256"],
+    "workbook_relative_path": plan["workbook_relative_path"],
+    "workbook_sha256": plan["workbook_sha256"],
+    "artifact_count": plan["artifact_count"],
+    "deployment_target": plan["deployment_target"],
+    "fresh_rollback_identity": plan["rollback_identity"],
+    "candidate_inventory_validated": True,
+    "candidate_health_validated": True,
+    "current_identity_revalidated_before_switch": True,
+    "atomic_current_switched": True,
+    "post_switch_health_validated": True,
+    "final_current_identity_revalidated": True,
+    "public_acceptance": public_acceptance,
+    "public_body_summary_sha256": hashlib.sha256(summary_payload).hexdigest(),
+    "playwright_acceptance_passed": True,
+    "rollback_required": False,
+    "provider_calls": 0,
+}
+write_v14_deployment_operation_facts(
+    path=output_path,
+    operation_facts=operation,
+)
+PY
+fi
 cleanup_public_artifacts
 cleanup_local_snapshot
 trap - EXIT
-DEPLOYED_AT_UTC="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
 printf 'Deployment complete\n'
 printf 'Deployment time (UTC): %s\n' "${DEPLOYED_AT_UTC}"
 printf 'Report: https://%s/\n' "${DOMAIN}"

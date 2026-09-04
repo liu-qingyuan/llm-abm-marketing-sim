@@ -23,7 +23,7 @@ def _parser() -> argparse.ArgumentParser:
 
     preflight = subparsers.add_parser(
         "preflight",
-        help="Close a v13 deployment plan before any remote connection",
+        help="Close a v13/v14 deployment plan before any remote connection",
     )
     preflight.add_argument("--deployment-facts", type=Path, required=True)
     preflight.add_argument("--authorization", type=Path)

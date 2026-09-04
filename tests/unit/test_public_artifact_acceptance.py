@@ -6,6 +6,8 @@ import os
 import subprocess
 from pathlib import Path
 
+import pytest
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 VERIFIER = REPO_ROOT / "scripts" / "verify_abm_public_artifact_bodies.py"
 MIB = 1024 * 1024
@@ -133,15 +135,27 @@ def test_public_body_verifier_processes_fixed_batches_and_manifest_binds_large_f
     assert not list(downloads.iterdir())
 
 
-def test_full_pool_paged_policy_body_hashes_presentation_files_not_bulk_json(
+@pytest.mark.parametrize(
+    ("release_contract_schema", "expected_full", "expected_manifest_bound"),
+    [
+        ("abm-report-release-contract-v13", 4, 15),
+        ("abm-report-release-contract-v14", 5, 14),
+    ],
+)
+def test_full_pool_paged_policy_hashes_v14_workbook_without_changing_v13(
     tmp_path: Path,
+    release_contract_schema: str,
+    expected_full: int,
+    expected_manifest_bound: int,
 ) -> None:
     facts, snapshot, public, downloads = _fixture(tmp_path)
     document = json.loads(facts.read_text(encoding="utf-8"))
     document["report_kind"] = "full-pool"
+    document["release_contract_schema_version"] = release_contract_schema
     artifacts = (
         ("bulk/page.json", 5 * MIB, b"}"),
         ("downloads/results.csv", 5 * MIB, b"\n"),
+        ("prompt_model_realized_results.xlsx", 5 * MIB, b"x"),
         ("report.html", 5 * MIB, b">"),
         ("artifact_manifest.json", 5 * MIB, b"}"),
         ("trace/message_1/batch-000000.json", 128, b"}"),
@@ -189,8 +203,8 @@ def test_full_pool_paged_policy_body_hashes_presentation_files_not_bulk_json(
     assert completed.returncode == 0, completed.stderr
     result = json.loads(summary.read_text(encoding="utf-8"))
     assert result["body_policy"] == "full-pool-paged-v1"
-    assert result["full_body_count"] == 4
-    assert result["manifest_bound_count"] == 14
+    assert result["full_body_count"] == expected_full
+    assert result["manifest_bound_count"] == expected_manifest_bound
     assert "Public body policy: full-pool-paged-v1" in completed.stdout
 
 
