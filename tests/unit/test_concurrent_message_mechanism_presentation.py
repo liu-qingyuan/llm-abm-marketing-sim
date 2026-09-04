@@ -327,6 +327,69 @@ def test_two_stage_full_pool_master_has_one_bilingual_semantic_owner_and_new_byt
     } == historical_before
 
 
+def test_robustness_v2_master_owns_twenty_cell_two_stage_mermaid_svg_and_fallback() -> None:
+    historical_before = {
+        filename: (_ASSET_ROOT / filename).read_bytes()
+        for filename in _HISTORICAL_APPROVED_HASHES
+    }
+
+    first = _MECHANISM_PRESENTATION.build_robustness_v2_master()
+    second = _MECHANISM_PRESENTATION.build_robustness_v2_master()
+
+    assert first == second
+    assert first.schema_version == "concurrent-robustness-v2-mechanism-presentation-v1"
+    assert tuple(artifact.filename for artifact in first.mermaid_artifacts) == (
+        "prompt-model-realized-mechanism.mmd",
+    )
+    diagram = first.diagrams[0]
+    artifact = first.mermaid_artifacts[0]
+    node_ids = {node.semantic_id for node in diagram.nodes}
+    edge_pairs = {(edge.source, edge.target) for edge in diagram.edges}
+    assert node_ids == {
+        "frozen_research_boundary",
+        "canonical_prompt_matrix",
+        "five_provider_conditions",
+        "twenty_independent_cells",
+        "provider_judgment",
+        "judgment_gate",
+        "shared_realization_draw",
+        "realized_outcome",
+        "full_batch_barrier",
+        "realized_positive_feedback",
+        "next_batch_ranking",
+        "realized_main_projection",
+    }
+    assert ("provider_judgment", "judgment_gate") in edge_pairs
+    assert ("judgment_gate", "shared_realization_draw") in edge_pairs
+    assert ("shared_realization_draw", "realized_outcome") in edge_pairs
+    assert ("realized_outcome", "full_batch_barrier") in edge_pairs
+    assert ("full_batch_barrier", "realized_positive_feedback") in edge_pairs
+    assert ("realized_positive_feedback", "next_batch_ranking") in edge_pairs
+    assert ("next_batch_ranking", "twenty_independent_cells") in edge_pairs
+    assert b"20 Independent Prompt-Model Cells" in artifact.payload
+    assert b"Provider Judgment" in artifact.payload
+    assert b"Shared Deterministic Draw" in artifact.payload
+    assert b"Realized-Positive Feedback" in artifact.payload
+    assert b"realized_reason" not in artifact.payload
+
+    for language in ("zh-CN", "en-US"):
+        svg = _MECHANISM_PRESENTATION.render_inline_svg(first, language=language)
+        fallback = _MECHANISM_PRESENTATION.render_fallback(first, language=language)
+        assert f'data-mechanism-language="{language}"' in svg
+        assert f'data-mechanism-language="{language}"' in fallback
+        for node in diagram.nodes:
+            assert f'data-mechanism-node-id="{node.semantic_id}"' in svg
+        for edge in diagram.edges:
+            assert f'data-mechanism-edge-id="{edge.semantic_id}"' in svg
+        projection = next(item for item in diagram.projections if item.language == language)
+        for key in projection.fallback_keys:
+            assert f'data-mechanism-fallback-key="{key}"' in fallback
+    assert {
+        filename: (_ASSET_ROOT / filename).read_bytes()
+        for filename in _HISTORICAL_APPROVED_HASHES
+    } == historical_before
+
+
 def test_module_has_one_package_internal_interface_and_no_public_export() -> None:
     interface_types = [
         name

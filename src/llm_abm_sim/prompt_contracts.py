@@ -320,6 +320,30 @@ class PromptContractRegistry:
         except KeyError as exc:
             raise ValueError(f"unsupported concurrent robustness prompt: {token_or_variant}") from exc
 
+    def catalog_records(self) -> tuple[dict[str, object], ...]:
+        """Return complete static client-message templates without per-user rendered values."""
+
+        records: list[dict[str, object]] = []
+        placeholders = {field: f"{{{{{field}}}}}" for field in _APPROVED_TEMPLATE_FIELDS}
+        for contract in self._contracts:
+            template = self._templates_by_token[contract.prompt_version]
+            records.append(
+                {
+                    "schema_version": "concurrent-robustness-prompt-catalog-record-v1",
+                    "variant_id": contract.variant_id,
+                    "controlled_change": self.controlled_change(contract.variant_id),
+                    "prompt_version": contract.prompt_version,
+                    "canonical_hash": contract.canonical_hash,
+                    "placeholder_fields": _APPROVED_TEMPLATE_FIELDS,
+                    "client_submitted_message_templates": (
+                        {"role": "system", "content": template.system_content},
+                        {"role": "user", "content": self._user_content(template, placeholders)},
+                    ),
+                    "decision_output_schema": asdict(contract.output_schema),
+                }
+            )
+        return tuple(records)
+
     def resolve(self, token_or_variant: str) -> ConcurrentPromptContract:
         try:
             return self._contracts_by_key[token_or_variant]
@@ -332,14 +356,18 @@ class PromptContractRegistry:
         missing = [key for key in _APPROVED_TEMPLATE_FIELDS if not isinstance(summaries.get(key), str)]
         if missing:
             raise ValueError(f"Prompt summaries missing approved fields: {', '.join(missing)}")
+        return [
+            {"role": "system", "content": template.system_content},
+            {"role": "user", "content": self._user_content(template, summaries)},
+        ]
+
+    @staticmethod
+    def _user_content(template: _PromptTemplate, summaries: Mapping[str, str]) -> str:
         blocks = [f"{section.heading}\n{summaries[section.field_key]}" for section in template.sections]
         if template.rubric is not None:
             blocks.append(template.rubric)
         blocks.append(template.output_instruction)
-        return [
-            {"role": "system", "content": template.system_content},
-            {"role": "user", "content": "\n\n".join(blocks)},
-        ]
+        return "\n\n".join(blocks)
 
     @staticmethod
     def _validate_template(variant_id: PromptVariantId, template: _PromptTemplate) -> None:

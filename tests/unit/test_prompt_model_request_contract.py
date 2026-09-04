@@ -23,6 +23,7 @@ from llm_abm_sim.schemas import (
     PlatformContext,
     PostContent,
     ProviderLLMConfig,
+    ReasoningEffort,
     UserProfile,
     ValueDimensions,
 )
@@ -52,6 +53,54 @@ def test_prompt_registry_exposes_four_frozen_information_equivalent_contracts() 
     assert len({contract.action_semantics for contract in contracts}) == 1
     assert len({contract.output_schema for contract in contracts}) == 1
     assert len({contract.equivalence_checklist for contract in contracts}) == 1
+
+
+def test_prompt_catalog_exposes_complete_client_templates_without_rendered_user_values() -> None:
+    records = CONCURRENT_ROBUSTNESS_PROMPT_REGISTRY.catalog_records()
+
+    assert tuple(record["variant_id"] for record in records) == ("P0", "P1", "P2", "P3")
+    assert tuple(record["controlled_change"] for record in records) == (
+        "baseline",
+        "wording_only",
+        "information_order_only",
+        "structured_rubric_only",
+    )
+    assert all(record["schema_version"] == "concurrent-robustness-prompt-catalog-record-v1" for record in records)
+    assert all(record["prompt_version"] in CONCURRENT_ROBUSTNESS_PROMPT_TOKENS for record in records)
+    assert all(str(record["canonical_hash"]).startswith("sha256:") for record in records)
+    assert all(record["placeholder_fields"] == (
+        "marketing_content_summary",
+        "post_value_summary",
+        "observed_profile_summary",
+        "consumption_preference_summary",
+        "peer_influence_summary",
+    ) for record in records)
+    messages_by_variant: dict[str, tuple[dict[str, str], ...]] = {}
+    for record in records:
+        messages = cast(
+            tuple[dict[str, str], ...],
+            record["client_submitted_message_templates"],
+        )
+        messages_by_variant[str(record["variant_id"])] = messages
+        assert tuple(message["role"] for message in messages) == ("system", "user")
+        assert all(isinstance(message["content"], str) and message["content"] for message in messages)
+        user_template = messages[1]["content"]
+        placeholder_fields = cast(tuple[str, ...], record["placeholder_fields"])
+        assert all(f"{{{{{field}}}}}" in user_template for field in placeholder_fields)
+        assert "【输出 schema】" in user_template
+        decision_schema = cast(dict[str, object], record["decision_output_schema"])
+        assert decision_schema["required_fields"] == (
+            "engage",
+            "probability",
+            "reason",
+            "confidence",
+            "action",
+        )
+        serialized = json.dumps(record, ensure_ascii=False)
+        assert "excluded-user-id" not in serialized
+        assert "rendered_prompt" not in serialized
+    assert "【结构化判断 rubric】" not in messages_by_variant["P0"][1]["content"]
+    assert "【结构化判断 rubric】" in messages_by_variant["P3"][1]["content"]
 
 
 def test_all_prompt_variants_render_the_same_allowlisted_decision_information() -> None:
@@ -130,7 +179,7 @@ def test_provider_request_options_are_typed_explicit_and_historically_omitted() 
     historical_metadata = historical_config.safe_metadata()
     historical_dump = historical_config.model_dump(mode="json")
     explicit_config = ProviderLLMConfig(
-        reasoning_effort="low",
+        reasoning_effort=ReasoningEffort.LOW,
         max_output_tokens=256,
     )
     explicit_metadata = explicit_config.safe_metadata()
@@ -144,9 +193,9 @@ def test_provider_request_options_are_typed_explicit_and_historically_omitted() 
     assert explicit_dump["reasoning_effort"] == "low"
     assert explicit_dump["max_output_tokens"] == 256
     with pytest.raises(ValidationError):
-        ProviderLLMConfig(reasoning_effort="untyped")
+        ProviderLLMConfig(reasoning_effort=cast(Any, "untyped"))
     with pytest.raises(ValidationError, match="Responses"):
-        ProviderLLMConfig(wire_api="chat", reasoning_effort="low")
+        ProviderLLMConfig(wire_api="chat", reasoning_effort=ReasoningEffort.LOW)
 
 
 def test_robustness_request_contract_fails_before_any_provider_call_when_incomplete() -> None:
@@ -168,7 +217,7 @@ def test_robustness_request_contract_fails_before_any_provider_call_when_incompl
         )
     with pytest.raises(ValueError, match="output-token ceiling"):
         OpenAICompatibleDecisionAdapter(
-            ProviderLLMConfig(prompt_version=token, reasoning_effort="low"),
+            ProviderLLMConfig(prompt_version=token, reasoning_effort=ReasoningEffort.LOW),
             client=client,
         )
 
@@ -183,7 +232,7 @@ def test_explicit_low_responses_request_contract_freezes_prompt_schema_and_limit
             model="requested-model",
             wire_api="responses",
             prompt_version=token,
-            reasoning_effort="low",
+            reasoning_effort=ReasoningEffort.LOW,
             max_output_tokens=256,
             timeout_seconds=12.5,
             max_retries=2,
@@ -252,7 +301,7 @@ def test_explicit_low_reaches_responses_wire_without_sampling_parameters() -> No
             enabled=True,
             model="requested-model",
             prompt_version=CONCURRENT_ROBUSTNESS_PROMPT_TOKENS[2],
-            reasoning_effort="low",
+            reasoning_effort=ReasoningEffort.LOW,
             max_output_tokens=256,
         ),
         client=client,
@@ -301,7 +350,7 @@ def test_safe_request_accounting_separates_requested_and_observed_model_identity
             enabled=True,
             model="requested-model-alias",
             prompt_version=token,
-            reasoning_effort="low",
+            reasoning_effort=ReasoningEffort.LOW,
             max_output_tokens=256,
         ),
         client=ContractAwareClient(),

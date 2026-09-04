@@ -28,6 +28,7 @@
 - [Concurrent Message Competition Experiment](architecture/concurrent-message-competition-experiment.md)
 - [Full-Pool Segmented Continuation Runtime and Recovery Preflight](architecture/full-pool-segmented-continuation.md)
 - [Full-Pool Two-Stage Engagement Realization](architecture/full-pool-two-stage-realization.md)
+- [Prompt–Model Realized Table-First Report](architecture/prompt-model-realized-report.md)
 - [Report Deployment Authorization and Rollback](architecture/report-deployment.md)
 - [Full-Pool Segmented Continuation Operator](architecture/full-pool-segmented-continuation-operator.md)
 - [锦江用户数据结构](architecture/jinjiang-user-profile-data-structure.md)

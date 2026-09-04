@@ -117,6 +117,23 @@ class ConcurrentRobustnessV2StudyFacts:
 
 
 @dataclass(frozen=True)
+class _ConcurrentRobustnessV2ReportSource:
+    """Closed persisted documents exposed only to the package-internal Report Module."""
+
+    facts: ConcurrentRobustnessV2StudyFacts
+    manifest: ConcurrentRobustnessManifestV2
+    root_manifest: Mapping[str, Any]
+    validation: Mapping[str, Any]
+    realized_analysis: Mapping[str, Any]
+    judgment_audit: Mapping[str, Any]
+    claim_audit: Mapping[str, Any]
+    cell_registry: Mapping[str, Any]
+    batch_commits: tuple[Mapping[str, Any], ...]
+    message_snapshot: tuple[Mapping[str, Any], ...]
+    artifact_hashes: Mapping[str, str]
+
+
+@dataclass(frozen=True)
 class _PersistedEvidence:
     manifest: ConcurrentRobustnessManifestV2
     manifest_bytes: bytes
@@ -1718,6 +1735,65 @@ def _close_concurrent_robustness_v2_study(
         raise ConcurrentRobustnessV2EvidenceError("v2 workspace mutated during atomic closure")
     _assert_source_unchanged(source_closure)
     return facts
+
+
+def _read_closed_concurrent_robustness_v2_report_source(
+    root_path: str | Path,
+) -> _ConcurrentRobustnessV2ReportSource:
+    """Reread a closed v2 root and its frozen message source for report composition."""
+
+    root = _real_directory(Path(root_path), "v2 study root")
+    before = _snapshot_tree(root)
+    facts = _validate_root(root)
+    documents = _read_root_documents(root)
+    source_membership, source_closure = _source_membership(documents.evidence.manifest)
+    if source_membership != documents.membership:
+        raise ConcurrentRobustnessV2EvidenceError(
+            "v2 report source membership differs from the frozen source"
+        )
+    root_manifest, _ = _read_canonical_object(root / _ROOT_MANIFEST, "v2 root manifest")
+    validation, _ = _read_canonical_object(root / _VALIDATION, "v2 root validation")
+    artifact_hashes = {
+        path.name: _sha256_file(path)
+        for path in sorted(root.iterdir())
+        if path.is_file() and not path.is_symlink()
+    }
+    if set(artifact_hashes) != _ROOT_FILES or _snapshot_tree(root) != before:
+        raise ConcurrentRobustnessV2EvidenceError(
+            "v2 report source changed during independent persisted reread"
+        )
+    _assert_source_unchanged(source_closure)
+    return _ConcurrentRobustnessV2ReportSource(
+        facts=facts,
+        manifest=documents.evidence.manifest,
+        root_manifest=root_manifest,
+        validation=validation,
+        realized_analysis=documents.realized_analysis,
+        judgment_audit=documents.judgment_audit,
+        claim_audit=documents.claim_audit,
+        cell_registry=documents.evidence.cell_registry,
+        batch_commits=documents.evidence.commits,
+        message_snapshot=tuple(
+            cast(Mapping[str, Any], row)
+            for row in source_closure.source_evidence.message_snapshot
+        ),
+        artifact_hashes=artifact_hashes,
+    )
+
+
+def _assert_concurrent_robustness_v2_report_source_unchanged(
+    source: _ConcurrentRobustnessV2ReportSource,
+) -> None:
+    root = source.facts.root_path
+    current = {
+        path.name: _sha256_file(path)
+        for path in sorted(root.iterdir())
+        if path.is_file() and not path.is_symlink()
+    }
+    if current != dict(source.artifact_hashes):
+        raise ConcurrentRobustnessV2EvidenceError(
+            "v2 report composition mutated immutable study evidence"
+        )
 
 
 def read_closed_concurrent_robustness_v2_study(

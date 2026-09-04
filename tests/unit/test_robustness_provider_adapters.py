@@ -13,6 +13,7 @@ from llm_abm_sim.providers.robustness import (
     DeepSeekV4FlashDecisionAdapter,
     PiKimiDecisionAdapter,
     PiOpenAIDecisionAdapter,
+    robustness_provider_disclosures,
 )
 from llm_abm_sim.schemas import PeerContext, PlatformContext, PostContent, UserProfile
 
@@ -101,6 +102,41 @@ def _context() -> dict[str, Any]:
         "platform_context": PlatformContext(),
         "time_step": 0,
     }
+
+
+def test_provider_disclosures_freeze_routes_identity_settings_and_gateway_limits() -> None:
+    records = robustness_provider_disclosures()
+
+    assert tuple(record["requested_model"] for record in records) == (
+        "deepseek-v4-flash",
+        "gemini-3.1-pro",
+        "gemini-3.8-flash-high",
+        "kimi-coding/k3-256k",
+        "openai-codex/gpt-5.6-sol",
+    )
+    assert tuple(record["required_observed_model"] for record in records) == (
+        "deepseek-v4-flash",
+        "gemini-pro-agent",
+        "gemini-3.8-flash-high",
+        "k3-256k",
+        "gpt-5.6-sol",
+    )
+    assert all(record["schema_version"] == "robustness-provider-disclosure-v1" for record in records)
+    assert records[0]["provider_route"] == "deepseek_official"
+    assert records[0]["thinking_mode"] == "disabled"
+    assert records[0]["fee_ceiling"] == 25.0
+    assert records[3]["provider_route"] == "pi_kimi_oauth_subscription"
+    assert records[4]["provider_route"] == "pi_openai_oauth_subscription"
+    for record in records[1:3]:
+        assert record["provider_route"] == "antigravity_openai_compatible_gateway"
+        assert record["route_kind"] == "openai_compatible_gateway"
+        assert record["gateway_context_visibility"] == "may_include_unobservable_context"
+        assert record["direct_gemini_developer_api"] is False
+        assert record["client_prompt_scope"] == "client_submitted_messages_not_complete_effective_prompt"
+    for record in (records[0], records[3], records[4]):
+        assert record["gateway_context_visibility"] == "not_applicable"
+        assert record["direct_gemini_developer_api"] is None
+        assert record["client_prompt_scope"] == "client_submitted_messages"
 
 
 @pytest.mark.parametrize("prompt_variant", ["P0", "P1", "P2", "P3"])

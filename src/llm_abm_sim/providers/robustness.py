@@ -131,6 +131,54 @@ _OPENAI = _ProviderCondition(
 )
 
 
+def robustness_provider_disclosures() -> tuple[dict[str, object], ...]:
+    """Return safe, static facts for the five frozen Provider/model conditions."""
+
+    conditions = (
+        _DEEPSEEK,
+        _GEMINI_CONDITIONS["gemini-3.1-pro"],
+        _GEMINI_CONDITIONS["gemini-3.8-flash-high"],
+        _KIMI,
+        _OPENAI,
+    )
+    records: list[dict[str, object]] = []
+    for condition in conditions:
+        is_gateway = condition.provider_route == "antigravity_openai_compatible_gateway"
+        if condition.provider_route == "deepseek_official":
+            route_kind = "official_api"
+        elif is_gateway:
+            route_kind = "openai_compatible_gateway"
+        else:
+            route_kind = "pi_oauth_subscription"
+        records.append(
+            {
+                "schema_version": "robustness-provider-disclosure-v1",
+                "provider_route": condition.provider_route,
+                "route_kind": route_kind,
+                "requested_model": condition.requested_model,
+                "wire_model": condition.wire_model,
+                "required_observed_model": condition.required_observed_model,
+                "wire_api": condition.wire_api,
+                "reasoning_effort": condition.reasoning_effort,
+                "thinking_mode": condition.thinking_mode,
+                "output_token_ceiling": condition.output_token_ceiling,
+                "billing_semantics": condition.billing_semantics,
+                "billing_currency": condition.billing_currency,
+                "fee_ceiling": condition.fee_ceiling,
+                "gateway_context_visibility": (
+                    "may_include_unobservable_context" if is_gateway else "not_applicable"
+                ),
+                "direct_gemini_developer_api": False if is_gateway else None,
+                "client_prompt_scope": (
+                    "client_submitted_messages_not_complete_effective_prompt"
+                    if is_gateway
+                    else "client_submitted_messages"
+                ),
+            }
+        )
+    return tuple(records)
+
+
 _WAIT_SECONDS_PATTERN = re.compile(r"\bWait\s+([0-9]+(?:\.[0-9]+)?)\s*s\b", re.IGNORECASE)
 _HTTP_STATUS_PATTERN = re.compile(
     r"\b(?:HTTP(?:\s+status)?|status(?:\s+code)?)[ :=]+(4\d\d|5\d\d)\b",

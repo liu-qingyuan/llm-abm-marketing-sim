@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import html
 import json
 import re
 from dataclasses import dataclass
@@ -8,6 +9,7 @@ from dataclasses import dataclass
 _SCHEMA_VERSION = "concurrent-message-mechanism-presentation-v1"
 _FULL_POOL_SCHEMA_VERSION = "full-pool-mechanism-presentation-v1"
 _FULL_POOL_TWO_STAGE_SCHEMA_VERSION = "full-pool-two-stage-mechanism-presentation-v1"
+_ROBUSTNESS_V2_SCHEMA_VERSION = "concurrent-robustness-v2-mechanism-presentation-v1"
 _SEMANTIC_SET_SCHEMA_VERSION = "mechanism-semantic-set-v1"
 _LANE_ORDER = (
     "historical_data",
@@ -1462,6 +1464,303 @@ def _full_pool_two_stage_definition() -> _DiagramDefinition:
     )
 
 
+def _robustness_v2_definition() -> _DiagramDefinition:
+    return _DiagramDefinition(
+        diagram_id="prompt_model_realized_main",
+        filename="prompt-model-realized-mechanism.mmd",
+        navigation_anchor="prompt-model-realized-mechanism",
+        title=_text(
+            "prompt_model_realized_main.title",
+            "五模型 Prompt–Model 两阶段实现机制",
+            "Five-Model Prompt–Model Two-Stage Realization",
+        ),
+        description=_text(
+            "prompt_model_realized_main.description",
+            "五个模型与 P0–P3 形成 20 个独立 cell。每个 Provider Judgment 经过跨 cell 共享的稳定抽样；完整批次关闭后，只有 realized-positive 用户进入下一批排序反馈。",
+            "Five models and P0–P3 form 20 independent cells. Every Provider Judgment passes through the shared deterministic draw, and only realized-positive users enter next-batch ranking feedback after the full batch closes.",
+        ),
+        nodes=(
+            _node(
+                "frozen_research_boundary",
+                "prompt_model_realized_main.node.frozen_research_boundary",
+                "冻结样本、互动图与三条 message",
+                "Frozen Sample, Graph, and Three Messages",
+                lane="historical_data",
+                stage=1,
+            ),
+            _node(
+                "canonical_prompt_matrix",
+                "prompt_model_realized_main.node.canonical_prompt_matrix",
+                "Canonical P0–P3 Prompt Matrix",
+                "Canonical P0–P3 Prompt Matrix",
+                lane="simulated_user_decision",
+                stage=2,
+            ),
+            _node(
+                "five_provider_conditions",
+                "prompt_model_realized_main.node.five_provider_conditions",
+                "五个模型 + route + reasoning 条件",
+                "Five Model + Route + Reasoning Conditions",
+                lane="simulated_user_decision",
+                stage=3,
+            ),
+            _node(
+                "twenty_independent_cells",
+                "prompt_model_realized_main.node.twenty_independent_cells",
+                "20 个独立 Prompt–Model Cells",
+                "20 Independent Prompt-Model Cells",
+                lane="platform_recommendation",
+                stage=4,
+                shape="rounded",
+            ),
+            _node(
+                "provider_judgment",
+                "prompt_model_realized_main.node.provider_judgment",
+                "Persisted Provider Judgment",
+                "Persisted Provider Judgment",
+                lane="simulated_user_decision",
+                stage=5,
+            ),
+            _node(
+                "judgment_gate",
+                "prompt_model_realized_main.node.judgment_gate",
+                "ignore 或正向 Judgment",
+                "Ignore or Positive Judgment",
+                lane="simulated_user_decision",
+                stage=6,
+                shape="diamond",
+            ),
+            _node(
+                "shared_realization_draw",
+                "prompt_model_realized_main.node.shared_realization_draw",
+                "跨 cell 共享确定性 Draw",
+                "Shared Deterministic Draw Across Cells",
+                lane="simulated_user_decision",
+                stage=7,
+                shape="rounded",
+            ),
+            _node(
+                "realized_outcome",
+                "prompt_model_realized_main.node.realized_outcome",
+                "Realized action 或 ignore",
+                "Realized Action or Ignore",
+                lane="simulated_user_decision",
+                stage=8,
+            ),
+            _node(
+                "full_batch_barrier",
+                "prompt_model_realized_main.node.full_batch_barrier",
+                "完整批次屏障",
+                "Full-Batch Barrier",
+                lane="platform_recommendation",
+                stage=9,
+                shape="hexagon",
+            ),
+            _node(
+                "realized_positive_feedback",
+                "prompt_model_realized_main.node.realized_positive_feedback",
+                "仅 Realized-Positive Feedback",
+                "Realized-Positive Feedback Only",
+                lane="platform_recommendation",
+                stage=10,
+            ),
+            _node(
+                "next_batch_ranking",
+                "prompt_model_realized_main.node.next_batch_ranking",
+                "下一批重新排序",
+                "Next-Batch Reranking",
+                lane="platform_recommendation",
+                stage=11,
+            ),
+            _node(
+                "realized_main_projection",
+                "prompt_model_realized_main.node.realized_main_projection",
+                "Realized 主表与独立 Judgment Audit",
+                "Realized Main Table and Separate Judgment Audit",
+                lane="platform_recommendation",
+                stage=12,
+                shape="stadium",
+            ),
+        ),
+        edges=(
+            _edge(
+                "boundary_to_prompts",
+                "frozen_research_boundary",
+                "canonical_prompt_matrix",
+                label=_text(
+                    "prompt_model_realized_main.edge.boundary_to_prompts",
+                    "共享同一研究边界",
+                    "Share One Research Boundary",
+                ),
+            ),
+            _edge(
+                "prompts_to_conditions",
+                "canonical_prompt_matrix",
+                "five_provider_conditions",
+                label=_text(
+                    "prompt_model_realized_main.edge.prompts_to_conditions",
+                    "同一 Prompt bytes 跨模型复用",
+                    "Reuse the Same Prompt Bytes Across Models",
+                ),
+            ),
+            _edge(
+                "conditions_to_cells",
+                "five_provider_conditions",
+                "twenty_independent_cells",
+                label=_text(
+                    "prompt_model_realized_main.edge.conditions_to_cells",
+                    "5 × 4",
+                    "5 × 4",
+                ),
+            ),
+            _edge(
+                "cells_to_judgment",
+                "twenty_independent_cells",
+                "provider_judgment",
+                label=_text(
+                    "prompt_model_realized_main.edge.cells_to_judgment",
+                    "每次曝光先持久化 Judgment",
+                    "Persist Judgment First for Every Exposure",
+                ),
+            ),
+            _edge(
+                "judgment_to_gate",
+                "provider_judgment",
+                "judgment_gate",
+                label=_text(
+                    "prompt_model_realized_main.edge.judgment_to_gate",
+                    "意向、action 与 probability",
+                    "Intent, Action, and Probability",
+                ),
+            ),
+            _edge(
+                "provider_ignore_to_outcome",
+                "judgment_gate",
+                "realized_outcome",
+                label=_text(
+                    "prompt_model_realized_main.edge.provider_ignore_to_outcome",
+                    "ignore 不抽样",
+                    "Ignore Skips the Draw",
+                ),
+                style="dashed",
+            ),
+            _edge(
+                "positive_to_shared_draw",
+                "judgment_gate",
+                "shared_realization_draw",
+                label=_text(
+                    "prompt_model_realized_main.edge.positive_to_shared_draw",
+                    "正向 Judgment 才抽样",
+                    "Draw Positive Judgments Only",
+                ),
+            ),
+            _edge(
+                "shared_draw_to_outcome",
+                "shared_realization_draw",
+                "realized_outcome",
+                label=_text(
+                    "prompt_model_realized_main.edge.shared_draw_to_outcome",
+                    "pass 保留 action；fail 变 ignore",
+                    "Pass Keeps Action; Fail Becomes Ignore",
+                ),
+            ),
+            _edge(
+                "outcome_to_barrier",
+                "realized_outcome",
+                "full_batch_barrier",
+                label=_text(
+                    "prompt_model_realized_main.edge.outcome_to_barrier",
+                    "本批全部 terminal 关闭",
+                    "Close Every Terminal in the Batch",
+                ),
+            ),
+            _edge(
+                "barrier_to_feedback",
+                "full_batch_barrier",
+                "realized_positive_feedback",
+                label=_text(
+                    "prompt_model_realized_main.edge.barrier_to_feedback",
+                    "按 user_id 去重提交",
+                    "Commit Deduplicated by user_id",
+                ),
+            ),
+            _edge(
+                "feedback_to_next_batch",
+                "realized_positive_feedback",
+                "next_batch_ranking",
+                label=_text(
+                    "prompt_model_realized_main.edge.feedback_to_next_batch",
+                    "只影响下一批",
+                    "Affect the Next Batch Only",
+                ),
+            ),
+            _edge(
+                "next_batch_feedback_loop",
+                "next_batch_ranking",
+                "twenty_independent_cells",
+                label=_text(
+                    "prompt_model_realized_main.edge.next_batch_feedback_loop",
+                    "各 cell 独立继续轨迹",
+                    "Continue Each Cell Independently",
+                ),
+                style="dashed",
+            ),
+            _edge(
+                "barrier_to_projection",
+                "full_batch_barrier",
+                "realized_main_projection",
+                label=_text(
+                    "prompt_model_realized_main.edge.barrier_to_projection",
+                    "全部 batches 关闭后投影",
+                    "Project After Every Batch Closes",
+                ),
+                style="thick",
+            ),
+        ),
+        fallback=(
+            _text(
+                "prompt_model_realized_main.fallback.boundary",
+                "20 个 cells 共享同一冻结样本、互动图、三条 message 与 Canonical P0–P3 Prompt Matrix。",
+                "All 20 cells share one frozen sample, interaction graph, three messages, and Canonical P0–P3 Prompt Matrix.",
+            ),
+            _text(
+                "prompt_model_realized_main.fallback.judgment",
+                "Provider Judgment 只记录互动意向、概率、action、reason 与 confidence，不等于 Realized 行动。",
+                "Provider Judgment records intent, probability, action, reason, and confidence; it is not a Realized action.",
+            ),
+            _text(
+                "prompt_model_realized_main.fallback.realization",
+                "Provider positive 才使用跨 cells 共享的 source、user、message 稳定 draw；ignore 不抽样。",
+                "Only Provider positives use the source-user-message stable draw shared across cells; ignore is not drawn.",
+            ),
+            _text(
+                "prompt_model_realized_main.fallback.barrier",
+                "本批所有 Realized terminals 关闭后，只有 realized-positive 用户按 campaign 去重进入下一批排序。",
+                "After every Realized terminal in the batch closes, only campaign-deduplicated realized-positive users enter next-batch ranking.",
+            ),
+            _text(
+                "prompt_model_realized_main.fallback.presentation",
+                "教师主表只展示 Realized 指标；Provider action、probability、confidence、attempt、usage 与模型身份位于独立 Judgment Audit。",
+                "The teacher-facing main table shows Realized metrics only; Provider action, probability, confidence, attempts, usage, and model identity stay in a separate Judgment Audit.",
+            ),
+        ),
+        node_budget=12,
+        image_brief=_image_brief(
+            "Provide one deterministic 20-cell two-stage semantic master without generating a raster asset.",
+            "A single chain from the frozen research boundary and canonical Prompt matrix through Judgment, shared realization, full-batch feedback, and separated report projections.",
+            (
+                "exactly twelve semantic nodes",
+                "five models by four Prompts equals twenty cells",
+                "Provider Judgment distinct from Realized outcome",
+                "shared deterministic draw across cells",
+                "realized-positive feedback after the full-batch barrier",
+                "Realized main table distinct from Judgment audit",
+            ),
+            generate_raster=False,
+        ),
+    )
+
+
 def _projection(definition: _DiagramDefinition, language: str) -> _MechanismLanguageProjection:
     texts: list[_BilingualText] = [
         definition.title,
@@ -1687,6 +1986,38 @@ def _validate_full_pool_two_stage_definition(definition: _DiagramDefinition) -> 
         raise ValueError("two-stage Full-Pool mechanism bilingual projection is incomplete")
 
 
+def _validate_robustness_v2_definition(definition: _DiagramDefinition) -> None:
+    if (
+        definition.diagram_id != "prompt_model_realized_main"
+        or definition.filename != "prompt-model-realized-mechanism.mmd"
+        or definition.node_budget != 12
+        or definition.image_brief.generate_raster
+    ):
+        raise ValueError("v2 robustness mechanism identity or raster boundary is crossed")
+    nodes = {node.semantic_id: node for node in definition.nodes}
+    edges = {edge.semantic_id: edge for edge in definition.edges}
+    if len(nodes) != 12 or len(edges) != len(definition.edges):
+        raise ValueError("v2 robustness mechanism semantic IDs are incomplete")
+    if any(_STABLE_ID.fullmatch(semantic_id) is None for semantic_id in (*nodes, *edges)):
+        raise ValueError("v2 robustness mechanism has an unstable semantic ID")
+    if {node.stage for node in definition.nodes} != set(range(1, 13)):
+        raise ValueError("v2 robustness mechanism stages are not complete")
+    if any(node.lane not in _LANE_ORDER for node in definition.nodes):
+        raise ValueError("v2 robustness mechanism has unknown lane ownership")
+    if any(edge.source not in nodes or edge.target not in nodes for edge in definition.edges):
+        raise ValueError("v2 robustness mechanism edge endpoint is missing")
+    texts = (
+        definition.title,
+        definition.description,
+        *(_LANE_LABELS[lane] for lane in _LANE_ORDER),
+        *(node.label for node in definition.nodes),
+        *(edge.label for edge in definition.edges if edge.label is not None),
+        *definition.fallback,
+    )
+    if any(not text.key or not text.zh_cn.strip() or not text.en_us.strip() for text in texts):
+        raise ValueError("v2 robustness mechanism bilingual projection is incomplete")
+
+
 def _semantic_set_identity(artifacts: tuple[_MechanismArtifact, ...]) -> str:
     identity_document = {
         "schema_version": _SEMANTIC_SET_SCHEMA_VERSION,
@@ -1703,6 +2034,133 @@ def _semantic_set_identity(artifacts: tuple[_MechanismArtifact, ...]) -> str:
 
 class _MechanismPresentationInterface:
     """Package-internal Interface owning every mechanism semantic projection."""
+
+    def build_robustness_v2_master(self) -> _MechanismPresentation:
+        """Build the additive 20-cell Judgment-to-Realization semantic master."""
+        definition = _robustness_v2_definition()
+        _validate_robustness_v2_definition(definition)
+        diagram = _MechanismDiagram(
+            diagram_id=definition.diagram_id,
+            filename=definition.filename,
+            navigation_anchor=definition.navigation_anchor,
+            title_key=definition.title.key,
+            description_key=definition.description.key,
+            lane_order=_LANE_ORDER,
+            stage_count=max(node.stage for node in definition.nodes),
+            node_budget=definition.node_budget,
+            nodes=definition.nodes,
+            edges=definition.edges,
+            projections=tuple(
+                _projection(definition, language) for language in ("zh-CN", "en-US")
+            ),
+            image_brief=definition.image_brief,
+        )
+        payload = _mermaid_bytes(definition)
+        artifact = _MechanismArtifact(
+            filename=definition.filename,
+            payload=payload,
+            sha256=hashlib.sha256(payload).hexdigest(),
+        )
+        return _MechanismPresentation(
+            schema_version=_ROBUSTNESS_V2_SCHEMA_VERSION,
+            lane_order=_LANE_ORDER,
+            diagrams=(diagram,),
+            mermaid_artifacts=(artifact,),
+            semantic_set_identity_sha256=_semantic_set_identity((artifact,)),
+        )
+
+    def render_inline_svg(self, presentation: _MechanismPresentation, *, language: str) -> str:
+        """Render one deterministic inline SVG directly from owned semantic records."""
+        if len(presentation.diagrams) != 1 or language not in {"zh-CN", "en-US"}:
+            raise ValueError("inline mechanism SVG requires one bilingual semantic master")
+        diagram = presentation.diagrams[0]
+        projection = next(
+            (item for item in diagram.projections if item.language == language),
+            None,
+        )
+        if projection is None:
+            raise ValueError("inline mechanism SVG language projection is missing")
+        width = 1740
+        height = 620
+        left = 32
+        step = 140
+        node_width = 122
+        node_height = 76
+        lane_y = {
+            "historical_data": 108,
+            "simulated_user_decision": 292,
+            "platform_recommendation": 476,
+        }
+        positions = {
+            node.semantic_id: (
+                left + (node.stage - 1) * step,
+                lane_y[node.lane],
+            )
+            for node in diagram.nodes
+        }
+        marker_id = f"mechanism-arrow-{language.lower().replace('-', '_')}"
+        edge_markup: list[str] = []
+        for edge in diagram.edges:
+            source_x, source_y = positions[edge.source]
+            target_x, target_y = positions[edge.target]
+            dash = ' stroke-dasharray="8 6"' if edge.style == "dashed" else ""
+            stroke_width = "3" if edge.style == "thick" else "2"
+            title = ""
+            if edge.label is not None:
+                title = f"<title>{html.escape(projection.value(edge.label.key))}</title>"
+            edge_markup.append(
+                f'<g data-mechanism-edge-id="{edge.semantic_id}">{title}'
+                f'<line x1="{source_x + node_width}" y1="{source_y + node_height / 2:.1f}" '
+                f'x2="{target_x}" y2="{target_y + node_height / 2:.1f}" '
+                f'stroke="#536174" stroke-width="{stroke_width}"{dash} marker-end="url(#{marker_id})"/></g>'
+            )
+        node_markup: list[str] = []
+        for node in diagram.nodes:
+            x, y = positions[node.semantic_id]
+            label = html.escape(projection.value(node.label_key))
+            node_markup.append(
+                f'<g data-mechanism-node-id="{node.semantic_id}" data-mechanism-lane="{node.lane}">'
+                f'<rect x="{x}" y="{y}" width="{node_width}" height="{node_height}" rx="8" '
+                'fill="#ffffff" stroke="#2459a9" stroke-width="1.5"/>'
+                f'<foreignObject x="{x + 6}" y="{y + 6}" width="{node_width - 12}" height="{node_height - 12}">'
+                '<div xmlns="http://www.w3.org/1999/xhtml" style="font:600 11px/1.25 system-ui;text-align:center;display:flex;align-items:center;justify-content:center;height:100%;color:#172033">'
+                f'{label}</div></foreignObject></g>'
+            )
+        title = html.escape(projection.value(diagram.title_key), quote=True)
+        return (
+            f'<svg data-testid="robustness-v2-mechanism-svg" data-mechanism-language="{language}" '
+            f'role="img" aria-label="{title}" viewBox="0 0 {width} {height}" xmlns="http://www.w3.org/2000/svg">'
+            f'<defs><marker id="{marker_id}" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">'
+            '<path d="M0,0 L8,4 L0,8 Z" fill="#536174"/></marker></defs>'
+            '<rect width="100%" height="100%" fill="#f7fafc"/>'
+            f'{"".join(edge_markup)}{"".join(node_markup)}</svg>'
+        )
+
+    def render_fallback(self, presentation: _MechanismPresentation, *, language: str) -> str:
+        """Render a deterministic text fallback from the same bilingual semantics."""
+        if len(presentation.diagrams) != 1 or language not in {"zh-CN", "en-US"}:
+            raise ValueError("mechanism fallback requires one bilingual semantic master")
+        diagram = presentation.diagrams[0]
+        projection = next(
+            (item for item in diagram.projections if item.language == language),
+            None,
+        )
+        if projection is None:
+            raise ValueError("mechanism fallback language projection is missing")
+        items = "".join(
+            f'<li data-mechanism-fallback-key="{html.escape(key, quote=True)}">{html.escape(value)}</li>'
+            for key, value in zip(
+                projection.fallback_keys,
+                projection.fallback_values,
+                strict=True,
+            )
+        )
+        return (
+            f'<section class="robustness-v2-mechanism-fallback" data-testid="robustness-v2-mechanism-fallback" '
+            f'data-mechanism-language="{language}">'
+            f'<h4>{html.escape(projection.value(diagram.title_key))}</h4>'
+            f'<p>{html.escape(projection.value(diagram.description_key))}</p><ol>{items}</ol></section>'
+        )
 
     def build_full_pool_master(self) -> _MechanismPresentation:
         """Build the additive Full-Pool master without changing the historical set."""

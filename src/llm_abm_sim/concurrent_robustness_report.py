@@ -72,6 +72,8 @@ from .prompt_contracts import CONCURRENT_ROBUSTNESS_PROMPT_REGISTRY
 
 if TYPE_CHECKING:
     from .concurrent_robustness_study import ConcurrentRobustnessManifest
+    from .concurrent_robustness_v2_evidence import _ConcurrentRobustnessV2ReportSource
+    from .concurrent_robustness_v2_report import _V2RealizedCandidateFacts
 
 _REPORT_PAYLOAD_SCHEMA = "concurrent-robustness-report-payload-v1"
 _REPORT_PAYLOAD_V2_SCHEMA = "concurrent-robustness-report-payload-v2"
@@ -992,6 +994,17 @@ class _CandidateProjection:
 
 
 @dataclass(frozen=True)
+class _V2RealizedReportInputs:
+    source: ClosedFullPoolTwoStageSource
+    historical_projection: _CandidateProjection
+    historical_candidate: Path
+    v2_source: _ConcurrentRobustnessV2ReportSource
+    source_lineage: Mapping[str, Any]
+    protected_roots: tuple[Path, ...]
+    snapshots: Mapping[Path, Mapping[str, str]]
+
+
+@dataclass(frozen=True)
 class _FullPoolTwoStageProductionInputs:
     source: ClosedFullPoolTwoStageSource
     candidate: Path
@@ -1050,6 +1063,104 @@ def _read_full_pool_presentation_source(
             manifest_sha256=manifest_sha256,
         ),
     )
+
+
+def _v2_realized_report_source_lineage(
+    *,
+    source: ClosedFullPoolTwoStageSource,
+    historical_projection: _CandidateProjection,
+    historical_candidate: Path,
+    v2_source: _ConcurrentRobustnessV2ReportSource,
+) -> dict[str, Any]:
+    historical_candidate_hashes = _directory_file_hashes(historical_candidate)
+    historical_manifest_sha256 = historical_projection.formal.artifact_hashes.get(
+        CONCURRENT_MESSAGE_ARTIFACT_MANIFEST_JSON
+    )
+    historical_study_manifest = historical_projection.study.root_manifest
+    historical_study_root_identity = historical_study_manifest.get(
+        "root_identity_sha256"
+    )
+    historical_study_artifact_manifest_sha256 = historical_projection.study.file_hashes.get(
+        "artifact_manifest.json"
+    )
+    v2_root_manifest_sha256 = v2_source.artifact_hashes.get("artifact_manifest.json")
+    if (
+        source.classification != FULL_POOL_TWO_STAGE_FORMAL_CLASSIFICATION
+        or source.formal_research_evidence is not True
+        or source.production_deploy_eligible is not True
+        or source.manifest.get("schema_version") != FULL_POOL_TWO_STAGE_SOURCE_SCHEMA
+        or len(historical_projection.manifest.prompt_model_cells) != 16
+        or not _is_sha256(historical_manifest_sha256)
+        or not _is_sha256(historical_study_root_identity)
+        or not _is_sha256(historical_study_artifact_manifest_sha256)
+        or not _is_sha256(v2_root_manifest_sha256)
+    ):
+        raise _RobustnessReportClosureError(
+            "v2 Realized report requires exact Formal v13, Historical 16-cell, and closed v2 lineages"
+        )
+    lineage = {
+        "full_pool_v13_realized": {
+            "source_path": source.root.as_posix(),
+            "schema_version": FULL_POOL_TWO_STAGE_SOURCE_SCHEMA,
+            "source_identity": source.source_identity,
+            "manifest_sha256": source.manifest_sha256,
+            "classification": source.classification,
+            "formal_research_evidence": True,
+            "source_production_deploy_eligible": True,
+            "counts": dict(source.counts),
+            "artifact_hashes": dict(sorted(source.artifact_hashes.items())),
+        },
+        "historical_formal": {
+            "source_path": historical_projection.formal.run_dir.resolve(strict=True).as_posix(),
+            "manifest_sha256": historical_manifest_sha256,
+            "manifest_schema_version": historical_projection.formal.manifest.schema_version,
+            "primary_prompt_token": historical_projection.formal.manifest.primary_prompt_token,
+            "shadow_prompt_token": historical_projection.formal.manifest.shadow_prompt_token,
+        },
+        "historical_judgment_reference": {
+            "study_path": historical_projection.study.root.as_posix(),
+            "manifest_sha256": historical_projection.manifest_sha256,
+            "artifact_manifest_sha256": historical_study_artifact_manifest_sha256,
+            "root_identity_sha256": historical_study_root_identity,
+            "cell_count": 16,
+            "evidence_scope": "immutable_historical_judgment_reference",
+        },
+        "historical_candidate": {
+            "candidate_path": historical_candidate.resolve(strict=True).as_posix(),
+            "artifact_count": len(historical_candidate_hashes),
+            "candidate_identity_sha256": _sha256_bytes(
+                _json_bytes(dict(sorted(historical_candidate_hashes.items())))
+            ),
+        },
+        "v2_realized_study": {
+            "study_path": v2_source.facts.root_path.as_posix(),
+            "manifest_sha256": v2_source.facts.manifest_sha256,
+            "artifact_manifest_sha256": v2_root_manifest_sha256,
+            "root_identity_sha256": v2_source.facts.root_identity_sha256,
+            "execution_profile": v2_source.manifest.execution_profile,
+            "logical_judgments": v2_source.facts.logical_judgments,
+            "physical_attempts": v2_source.facts.physical_attempts,
+            "provider_calls": v2_source.facts.provider_calls,
+            "live_api_triggered": v2_source.facts.live_api_triggered,
+            "source_production_deploy_eligible": False,
+            "evidence_scope": "twenty_cell_two_stage_realized",
+        },
+    }
+    hashes = (
+        source.source_identity,
+        source.manifest_sha256,
+        historical_manifest_sha256,
+        historical_projection.manifest_sha256,
+        historical_study_artifact_manifest_sha256,
+        historical_study_root_identity,
+        lineage["historical_candidate"]["candidate_identity_sha256"],
+        v2_source.facts.manifest_sha256,
+        v2_root_manifest_sha256,
+        v2_source.facts.root_identity_sha256,
+    )
+    if any(not _is_sha256(value) for value in hashes):
+        raise _RobustnessReportClosureError("v2 Realized report lineage contains an invalid identity hash")
+    return lineage
 
 
 def _validate_full_pool_two_stage_production_stage_facts(
@@ -1184,6 +1295,259 @@ class _ReportPresentationInterface:
         _assert_formal_unchanged(projection.formal, formal_before)
         _assert_study_unchanged(projection.study, study_before)
         return destination
+
+    def compose_v2_realized_candidate(
+        self,
+        *,
+        full_pool_source_root: str | Path,
+        full_pool_manifest_sha256: str,
+        historical_formal_root: str | Path,
+        historical_study_root: str | Path,
+        historical_candidate_dir: str | Path,
+        v2_study_root: str | Path,
+        destination_dir: str | Path,
+    ) -> Path:
+        """Compose one table-first candidate from four explicit closed lineages."""
+
+        from .concurrent_robustness_v2_report import (
+            ConcurrentRobustnessV2ReportError,
+            compose_v2_realized_candidate,
+        )
+
+        inputs = self._prepare_v2_realized_report_inputs(
+            full_pool_source_root=full_pool_source_root,
+            full_pool_manifest_sha256=full_pool_manifest_sha256,
+            historical_formal_root=historical_formal_root,
+            historical_study_root=historical_study_root,
+            historical_candidate_dir=historical_candidate_dir,
+            v2_study_root=v2_study_root,
+        )
+        destination = _validate_destination(
+            Path(destination_dir),
+            protected_roots=inputs.protected_roots,
+        )
+        created: Path | None = None
+
+        def discard_installed_candidate() -> None:
+            if created is None or not os.path.lexists(created):
+                return
+            if created != destination or created.is_symlink() or not created.is_dir():
+                raise _RobustnessReportClosureError(
+                    "v2 Realized report could not safely discard its failed candidate"
+                )
+            shutil.rmtree(created)
+
+        try:
+            created = compose_v2_realized_candidate(
+                source=inputs.source,
+                historical_candidate=inputs.historical_candidate,
+                v2_source=inputs.v2_source,
+                source_lineage=inputs.source_lineage,
+                destination=destination,
+            )
+            self._assert_v2_realized_report_inputs_unchanged(inputs)
+            return created
+        except (
+            _RobustnessReportPathError,
+            _RobustnessReportConflictError,
+            _RobustnessReportClosureError,
+        ):
+            discard_installed_candidate()
+            raise
+        except (
+            ConcurrentRobustnessV2ReportError,
+            FileNotFoundError,
+            OSError,
+            TypeError,
+            ValueError,
+            json.JSONDecodeError,
+        ) as exc:
+            discard_installed_candidate()
+            raise _RobustnessReportClosureError(
+                "v2 Realized report candidate composition failed closed"
+            ) from exc
+
+    def validate_v2_realized_candidate(
+        self,
+        candidate_dir: str | Path,
+        *,
+        full_pool_source_root: str | Path,
+        full_pool_manifest_sha256: str,
+        historical_formal_root: str | Path,
+        historical_study_root: str | Path,
+        historical_candidate_dir: str | Path,
+        v2_study_root: str | Path,
+    ) -> _V2RealizedCandidateFacts:
+        """Independently reread candidate bytes and every explicit source lineage."""
+
+        from .concurrent_robustness_v2_report import (
+            ConcurrentRobustnessV2ReportError,
+            validate_v2_realized_candidate,
+        )
+
+        inputs = self._prepare_v2_realized_report_inputs(
+            full_pool_source_root=full_pool_source_root,
+            full_pool_manifest_sha256=full_pool_manifest_sha256,
+            historical_formal_root=historical_formal_root,
+            historical_study_root=historical_study_root,
+            historical_candidate_dir=historical_candidate_dir,
+            v2_study_root=v2_study_root,
+        )
+        candidate = Path(candidate_dir)
+        try:
+            absolute = Path(os.path.abspath(candidate))
+            resolved = candidate.resolve(strict=True)
+            if (
+                ".." in candidate.parts
+                or absolute != resolved
+                or candidate.is_symlink()
+                or not resolved.is_dir()
+                or any(
+                    resolved == root
+                    or resolved.is_relative_to(root)
+                    or root.is_relative_to(resolved)
+                    for root in inputs.protected_roots
+                )
+            ):
+                raise ValueError("v2 Realized candidate path is unsafe or overlaps input evidence")
+            facts = validate_v2_realized_candidate(
+                resolved,
+                source=inputs.source,
+                historical_candidate=inputs.historical_candidate,
+                v2_source=inputs.v2_source,
+                source_lineage=inputs.source_lineage,
+            )
+            self._assert_v2_realized_report_inputs_unchanged(inputs)
+            return facts
+        except _RobustnessReportClosureError:
+            raise
+        except (
+            ConcurrentRobustnessV2ReportError,
+            FileNotFoundError,
+            OSError,
+            TypeError,
+            ValueError,
+            json.JSONDecodeError,
+        ) as exc:
+            raise _RobustnessReportClosureError(
+                "v2 Realized report candidate failed independent validation"
+            ) from exc
+
+    def _prepare_v2_realized_report_inputs(
+        self,
+        *,
+        full_pool_source_root: str | Path,
+        full_pool_manifest_sha256: str,
+        historical_formal_root: str | Path,
+        historical_study_root: str | Path,
+        historical_candidate_dir: str | Path,
+        v2_study_root: str | Path,
+    ) -> _V2RealizedReportInputs:
+        from .concurrent_robustness_v2_evidence import (
+            _read_closed_concurrent_robustness_v2_report_source,
+        )
+
+        try:
+            source = _read_full_pool_presentation_source(
+                full_pool_source_root,
+                manifest_sha256=full_pool_manifest_sha256,
+            )
+            if (
+                not isinstance(source, ClosedFullPoolTwoStageSource)
+                or source.classification != FULL_POOL_TWO_STAGE_FORMAL_CLASSIFICATION
+                or source.formal_research_evidence is not True
+                or source.production_deploy_eligible is not True
+                or source.manifest.get("schema_version") != FULL_POOL_TWO_STAGE_SOURCE_SCHEMA
+            ):
+                raise ValueError("v2 report requires an exact closed Formal v13 Realized source")
+            formal_path = Path(historical_formal_root)
+            study_path = Path(historical_study_root)
+            workspace_path = _workspace_root_for_study(study_path)
+            manifest, manifest_payload, manifest_sha256 = _load_study_manifest(study_path)
+            historical_candidate, historical_projection = self._validate_candidate_from_inputs(
+                formal_root=formal_path,
+                study_root=study_path,
+                workspace_root=workspace_path,
+                manifest=manifest,
+                manifest_payload=manifest_payload,
+                manifest_sha256=manifest_sha256,
+                candidate_dir=historical_candidate_dir,
+            )
+            v2_source = _read_closed_concurrent_robustness_v2_report_source(
+                v2_study_root
+            )
+            v2_frozen_source = Path(v2_source.manifest.source.source_dir).resolve(
+                strict=True
+            )
+            protected_roots = tuple(
+                root.resolve(strict=True)
+                for root in (
+                    source.root,
+                    historical_projection.formal.run_dir,
+                    historical_projection.study.root,
+                    workspace_path,
+                    historical_candidate,
+                    v2_source.facts.root_path,
+                    v2_frozen_source,
+                )
+            )
+            snapshots = {
+                root: _directory_file_hashes(root) for root in protected_roots
+            }
+            source_lineage = _v2_realized_report_source_lineage(
+                source=source,
+                historical_projection=historical_projection,
+                historical_candidate=historical_candidate,
+                v2_source=v2_source,
+            )
+            return _V2RealizedReportInputs(
+                source=source,
+                historical_projection=historical_projection,
+                historical_candidate=historical_candidate,
+                v2_source=v2_source,
+                source_lineage=source_lineage,
+                protected_roots=protected_roots,
+                snapshots=snapshots,
+            )
+        except _RobustnessReportClosureError:
+            raise
+        except (
+            FileNotFoundError,
+            FullPoolExperimentError,
+            _FullPoolPresentationError,
+            OSError,
+            TypeError,
+            ValueError,
+            json.JSONDecodeError,
+        ) as exc:
+            raise _RobustnessReportClosureError(
+                "v2 Realized report inputs failed independent closure"
+            ) from exc
+
+    @staticmethod
+    def _assert_v2_realized_report_inputs_unchanged(
+        inputs: _V2RealizedReportInputs,
+    ) -> None:
+        from .concurrent_robustness_v2_evidence import (
+            _assert_concurrent_robustness_v2_report_source_unchanged,
+        )
+
+        if any(
+            _directory_file_hashes(root) != dict(inputs.snapshots[root])
+            for root in inputs.protected_roots
+        ):
+            raise _RobustnessReportClosureError(
+                "v2 Realized report composition mutated immutable input evidence"
+            )
+        _assert_formal_unchanged(
+            inputs.historical_projection.formal,
+            dict(inputs.historical_projection.formal.artifact_hashes),
+        )
+        _assert_study_unchanged(
+            inputs.historical_projection.study,
+            dict(inputs.historical_projection.study.file_hashes),
+        )
+        _assert_concurrent_robustness_v2_report_source_unchanged(inputs.v2_source)
 
     def compose_full_pool_presentation_bundle(
         self,
