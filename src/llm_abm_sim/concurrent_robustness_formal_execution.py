@@ -176,6 +176,12 @@ class FormalProviderCap(_FrozenModel):
     cap_kind: Literal["provider_fee_cny", "gateway_quota", "subscription_quota"]
     currency: Literal["CNY"] | None
     fee_ceiling: float | None
+    fee_policy: Literal["optional_best_effort_no_cash_ceiling_v1"] = (
+        "optional_best_effort_no_cash_ceiling_v1"
+    )
+    quota_exhaustion_policy: Literal["stop_on_explicit_exhaustion_v1"] = (
+        "stop_on_explicit_exhaustion_v1"
+    )
 
     @model_validator(mode="after")
     def _validate_fee(self) -> FormalProviderCap:
@@ -353,7 +359,9 @@ def _expected_provider_caps() -> tuple[dict[str, object], ...]:
                 else "subscription_quota"
             ),
             "currency": "CNY" if model == "deepseek-v4-flash" else None,
-            "fee_ceiling": 25.0 if model == "deepseek-v4-flash" else None,
+            "fee_ceiling": None,
+            "fee_policy": "optional_best_effort_no_cash_ceiling_v1",
+            "quota_exhaustion_policy": "stop_on_explicit_exhaustion_v1",
         }
         for model in _V2_MODELS
     )
@@ -687,7 +695,9 @@ def _handoff(
                 f"`timeout={parameters['request_timeout_seconds']}s` / "
                 f"`backoff={parameters['retry_backoff_seconds']}..{parameters['backoff_ceiling_seconds']}s`"
             ),
-            "- DeepSeek cash ceiling: `CNY ¥25`; gateway and subscription quotas remain separate.",
+            "- 费用为 optional/best-effort：未知保留 null，不预留费用、不强制定价快照、不保证现金封顶。",
+            "- 明确余额/订阅额度耗尽立即停止；普通 429/5xx/transport 仍仅作有界重试。",
+            "- CNY 与 gateway/subscription quota 及 nominal USD reference 分开记录，不跨币种合计。",
             "- Qualification artifacts: five independent, hash-bound, currently valid Provider observations.",
             "- This request does not authorize Release or Deployment.",
             "",
@@ -1207,7 +1217,7 @@ def validate_embedded_formal_execution_plan(
         "deployment_authorized": False,
         "production_deploy_eligible": False,
     }
-    if set(identity) != identity_fields or any(
+    if caps != list(_expected_provider_caps()) or set(identity) != identity_fields or any(
         identity.get(key) != value
         for key, value in fixed_identity.items()
         if key != "qualification_artifacts"

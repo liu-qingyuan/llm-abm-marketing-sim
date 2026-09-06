@@ -353,12 +353,10 @@ class _SequenceProviderTransport:
         observed_model: str,
         sequence: list[object] | None = None,
         provider_fee_cny_per_response: float | None = None,
-        maximum_provider_fee_cny_per_attempt: float | None = None,
     ) -> None:
         self.observed_model = observed_model
         self.sequence = list(sequence or [])
         self.provider_fee_cny_per_response = provider_fee_cny_per_response
-        self.maximum_provider_fee_cny_per_attempt = maximum_provider_fee_cny_per_attempt
         self.last_provider_fee_cny: float | None = None
         self.calls: list[tuple[list[dict[str, str]], str, dict[str, object]]] = []
 
@@ -412,7 +410,6 @@ def _provider_adapters(
     *,
     first_sequence: list[object] | None = None,
     first_provider_fee_cny: float | None = None,
-    first_maximum_provider_fee_cny: float | None = None,
 ) -> tuple[dict[str, LLMDecisionAdapter], dict[str, _SequenceProviderTransport]]:
     adapters: dict[str, LLMDecisionAdapter] = {}
     transports: dict[str, _SequenceProviderTransport] = {}
@@ -422,9 +419,6 @@ def _provider_adapters(
             observed_model=cell.required_observed_model,
             sequence=first_sequence if index == 0 else None,
             provider_fee_cny_per_response=first_provider_fee_cny if index == 0 else None,
-            maximum_provider_fee_cny_per_attempt=(
-                first_maximum_provider_fee_cny if index == 0 else None
-            ),
         )
         transports[cell.cell_id] = transport
         adapters[cell.cell_id] = _provider_adapter_for_cell(cell, transport)
@@ -476,7 +470,6 @@ def test_formal_run_closes_one_model_per_invocation_then_publishes_after_fifth(
         for cell_id, transport in transports.items():
             transport.external_provider_client = True
             if cell_id.endswith("::deepseek-v4-flash"):
-                transport.maximum_provider_fee_cny_per_attempt = 0.01
                 transport.provider_fee_cny_per_response = 0.0
         for adapter in adapters.values():
             cast(Any, adapter).deterministic_validation = False
@@ -757,45 +750,80 @@ def test_v2_private_model_lane_stops_on_nonretryable_or_three_exhausted_attempts
     assert [row["outcome"] for row in stopped["payload"]["attempt_evidence"]] == expected_outcomes
 
 
-def test_v2_deepseek_cny_ceiling_stops_safely_before_dispatch_and_stays_separate(
+def test_v2_explicit_quota_exhaustion_preserves_progress_and_never_resends(
     tmp_path: Path,
+) -> None:
+    class Exhausted(_HTTPError):
+        body = {"error": {"code": "insufficient_quota", "message": "private-error-sentinel"}}
+
+    source = _make_validation_report_source(tmp_path, "v2-exhausted-source")
+    manifest = _v2_manifest(source, output_identity="v2-exhausted")
+    adapters, transports = _provider_adapters(
+        manifest, first_sequence=[None, Exhausted(429, retry_after="13")],
+        first_provider_fee_cny=30.0,
+    )
+    workspace = tmp_path / "v2-exhausted-workspace"
+    result = ConcurrentRobustnessStudy().run(manifest, adapters, workspace)
+    assert result.status == ConcurrentRobustnessStudyStatus.STOPPED
+    assert result.logical_provider_attempts == result.physical_provider_attempts == 2
+    assert sum(len(t.calls) for t in transports.values()) == 2
+    operational = workspace.parent / f".{workspace.name}.two-stage-v2-operational"
+    ledger_path = operational / "cell-00" / "pair_lifecycle.jsonl"
+    before = ledger_path.read_bytes()
+    ledger = _jsonl(ledger_path)
+    assert len([row for row in ledger if row["state"] == "judgment_persisted"]) == 1
+    assert len([row for row in ledger if row["state"] == "settled"]) == 1
+    stopped = next(row for row in ledger if row["state"] == "stopped")
+    attempt = stopped["payload"]["attempt_evidence"][0]
+    assert attempt["failure_category"] == "quota_exhausted"
+    assert attempt["outcome"] == "nonretryable_failure"
+    assert attempt["provider_fee_cny"] is None
+    assert attempt["wait_seconds"] is None and attempt["lane_cooldown"] is False
+    assert b"private-error-sentinel" not in before
+    assert result.study_root is None
+    assert ConcurrentRobustnessStudy().run(manifest, None, workspace) == result
+    assert ledger_path.read_bytes() == before
+
+
+@pytest.mark.parametrize("fee", [15.0, None, 0.0])
+def test_v2_optional_fees_close_without_reservation_and_keep_partial_totals_unknown(
+    tmp_path: Path, fee: float | None,
 ) -> None:
     source = _make_validation_report_source(tmp_path, "v2-deepseek-cap-source")
     manifest = _v2_manifest(source, output_identity="v2-deepseek-cap")
     adapters, transports = _provider_adapters(
         manifest,
-        first_provider_fee_cny=15.0,
-        first_maximum_provider_fee_cny=15.0,
+        first_provider_fee_cny=fee,
     )
     workspace = tmp_path / "v2-deepseek-cap-workspace"
 
     result = ConcurrentRobustnessStudy().run(manifest, adapters, workspace)
 
-    assert result.status == ConcurrentRobustnessStudyStatus.RESUMABLE
-    assert result.logical_provider_attempts == 2
-    assert result.physical_provider_attempts == 1
+    assert result.status == ConcurrentRobustnessStudyStatus.COMPLETE
+    assert result.logical_provider_attempts == 1_200
+    assert result.physical_provider_attempts == 1_200
     first_cell = manifest.prompt_model_cells[0]
-    assert len(transports[first_cell.cell_id].calls) == 1
+    assert len(transports[first_cell.cell_id].calls) == 60
     operational = workspace.parent / f".{workspace.name}.two-stage-v2-operational"
     ledger = _jsonl(operational / "cell-00" / "pair_lifecycle.jsonl")
     judgment = next(row for row in ledger if row["state"] == "judgment_persisted")
     attempt = judgment["payload"]["judgment"]["attempt_evidence"][0]
-    assert attempt["provider_fee_cny"] == 15.0
+    assert attempt["provider_fee_cny"] == fee
     assert attempt["billing_currency"] == "CNY"
-    assert attempt["fee_ceiling"] == 25.0
-    latest = ledger[-1]
-    assert latest["state"] == "attempting"
-    assert latest["payload"]["phase"] == "pre_dispatch"
-    assert latest["payload"]["attempt_evidence"] == []
-
-    resume_adapters, resume_transports = _provider_adapters(
-        manifest,
-        first_provider_fee_cny=15.0,
-        first_maximum_provider_fee_cny=15.0,
-    )
-    resumed = ConcurrentRobustnessStudy().run(manifest, resume_adapters, workspace)
-    assert resumed == result
-    assert len(resume_transports[first_cell.cell_id].calls) == 0
+    assert attempt["fee_ceiling"] is None
+    study_root = result.study_root
+    assert study_root is not None
+    audit = json.loads((study_root / "judgment_audit.json").read_text())
+    total = next(row for row in audit["group_rows"] if row["scope"] == "total")
+    assert total["provider_fee_cny"] is None
+    assert total["provider_fee_cny_known_subtotal"] == (60 * fee if fee is not None else None)
+    assert total["provider_fee_cny_observed_attempt_count"] == (60 if fee is not None else 0)
+    assert total["provider_fee_cny_missing_attempt_count"] == (180 if fee is not None else 240)
+    first_group = next(row for row in audit["group_rows"] if row["scope"] == "model_prompt"
+                       and row["requested_model"] == first_cell.requested_model
+                       and row["prompt_variant"] == first_cell.prompt_variant)
+    assert first_group["provider_fee_cny"] == (60 * fee if fee is not None else None)
+    assert ConcurrentRobustnessStudy().run(manifest, None, workspace) == result
 
 
 def test_v2_retry_wait_is_durable_and_resumes_only_the_remaining_attempt_budget(
@@ -999,8 +1027,8 @@ def test_v2_study_closes_twenty_two_stage_cells_into_immutable_root_and_replays_
     assert judgment_total["logical_judgment_count"] == len(terminals)
     assert judgment_total["physical_attempt_count"] == len(terminals)
     assert judgment_total["positive_judgment_count"] == sum(row["provider_engage"] for row in terminals)
-    assert judgment_total["provider_fee_cny"] == 0.0
-    assert judgment_total["subscription_nominal_cost_usd_reference"] == 0.0
+    assert judgment_total["provider_fee_cny"] is None
+    assert judgment_total["subscription_nominal_cost_usd_reference"] is None
     assert judgment_total["usage_complete_judgment_count"] == 1_200
     assert judgment_total["usage_missing_judgment_count"] == 0
     assert judgment_total["input_tokens"] == 0

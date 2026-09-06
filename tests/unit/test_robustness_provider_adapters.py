@@ -8,6 +8,7 @@ from llm_abm_sim import concurrent_robustness_v2 as v2_module
 from llm_abm_sim.decision import ProviderDecisionError, ProviderResponseProvenanceUnknown
 from llm_abm_sim.prompt_contracts import CONCURRENT_ROBUSTNESS_PROMPT_REGISTRY
 from llm_abm_sim.provider_accounting import ProviderResponseEnvelope
+from llm_abm_sim.providers.pi_subscription import PiSubscriptionProviderError
 from llm_abm_sim.providers.robustness import (
     AntigravityGeminiDecisionAdapter,
     DeepSeekV4FlashDecisionAdapter,
@@ -104,6 +105,21 @@ def _context() -> dict[str, Any]:
     }
 
 
+def test_deepseek_fee_is_optional_per_attempt_and_never_reused() -> None:
+    class Transport(_FakeTransport):
+        external_provider_client = True
+        last_provider_fee_cny: object = None
+
+    transport = Transport("deepseek-v4-flash")
+    adapter = DeepSeekV4FlashDecisionAdapter(prompt_version="P0", client=transport)
+    for fee, expected in [(None, None), (30.0, 30.0), (None, None), (0.0, 0.0), (float("nan"), None)]:
+        transport.last_provider_fee_cny = fee
+        assert adapter.decide(**_context()).action == "like"
+        assert adapter.last_provider_fee_cny == expected
+    assert adapter.provider_accounting.successful_decision_count == 5
+    assert adapter.request_evidence["fee_ceiling"] is None
+
+
 def test_provider_disclosures_freeze_routes_identity_settings_and_gateway_limits() -> None:
     records = robustness_provider_disclosures()
 
@@ -124,12 +140,17 @@ def test_provider_disclosures_freeze_routes_identity_settings_and_gateway_limits
     assert all(record["schema_version"] == "robustness-provider-disclosure-v1" for record in records)
     assert records[0]["provider_route"] == "deepseek_official"
     assert records[0]["thinking_mode"] == "disabled"
-    assert records[0]["fee_ceiling"] == 25.0
+    assert records[0]["fee_ceiling"] is None
     assert records[3]["provider_route"] == "pi_kimi_oauth_subscription"
     assert records[4]["provider_route"] == "pi_openai_oauth_subscription"
     for record in records[1:3]:
         assert record["provider_route"] == "antigravity_openai_compatible_gateway"
         assert record["route_kind"] == "openai_compatible_gateway"
+        assert record["wire_api"] == "chat_completions"
+        assert record["reasoning_effort"] is None
+        assert record["thinking_budget"] == 128
+        assert record["wire_output_token_ceiling"] == 1024
+        assert record["output_token_ceiling_scope"] == "visible_completion_tokens"
         assert record["gateway_context_visibility"] == "may_include_unobservable_context"
         assert record["direct_gemini_developer_api"] is False
         assert record["client_prompt_scope"] == "client_submitted_messages_not_complete_effective_prompt"
@@ -182,7 +203,10 @@ def test_five_provider_conditions_share_canonical_prompt_bytes_and_keep_request_
         "wire_api": "chat_completions",
         "reasoning_effort": None,
         "thinking_mode": "disabled",
+        "thinking_budget": None,
         "output_token_ceiling": 256,
+        "wire_output_token_ceiling": 256,
+        "output_token_ceiling_scope": "total_completion_tokens",
         "structured_output_schema_version": "engage-decision-output-v1",
         "structured_output_schema_hash": "sha256:baa4b5ac3950d8834bd296b184b8544c707633d5e668e1ee23cb8570e0e46654",
         "maximum_physical_attempts_per_logical_pair": 3,
@@ -190,11 +214,20 @@ def test_five_provider_conditions_share_canonical_prompt_bytes_and_keep_request_
         "prompt_canonical_hash": prompt.canonical_hash,
         "billing_semantics": "provider_fee_cny",
         "billing_currency": "CNY",
-        "fee_ceiling": 25.0,
+        "fee_ceiling": None,
     }
     assert adapters[1].request_evidence["provider_route"] == "antigravity_openai_compatible_gateway"
     assert adapters[1].request_evidence["required_observed_model"] == "gemini-pro-agent"
+    assert adapters[1].request_evidence["wire_api"] == "chat_completions"
+    assert adapters[1].request_evidence["reasoning_effort"] is None
+    assert adapters[1].request_evidence["thinking_budget"] == 128
+    assert adapters[1].request_evidence["wire_output_token_ceiling"] == 1024
+    assert adapters[1].request_evidence["output_token_ceiling_scope"] == (
+        "visible_completion_tokens"
+    )
     assert adapters[2].request_evidence["required_observed_model"] == "gemini-3.8-flash-high"
+    assert adapters[2].request_evidence["wire_api"] == "chat_completions"
+    assert adapters[2].request_evidence["reasoning_effort"] is None
     assert adapters[3].request_evidence["provider_route"] == "pi_kimi_oauth_subscription"
     assert adapters[3].request_evidence["reasoning_effort"] == "low"
     assert adapters[4].request_evidence["provider_route"] == "pi_openai_oauth_subscription"
@@ -203,12 +236,14 @@ def test_five_provider_conditions_share_canonical_prompt_bytes_and_keep_request_
         "output_token_ceiling": 256,
         "thinking_mode": "disabled",
     }
-    for requested_model in (
-        "gemini-3.1-pro",
-        "gemini-3.8-flash-high",
-        "kimi-coding/k3-256k",
-        "openai-codex/gpt-5.6-sol",
-    ):
+    assert transports["gemini-3.1-pro"].calls[0][1] == "gemini-pro-agent"
+    assert transports["gemini-3.8-flash-high"].calls[0][1] == "gemini-3.8-flash-high"
+    for requested_model in ("gemini-3.1-pro", "gemini-3.8-flash-high"):
+        assert transports[requested_model].calls[0][2] == {
+            "reasoning_effort": None,
+            "output_token_ceiling": 256,
+        }
+    for requested_model in ("kimi-coding/k3-256k", "openai-codex/gpt-5.6-sol"):
         assert transports[requested_model].calls[0][2] == {
             "reasoning_effort": "low",
             "output_token_ceiling": 256,
@@ -246,6 +281,22 @@ def test_five_provider_conditions_share_canonical_prompt_bytes_and_keep_request_
         ),
         (RuntimeError("HTTP status 429; Wait 4s"), "http_status", True, 429, True, 4.0, "provider_wait"),
         (_HTTPFailure(500), "http_status", True, 500, False, None, None),
+        (_HTTPFailure(503, message="exceeded your current quota"),
+         "http_status", True, 503, True, None, None),
+        (_HTTPFailure(429, message="You exceeded your current quota, please check your plan and billing details."),
+         "quota_exhausted", False, 429, False, None, None),
+        (_HTTPFailure(429, message="insufficient_quota", retry_after="13"),
+         "quota_exhausted", False, 429, False, None, None),
+        (_HTTPFailure(402, message="Insufficient Balance"),
+         "quota_exhausted", False, 402, False, None, None),
+        (_HTTPFailure(403, message="credit balance is too low"),
+         "quota_exhausted", False, 403, False, None, None),
+        (_HTTPFailure(429, message="RESOURCE_EXHAUSTED quota rate limit"),
+         "http_status", True, 429, True, None, None),
+        (RuntimeError("weekly usage limit reached"),
+         "quota_exhausted", False, None, False, None, None),
+        (RuntimeError("quota has been exhausted"),
+         "quota_exhausted", False, None, False, None, None),
         (_HTTPFailure(400), "http_status", False, 400, False, None, None),
         (_HTTPFailure(401), "authentication", False, 401, False, None, None),
         (_HTTPFailure(403), "permission", False, 403, False, None, None),
@@ -278,16 +329,21 @@ def test_adapter_normalizes_only_the_frozen_retry_allowlist(
     assert captured.value.wait_source == wait_source
 
 
+@pytest.mark.parametrize("error", [
+    _HTTPFailure(500),
+    _HTTPFailure(503, message="exceeded your current quota"),
+])
 def test_model_lane_exponential_backoff_is_bounded_and_never_exceeds_three_attempts(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, error: Exception,
 ) -> None:
     adapter = DeepSeekV4FlashDecisionAdapter(
         prompt_version=CONCURRENT_ROBUSTNESS_PROMPT_REGISTRY.resolve("P0").prompt_version,
-        client=_FailingTransport(_HTTPFailure(500)),
+        client=_FailingTransport(error),
     )
     lane = v2_module._V2ModelLane(requested_model="deepseek-v4-flash", backoff_seconds=40.0)
     waits: list[float] = []
     monkeypatch.setattr(v2_module, "_V2_SLEEP", waits.append)
+    monkeypatch.setattr(v2_module, "_V2_MONOTONIC", lambda: 0.0)
     wrapped = v2_module._V2LaneDecisionAdapter(adapter, lane)
 
     with pytest.raises(ProviderDecisionError) as captured:
@@ -296,6 +352,53 @@ def test_model_lane_exponential_backoff_is_bounded_and_never_exceeds_three_attem
     assert adapter.request_invocations == 3
     assert waits == [40.0, 60.0]
     assert captured.value.retryable is True
+    assert [row.outcome for row in wrapped.last_attempt_evidence] == [
+        "retryable_failure",
+        "retryable_failure",
+        "attempts_exhausted",
+    ]
+
+
+def test_kimi_typed_rate_limit_is_valid_retryable_lane_evidence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    error = PiSubscriptionProviderError(
+        "known failure",
+        category="rate_limited",
+        wait_seconds=1.0,
+        wait_source="provider_wait",
+        retryable=True,
+        lane_cooldown=True,
+    )
+    adapter = PiKimiDecisionAdapter(
+        prompt_version=CONCURRENT_ROBUSTNESS_PROMPT_REGISTRY.resolve("P0").prompt_version,
+        client=_FailingTransport(error),
+    )
+    lane = v2_module._V2ModelLane(
+        requested_model="kimi-coding/k3-256k",
+        backoff_seconds=0.5,
+    )
+    now = [0.0]
+    waits: list[float] = []
+
+    def sleep(delay: float) -> None:
+        waits.append(delay)
+        now[0] += delay
+
+    monkeypatch.setattr(v2_module, "_V2_MONOTONIC", lambda: now[0])
+    monkeypatch.setattr(v2_module, "_V2_SLEEP", sleep)
+    wrapped = v2_module._V2LaneDecisionAdapter(adapter, lane)
+
+    with pytest.raises(ProviderDecisionError) as captured:
+        wrapped.decide(**_context())
+
+    assert captured.value.retryable is True
+    assert waits == [1.0, 1.0]
+    assert [row.failure_category for row in wrapped.last_attempt_evidence] == [
+        "rate_limited",
+        "rate_limited",
+        "rate_limited",
+    ]
     assert [row.outcome for row in wrapped.last_attempt_evidence] == [
         "retryable_failure",
         "retryable_failure",
@@ -366,6 +469,125 @@ def test_adapter_retries_only_malformed_decision_text_not_identity_or_usage_evid
             adapter.decide(**_context())
         assert captured.value.failure_category == category
         assert captured.value.retryable is retryable
+
+
+def test_adapter_fails_closed_when_complete_usage_exceeds_the_output_ceiling() -> None:
+    transport = _FakeTransport("gemini-pro-agent")
+    transport.create_response = lambda *_args, **_kwargs: ProviderResponseEnvelope(  # type: ignore[method-assign]
+        decision_text=(
+            '{"engage":false,"probability":0.1,"reason":"low",'
+            '"confidence":0.8,"action":"ignore"}'
+        ),
+        observed_model="gemini-pro-agent",
+        observed_model_status="reported",
+        usage_status="complete",
+        input_tokens=20,
+        output_tokens=257,
+        total_tokens=277,
+        cached_input_tokens=0,
+    )
+    adapter = AntigravityGeminiDecisionAdapter(
+        requested_model="gemini-3.1-pro",
+        prompt_version=CONCURRENT_ROBUSTNESS_PROMPT_REGISTRY.resolve("P0").prompt_version,
+        client=transport,
+    )
+
+    with pytest.raises(ProviderDecisionError) as captured:
+        adapter.decide(**_context())
+
+    assert captured.value.failure_category == "output_ceiling_exceeded"
+    assert captured.value.retryable is False
+
+
+def test_antigravity_adapter_caps_visible_completion_without_dropping_reasoning_usage() -> None:
+    transport = _FakeTransport("gemini-pro-agent")
+    transport.external_provider_client = True  # type: ignore[attr-defined]
+    transport.provider_transport = (  # type: ignore[attr-defined]
+        "antigravity_openai_compatible_gateway"
+    )
+    transport.wire_api = "chat_completions"  # type: ignore[attr-defined]
+    transport.thinking_budget = 128  # type: ignore[attr-defined]
+    transport.reasoning_usage_mapping = (  # type: ignore[attr-defined]
+        "reasoning_included_in_completion_tokens"
+    )
+    transport.output_token_ceiling_scope = (  # type: ignore[attr-defined]
+        "visible_completion_tokens"
+    )
+    transport.wire_output_token_ceiling = 1024  # type: ignore[attr-defined]
+    transport.output_token_ceiling_enforcement = (  # type: ignore[attr-defined]
+        "wire_total_and_visible_application_fail_closed"
+    )
+    transport.last_output_tokens_for_ceiling = 50  # type: ignore[attr-defined]
+    transport.create_response = lambda *_args, **_kwargs: ProviderResponseEnvelope(  # type: ignore[method-assign]
+        decision_text=(
+            '{"engage":false,"probability":0.1,"reason":"low",'
+            '"confidence":0.8,"action":"ignore"}'
+        ),
+        observed_model="gemini-pro-agent",
+        observed_model_status="reported",
+        usage_status="complete",
+        input_tokens=20,
+        output_tokens=300,
+        total_tokens=320,
+        cached_input_tokens=0,
+    )
+    adapter = AntigravityGeminiDecisionAdapter(
+        requested_model="gemini-3.1-pro",
+        prompt_version=CONCURRENT_ROBUSTNESS_PROMPT_REGISTRY.resolve("P0").prompt_version,
+        client=transport,
+    )
+
+    decision = adapter.decide(**_context())
+
+    assert decision.action == "ignore"
+    assert adapter.provider_accounting.output_tokens == 300
+
+
+def test_antigravity_adapter_rejects_an_external_responses_transport_before_dispatch() -> None:
+    transport = _FakeTransport("gemini-pro-agent")
+    transport.external_provider_client = True  # type: ignore[attr-defined]
+    transport.wire_api = "responses"  # type: ignore[attr-defined]
+
+    with pytest.raises(ValueError, match="Chat Completions"):
+        AntigravityGeminiDecisionAdapter(
+            requested_model="gemini-3.1-pro",
+            prompt_version=CONCURRENT_ROBUSTNESS_PROMPT_REGISTRY.resolve("P0").prompt_version,
+            client=transport,
+        )
+
+    assert transport.calls == []
+
+
+def test_antigravity_adapter_rejects_external_chat_without_bounded_controls() -> None:
+    transport = _FakeTransport("gemini-pro-agent")
+    transport.external_provider_client = True  # type: ignore[attr-defined]
+    transport.provider_transport = (  # type: ignore[attr-defined]
+        "antigravity_openai_compatible_gateway"
+    )
+    transport.wire_api = "chat_completions"  # type: ignore[attr-defined]
+
+    with pytest.raises(ValueError, match="Chat Completions"):
+        AntigravityGeminiDecisionAdapter(
+            requested_model="gemini-3.1-pro",
+            prompt_version=CONCURRENT_ROBUSTNESS_PROMPT_REGISTRY.resolve("P0").prompt_version,
+            client=transport,
+        )
+
+    assert transport.calls == []
+
+
+def test_kimi_adapter_rejects_an_external_application_only_ceiling_before_dispatch() -> None:
+    transport = _FakeTransport("k3-256k")
+    transport.external_provider_client = True  # type: ignore[attr-defined]
+    transport.output_token_ceiling_enforcement = "application_fail_closed"  # type: ignore[attr-defined]
+
+    with pytest.raises(ValueError, match="wire and application"):
+        PiKimiDecisionAdapter(
+            prompt_version=CONCURRENT_ROBUSTNESS_PROMPT_REGISTRY.resolve("P0").prompt_version,
+            client=transport,
+        )
+
+    assert transport.calls == []
 
 
 def test_adapter_never_wraps_unknown_post_dispatch_provenance_as_retryable() -> None:

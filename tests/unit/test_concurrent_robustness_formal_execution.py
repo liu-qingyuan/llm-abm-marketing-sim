@@ -273,7 +273,7 @@ def _request_bundle(tmp_path: Path) -> tuple[ConcurrentRobustnessFormalExecution
                 "physical_attempt_cap": 21_600,
                 "cap_kind": "provider_fee_cny",
                 "currency": "CNY",
-                "fee_ceiling": 25.0,
+                "fee_ceiling": None,
             },
             {
                 "provider_route": "antigravity_openai_compatible_gateway",
@@ -390,6 +390,10 @@ def test_missing_authorization_returns_hash_bound_nonproduction_readiness_withou
         and row["physical_attempt_cap"] == 21_600
         for row in request_identity["provider_caps"]
     )
+    assert all(row["fee_ceiling"] is None for row in request_identity["provider_caps"])
+    assert all(row["fee_policy"] == "optional_best_effort_no_cash_ceiling_v1"
+               and row["quota_exhaustion_policy"] == "stop_on_explicit_exhaustion_v1"
+               for row in request_identity["provider_caps"])
     assert request_identity["logical_judgment_cap"] == 36_000
     assert request_identity["physical_attempt_cap"] == 108_000
     assert request_identity["output_identity"] == request.output_identity
@@ -571,7 +575,8 @@ def test_preflight_rejects_crossed_expired_secret_or_cap_facts(
         payload = request.model_dump(mode="json")
         caps = payload["provider_caps"]
         assert isinstance(caps, list) and isinstance(caps[0], dict)
-        caps[0]["fee_ceiling"] = 24.0
+        # The previous immutable ¥25 authorization cannot authorize the new policy.
+        caps[0]["fee_ceiling"] = 25.0
         request = ConcurrentRobustnessFormalExecutionRequest.model_validate(payload)
     else:
         qualification = dict(qualifications["deepseek-v4-flash"])
@@ -694,7 +699,29 @@ class _ExplodingAdapterMap(Mapping[str, object]):
 class _FreshExternalTransport:
     external_provider_client = True
     subscription_nominal_cost_usd_total = 0.0
-    maximum_provider_fee_cny_per_attempt = 0.01
+
+    def __init__(
+        self,
+        *,
+        wire_api: str | None = None,
+        output_token_ceiling_enforcement: str | None = None,
+    ) -> None:
+        self.wire_api = wire_api
+        if wire_api == "chat_completions":
+            self.provider_transport = "antigravity_openai_compatible_gateway"
+            self.thinking_budget = 128
+            self.reasoning_usage_mapping = "reasoning_included_in_completion_tokens"
+            self.output_token_ceiling_scope = "visible_completion_tokens"
+            self.wire_output_token_ceiling = 1024
+            self.output_token_ceiling_enforcement = (
+                "wire_total_and_visible_application_fail_closed"
+            )
+        elif output_token_ceiling_enforcement == "wire_and_application_fail_closed":
+            self.provider_transport = "kimi-coding"
+        else:
+            self.provider_transport = None
+        if wire_api != "chat_completions":
+            self.output_token_ceiling_enforcement = output_token_ceiling_enforcement
 
     def create_response(self, *_args: object, **_kwargs: object) -> NoReturn:
         raise AssertionError("Formal adapter preflight must not send a Provider request")
@@ -706,7 +733,16 @@ def _formal_adapters(
     adapters: dict[str, object] = {}
     transports: list[_FreshExternalTransport] = []
     for cell in manifest.prompt_model_cells:
-        transport = _FreshExternalTransport()
+        transport = _FreshExternalTransport(
+            wire_api=(
+                "chat_completions" if cell.requested_model.startswith("gemini-") else None
+            ),
+            output_token_ceiling_enforcement=(
+                "wire_and_application_fail_closed"
+                if cell.requested_model == "kimi-coding/k3-256k"
+                else None
+            ),
+        )
         transports.append(transport)
         if cell.requested_model == "deepseek-v4-flash":
             adapter = DeepSeekV4FlashDecisionAdapter(

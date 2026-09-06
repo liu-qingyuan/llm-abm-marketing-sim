@@ -134,6 +134,10 @@ def test_report_interface_composes_one_table_first_v2_candidate_and_deterministi
     assert projection["primary_outcome"] == "abm_realized_engagement"
     assert len(projection["realized_main_rows"]) == 180
     assert len(projection["judgment_audit_rows"]) == 180
+    assert all(row["provider_fee_cny"] is None for row in projection["judgment_audit_rows"])
+    assert all(row["provider_fee_cny_known_subtotal"] is None
+               for row in projection["judgment_audit_rows"])
+    assert all(row["planned_fee_ceiling"] is None for row in projection["provider_audit_rows"])
     assert len(projection["prompt_catalog"]) == 4
     assert len(projection["provider_audit_rows"]) == 5
     assert all(
@@ -188,6 +192,12 @@ def test_report_interface_composes_one_table_first_v2_candidate_and_deterministi
         first["engagement_rate"],
         first["prompt_anchor"],
     ]
+    audit_sheet = workbook["Judgment Audit"]
+    fee_column = next(cell.column for cell in audit_sheet[1] if cell.value == "Provider Fee Cny")
+    assert audit_sheet.cell(2, fee_column).value is None
+    readme = {str(row[0]): row[1]
+              for row in workbook["README & Lineage"].iter_rows(min_row=2, values_only=True)}
+    assert "blank means unknown or not applicable" in str(readme["Fee policy"])
     workbook.close()
 
     report = (destination / "report.html").read_text(encoding="utf-8")
@@ -204,6 +214,8 @@ def test_report_interface_composes_one_table_first_v2_candidate_and_deterministi
     assert "Planned Provider condition" in report
     assert "injected_deterministic_validation" in report
     assert "not direct Gemini Developer API" in report
+    assert "费用未知不等于免费" in report
+    assert "No cash ceiling" in report
     assert "不可见上下文" in report
     assert "client-submitted Prompt" in report
     assert "Historical 16-cell Judgment Reference" in report

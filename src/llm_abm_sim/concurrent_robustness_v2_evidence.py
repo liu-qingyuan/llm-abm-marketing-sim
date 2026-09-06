@@ -1255,6 +1255,29 @@ def _realized_analysis_document(
     }
 
 
+def _fee_summary(attempts: Sequence[_V2AttemptEvidence]) -> dict[str, Any]:
+    """Totals require complete applicable observations; partial subtotals are separate."""
+    result: dict[str, Any] = {}
+    for field, observations in (
+        ("provider_fee_cny", [a.provider_fee_cny for a in attempts if a.billing_currency == "CNY"]),
+        (
+            "subscription_nominal_cost_usd_reference",
+            [a.subscription_nominal_cost_usd for a in attempts
+             if a.billing_semantics == "subscription_quota_with_nominal_usd_reference"],
+        ),
+    ):
+        known = [value for value in observations if value is not None]
+        subtotal = round(sum(known), 12) if known else None
+        missing = len(observations) - len(known)
+        result.update({
+            field: subtotal if missing == 0 else None,
+            f"{field}_known_subtotal": subtotal,
+            f"{field}_observed_attempt_count": len(known),
+            f"{field}_missing_attempt_count": missing,
+        })
+    return result
+
+
 def _judgment_group_rows(
     evidence: _PersistedEvidence,
     membership_by_user: Mapping[str, str],
@@ -1293,8 +1316,6 @@ def _judgment_group_rows(
             requested_models = Counter(str(row["requested_model"]) for row in rows)
             routes = Counter(attempt.provider_route for attempt in attempts)
             billing = Counter(attempt.billing_semantics for attempt in attempts)
-            cny_fee = sum(attempt.provider_fee_cny or 0.0 for attempt in attempts)
-            nominal_usd = sum(attempt.subscription_nominal_cost_usd or 0.0 for attempt in attempts)
             input_tokens = sum(cast(int, row["input_usage"]) for row in rows if row["input_usage"] is not None)
             output_tokens = sum(cast(int, row["output_usage"]) for row in rows if row["output_usage"] is not None)
             total_tokens = sum(cast(int, row["total_usage"]) for row in rows if row["total_usage"] is not None)
@@ -1344,8 +1365,7 @@ def _judgment_group_rows(
                     "observed_model_counts": dict(sorted(observed_models.items())),
                     "provider_route_counts": dict(sorted(routes.items())),
                     "billing_semantics_counts": dict(sorted(billing.items())),
-                    "provider_fee_cny": round(cny_fee, 12),
-                    "subscription_nominal_cost_usd_reference": round(nominal_usd, 12),
+                    **_fee_summary(attempts),
                 }
             )
     return result
@@ -1355,10 +1375,6 @@ def _judgment_audit_document(
     evidence: _PersistedEvidence,
     membership_by_user: Mapping[str, str],
 ) -> dict[str, Any]:
-    attempts = [attempt for judgment in evidence.judgments for attempt in judgment.attempt_evidence]
-    cny_fee = sum(attempt.provider_fee_cny or 0.0 for attempt in attempts)
-    if cny_fee > 25.0:
-        raise ConcurrentRobustnessV2EvidenceError("DeepSeek CNY fee exceeds the independent ceiling")
     return {
         "schema_version": CONCURRENT_ROBUSTNESS_JUDGMENT_AUDIT_V2_SCHEMA,
         "manifest_sha256": evidence.manifest_sha256,
@@ -1374,6 +1390,9 @@ def _judgment_audit_document(
         "accounting_contract": {
             "provider_routes": sorted(_V2_ATTEMPT_BILLING_PROFILES),
             "currency_rule": "CNY Provider fee and subscription nominal USD reference are not summed",
+            "fee_policy": "optional_best_effort_no_cash_ceiling_v1",
+            "unknown_fee_rule": "null total when any applicable attempt is missing; known subtotal is partial",
+            "cash_spend_capped": False,
             "requested_and_observed_model_separate": True,
             "reason_and_confidence_belong_to_judgment": True,
         },
@@ -1900,8 +1919,6 @@ def _read_closed_concurrent_robustness_v2_formal_release_source(
     output_tokens = 0
     total_tokens = 0
     cached_input_tokens = 0
-    provider_fee_cny = 0.0
-    subscription_nominal_usd = 0.0
 
     request_identity = validated_plan.get("request_identity")
     if not isinstance(request_identity, Mapping):
@@ -1991,8 +2008,6 @@ def _read_closed_concurrent_robustness_v2_formal_release_source(
             provider_routes[attempt.provider_route] += 1
             billing_semantics[attempt.billing_semantics] += 1
             usage_complete_responses += attempt.usage_complete_response_count
-            provider_fee_cny += attempt.provider_fee_cny or 0.0
-            subscription_nominal_usd += attempt.subscription_nominal_cost_usd or 0.0
 
     last_state_by_pair: dict[tuple[int, str], str] = {}
     for row in evidence.lifecycle:
@@ -2136,11 +2151,9 @@ def _read_closed_concurrent_robustness_v2_formal_release_source(
         "output_tokens": output_tokens,
         "total_tokens": total_tokens,
         "cached_input_tokens": cached_input_tokens,
-        "provider_fee_cny": round(provider_fee_cny, 12),
-        "subscription_nominal_cost_usd_reference": round(
-            subscription_nominal_usd,
-            12,
-        ),
+        **_fee_summary([a for j in evidence.judgments for a in j.attempt_evidence]),
+        "fee_policy": "optional_best_effort_no_cash_ceiling_v1",
+        "cash_spend_capped": False,
         "cross_currency_total_reported": False,
         "live_api_triggered": True,
         "formal_research_evidence": True,

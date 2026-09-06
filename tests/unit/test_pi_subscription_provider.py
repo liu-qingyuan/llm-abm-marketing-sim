@@ -33,6 +33,8 @@ def _fake_worker(path: Path) -> Path:
     path.write_text(
         """
 let buffer = "";
+let requestCount = 0;
+const scenario = process.env.FAKE_WORKER_SCENARIO ?? "success";
 const models = ["gpt-5.4-mini", "gpt-5.4", "gpt-5.5", "gpt-5.6-sol"];
 function emit(value) { process.stdout.write(JSON.stringify(value) + "\\n"); }
 process.stdin.setEncoding("utf8");
@@ -60,6 +62,15 @@ process.stdin.on("data", chunk => {
         }
       });
     } else if (command.type === "request") {
+      requestCount += 1;
+      if (scenario === "failure_after_success" && requestCount > 1) {
+        emit({
+          id: command.id,
+          ok: false,
+          error: {category: "rate_limited", status_code: 429, wait_seconds: 13}
+        });
+        continue;
+      }
       emit({
         id: command.id,
         ok: true,
@@ -73,7 +84,9 @@ process.stdin.on("data", chunk => {
           output_tokens: 10,
           total_tokens: 30,
           cached_input_tokens: 0,
-          subscription_nominal_cost_usd: 0
+          ...(scenario === "missing_cost"
+            ? {}
+            : {subscription_nominal_cost_usd: scenario === "invalid_cost" ? "invalid" : scenario === "failure_after_success" ? 0.25 : 0})
         },
         output_token_ceiling_enforcement: "application_fail_closed"
       });
@@ -130,7 +143,7 @@ process.stdin.on("data", chunk => {
           cached_input_tokens: 0,
           subscription_nominal_cost_usd: 0
         },
-        output_token_ceiling_enforcement: "application_fail_closed"
+        output_token_ceiling_enforcement: "wire_and_application_fail_closed"
       });
     } else if (command.type === "close") {
       emit({id: command.id, ok: true, closing: true});
@@ -149,6 +162,7 @@ def _fake_kimi_failure_worker(path: Path) -> Path:
     path.write_text(
         """
 let buffer = "";
+const failureCategory = process.env.FAKE_KIMI_FAILURE_CATEGORY ?? "APIError";
 function emit(value) { process.stdout.write(JSON.stringify(value) + "\\n"); }
 process.stdin.setEncoding("utf8");
 process.stdin.on("data", chunk => {
@@ -173,7 +187,7 @@ process.stdin.on("data", chunk => {
       emit({
         id: command.id,
         ok: false,
-        error: {category: "APIError", status_code: 429, wait_seconds: 13}
+        error: {category: failureCategory, status_code: 429, wait_seconds: 13}
       });
     } else if (command.type === "close") {
       emit({id: command.id, ok: true, closing: true});
@@ -236,8 +250,61 @@ def test_kimi_subscription_uses_an_independent_profile_without_widening_openai_a
         "adapter_identity": "kimi-coding-subscription-client-v1",
         "authentication": "local_oauth_subscription",
         "requested_model_aliases": {"kimi-coding/k3-256k": "k3-256k"},
-        "output_token_ceiling_enforcement": "application_fail_closed",
+        "output_token_ceiling_enforcement": "wire_and_application_fail_closed",
     }
+
+
+@pytest.mark.parametrize("scenario", ["missing_cost", "invalid_cost"])
+def test_subscription_optional_nominal_cost_does_not_fail_success(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    scenario: str,
+) -> None:
+    monkeypatch.setenv("LLM_ABM_RUN_LIVE_LLM", "1")
+    monkeypatch.setenv("FAKE_WORKER_SCENARIO", scenario)
+    client = PiSubscriptionProviderClient(worker_path=_fake_worker(tmp_path / "worker.mjs"))
+    try:
+        response = client.create_response(
+            [{"role": "user", "content": "bounded test"}],
+            "gpt-5.4-mini",
+            reasoning_effort="low",
+            output_token_ceiling=256,
+        )
+    finally:
+        client.close()
+
+    assert response.usage_status == "complete"
+    assert client.last_subscription_nominal_cost_usd is None
+    assert client.subscription_nominal_cost_usd_total is None
+
+
+def test_subscription_failed_dispatched_attempt_clears_previous_nominal_cost(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LLM_ABM_RUN_LIVE_LLM", "1")
+    monkeypatch.setenv("FAKE_WORKER_SCENARIO", "failure_after_success")
+    client = PiSubscriptionProviderClient(worker_path=_fake_worker(tmp_path / "worker.mjs"))
+    try:
+        client.create_response(
+            [{"role": "user", "content": "bounded test"}],
+            "gpt-5.4-mini",
+            reasoning_effort="low",
+            output_token_ceiling=256,
+        )
+        assert client.last_subscription_nominal_cost_usd == 0.25
+        assert client.subscription_nominal_cost_usd_total == 0.25
+        with pytest.raises(PiSubscriptionProviderError):
+            client.create_response(
+                [{"role": "user", "content": "bounded test"}],
+                "gpt-5.4-mini",
+                reasoning_effort="low",
+                output_token_ceiling=256,
+            )
+        assert client.last_subscription_nominal_cost_usd is None
+        assert client.subscription_nominal_cost_usd_total is None
+    finally:
+        client.close()
 
 
 def test_kimi_worker_known_quota_failure_preserves_only_typed_retry_facts(
@@ -264,7 +331,7 @@ def test_kimi_worker_known_quota_failure_preserves_only_typed_retry_facts(
     finally:
         client.close()
 
-    assert captured.value.failure_category == "http_status"
+    assert captured.value.failure_category == "rate_limited"
     assert captured.value.status_code == 429
     assert captured.value.retryable is True
     assert captured.value.lane_cooldown is True
@@ -273,10 +340,92 @@ def test_kimi_worker_known_quota_failure_preserves_only_typed_retry_facts(
     assert "APIError" not in str(captured.value)
 
 
+def test_python_worker_explicit_quota_category_overrides_http_status(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LLM_ABM_RUN_LIVE_LLM", "1")
+    monkeypatch.setenv("FAKE_KIMI_FAILURE_CATEGORY", "quota_exhausted")
+    client = PiKimiSubscriptionProviderClient(
+        worker_path=_fake_kimi_failure_worker(tmp_path / "kimi-failure-worker.mjs")
+    )
+    try:
+        with pytest.raises(PiSubscriptionProviderError) as captured:
+            client.create_response(
+                [{"role": "user", "content": "bounded test"}],
+                "kimi-coding/k3-256k",
+                reasoning_effort="low",
+                output_token_ceiling=256,
+            )
+    finally:
+        client.close()
+
+    assert captured.value.category == "quota_exhausted"
+    assert captured.value.status_code == 429
+    assert captured.value.retryable is False
+    assert captured.value.wait_seconds is None
+    assert captured.value.wait_source is None
+    assert captured.value.lane_cooldown is False
+
+
+def test_kimi_python_boundary_rejects_worker_output_above_the_ceiling(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LLM_ABM_RUN_LIVE_LLM", "1")
+    client = PiKimiSubscriptionProviderClient(
+        worker_path=_fake_kimi_worker(tmp_path / "kimi-worker.mjs")
+    )
+    crossed_response = {
+        "provider": "kimi-coding",
+        "requested_model": "kimi-coding/k3-256k",
+        "upstream_model": "k3-256k",
+        "observed_model": "k3-256k",
+        "decision_text": (
+            '{"engage":true,"probability":0.8,"reason":"fit",'
+            '"confidence":0.9,"action":"like"}'
+        ),
+        "usage": {
+            "input_tokens": 20,
+            "output_tokens": 257,
+            "total_tokens": 277,
+            "cached_input_tokens": 0,
+            "subscription_nominal_cost_usd": 0,
+        },
+        "output_token_ceiling_enforcement": "wire_and_application_fail_closed",
+    }
+    try:
+        with monkeypatch.context() as context:
+            context.setattr(client, "_rpc", lambda _payload: crossed_response)
+            with pytest.raises(PiSubscriptionProviderError) as captured:
+                client.create_response(
+                    [{"role": "user", "content": "bounded test"}],
+                    "kimi-coding/k3-256k",
+                    reasoning_effort="low",
+                    output_token_ceiling=256,
+                )
+    finally:
+        client.close()
+
+    assert captured.value.category == "output_ceiling_exceeded"
+    assert captured.value.retryable is False
+
+
 def test_subscription_client_requires_explicit_live_gate(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("LLM_ABM_RUN_LIVE_LLM", raising=False)
     with pytest.raises(PiSubscriptionProviderError, match="explicit"):
         PiSubscriptionProviderClient(worker_path=_fake_worker(tmp_path / "worker.mjs"))
+
+
+def test_pi_package_root_supports_bundled_cli_layout(tmp_path: Path) -> None:
+    package_root = tmp_path / "pi-coding-agent"
+    cli = package_root / "dist" / "bundle" / "cli.js"
+    cli.parent.mkdir(parents=True)
+    cli.write_text("", encoding="utf-8")
+    (package_root / "dist" / "index.js").write_text("", encoding="utf-8")
+    (package_root / "package.json").write_text("{}\n", encoding="utf-8")
+
+    assert pi_subscription_module._pi_package_root(str(cli)) == package_root
 
 
 def test_subscription_unknown_response_provenance_is_not_retryable(

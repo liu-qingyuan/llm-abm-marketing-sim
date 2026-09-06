@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import selectors
 import shutil
@@ -8,7 +9,7 @@ import subprocess
 import threading
 from collections.abc import Callable
 from pathlib import Path
-from typing import IO, Any, Literal
+from typing import IO, Any, Literal, TypedDict
 
 from llm_abm_sim.decision import ProviderResponseProvenanceUnknown
 from llm_abm_sim.provider_accounting import ProviderResponseEnvelope
@@ -24,9 +25,35 @@ PI_SUBSCRIPTION_MODEL_ALIASES: dict[str, str] = {
 }
 PI_KIMI_SUBSCRIPTION_ADAPTER_IDENTITY = "kimi-coding-subscription-client-v1"
 PI_KIMI_SUBSCRIPTION_PROVIDER = "kimi-coding"
+PI_KIMI_OUTPUT_TOKEN_CEILING_ENFORCEMENT = "wire_and_application_fail_closed"
 PI_KIMI_SUBSCRIPTION_MODEL_ALIASES: dict[str, str] = {
     "kimi-coding/k3-256k": "k3-256k",
 }
+PI_SUBSCRIPTION_FAILURE_CATEGORIES = frozenset(
+    {
+        "request_invalid",
+        "authentication",
+        "entitlement",
+        "quota_exhausted",
+        "rate_limited",
+        "upstream_unavailable",
+        "transport",
+        "provider_stop",
+        "output_ceiling_exceeded",
+    }
+)
+_RETRYABLE_PI_FAILURE_CATEGORIES = frozenset(
+    {"rate_limited", "upstream_unavailable", "transport"}
+)
+
+
+class _WorkerFailureFacts(TypedDict):
+    category: str
+    status_code: int | None
+    wait_seconds: float | None
+    wait_source: str | None
+    retryable: bool
+    lane_cooldown: bool
 
 
 class PiSubscriptionProviderError(RuntimeError):
@@ -36,13 +63,30 @@ class PiSubscriptionProviderError(RuntimeError):
         self,
         message: str,
         *,
+        category: str = "provider_stop",
         status_code: int | None = None,
         wait_seconds: float | None = None,
+        wait_source: str | None = None,
+        retryable: bool = False,
+        lane_cooldown: bool = False,
     ) -> None:
         super().__init__(message)
+        self.category = (
+            category if category in PI_SUBSCRIPTION_FAILURE_CATEGORIES else "provider_stop"
+        )
         self.status_code = status_code
-        self.wait_seconds = wait_seconds
-        self.wait_source = "provider_wait" if wait_seconds is not None else None
+        self.wait_seconds = None if self.category == "quota_exhausted" else wait_seconds
+        self.wait_source = (
+            None
+            if self.category == "quota_exhausted"
+            else wait_source
+            if wait_source in {"retry_after", "provider_wait"}
+            else "provider_wait"
+            if wait_seconds is not None
+            else None
+        )
+        self.retryable = False if self.category == "quota_exhausted" else retryable
+        self.lane_cooldown = False if self.category == "quota_exhausted" else lane_cooldown
 
 
 class PiSubscriptionProviderClient:
@@ -82,8 +126,8 @@ class PiSubscriptionProviderClient:
         self._process: subprocess.Popen[str] | None = None
         self._sequence = 0
         self._ready = False
-        self.last_subscription_nominal_cost_usd = 0.0
-        self.subscription_nominal_cost_usd_total = 0.0
+        self.last_subscription_nominal_cost_usd: float | None = 0.0
+        self.subscription_nominal_cost_usd_total: float | None = 0.0
         self._start()
 
     @property
@@ -113,7 +157,7 @@ class PiSubscriptionProviderClient:
             raise PiSubscriptionProviderError("Pi subscription transport does not accept thinking_mode")
         if reasoning_effort != "low":
             raise PiSubscriptionProviderError("Pi subscription robustness requests require reasoning_effort=low")
-        if output_token_ceiling is None or output_token_ceiling < 1:
+        if type(output_token_ceiling) is not int or output_token_ceiling < 1:
             raise PiSubscriptionProviderError("Pi subscription robustness requests require an output-token ceiling")
         upstream_model = self.requested_model_aliases.get(model)
         if upstream_model is None:
@@ -121,49 +165,62 @@ class PiSubscriptionProviderClient:
         if not self.ready:
             self.close()
             self._start()
-        response = self._rpc(
-            {
-                "type": "request",
-                "messages": messages,
-                "model": model,
-                "reasoning_effort": reasoning_effort,
-                "output_token_ceiling": output_token_ceiling,
-                "timeout_ms": int(self.response_timeout_seconds * 1000),
-            }
-        )
-        usage = response.get("usage")
-        if not isinstance(usage, dict):
-            raise PiSubscriptionProviderError("Pi subscription response is missing usage evidence")
-        if (
-            response.get("provider") != self.provider_transport
-            or response.get("requested_model") != model
-            or response.get("upstream_model") != upstream_model
-            or response.get("output_token_ceiling_enforcement") != self.output_token_ceiling_enforcement
-        ):
-            raise PiSubscriptionProviderError("Pi subscription response identity is crossed")
-        decision_text = response.get("decision_text")
-        observed_model = response.get("observed_model")
-        if not isinstance(decision_text, str) or observed_model != upstream_model:
-            raise PiSubscriptionProviderError("Pi subscription response is missing or crossing model evidence")
-        input_tokens = _non_negative_int(usage.get("input_tokens"), "input_tokens")
-        output_tokens = _non_negative_int(usage.get("output_tokens"), "output_tokens")
-        total_tokens = _non_negative_int(usage.get("total_tokens"), "total_tokens")
-        cached_input_tokens = _non_negative_int(usage.get("cached_input_tokens"), "cached_input_tokens")
-        if total_tokens != input_tokens + output_tokens or cached_input_tokens > input_tokens:
-            raise PiSubscriptionProviderError("Pi subscription response usage totals are crossed")
-        nominal_cost = _subscription_nominal_cost(usage.get("subscription_nominal_cost_usd"))
-        self.last_subscription_nominal_cost_usd = nominal_cost
-        self.subscription_nominal_cost_usd_total += nominal_cost
-        return ProviderResponseEnvelope(
-            decision_text=decision_text,
-            observed_model=observed_model,
-            observed_model_status="reported",
-            usage_status="complete",
-            input_tokens=input_tokens,
-            output_tokens=output_tokens,
-            total_tokens=total_tokens,
-            cached_input_tokens=cached_input_tokens,
-        )
+        self.last_subscription_nominal_cost_usd = None
+        try:
+            response = self._rpc(
+                {
+                    "type": "request",
+                    "messages": messages,
+                    "model": model,
+                    "reasoning_effort": reasoning_effort,
+                    "output_token_ceiling": output_token_ceiling,
+                    "timeout_ms": int(self.response_timeout_seconds * 1000),
+                }
+            )
+            usage = response.get("usage")
+            if not isinstance(usage, dict):
+                raise PiSubscriptionProviderError("Pi subscription response is missing usage evidence")
+            if (
+                response.get("provider") != self.provider_transport
+                or response.get("requested_model") != model
+                or response.get("upstream_model") != upstream_model
+                or response.get("output_token_ceiling_enforcement") != self.output_token_ceiling_enforcement
+            ):
+                raise PiSubscriptionProviderError("Pi subscription response identity is crossed")
+            decision_text = response.get("decision_text")
+            observed_model = response.get("observed_model")
+            if not isinstance(decision_text, str) or observed_model != upstream_model:
+                raise PiSubscriptionProviderError("Pi subscription response is missing or crossing model evidence")
+            input_tokens = _non_negative_int(usage.get("input_tokens"), "input_tokens")
+            output_tokens = _non_negative_int(usage.get("output_tokens"), "output_tokens")
+            total_tokens = _non_negative_int(usage.get("total_tokens"), "total_tokens")
+            cached_input_tokens = _non_negative_int(usage.get("cached_input_tokens"), "cached_input_tokens")
+            if total_tokens != input_tokens + output_tokens or cached_input_tokens > input_tokens:
+                raise PiSubscriptionProviderError("Pi subscription response usage totals are crossed")
+            if output_tokens > output_token_ceiling:
+                raise PiSubscriptionProviderError(
+                    "Pi subscription response exceeded its output-token ceiling",
+                    category="output_ceiling_exceeded",
+                )
+            nominal_cost = _subscription_nominal_cost(usage.get("subscription_nominal_cost_usd"))
+            self.last_subscription_nominal_cost_usd = nominal_cost
+            if nominal_cost is None:
+                self.subscription_nominal_cost_usd_total = None
+            elif self.subscription_nominal_cost_usd_total is not None:
+                self.subscription_nominal_cost_usd_total += nominal_cost
+            return ProviderResponseEnvelope(
+                decision_text=decision_text,
+                observed_model=observed_model,
+                observed_model_status="reported",
+                usage_status="complete",
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+                total_tokens=total_tokens,
+                cached_input_tokens=cached_input_tokens,
+            )
+        except Exception:
+            self.subscription_nominal_cost_usd_total = None
+            raise
 
     def close(self) -> None:
         with self._lock:
@@ -202,7 +259,7 @@ class PiSubscriptionProviderClient:
         node_executable = shutil.which("node")
         if pi_executable is None or node_executable is None:
             raise PiSubscriptionProviderError("Pi subscription transport requires installed pi and node executables")
-        package_root = Path(pi_executable).resolve().parents[1]
+        package_root = _pi_package_root(pi_executable)
         env = dict(os.environ)
         env["PI_CODING_AGENT_PACKAGE_ROOT"] = str(package_root)
         env["LLM_ABM_PI_SUBSCRIPTION_PROFILE"] = self.worker_profile
@@ -293,23 +350,11 @@ class PiSubscriptionProviderClient:
                 raise PiSubscriptionProviderError("Pi subscription worker response identity is crossed")
             if response.get("ok") is not True:
                 error = response.get("error")
-                if isinstance(error, dict):
-                    status_code = error.get("status_code")
-                    wait_seconds = error.get("wait_seconds")
-                    safe_status = status_code if isinstance(status_code, int) and not isinstance(status_code, bool) else None
-                    safe_wait = (
-                        float(wait_seconds)
-                        if isinstance(wait_seconds, (int, float))
-                        and not isinstance(wait_seconds, bool)
-                        and 0.0 <= float(wait_seconds) < float("inf")
-                        else None
-                    )
-                    raise PiSubscriptionProviderError(
-                        "Pi subscription Provider returned a known failure",
-                        status_code=safe_status,
-                        wait_seconds=safe_wait,
-                    )
-                raise PiSubscriptionProviderError("Pi subscription Provider returned a known failure")
+                failure = _worker_failure(error if isinstance(error, dict) else {})
+                raise PiSubscriptionProviderError(
+                    "Pi subscription Provider returned a known failure",
+                    **failure,
+                )
             return response
 
     def _discard_process(self, process: subprocess.Popen[str]) -> None:
@@ -341,10 +386,81 @@ class PiKimiSubscriptionProviderClient(PiSubscriptionProviderClient):
     adapter_identity = PI_KIMI_SUBSCRIPTION_ADAPTER_IDENTITY
     requested_model_aliases = PI_KIMI_SUBSCRIPTION_MODEL_ALIASES
     worker_profile = PI_KIMI_SUBSCRIPTION_PROVIDER
+    output_token_ceiling_enforcement = PI_KIMI_OUTPUT_TOKEN_CEILING_ENFORCEMENT
+
+
+def _worker_failure(error: dict[str, object]) -> _WorkerFailureFacts:
+    raw_status = error.get("status_code")
+    status_code = (
+        raw_status
+        if type(raw_status) is int and 400 <= raw_status <= 599
+        else None
+    )
+    category_by_status = (
+        "request_invalid"
+        if status_code in {400, 422}
+        else "authentication"
+        if status_code == 401
+        else "entitlement"
+        if status_code in {403, 404}
+        else "transport"
+        if status_code in {408, 409}
+        else "rate_limited"
+        if status_code == 429
+        else "upstream_unavailable"
+        if status_code is not None and status_code >= 500
+        else "request_invalid"
+        if status_code is not None
+        else None
+    )
+    raw_category = error.get("category")
+    explicit_category = (
+        raw_category
+        if isinstance(raw_category, str)
+        and raw_category in PI_SUBSCRIPTION_FAILURE_CATEGORIES
+        else None
+    )
+    category = explicit_category or category_by_status or "provider_stop"
+    retryable = category in _RETRYABLE_PI_FAILURE_CATEGORIES
+    raw_wait = error.get("wait_seconds")
+    wait_seconds = (
+        float(raw_wait)
+        if retryable
+        and isinstance(raw_wait, (int, float))
+        and not isinstance(raw_wait, bool)
+        and 0.0 <= float(raw_wait) < float("inf")
+        else None
+    )
+    raw_wait_source = error.get("wait_source")
+    wait_source = (
+        raw_wait_source
+        if wait_seconds is not None
+        and isinstance(raw_wait_source, str)
+        and raw_wait_source in {"retry_after", "provider_wait"}
+        else "provider_wait"
+        if wait_seconds is not None
+        else None
+    )
+    return {
+        "category": category,
+        "status_code": status_code,
+        "wait_seconds": wait_seconds,
+        "wait_source": wait_source,
+        "retryable": retryable,
+        "lane_cooldown": category in {"rate_limited", "upstream_unavailable"},
+    }
 
 
 def _default_worker_path() -> Path:
     return Path(__file__).resolve().parents[3] / "scripts" / "pi_subscription_provider_worker.mjs"
+
+
+def _pi_package_root(pi_executable: str) -> Path:
+    resolved = Path(pi_executable).resolve()
+    for candidate in resolved.parents:
+        if (candidate / "package.json").is_file() and (candidate / "dist" / "index.js").is_file():
+            return candidate
+    raise PiSubscriptionProviderError("Pi subscription transport cannot resolve the Pi package root")
 
 
 def _non_negative_int(value: object, label: str) -> int:
@@ -353,10 +469,15 @@ def _non_negative_int(value: object, label: str) -> int:
     return value
 
 
-def _subscription_nominal_cost(value: object) -> float:
-    if isinstance(value, bool) or not isinstance(value, (int, float)) or not 0.0 <= float(value) < float("inf"):
-        raise PiSubscriptionProviderError("Pi subscription response reported invalid nominal cost")
-    return float(value)
+def _subscription_nominal_cost(value: object) -> float | None:
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    numeric_value = float(value)
+    if numeric_value < 0 or not math.isfinite(numeric_value):
+        return None
+    return numeric_value
 
 
 def _readline_with_timeout(stream: IO[Any], timeout_seconds: float) -> str:

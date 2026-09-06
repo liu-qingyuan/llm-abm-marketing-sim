@@ -270,6 +270,9 @@ class OpenAICompatibleDecisionAdapter(LLMDecisionAdapter):
 
 
 class _OpenAISDKClient:
+    external_provider_client = True
+    provider_transport = "openai_compatible_sdk"
+
     def __init__(
         self,
         *,
@@ -279,9 +282,31 @@ class _OpenAISDKClient:
         wire_api: str = "responses",
         default_headers: dict[str, str] | None = None,
         http_client: Any | None = None,
+        chat_output_token_field: Literal["max_completion_tokens", "max_tokens"] = (
+            "max_completion_tokens"
+        ),
+        chat_structured_output: Literal["json_object", "json_schema"] = "json_object",
+        chat_thinking_budget: int | None = None,
+        chat_additive_reasoning_usage: bool = False,
     ) -> None:
         from openai import Omit, OpenAI  # type: ignore[import-not-found]
 
+        normalized_wire_api = "chat" if wire_api == "chat_completions" else wire_api
+        if normalized_wire_api not in {"chat", "responses"}:
+            raise ProviderConfigurationError("unsupported OpenAI-compatible wire API")
+        if chat_output_token_field not in {"max_completion_tokens", "max_tokens"}:
+            raise ProviderConfigurationError("unsupported Chat output-token field")
+        if chat_structured_output not in {"json_object", "json_schema"}:
+            raise ProviderConfigurationError("unsupported Chat structured-output mode")
+        if isinstance(chat_thinking_budget, bool) or (
+            chat_thinking_budget is not None
+            and (not isinstance(chat_thinking_budget, int) or chat_thinking_budget <= 0)
+        ):
+            raise ProviderConfigurationError("Chat thinking budget must be a positive integer")
+        if normalized_wire_api != "chat" and (
+            chat_thinking_budget is not None or chat_additive_reasoning_usage
+        ):
+            raise ProviderConfigurationError("Chat-only controls require Chat Completions")
         if api_key is None and not default_headers:
             raise ProviderConfigurationError("header-only SDK client requires selected-provider runtime headers")
 
@@ -305,7 +330,15 @@ class _OpenAISDKClient:
         self._extra_headers = (
             {"Authorization": Omit()} if header_only and not configured_authorization else None
         )
-        self._wire_api = wire_api
+        self._wire_api = normalized_wire_api
+        self.wire_api = (
+            "chat_completions" if normalized_wire_api == "chat" else normalized_wire_api
+        )
+        self._chat_output_token_field = chat_output_token_field
+        self._chat_structured_output = chat_structured_output
+        self._chat_thinking_budget = chat_thinking_budget
+        self._chat_additive_reasoning_usage = chat_additive_reasoning_usage
+        self.last_safe_usage_diagnostics: dict[str, object] | None = None
 
     def create_response(
         self,
@@ -320,21 +353,65 @@ class _OpenAISDKClient:
         if self._wire_api == "chat":
             if reasoning_effort is not None:
                 raise ProviderConfigurationError("reasoning_effort requires the Responses wire")
+            chat_structured_output = getattr(self, "_chat_structured_output", "json_object")
+            response_format: dict[str, Any] = {"type": "json_object"}
+            if chat_structured_output == "json_schema":
+                schema = engage_decision_json_schema()
+                response_format = {
+                    "type": "json_schema",
+                    "json_schema": {
+                        "name": schema["name"],
+                        "strict": schema["strict"],
+                        "schema": schema["schema"],
+                    },
+                }
             chat_request: dict[str, Any] = {
                 "model": model,
                 "messages": sdk_messages,
-                "response_format": {"type": "json_object"},
+                "response_format": response_format,
                 "extra_headers": self._extra_headers,
             }
             if output_token_ceiling is not None:
-                chat_request["max_completion_tokens"] = output_token_ceiling
+                token_field = getattr(
+                    self, "_chat_output_token_field", "max_completion_tokens"
+                )
+                chat_request[token_field] = output_token_ceiling
+            chat_thinking_budget = getattr(self, "_chat_thinking_budget", None)
+            if thinking_mode == "disabled" and chat_thinking_budget is not None:
+                raise ProviderConfigurationError(
+                    "Chat thinking mode and an explicit thinking budget are mutually exclusive"
+                )
             if thinking_mode == "disabled":
                 chat_request["extra_body"] = {"thinking": {"type": "disabled"}}
+            elif chat_thinking_budget is not None:
+                chat_request["extra_body"] = {
+                    "thinking": {
+                        "type": "enabled",
+                        "budget_tokens": chat_thinking_budget,
+                    }
+                }
             chat_response = self._client.chat.completions.create(**chat_request)
+            usage = response_field(chat_response, "usage")
+            diagnostics = _safe_chat_usage_diagnostics(usage)
+            if getattr(self, "_chat_additive_reasoning_usage", False):
+                usage, reconciled = _reconcile_additive_chat_reasoning_usage(usage)
+                normalized_output_tokens = (
+                    response_field(usage, "completion_tokens")
+                    if reconciled
+                    else diagnostics["output_tokens"]
+                )
+                diagnostics = {
+                    **diagnostics,
+                    "reasoning_reconciliation": (
+                        "added_to_completion_tokens" if reconciled else "not_applied"
+                    ),
+                    "normalized_output_tokens": normalized_output_tokens,
+                }
+            self.last_safe_usage_diagnostics = diagnostics
             return normalize_provider_response_envelope(
                 decision_text=_chat_decision_text(chat_response),
                 observed_model=response_field(chat_response, "model"),
-                usage=response_field(chat_response, "usage"),
+                usage=usage,
                 input_tokens_field="prompt_tokens",
                 output_tokens_field="completion_tokens",
                 cached_details_field="prompt_tokens_details",
@@ -360,6 +437,92 @@ class _OpenAISDKClient:
             output_tokens_field="output_tokens",
             cached_details_field="input_tokens_details",
         )
+
+    def close(self) -> None:
+        self._client.close()
+
+
+def _safe_chat_usage_diagnostics(usage: object) -> dict[str, object]:
+    def safe_counter(value: object) -> int | None:
+        return value if type(value) is int and value >= 0 else None
+
+    input_tokens = safe_counter(response_field(usage, "prompt_tokens"))
+    output_tokens = safe_counter(response_field(usage, "completion_tokens"))
+    total_tokens = safe_counter(response_field(usage, "total_tokens"))
+    prompt_details = response_field(usage, "prompt_tokens_details")
+    completion_details = response_field(usage, "completion_tokens_details")
+    cached_input_tokens = safe_counter(response_field(prompt_details, "cached_tokens"))
+    reasoning_tokens = safe_counter(response_field(completion_details, "reasoning_tokens"))
+    normalized = normalize_provider_response_envelope(
+        decision_text="",
+        observed_model="safe-usage-diagnostic",
+        usage=usage,
+        input_tokens_field="prompt_tokens",
+        output_tokens_field="completion_tokens",
+        cached_details_field="prompt_tokens_details",
+    )
+    total_delta = (
+        total_tokens - input_tokens - output_tokens
+        if input_tokens is not None and output_tokens is not None and total_tokens is not None
+        else None
+    )
+    failure_invariant = (
+        None
+        if normalized.usage_status == "complete"
+        else "required_counter_invalid"
+        if input_tokens is None or output_tokens is None or total_tokens is None
+        else "total_mismatch"
+        if total_delta != 0
+        else "cached_gt_input"
+        if cached_input_tokens is not None and cached_input_tokens > input_tokens
+        else "usage_details_malformed"
+    )
+    return {
+        "usage_status": normalized.usage_status,
+        "input_tokens": input_tokens,
+        "output_tokens": output_tokens,
+        "total_tokens": total_tokens,
+        "cached_input_tokens": cached_input_tokens,
+        "reasoning_tokens": reasoning_tokens,
+        "failure_invariant": failure_invariant,
+        "total_delta": total_delta,
+    }
+
+
+def _reconcile_additive_chat_reasoning_usage(usage: object) -> tuple[object, bool]:
+    """Normalize a compatible gateway's additive reasoning-token ledger.
+
+    OpenAI Chat defines reasoning tokens as a subset of ``completion_tokens``.
+    Reconciliation is fail-closed: it applies only when the reasoning count exactly
+    explains ``total_tokens - prompt_tokens - completion_tokens``.
+    """
+
+    diagnostics = _safe_chat_usage_diagnostics(usage)
+    input_tokens = diagnostics["input_tokens"]
+    output_tokens = diagnostics["output_tokens"]
+    total_tokens = diagnostics["total_tokens"]
+    reasoning_tokens = diagnostics["reasoning_tokens"]
+    if not (
+        diagnostics["failure_invariant"] == "total_mismatch"
+        and isinstance(input_tokens, int)
+        and isinstance(output_tokens, int)
+        and isinstance(total_tokens, int)
+        and isinstance(reasoning_tokens, int)
+        and reasoning_tokens > 0
+        and diagnostics["total_delta"] == reasoning_tokens
+    ):
+        return usage, False
+
+    normalized: dict[str, object] = {
+        "prompt_tokens": input_tokens,
+        "completion_tokens": output_tokens + reasoning_tokens,
+        "total_tokens": total_tokens,
+        "completion_tokens_details": {"reasoning_tokens": reasoning_tokens},
+    }
+    cached_input_tokens = diagnostics["cached_input_tokens"]
+    if isinstance(cached_input_tokens, int):
+        normalized["prompt_tokens_details"] = {"cached_tokens": cached_input_tokens}
+    return normalized, True
 
 
 def _responses_decision_text(response: object) -> str:

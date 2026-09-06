@@ -511,7 +511,7 @@ _V2_ATTEMPT_BILLING_PROFILES: Mapping[
     str,
     tuple[str, Literal["CNY"] | None, float | None],
 ] = {
-    "deepseek_official": ("provider_fee_cny", "CNY", 25.0),
+    "deepseek_official": ("provider_fee_cny", "CNY", None),
     "antigravity_openai_compatible_gateway": ("gateway_quota_usage", None, None),
     "pi_kimi_oauth_subscription": (
         "subscription_quota_with_nominal_usd_reference",
@@ -586,8 +586,8 @@ class _V2AttemptEvidence(_V2FrozenModel):
             self.subscription_nominal_cost_usd
         ):
             raise ValueError("attempt nominal USD reference must be finite")
-        if (self.billing_currency == "CNY") != (self.fee_ceiling is not None):
-            raise ValueError("CNY attempt evidence requires its independent fee ceiling")
+        if self.fee_ceiling is not None:
+            raise ValueError("v2 optional fee evidence cannot impose a cash ceiling")
         if self.billing_currency != "CNY" and self.provider_fee_cny is not None:
             raise ValueError("non-CNY Provider attempt cannot carry a CNY fee")
         if (
@@ -612,6 +612,9 @@ class _V2AttemptEvidence(_V2FrozenModel):
                 "timeout",
                 "http_status",
                 "malformed_structured_response",
+                "rate_limited",
+                "upstream_unavailable",
+                "transport",
             }:
                 raise ValueError("retryable attempt is outside the frozen failure allowlist")
         elif self.wait_seconds is not None:
@@ -620,8 +623,14 @@ class _V2AttemptEvidence(_V2FrozenModel):
             raise ValueError("attempt exhaustion is valid only at the physical-attempt cap")
         if self.failure_category == "http_status" and self.status_code is None:
             raise ValueError("HTTP attempt failure requires a status code")
-        if self.lane_cooldown != (self.status_code in {429, 503}):
-            raise ValueError("model-lane cooldown must be caused only by 429 or 503")
+        if self.failure_category == "quota_exhausted" and self.outcome != "nonretryable_failure":
+            raise ValueError("explicit quota exhaustion must stop without retry")
+        expected_lane_cooldown = self.failure_category != "quota_exhausted" and (
+            self.status_code in {429, 503}
+            or self.failure_category in {"rate_limited", "upstream_unavailable"}
+        )
+        if self.lane_cooldown != expected_lane_cooldown:
+            raise ValueError("model-lane cooldown must be caused by a rate or upstream outage")
         observed_total = (
             sum(self.observed_model_counts.values())
             + self.observed_model_missing_response_count
@@ -1225,10 +1234,6 @@ class _V2ReconciliationRequired(RuntimeError):
     pass
 
 
-class _V2SafePreCallStop(RuntimeError):
-    pass
-
-
 class _V2CellStopped(RuntimeError):
     pass
 
@@ -1735,8 +1740,8 @@ def _runtime_identity(
 class _V2AdapterAttemptSnapshot:
     request_invocations: int
     accounting: ProviderAccounting
-    provider_fee_cny_total: float | None
-    subscription_nominal_cost_usd_total: float | None
+    last_provider_fee_cny: float | None
+    last_subscription_nominal_cost_usd: float | None
 
 
 def _v2_adapter_snapshot(adapter: LLMDecisionAdapter) -> _V2AdapterAttemptSnapshot:
@@ -1744,7 +1749,7 @@ def _v2_adapter_snapshot(adapter: LLMDecisionAdapter) -> _V2AdapterAttemptSnapsh
     accounting = getattr(adapter, "provider_accounting", None)
     if type(request_invocations) is not int or request_invocations < 0 or not isinstance(accounting, ProviderAccounting):
         raise ValueError("v2 Provider Adapter counters are unavailable")
-    provider_fee = getattr(adapter, "provider_fee_cny_total", None)
+    provider_fee = getattr(adapter, "last_provider_fee_cny", None)
     if provider_fee is not None and (
         isinstance(provider_fee, bool)
         or not isinstance(provider_fee, (int, float))
@@ -1752,7 +1757,7 @@ def _v2_adapter_snapshot(adapter: LLMDecisionAdapter) -> _V2AdapterAttemptSnapsh
         or float(provider_fee) < 0.0
     ):
         raise ValueError("v2 Provider Adapter CNY accounting is invalid")
-    nominal_cost = getattr(adapter, "subscription_nominal_cost_usd_total", None)
+    nominal_cost = getattr(adapter, "last_subscription_nominal_cost_usd", None)
     if nominal_cost is not None and (
         isinstance(nominal_cost, bool)
         or not isinstance(nominal_cost, (int, float))
@@ -1763,8 +1768,8 @@ def _v2_adapter_snapshot(adapter: LLMDecisionAdapter) -> _V2AdapterAttemptSnapsh
     return _V2AdapterAttemptSnapshot(
         request_invocations=request_invocations,
         accounting=accounting,
-        provider_fee_cny_total=float(provider_fee) if provider_fee is not None else None,
-        subscription_nominal_cost_usd_total=(
+        last_provider_fee_cny=float(provider_fee) if provider_fee is not None else None,
+        last_subscription_nominal_cost_usd=(
             float(nominal_cost) if nominal_cost is not None else None
         ),
     )
@@ -1788,29 +1793,6 @@ def _v2_attempt_evidence(
     request_evidence = getattr(adapter, "request_evidence", None)
     if not isinstance(request_evidence, Mapping):
         raise ValueError("v2 concrete Adapter is missing its safe request evidence")
-    provider_fee_cny: float | None = None
-    if before.provider_fee_cny_total is not None or after.provider_fee_cny_total is not None:
-        if before.provider_fee_cny_total is None or after.provider_fee_cny_total is None:
-            raise ValueError("v2 Provider CNY accounting disappeared during an attempt")
-        provider_fee_cny = after.provider_fee_cny_total - before.provider_fee_cny_total
-        if provider_fee_cny < 0.0:
-            raise ValueError("v2 Provider CNY accounting is not monotonic")
-    nominal_cost_usd: float | None = None
-    if (
-        before.subscription_nominal_cost_usd_total is not None
-        or after.subscription_nominal_cost_usd_total is not None
-    ):
-        if (
-            before.subscription_nominal_cost_usd_total is None
-            or after.subscription_nominal_cost_usd_total is None
-        ):
-            raise ValueError("v2 subscription nominal cost disappeared during an attempt")
-        nominal_cost_usd = (
-            after.subscription_nominal_cost_usd_total
-            - before.subscription_nominal_cost_usd_total
-        )
-        if nominal_cost_usd < 0.0:
-            raise ValueError("v2 subscription nominal cost is not monotonic")
     payload = {
         "schema_version": "concurrent-robustness-provider-attempt-v2",
         "attempt_number": attempt_number,
@@ -1836,8 +1818,8 @@ def _v2_attempt_evidence(
         "provider_route": request_evidence.get("provider_route"),
         "billing_semantics": request_evidence.get("billing_semantics"),
         "billing_currency": request_evidence.get("billing_currency"),
-        "provider_fee_cny": provider_fee_cny,
-        "subscription_nominal_cost_usd": nominal_cost_usd,
+        "provider_fee_cny": after.last_provider_fee_cny,
+        "subscription_nominal_cost_usd": after.last_subscription_nominal_cost_usd,
         "fee_ceiling": request_evidence.get("fee_ceiling"),
     }
     return _V2AttemptEvidence.model_validate(payload)
@@ -1851,35 +1833,11 @@ class _V2ModelLane:
         *,
         requested_model: str,
         backoff_seconds: float,
-        provider_fee_cny_spent: float = 0.0,
     ) -> None:
         self.requested_model = requested_model
         self.backoff_seconds = backoff_seconds
         self.cooldown_until = 0.0
-        self.provider_fee_cny_spent = provider_fee_cny_spent
         self._lock = threading.Lock()
-
-    def _enforce_pre_call_ceiling(self, adapter: LLMDecisionAdapter) -> None:
-        request_evidence = getattr(adapter, "request_evidence", None)
-        if not isinstance(request_evidence, Mapping) or request_evidence.get("billing_currency") != "CNY":
-            return
-        ceiling = request_evidence.get("fee_ceiling")
-        maximum_attempt_fee = getattr(adapter, "maximum_provider_fee_cny_per_attempt", None)
-        if (
-            isinstance(ceiling, bool)
-            or not isinstance(ceiling, (int, float))
-            or maximum_attempt_fee is None
-        ):
-            raise _V2SafePreCallStop("DeepSeek CNY dispatch lacks a safe fee reservation")
-        if self.provider_fee_cny_spent + float(maximum_attempt_fee) > float(ceiling):
-            raise _V2SafePreCallStop("DeepSeek CNY fee ceiling reached before dispatch")
-
-    def _record_provider_fee(self, attempt: _V2AttemptEvidence) -> None:
-        if attempt.provider_fee_cny is None:
-            return
-        self.provider_fee_cny_spent += attempt.provider_fee_cny
-        if attempt.fee_ceiling is None or self.provider_fee_cny_spent > attempt.fee_ceiling:
-            raise ValueError("DeepSeek CNY fee evidence exceeded its independent ceiling")
 
     def execute(
         self,
@@ -1897,7 +1855,6 @@ class _V2ModelLane:
                 remaining_cooldown = self.cooldown_until - _V2_MONOTONIC()
                 if remaining_cooldown > 0.0:
                     _V2_SLEEP(remaining_cooldown)
-                self._enforce_pre_call_ceiling(adapter)
                 if observer is not None:
                     observer("dispatching", attempt_number, tuple(evidence), None)
                 before = _v2_adapter_snapshot(adapter)
@@ -1933,7 +1890,6 @@ class _V2ModelLane:
                         wait_seconds=wait_seconds,
                         wait_source=wait_source,
                     )
-                    self._record_provider_fee(attempt_evidence)
                     evidence.append(attempt_evidence)
                     if not has_retry:
                         exc.attempt_evidence = tuple(evidence)
@@ -1955,7 +1911,6 @@ class _V2ModelLane:
                     wait_seconds=None,
                     wait_source=None,
                 )
-                self._record_provider_fee(attempt_evidence)
                 evidence.append(attempt_evidence)
                 return decision, tuple(evidence)
         raise RuntimeError("v2 model lane exhausted without a terminal result")
@@ -3106,7 +3061,6 @@ def _validate_published_lifecycle(
         records_by_cell[cell_index].append(record)
     expected_records_per_cell = manifest.request_caps.logical_judgments_per_cell * len(_V2_PAIR_STATES)
     replayed_terminals: list[_V2RealizedTerminal] = []
-    replayed_judgments: list[_V2Judgment] = []
     for cell_index, cell in enumerate(manifest.prompt_model_cells):
         records = records_by_cell[cell_index]
         if len(records) < expected_records_per_cell:
@@ -3129,9 +3083,6 @@ def _validate_published_lifecycle(
         replay = _V2LedgerReplay((), {}, {}, None)
         for record in records:
             replay = ledger._apply_record(replay, record)
-            if record.get("state") == "judgment_persisted":
-                payload = cast(Mapping[str, object], record["payload"])
-                replayed_judgments.append(_V2Judgment.model_validate(payload.get("judgment")))
             if record.get("state") == "realized_persisted":
                 payload = cast(Mapping[str, object], record["payload"])
                 replayed_terminals.append(_V2RealizedTerminal.model_validate(payload.get("terminal")))
@@ -3143,14 +3094,6 @@ def _validate_published_lifecycle(
         row.model_dump(mode="json") for row in terminals
     ]:
         raise ValueError("v2 terminal artifact is crossed with lifecycle evidence")
-    deepseek_fee_cny = sum(
-        attempt.provider_fee_cny or 0.0
-        for judgment in replayed_judgments
-        if judgment.requested_model == "deepseek-v4-flash"
-        for attempt in judgment.attempt_evidence
-    )
-    if deepseek_fee_cny > 25.0:
-        raise ValueError("v2 execution DeepSeek CNY fee exceeds the independent ceiling")
 
 
 def _validate_batch_commits(
@@ -3468,47 +3411,6 @@ def _operational_progress(root: Path) -> tuple[int, int, int, str | None, str | 
     return logical, physical, completed, last_cell, last_pair
 
 
-def _operational_provider_fee_cny(root: Path) -> dict[str, float]:
-    totals: dict[str, float] = {}
-    for cell_scope in sorted(root.glob("cell-*")):
-        identity_path = cell_scope / _V2_LEDGER_IDENTITY
-        journal_path = cell_scope / _V2_LEDGER_JSONL
-        if not identity_path.is_file() or not journal_path.is_file():
-            raise ValueError("v2 operational fee evidence is incomplete")
-        identity = json.loads(identity_path.read_text(encoding="utf-8"))
-        cell = identity.get("cell")
-        if not isinstance(cell, Mapping):
-            raise ValueError("v2 operational fee cell identity is malformed")
-        requested_model = cell.get("requested_model")
-        if not isinstance(requested_model, str):
-            raise ValueError("v2 operational fee model identity is malformed")
-        ledger = _V2PairLedger.open(cell_scope, identity=identity)
-        attempts_by_pair: dict[str, tuple[_V2AttemptEvidence, ...]] = {}
-        for record in ledger.records:
-            pair_id = str(record["pair_id"])
-            payload = cast(Mapping[str, object], record["payload"])
-            raw_attempts: object | None = None
-            if record["state"] == "judgment_persisted":
-                judgment = _V2Judgment.model_validate(payload.get("judgment"))
-                attempts_by_pair[pair_id] = judgment.attempt_evidence
-                continue
-            if record["state"] in {"attempting", "stopped"}:
-                raw_attempts = payload.get("attempt_evidence")
-            if isinstance(raw_attempts, list):
-                attempts_by_pair[pair_id] = tuple(
-                    _V2AttemptEvidence.model_validate(attempt) for attempt in raw_attempts
-                )
-        total = sum(
-            attempt.provider_fee_cny or 0.0
-            for attempts in attempts_by_pair.values()
-            for attempt in attempts
-        )
-        totals[requested_model] = totals.get(requested_model, 0.0) + total
-    if totals.get("deepseek-v4-flash", 0.0) > 25.0:
-        raise ValueError("v2 operational DeepSeek CNY fee exceeds the independent ceiling")
-    return totals
-
-
 def _result(
     *,
     status: ConcurrentRobustnessStudyStatus,
@@ -3701,7 +3603,6 @@ def _run_concurrent_robustness_v2(
             formal_execution_plan=validated_formal_plan,
         )
         cells: list[_V2CellResult] = []
-        restored_provider_fees = _operational_provider_fee_cny(root)
         _, _, completed_before, _, _ = _operational_progress(root)
         invocation_cell_end = (
             _formal_model_batch_end(completed_before)
@@ -3718,7 +3619,6 @@ def _run_concurrent_robustness_v2(
                         _V2ModelLane(
                             requested_model=cell.requested_model,
                             backoff_seconds=manifest.request_contract.retry_backoff_seconds,
-                            provider_fee_cny_spent=restored_provider_fees.get(cell.requested_model, 0.0),
                         ),
                     )
                 cell_result = _run_cell(
@@ -3751,13 +3651,11 @@ def _run_concurrent_robustness_v2(
                     and len(cells) == invocation_cell_end
                 ):
                     break
-        except (_V2ReconciliationRequired, _V2SafePreCallStop, _V2CellStopped) as pause:
+        except (_V2ReconciliationRequired, _V2CellStopped) as pause:
             _assert_source_unchanged(closure)
             logical, physical, completed, last_cell, last_pair = _operational_progress(root)
             if isinstance(pause, _V2ReconciliationRequired):
                 status = ConcurrentRobustnessStudyStatus.RECONCILIATION_REQUIRED
-            elif isinstance(pause, _V2SafePreCallStop):
-                status = ConcurrentRobustnessStudyStatus.RESUMABLE
             else:
                 status = ConcurrentRobustnessStudyStatus.STOPPED
             _write_operational_status(

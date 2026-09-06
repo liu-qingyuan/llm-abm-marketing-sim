@@ -115,7 +115,13 @@ _JUDGMENT_FIELDS = (
     "provider_route_counts",
     "billing_semantics_counts",
     "provider_fee_cny",
+    "provider_fee_cny_known_subtotal",
+    "provider_fee_cny_observed_attempt_count",
+    "provider_fee_cny_missing_attempt_count",
     "subscription_nominal_cost_usd_reference",
+    "subscription_nominal_cost_usd_reference_known_subtotal",
+    "subscription_nominal_cost_usd_reference_observed_attempt_count",
+    "subscription_nominal_cost_usd_reference_missing_attempt_count",
     "prompt_anchor",
 )
 _JUDGMENT_HEADERS = tuple(field.replace("_", " ").title() for field in _JUDGMENT_FIELDS)
@@ -448,13 +454,21 @@ def _normalize_judgment_rows(source: _ConcurrentRobustnessV2ReportSource) -> tup
         "output_tokens",
         "total_tokens",
         "cached_input_tokens",
+        "provider_fee_cny_observed_attempt_count",
+        "provider_fee_cny_missing_attempt_count",
+        "subscription_nominal_cost_usd_reference_observed_attempt_count",
+        "subscription_nominal_cost_usd_reference_missing_attempt_count",
     )
     float_fields = (
         "positive_judgment_rate",
         "mean_probability",
         "mean_confidence",
+    )
+    optional_fee_fields = (
         "provider_fee_cny",
+        "provider_fee_cny_known_subtotal",
         "subscription_nominal_cost_usd_reference",
+        "subscription_nominal_cost_usd_reference_known_subtotal",
     )
     counter_fields = (
         "requested_model_counts",
@@ -472,6 +486,10 @@ def _normalize_judgment_rows(source: _ConcurrentRobustnessV2ReportSource) -> tup
         }
         values.update({field: _strict_int(row.get(field), f"Judgment {field}") for field in integer_fields})
         values.update({field: _finite_float(row.get(field), f"Judgment {field}") for field in float_fields})
+        values.update({
+            field: None if row[field] is None else _finite_float(row[field], f"Judgment {field}")
+            for field in optional_fee_fields
+        })
         values.update(
             {
                 field: _compact_json(_string_counter(row.get(field), f"Judgment {field}"))
@@ -851,6 +869,9 @@ def _readme_rows(projection: _ValidatedReportProjection) -> tuple[tuple[object, 
         ("Schema", _PROJECTION_SCHEMA),
         ("Primary result", "ABM Realized like/comment/share/engagement/exposure and engagement rate"),
         ("Judgment scope", "Provider Judgment remains in the separate Judgment Audit sheet"),
+        ("Fee policy", "Optional best-effort: blank means unknown or not applicable, not free. "
+         "Totals require all applicable attempts; known subtotal and observed/missing counts remain separate. "
+         "No cash ceiling or fee reservation; CNY and nominal USD reference are not summed."),
         ("Grouping", "Model → Prompt → S1–S3 → M1–M3"),
         ("Formal topology", _compact_json(projection.formal_topology)),
         ("Validated denominator", _compact_json(projection.realized_denominator)),
@@ -1209,6 +1230,7 @@ def _provider_audit_html(projection: _ValidatedReportProjection) -> str:
         '<section class="robustness-v2-block" data-testid="robustness-v2-provider-audit">'
         f'<h3>{_bilingual("Provider Audit", "Provider Audit")}</h3>'
         f'<p>{_bilingual("Planned Provider condition 列来自冻结的 Provider contract；Observed 列只来自 closed execution evidence。deterministic_validation 不得伪装成 Formal route。", "Planned Provider condition columns come from the frozen Provider contract; Observed columns come only from closed execution evidence. Deterministic validation is never presented as a Formal route.")}</p>'
+        f'<p>{_bilingual("费用未知不等于免费：空白表示未知或不适用；费用只作可选统计，部分已知小计及缺失次数见 Judgment Audit 下载，不设现金上限。", "Unknown fees do not mean free: blank means unknown or not applicable. Fees are optional statistics; partial known subtotals and missing counts are in the Judgment Audit download. No cash ceiling.")}</p>'
         '<div class="robustness-v2-table-wrap"><table><thead><tr>'
         + _table_header("Execution profile", "Execution profile")
         + _table_header("Condition evidence", "Condition evidence")
