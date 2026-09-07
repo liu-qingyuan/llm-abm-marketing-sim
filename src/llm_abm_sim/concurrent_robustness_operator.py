@@ -10,6 +10,7 @@ from pathlib import Path
 from .concurrent_robustness_formal_execution import (
     _manifest_from_request,
     _request_from_plan,
+    inspect_formal_execution_plan,
     validate_formal_execution_plan,
 )
 from .concurrent_robustness_study import (
@@ -17,7 +18,7 @@ from .concurrent_robustness_study import (
     ConcurrentRobustnessStudyResult,
     ConcurrentRobustnessStudyStatus,
 )
-from .concurrent_robustness_v2 import ConcurrentRobustnessManifestV2
+from .concurrent_robustness_v2 import ConcurrentRobustnessManifestV2, _inspect_v2_progress
 from .decision import LLMDecisionAdapter
 from .providers.antigravity import AntigravityGeminiProviderClient
 from .providers.openai_compatible import _OpenAISDKClient
@@ -117,6 +118,34 @@ def _build_adapters(
             adapter = PiOpenAIDecisionAdapter(prompt_version=cell.prompt_version, client=client)
         adapters[cell.cell_id] = adapter
     return adapters
+
+
+def inspect_concurrent_robustness_formal(plan_path: str | Path) -> dict[str, object]:
+    """Read verified progress and expiry blockers without credentials or writes.
+
+    This never renews authorization, resumes a stopped pair or enables Provider
+    dispatch. Remaining attempts alone are not recovery permission.
+    """
+    inspected = inspect_formal_execution_plan(plan_path)
+    snapshot = _inspect_v2_progress(
+        manifest=inspected.manifest, output_path=inspected.request.output_root,
+        formal_execution_plan=inspected.plan,
+    )
+    blockers = []
+    if not inspected.current_gate["currently_valid"]:
+        blockers.append("authorization_or_qualification_not_current")
+    if snapshot["status"] == "stopped":
+        blockers.append("stopped_run_requires_explicit_recovery_contract")
+    if snapshot["status"] == "reconciliation_required":
+        blockers.append("unknown_postdispatch_requires_reconciliation")
+    return {
+        "schema_version": "concurrent-robustness-formal-inspection-v1",
+        **snapshot, "current_gate": inspected.current_gate, "blockers": blockers,
+        "plan_identity_sha256": inspected.plan["plan_identity_sha256"],
+        "inspection_only": True, "automatic_resume_allowed": False,
+        "provider_calls_during_inspection": 0, "credential_reads_during_inspection": 0,
+        "production_deploy_eligible": False,
+    }
 
 
 def run_concurrent_robustness_formal(plan_path: str | Path) -> ConcurrentRobustnessStudyResult:

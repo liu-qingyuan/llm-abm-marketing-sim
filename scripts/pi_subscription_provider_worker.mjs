@@ -223,8 +223,9 @@ function safeError(error, observation = {}) {
       ? "provider_wait"
       : null;
   const explicitCategory = safeFailureCategories.has(error?.category) ? error.category : null;
-  const category = explicitCategory
-    ?? (explicitQuotaFailure(error, message) ? "quota_exhausted" : null)
+  const category = explicitQuotaFailure(error, message)
+    ? "quota_exhausted"
+    : explicitCategory
     ?? classifyFailure(
       statusCode,
       name,

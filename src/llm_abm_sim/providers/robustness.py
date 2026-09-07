@@ -6,6 +6,8 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Literal, Protocol
 
+from pydantic import ValidationError
+
 from llm_abm_sim.decision import (
     DecisionInput,
     EngageDecision,
@@ -30,7 +32,7 @@ from llm_abm_sim.providers.antigravity import (
     ANTIGRAVITY_GEMINI_THINKING_BUDGET,
     ANTIGRAVITY_GEMINI_WIRE_OUTPUT_TOKEN_CEILING,
 )
-from llm_abm_sim.providers.openai_compatible import _parse_provider_decision
+from llm_abm_sim.providers.openai_compatible import ChatUsageDiagnostics, _parse_provider_decision
 from llm_abm_sim.providers.pi_subscription import (
     PI_KIMI_OUTPUT_TOKEN_CEILING_ENFORCEMENT,
     PI_KIMI_SUBSCRIPTION_PROVIDER,
@@ -391,6 +393,7 @@ class _FrozenRobustnessDecisionAdapter(LLMDecisionAdapter):
         # These observations belong only to the latest attempt; absent is not free.
         self.last_provider_fee_cny: float | None = None
         self.last_subscription_nominal_cost_usd: float | None = None
+        self.last_usage_diagnostics: ChatUsageDiagnostics | None = None
         self.deterministic_validation = not bool(getattr(client, "external_provider_client", False))
         self._request_evidence: dict[str, object] = {
             "schema_version": "robustness-provider-request-evidence-v2",
@@ -467,6 +470,7 @@ class _FrozenRobustnessDecisionAdapter(LLMDecisionAdapter):
         messages = build_engagement_prompt(decision_input)
         self.last_provider_fee_cny = None
         self.last_subscription_nominal_cost_usd = None
+        self.last_usage_diagnostics = None
         self.request_invocations += 1
         if bool(getattr(self.client, "external_provider_client", False)):
             self.external_request_invocations += 1
@@ -495,6 +499,14 @@ class _FrozenRobustnessDecisionAdapter(LLMDecisionAdapter):
             failure = ProviderAttemptFailure(category="response_evidence", retryable=False)
             raise ProviderDecisionError(failure) from failure
         self._provider_accounting.record_response(response)
+        diagnostics = getattr(self.client, "last_safe_usage_diagnostics", None)
+        if diagnostics is not None:
+            try:
+                self.last_usage_diagnostics = ChatUsageDiagnostics.model_validate(diagnostics)
+            except ValidationError:
+                # Optional diagnostics cannot weaken the required envelope gates
+                # or persist an unallowlisted payload from an injected transport.
+                pass
         if self.condition.billing_currency == "CNY":
             self.last_provider_fee_cny = _optional_fee(
                 getattr(self.client, "last_provider_fee_cny", None)

@@ -229,6 +229,10 @@ _Avoid_: Model Accuracy Validation, Calibration Study
 
 五模型 Formal 研究的 production composition root：消费显式、当前有效的 immutable execution plan，在凭证初始化之前关闭授权/source/进度 gates，并以 output-root-bound 本机锁排斥并发 invocation。它拥有 concrete client 与 fresh Adapter 的生命周期；Study 仍独占调度、重试、模型 checkpoint、停止与恢复知识。Operator 不隐式刷新 qualification、不生成授权、不扫描 latest，也不负责 Release 或 Deployment。
 
+### Robustness Formal Inspection
+
+独立的只读 `inspect_concurrent_robustness_formal(plan_path)` / CLI `status --plan` Interface。Formal Execution Module 关闭历史 plan/source/authorization/qualification 字节绑定并单独报告当前时间 gates；Study-owned reader 验证已有工作区、模型顺序、canonical pair ledgers、attempt/model/usage 与计数，Operator 只组合安全快照。不创建工作区、不读取凭证、不调用 Provider、不修复历史 artifact，也不把剩余 attempt budget 变成 stopped run 的恢复权限。
+
 ### Provider-Aware Retry Lane
 
 Prompt–Model Robustness Extension 的每个 Provider/model condition 使用独立调用通道。单个 logical judgment 最多执行三次 physical attempts；明确余额/订阅额度耗尽单独标为不可重试的 `quota_exhausted`，停止后续请求且保留已完成证据；普通连接错误、超时、408/409/429/5xx 与 malformed structured response 才可重试，优先遵守 `Retry-After` 或可解析的 `Wait Ns`，否则使用有界指数退避。429/503 触发该模型通道共享冷却，不能让并发 worker 对同一受限账号盲目重试；成功 terminal 必须先持久化再推进，恢复时只处理 unresolved pair。重试耗尽必须停止相应 cell 并保留失败证据，禁止替换模型，也禁止把 Provider failure 写成用户 `ignore`。

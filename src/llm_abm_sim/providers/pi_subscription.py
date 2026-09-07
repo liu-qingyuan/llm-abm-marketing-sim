@@ -277,24 +277,28 @@ class PiSubscriptionProviderClient:
             )
         except OSError as exc:
             raise PiSubscriptionProviderError("cannot start Pi subscription worker") from exc
-        if process.stdin is None or process.stdout is None or process.stderr is None:
-            process.kill()
-            raise PiSubscriptionProviderError("Pi subscription worker pipes are unavailable")
         self._process = process
-        status = self._rpc({"type": "status"})
-        models = status.get("models")
-        if (
-            status.get("provider") != self.provider_transport
-            or status.get("auth_type") != "oauth"
-            or status.get("requested_model_aliases") != self.requested_model_aliases
-            or not isinstance(models, list)
-        ):
-            self.close()
-            raise PiSubscriptionProviderError("Pi subscription worker returned invalid OAuth readiness evidence")
-        if tuple(models) != tuple(self.requested_model_aliases.values()):
-            self.close()
-            raise PiSubscriptionProviderError("Pi subscription worker does not expose the exact profile models")
-        self._ready = True
+        try:
+            if process.stdin is None or process.stdout is None or process.stderr is None:
+                raise PiSubscriptionProviderError("Pi subscription worker pipes are unavailable")
+            status = self._rpc({"type": "status"})
+            models = status.get("models")
+            if (
+                status.get("provider") != self.provider_transport
+                or status.get("auth_type") != "oauth"
+                or status.get("requested_model_aliases") != self.requested_model_aliases
+                or not isinstance(models, list)
+            ):
+                raise PiSubscriptionProviderError("Pi subscription worker returned invalid OAuth readiness evidence")
+            if tuple(models) != tuple(self.requested_model_aliases.values()):
+                raise PiSubscriptionProviderError("Pi subscription worker does not expose the exact profile models")
+            self._ready = True
+        except BaseException:
+            try:
+                self.close()
+            except Exception:
+                pass
+            raise
 
     def _rpc(self, payload: dict[str, object]) -> dict[str, Any]:
         with self._lock:
@@ -474,7 +478,10 @@ def _subscription_nominal_cost(value: object) -> float | None:
         return None
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         return None
-    numeric_value = float(value)
+    try:
+        numeric_value = float(value)
+    except (OverflowError, ValueError):
+        return None
     if numeric_value < 0 or not math.isfinite(numeric_value):
         return None
     return numeric_value

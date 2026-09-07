@@ -5,7 +5,9 @@ import json
 import time
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Literal, Protocol, cast
+from typing import Annotated, Any, Literal, Protocol, cast
+
+from pydantic import BaseModel, ConfigDict, Field
 
 from llm_abm_sim.decision import (
     DecisionInput,
@@ -47,6 +49,35 @@ from llm_abm_sim.schemas import (
     ProviderLLMConfig,
     UserProfile,
 )
+
+_MAX_DIAGNOSTIC_COUNTER = 2**53 - 1
+_DiagnosticCounter = Annotated[int, Field(ge=0, le=_MAX_DIAGNOSTIC_COUNTER)]
+
+
+class ChatUsageDiagnostics(BaseModel):
+    """Allowlisted wire observations, separate from authoritative usage accounting.
+
+    ``usage_status`` describes the original Chat counters; the normalized status
+    describes the envelope after any exact additive-reasoning reconciliation.
+    Unavailable or out-of-bound diagnostic counters are null, never estimated.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+    schema_version: Literal["chat-usage-diagnostics-v1"] = "chat-usage-diagnostics-v1"
+    usage_status: Literal["complete", "missing", "malformed"]
+    normalized_usage_status: Literal["complete", "missing", "malformed"]
+    input_tokens: _DiagnosticCounter | None
+    output_tokens: _DiagnosticCounter | None
+    total_tokens: _DiagnosticCounter | None
+    cached_input_tokens: _DiagnosticCounter | None
+    reasoning_tokens: _DiagnosticCounter | None
+    failure_invariant: Literal[
+        "usage_absent", "required_counter_invalid", "total_mismatch",
+        "cached_gt_input", "usage_details_malformed",
+    ] | None
+    total_delta: int | None = Field(ge=-_MAX_DIAGNOSTIC_COUNTER, le=_MAX_DIAGNOSTIC_COUNTER)
+    reasoning_reconciliation: Literal["added_to_completion_tokens", "not_applied"] = "not_applied"
+    normalized_output_tokens: _DiagnosticCounter | None
 
 
 class ProviderClient(Protocol):
@@ -349,6 +380,8 @@ class _OpenAISDKClient:
         output_token_ceiling: int | None = None,
         thinking_mode: Literal["disabled"] | None = None,
     ) -> ProviderResponseEnvelope:
+        # A request rejected locally or failing before a response has no usage.
+        self.last_safe_usage_diagnostics = None
         sdk_messages = cast(Any, messages)
         if self._wire_api == "chat":
             if reasoning_effort is not None:
@@ -390,25 +423,18 @@ class _OpenAISDKClient:
                         "budget_tokens": chat_thinking_budget,
                     }
                 }
-            chat_response = self._client.chat.completions.create(**chat_request)
+            # Inspect actual JSON types: the SDK's typed Chat parser coerces
+            # booleans, numeric strings and floats into integer usage counters.
+            # The raw body is used only in memory, never returned or persisted.
+            chat_response = self._client.chat.completions.with_raw_response.create(
+                **chat_request
+            ).http_response.json()
             usage = response_field(chat_response, "usage")
             diagnostics = _safe_chat_usage_diagnostics(usage)
+            reconciled = False
             if getattr(self, "_chat_additive_reasoning_usage", False):
                 usage, reconciled = _reconcile_additive_chat_reasoning_usage(usage)
-                normalized_output_tokens = (
-                    response_field(usage, "completion_tokens")
-                    if reconciled
-                    else diagnostics["output_tokens"]
-                )
-                diagnostics = {
-                    **diagnostics,
-                    "reasoning_reconciliation": (
-                        "added_to_completion_tokens" if reconciled else "not_applied"
-                    ),
-                    "normalized_output_tokens": normalized_output_tokens,
-                }
-            self.last_safe_usage_diagnostics = diagnostics
-            return normalize_provider_response_envelope(
+            envelope = normalize_provider_response_envelope(
                 decision_text=_chat_decision_text(chat_response),
                 observed_model=response_field(chat_response, "model"),
                 usage=usage,
@@ -416,6 +442,15 @@ class _OpenAISDKClient:
                 output_tokens_field="completion_tokens",
                 cached_details_field="prompt_tokens_details",
             )
+            self.last_safe_usage_diagnostics = ChatUsageDiagnostics.model_validate({
+                **diagnostics,
+                "reasoning_reconciliation": (
+                    "added_to_completion_tokens" if reconciled else "not_applied"
+                ),
+                "normalized_usage_status": envelope.usage_status,
+                "normalized_output_tokens": _bounded_diagnostic_counter(envelope.output_tokens),
+            }).model_dump(mode="json")
+            return envelope
         if thinking_mode is not None:
             raise ProviderConfigurationError("thinking_mode is supported only by the chat wire")
         responses_request: dict[str, Any] = {
@@ -442,17 +477,18 @@ class _OpenAISDKClient:
         self._client.close()
 
 
-def _safe_chat_usage_diagnostics(usage: object) -> dict[str, object]:
-    def safe_counter(value: object) -> int | None:
-        return value if type(value) is int and value >= 0 else None
+def _bounded_diagnostic_counter(value: object) -> int | None:
+    return value if type(value) is int and 0 <= value <= _MAX_DIAGNOSTIC_COUNTER else None
 
-    input_tokens = safe_counter(response_field(usage, "prompt_tokens"))
-    output_tokens = safe_counter(response_field(usage, "completion_tokens"))
-    total_tokens = safe_counter(response_field(usage, "total_tokens"))
+
+def _safe_chat_usage_diagnostics(usage: object) -> dict[str, object]:
+    input_tokens = _bounded_diagnostic_counter(response_field(usage, "prompt_tokens"))
+    output_tokens = _bounded_diagnostic_counter(response_field(usage, "completion_tokens"))
+    total_tokens = _bounded_diagnostic_counter(response_field(usage, "total_tokens"))
     prompt_details = response_field(usage, "prompt_tokens_details")
     completion_details = response_field(usage, "completion_tokens_details")
-    cached_input_tokens = safe_counter(response_field(prompt_details, "cached_tokens"))
-    reasoning_tokens = safe_counter(response_field(completion_details, "reasoning_tokens"))
+    cached_input_tokens = _bounded_diagnostic_counter(response_field(prompt_details, "cached_tokens"))
+    reasoning_tokens = _bounded_diagnostic_counter(response_field(completion_details, "reasoning_tokens"))
     normalized = normalize_provider_response_envelope(
         decision_text="",
         observed_model="safe-usage-diagnostic",
@@ -469,6 +505,8 @@ def _safe_chat_usage_diagnostics(usage: object) -> dict[str, object]:
     failure_invariant = (
         None
         if normalized.usage_status == "complete"
+        else "usage_absent"
+        if normalized.usage_status == "missing"
         else "required_counter_invalid"
         if input_tokens is None or output_tokens is None or total_tokens is None
         else "total_mismatch"
@@ -485,7 +523,7 @@ def _safe_chat_usage_diagnostics(usage: object) -> dict[str, object]:
         "cached_input_tokens": cached_input_tokens,
         "reasoning_tokens": reasoning_tokens,
         "failure_invariant": failure_invariant,
-        "total_delta": total_delta,
+        "total_delta": total_delta if total_delta is not None and abs(total_delta) <= _MAX_DIAGNOSTIC_COUNTER else None,
     }
 
 
@@ -497,19 +535,17 @@ def _reconcile_additive_chat_reasoning_usage(usage: object) -> tuple[object, boo
     explains ``total_tokens - prompt_tokens - completion_tokens``.
     """
 
-    diagnostics = _safe_chat_usage_diagnostics(usage)
-    input_tokens = diagnostics["input_tokens"]
-    output_tokens = diagnostics["output_tokens"]
-    total_tokens = diagnostics["total_tokens"]
-    reasoning_tokens = diagnostics["reasoning_tokens"]
+    # Diagnostic size limits must not affect authoritative usage arithmetic.
+    input_tokens = response_field(usage, "prompt_tokens")
+    output_tokens = response_field(usage, "completion_tokens")
+    total_tokens = response_field(usage, "total_tokens")
+    reasoning_tokens = response_field(response_field(usage, "completion_tokens_details"), "reasoning_tokens")
     if not (
-        diagnostics["failure_invariant"] == "total_mismatch"
-        and isinstance(input_tokens, int)
-        and isinstance(output_tokens, int)
-        and isinstance(total_tokens, int)
-        and isinstance(reasoning_tokens, int)
-        and reasoning_tokens > 0
-        and diagnostics["total_delta"] == reasoning_tokens
+        type(input_tokens) is int and input_tokens >= 0
+        and type(output_tokens) is int and output_tokens >= 0
+        and type(total_tokens) is int and total_tokens >= 0
+        and type(reasoning_tokens) is int and reasoning_tokens > 0
+        and total_tokens - input_tokens - output_tokens == reasoning_tokens
     ):
         return usage, False
 
@@ -519,9 +555,9 @@ def _reconcile_additive_chat_reasoning_usage(usage: object) -> tuple[object, boo
         "total_tokens": total_tokens,
         "completion_tokens_details": {"reasoning_tokens": reasoning_tokens},
     }
-    cached_input_tokens = diagnostics["cached_input_tokens"]
-    if isinstance(cached_input_tokens, int):
-        normalized["prompt_tokens_details"] = {"cached_tokens": cached_input_tokens}
+    # Preserve declared details for the strict normalizer. Filtering an invalid
+    # cache counter here would silently turn malformed usage into complete usage.
+    normalized["prompt_tokens_details"] = response_field(usage, "prompt_tokens_details")
     return normalized, True
 
 

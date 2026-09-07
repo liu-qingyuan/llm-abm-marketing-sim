@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -37,6 +38,17 @@ let requestCount = 0;
 const scenario = process.env.FAKE_WORKER_SCENARIO ?? "success";
 const models = ["gpt-5.4-mini", "gpt-5.4", "gpt-5.5", "gpt-5.6-sol"];
 function emit(value) { process.stdout.write(JSON.stringify(value) + "\\n"); }
+function emitResponse(value) {
+  if (scenario !== "huge_cost") {
+    emit(value);
+    return;
+  }
+  const encoded = JSON.stringify(value).replace(
+    '"subscription_nominal_cost_usd":0',
+    `"subscription_nominal_cost_usd":${"1" + "0".repeat(400)}`,
+  );
+  process.stdout.write(encoded + "\\n");
+}
 process.stdin.setEncoding("utf8");
 process.stdin.on("data", chunk => {
   buffer += chunk;
@@ -48,6 +60,14 @@ process.stdin.on("data", chunk => {
     if (!line) continue;
     const command = JSON.parse(line);
     if (command.type === "status") {
+      if (scenario === "status_failure") {
+        emit({
+          id: command.id,
+          ok: false,
+          error: {category: "authentication", status_code: 401}
+        });
+        continue;
+      }
       emit({
         id: command.id,
         ok: true,
@@ -71,7 +91,7 @@ process.stdin.on("data", chunk => {
         });
         continue;
       }
-      emit({
+      emitResponse({
         id: command.id,
         ok: true,
         provider: "openai-codex",
@@ -254,7 +274,7 @@ def test_kimi_subscription_uses_an_independent_profile_without_widening_openai_a
     }
 
 
-@pytest.mark.parametrize("scenario", ["missing_cost", "invalid_cost"])
+@pytest.mark.parametrize("scenario", ["missing_cost", "invalid_cost", "huge_cost"])
 def test_subscription_optional_nominal_cost_does_not_fail_success(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -409,6 +429,43 @@ def test_kimi_python_boundary_rejects_worker_output_above_the_ceiling(
 
     assert captured.value.category == "output_ceiling_exceeded"
     assert captured.value.retryable is False
+
+
+@pytest.mark.parametrize("interrupted", [False, True])
+def test_subscription_client_reaps_worker_when_readiness_handshake_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    interrupted: bool,
+) -> None:
+    monkeypatch.setenv("LLM_ABM_RUN_LIVE_LLM", "1")
+    monkeypatch.setenv("FAKE_WORKER_SCENARIO", "status_failure")
+    processes = []
+    monkeypatch.setattr(PiSubscriptionProviderClient, "__del__", lambda _client: None)
+    if interrupted:
+        def interrupt_status(*_args: object, **_kwargs: object) -> None:
+            raise KeyboardInterrupt
+        monkeypatch.setattr(PiSubscriptionProviderClient, "_rpc", interrupt_status)
+
+    def process_factory(*args: Any, **kwargs: Any):
+        process = pi_subscription_module.subprocess.Popen(*args, **kwargs)
+        processes.append(process)
+        return process
+
+    try:
+        with pytest.raises(KeyboardInterrupt if interrupted else PiSubscriptionProviderError):
+            PiSubscriptionProviderClient(
+                worker_path=_fake_worker(tmp_path / "worker.mjs"),
+                process_factory=process_factory,
+            )
+        assert processes and processes[0].poll() is not None
+        assert all(pipe is not None and pipe.closed for pipe in (
+            processes[0].stdin, processes[0].stdout, processes[0].stderr,
+        ))
+    finally:
+        for process in processes:
+            if process.poll() is None:
+                process.terminate()
+                process.wait(timeout=2)
 
 
 def test_subscription_client_requires_explicit_live_gate(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

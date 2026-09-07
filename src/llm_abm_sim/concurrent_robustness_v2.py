@@ -15,7 +15,15 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal, cast
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    SerializerFunctionWrapHandler,
+    field_validator,
+    model_serializer,
+    model_validator,
+)
 
 from .concurrent_execution_journal import (
     ConcurrentExecutionJournal,
@@ -81,6 +89,7 @@ from .engagement_realization import (
 from .final_research import VALIDATION_RUN_STATUS
 from .prompt_contracts import CONCURRENT_ROBUSTNESS_PROMPT_REGISTRY
 from .provider_accounting import ProviderAccounting, provider_accounting_delta
+from .providers.openai_compatible import ChatUsageDiagnostics
 
 CONCURRENT_ROBUSTNESS_MANIFEST_V2_SCHEMA = "concurrent-robustness-manifest-v2"
 CONCURRENT_ROBUSTNESS_REALIZATION_SOURCE_SCHEMA = "concurrent-robustness-realization-source-v1"
@@ -555,6 +564,7 @@ class _V2AttemptEvidence(_V2FrozenModel):
     usage_complete_response_count: int = Field(ge=0, le=1)
     usage_missing_response_count: int = Field(ge=0, le=1)
     usage_malformed_response_count: int = Field(ge=0, le=1)
+    usage_diagnostics: ChatUsageDiagnostics | None = None
     input_usage: int | None = Field(default=None, ge=0)
     output_usage: int | None = Field(default=None, ge=0)
     total_usage: int | None = Field(default=None, ge=0)
@@ -565,6 +575,14 @@ class _V2AttemptEvidence(_V2FrozenModel):
     provider_fee_cny: float | None = Field(default=None, ge=0.0)
     subscription_nominal_cost_usd: float | None = Field(default=None, ge=0.0)
     fee_ceiling: float | None = Field(default=None, ge=0.0)
+
+    @model_serializer(mode="wrap")
+    def _serialize_attempt(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
+        payload = handler(self)
+        # Historical canonical judgments/hash chains must retain their bytes.
+        if self.usage_diagnostics is None:
+            payload.pop("usage_diagnostics", None)
+        return payload
 
     @model_validator(mode="after")
     def _validate_attempt(self) -> _V2AttemptEvidence:
@@ -643,6 +661,18 @@ class _V2AttemptEvidence(_V2FrozenModel):
         )
         if observed_total != self.provider_response_count or usage_total != self.provider_response_count:
             raise ValueError("attempt response evidence must close model and usage denominators")
+        if self.usage_diagnostics is not None:
+            normalized_status = self.usage_diagnostics.normalized_usage_status
+            count = {
+                "complete": self.usage_complete_response_count,
+                "missing": self.usage_missing_response_count,
+                "malformed": self.usage_malformed_response_count,
+            }[normalized_status]
+            if count != 1:
+                raise ValueError("attempt diagnostics must belong to its response usage status")
+            output = self.usage_diagnostics.normalized_output_tokens
+            if output is not None and output != self.output_usage:
+                raise ValueError("attempt diagnostics cannot override normalized usage")
         required_usage = (self.input_usage, self.output_usage, self.total_usage)
         if self.usage_complete_response_count == 0:
             if any(value is not None for value in (*required_usage, self.cached_input_usage)):
@@ -894,6 +924,19 @@ class _V2PairLedger:
                 handle.flush()
                 os.fsync(handle.fileno())
             _fsync_directory(root)
+        return cls.read(root, identity=identity)
+
+    @classmethod
+    def read(cls, root: Path, *, identity: Mapping[str, object]) -> _V2PairLedger:
+        """Validate an existing lifecycle without creating or repairing files."""
+        ledger = cls(root, identity=identity)
+        if root.is_symlink() or not root.is_dir() or any(
+            path.is_symlink() or not path.is_file()
+            for path in (ledger.identity_path, ledger.journal_path)
+        ):
+            raise ValueError("v2 pair lifecycle files must be existing regular files")
+        if ledger.identity_path.read_bytes() != _canonical_json_bytes(ledger.identity):
+            raise ValueError("v2 pair lifecycle identity is crossed")
         ledger._replay = ledger._read_replay()
         return ledger
 
@@ -1353,6 +1396,21 @@ def _workspace_payloads(
     }
 
 
+def _validate_existing_workspace(output_path: Path, expected: Mapping[str, bytes]) -> None:
+    if output_path.is_symlink() or not output_path.is_dir():
+        raise ValueError("v2 workspace must be an existing real directory")
+    entries = {path.name: path for path in output_path.iterdir()}
+    if not set(entries).issubset({*expected, _V2_EXECUTION_DIR}) or not set(expected).issubset(entries):
+        raise ValueError("v2 workspace contains missing or unexpected entries")
+    for name, payload in expected.items():
+        path = entries[name]
+        if path.is_symlink() or not path.is_file() or path.read_bytes() != payload:
+            raise ValueError(f"v2 workspace artifact is crossed: {name}")
+    execution = entries.get(_V2_EXECUTION_DIR)
+    if execution is not None and (execution.is_symlink() or not execution.is_dir()):
+        raise ValueError("v2 execution artifact must be a real directory")
+
+
 def _open_workspace(
     output_path: Path,
     *,
@@ -1365,19 +1423,7 @@ def _open_workspace(
         manifest_sha256=manifest_sha256,
     )
     if output_path.exists():
-        if output_path.is_symlink() or not output_path.is_dir():
-            raise ValueError("v2 workspace must be a real directory")
-        entries = {path.name: path for path in output_path.iterdir()}
-        allowed = {*expected, _V2_EXECUTION_DIR}
-        if not set(entries).issubset(allowed) or not set(expected).issubset(entries):
-            raise ValueError("v2 workspace contains missing or unexpected entries")
-        for name, payload in expected.items():
-            path = entries[name]
-            if path.is_symlink() or not path.is_file() or path.read_bytes() != payload:
-                raise ValueError(f"v2 workspace artifact is crossed: {name}")
-        execution = entries.get(_V2_EXECUTION_DIR)
-        if execution is not None and (execution.is_symlink() or not execution.is_dir()):
-            raise ValueError("v2 execution artifact must be a real directory")
+        _validate_existing_workspace(output_path, expected)
         return
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1811,6 +1857,7 @@ def _v2_attempt_evidence(
         "usage_complete_response_count": accounting.usage_complete_response_count,
         "usage_missing_response_count": accounting.usage_missing_response_count,
         "usage_malformed_response_count": accounting.usage_malformed_response_count,
+        "usage_diagnostics": getattr(adapter, "last_usage_diagnostics", None),
         "input_usage": accounting.input_tokens,
         "output_usage": accounting.output_tokens,
         "total_usage": accounting.total_tokens,
@@ -3409,6 +3456,203 @@ def _operational_progress(root: Path) -> tuple[int, int, int, str | None, str | 
             last_cell = str(identity.get("cell_id"))
             last_pair = str(ledger.records[-1].get("pair_id"))
     return logical, physical, completed, last_cell, last_pair
+
+
+def _inspect_v2_progress(
+    *, manifest: ConcurrentRobustnessManifestV2, output_path: Path,
+    formal_execution_plan: Mapping[str, object],
+) -> dict[str, object]:
+    """Read the operational lifecycle without opening or repairing a workspace."""
+    manifest_sha256 = hashlib.sha256(_manifest_bytes(manifest)).hexdigest()
+    # Root and cell identities anchor a valid checksum chain to the expected run.
+    root = _operational_root(output_path)
+    models: list[dict[str, object]] = [{
+        "requested_model": model, "status": "not_started", "completed_cells": 0,
+        "successful_judgments": 0, "failed_logical_judgments": 0,
+        "attempted_logical_judgments": 0, "physical_attempts": 0,
+    } for model in _V2_MODELS]
+    snapshot: dict[str, object] = {
+        "status": "not_started", "successful_judgments": 0,
+        "failed_logical_judgments": 0, "attempted_logical_judgments": 0,
+        "physical_attempts": 0, "completed_cells": 0, "completed_models": [],
+        "models": models, "failures": [], "unknown_postdispatch_pairs": 0,
+    }
+    if output_path.is_symlink():
+        raise ValueError("v2 inspected workspace is unsafe")
+    if output_path.exists():
+        _validate_existing_workspace(output_path, _workspace_payloads(
+            output_path, manifest=manifest, manifest_sha256=manifest_sha256,
+        ))
+    published = None
+    if (output_path / _V2_EXECUTION_DIR).exists():
+        published = _validate_published_execution(
+            output_path / _V2_EXECUTION_DIR, manifest=manifest,
+            manifest_sha256=manifest_sha256,
+            expected_formal_execution_plan=formal_execution_plan,
+        )
+    snapshot["execution_published"] = published is not None
+    if not root.exists():
+        if root.is_symlink() or (output_path / _V2_EXECUTION_DIR).exists():
+            raise ValueError("v2 operational evidence is absent or unsafe")
+        return snapshot
+    if root.is_symlink() or not root.is_dir() or not output_path.is_dir():
+        raise ValueError("v2 operational scope is unsafe or incomplete")
+
+    def read_object(path: Path) -> dict[str, object]:
+        if path.is_symlink() or not path.is_file():
+            raise ValueError("v2 inspection requires regular artifacts")
+        payload = path.read_bytes()
+        value = json.loads(payload)
+        if not isinstance(value, dict) or payload != _canonical_json_bytes(value):
+            raise ValueError("v2 inspection requires canonical objects")
+        return value
+
+    expected_identity = _operational_identity(
+        manifest=manifest, manifest_sha256=manifest_sha256,
+        output_path=output_path, formal_execution_plan=formal_execution_plan,
+    )
+    if read_object(root / _V2_OPERATIONAL_IDENTITY) != expected_identity:
+        raise ValueError("v2 inspected operational identity is crossed")
+    status = read_object(root / _V2_OPERATIONAL_STATUS)
+    if status.get("schema_version") != _V2_OPERATIONAL_STATUS_SCHEMA or status.get("manifest_sha256") != manifest_sha256:
+        raise ValueError("v2 inspected status identity is crossed")
+    names = {p.name for p in root.iterdir()}
+    cell_names = sorted(names - {_V2_OPERATIONAL_IDENTITY, _V2_OPERATIONAL_STATUS})
+    if cell_names != [f"cell-{index:02d}" for index in range(len(cell_names))] or len(cell_names) > _V2_CELL_COUNT:
+        raise ValueError("v2 inspected cells must be a contiguous prefix")
+    from .providers.robustness import robustness_provider_disclosures
+
+    routes = {row["requested_model"]: row["provider_route"] for row in robustness_provider_disclosures()}
+    successes = failed = physical = attempted = completed = unknown = 0
+    failures = []
+    safe_categories = {
+        "connection", "timeout", "http_status", "malformed_structured_response",
+        "rate_limited", "upstream_unavailable", "transport", "quota_exhausted",
+        "model_identity", "usage_evidence", "authentication", "entitlement",
+        "request_invalid", "provider_stop", "output_ceiling_exceeded",
+        "provider_known_failure_unclassified",
+    }
+    for index, name in enumerate(cell_names):
+        cell = manifest.prompt_model_cells[index]
+        scope = root / name
+        ledger = _V2PairLedger.read(scope, identity=_cell_ledger_identity(
+            manifest=manifest, manifest_sha256=manifest_sha256, cell_index=index,
+            cell=cell, cell_scope=scope,
+        ))
+        judgments = ledger.judgments()
+        terminals = ledger.terminals()
+
+        def validate_attempts(
+            evidence: Sequence[_V2AttemptEvidence], cell: _PromptModelCell = cell,
+        ) -> None:
+            for attempt in evidence:
+                if attempt.provider_route != routes[cell.requested_model]:
+                    raise ValueError("v2 inspected attempt Provider route is crossed")
+                if attempt.provider_response_count and attempt.failure_category != "model_identity" and (
+                    attempt.observed_model_counts != {cell.required_observed_model: 1}
+                    or attempt.observed_model_missing_response_count
+                    or attempt.observed_model_malformed_response_count
+                ):
+                    raise ValueError("v2 inspected attempt model identity is crossed")
+
+        for judgment in judgments:
+            validate_attempts(judgment.attempt_evidence)
+        stop_records = [row for row in ledger.records if row["state"] == "stopped"]
+        incomplete = [ledger.latest(pair) for pair, state in ledger.state_by_pair.items() if state == "attempting"]
+        cell_physical = sum(j.request_invocations for j in judgments)
+        for row in stop_records:
+            payload = cast(Mapping[str, object], row["payload"])
+            evidence = [_V2AttemptEvidence.model_validate(a) for a in cast(list[object], payload["attempt_evidence"])]
+            if not evidence or evidence[-1].outcome not in {"nonretryable_failure", "attempts_exhausted"}:
+                raise ValueError("v2 stopped inspection requires a terminal attempt failure")
+            validate_attempts(evidence)
+            last = evidence[-1]
+            cell_physical += cast(int, payload["request_invocations"])
+            failures.append({
+                "cell_id": cell.cell_id,
+                "category": last.failure_category if last.failure_category in safe_categories else "unclassified",
+                "outcome": last.outcome, "request_invocations": len(evidence),
+                "remaining_attempt_budget": _V2_MAXIMUM_ATTEMPTS - len(evidence),
+                "usage_missing_response_count": last.usage_missing_response_count,
+                "usage_malformed_response_count": last.usage_malformed_response_count,
+                "usage_diagnostics": last.usage_diagnostics.model_dump(mode="json") if last.usage_diagnostics is not None else None,
+                "recovery_authorized": False,
+            })
+        for row in incomplete:
+            assert row is not None
+            payload = cast(Mapping[str, object], row["payload"])
+            evidence = [_V2AttemptEvidence.model_validate(row) for row in cast(list[object], payload.get("attempt_evidence", []))]
+            validate_attempts(evidence)
+            if any(row.outcome != "retryable_failure" for row in evidence):
+                raise ValueError("v2 attempting inspection cannot advance a terminal failure")
+            dispatched = payload.get("phase") in {None, "dispatching"}
+            cell_physical += len(evidence) + int(dispatched)
+            unknown += int(dispatched)
+        per_cell_cap = manifest.request_caps.logical_judgments_per_cell
+        if len(ledger.state_by_pair) > per_cell_cap or cell_physical > per_cell_cap * _V2_MAXIMUM_ATTEMPTS:
+            raise ValueError("v2 inspected cell exceeds its request caps")
+        cell_complete = len(terminals) == manifest.request_caps.logical_judgments_per_cell and all(
+            state == "settled" for state in ledger.state_by_pair.values()
+        )
+        if not cell_complete and index != len(cell_names) - 1:
+            raise ValueError("v2 inspected execution skipped an incomplete cell")
+        model = models[index // _V2_CELLS_PER_MODEL]
+        for key, count in (("successful_judgments", len(judgments)), ("failed_logical_judgments", len(stop_records)),
+                           ("attempted_logical_judgments", len(judgments) + len(stop_records) + len(incomplete)),
+                           ("physical_attempts", cell_physical), ("completed_cells", int(cell_complete))):
+            model[key] = cast(int, model[key]) + count
+        model["status"] = "stopped" if stop_records else "partial"
+        if model["completed_cells"] == _V2_CELLS_PER_MODEL:
+            model["status"] = "complete"
+        successes += len(judgments)
+        failed += len(stop_records)
+        attempted += len(judgments) + len(stop_records) + len(incomplete)
+        physical += cell_physical
+        completed += int(cell_complete)
+    observed = (attempted, physical, completed)
+    persisted = tuple(status.get(key) for key in ("logical_judgments", "physical_attempts", "completed_cells"))
+    if any(type(v) is not int or v < 0 for v in persisted) or any(cast(int, p) > a for p, a in zip(persisted, observed, strict=True)):
+        raise ValueError("v2 inspected status leads its durable evidence")
+    if any(status.get(k) != v for k, v in _model_progress_fields(cast(int, status["completed_cells"])).items()):
+        raise ValueError("v2 inspected model checkpoint is crossed")
+    if attempted > manifest.request_caps.logical_judgment_cap or physical > manifest.request_caps.physical_attempt_cap:
+        raise ValueError("v2 inspected attempts exceed the run caps")
+    if (
+        type(status.get("provider_calls")) is not int
+        or status.get("provider_calls") != persisted[1]
+        or status.get("live_api_triggered") is not (cast(int, persisted[1]) > 0)
+        or status.get("production_deploy_eligible") is not False
+    ):
+        raise ValueError("v2 inspected Provider checkpoint is crossed")
+    if published is not None and (
+        completed != _V2_CELL_COUNT or failed or unknown
+        or published.logical_judgments != successes or published.physical_attempts != physical
+    ):
+        raise ValueError("v2 inspected publication differs from its operational evidence")
+    lifecycle = status.get("lifecycle")
+    if lifecycle not in _V2_OPERATIONAL_LIFECYCLES:
+        raise ValueError("v2 inspected lifecycle is invalid")
+    if lifecycle in {"stopped", "reconciliation_required"} and persisted != observed:
+        raise ValueError("v2 terminal checkpoint is behind its durable evidence")
+    if lifecycle == "stopped" and not failed:
+        raise ValueError("v2 stopped checkpoint lacks a failure")
+    if failed:
+        lifecycle = "stopped"
+    elif unknown:
+        lifecycle = "reconciliation_required"
+    elif completed == _V2_CELL_COUNT:
+        lifecycle = "cells_complete"
+    elif completed and completed % _V2_CELLS_PER_MODEL == 0 and len(cell_names) == completed:
+        lifecycle = "model_batch_complete"
+    elif attempted:
+        lifecycle = "running"
+    snapshot.update(
+        status=lifecycle, successful_judgments=successes, failed_logical_judgments=failed,
+        attempted_logical_judgments=attempted, physical_attempts=physical,
+        completed_cells=completed, completed_models=[row["requested_model"] for row in models if row["status"] == "complete"],
+        failures=failures, unknown_postdispatch_pairs=unknown,
+    )
+    return snapshot
 
 
 def _result(

@@ -150,6 +150,69 @@ def test_run_errors_hide_raw_input_and_never_claim_zero_calls(
     assert "provider_calls" not in json.loads(captured.out)
 
 
+@pytest.mark.parametrize(("days", "expected_gate"), [(-2, "not_yet_valid"), (0, "current"), (2, "expired")])
+def test_status_reads_plan_without_credentials_or_workspace_creation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+    days: int, expected_gate: str,
+) -> None:
+    from datetime import timedelta
+
+    request, _ = _request(tmp_path, monkeypatch)
+    authorization, digest, _ = _authorization_artifact(tmp_path, request)
+    plan = tmp_path / "plan.json"
+    formal_module.authorize_formal_execution(
+        request=request, authorization_path=authorization,
+        authorization_sha256=digest, plan_output=plan,
+    )
+    original = plan.read_bytes()
+    monkeypatch.setattr(formal_module, "_utc_now", lambda: _NOW + timedelta(days=days))
+    monkeypatch.delenv("LLM_ABM_RUN_LIVE_LLM", raising=False)
+
+    assert cli.main(["status", "--plan", str(plan)]) == 0
+    snapshot = json.loads(capsys.readouterr().out)
+    assert snapshot["status"] == "not_started"
+    assert snapshot["successful_judgments"] == snapshot["physical_attempts"] == 0
+    assert snapshot["current_gate"]["authorization_status"] == expected_gate
+    assert all(row["status"] == expected_gate for row in snapshot["current_gate"]["qualifications"])
+    assert snapshot["current_gate"]["currently_valid"] is (expected_gate == "current")
+    assert snapshot["automatic_resume_allowed"] is False
+    assert snapshot["provider_calls_during_inspection"] == 0
+    assert snapshot["inspection_only"] is True
+    assert plan.read_bytes() == original
+    assert not request.output_root.exists()
+
+
+@pytest.mark.parametrize("corruption", ["source", "qualification", "authorization", "plan", "dangling_output"])
+def test_status_rejects_crossed_inputs_without_repair_or_setup(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], corruption: str,
+) -> None:
+    request, _ = _request(tmp_path, monkeypatch)
+    authorization, digest, _ = _authorization_artifact(tmp_path, request)
+    plan = tmp_path / "plan.json"
+    formal_module.authorize_formal_execution(
+        request=request, authorization_path=authorization,
+        authorization_sha256=digest, plan_output=plan,
+    )
+    if corruption == "dangling_output":
+        request.output_root.symlink_to(tmp_path / "missing-workspace", target_is_directory=True)
+    else:
+        target = {
+            "source": request.manifest.path.parent / "formal-source" / "artifact_manifest.json",
+            "qualification": request.qualification_artifacts[0].path,
+            "authorization": authorization, "plan": plan,
+        }[corruption]
+        original_mode = target.stat().st_mode
+        target.chmod(0o644)
+        target.write_bytes(target.read_bytes() + b"RAW_SENTINEL")
+        target.chmod(original_mode)
+    before = {p: p.read_bytes() for p in tmp_path.rglob("*") if p.is_file()}
+    assert cli.main(["status", "--plan", str(plan)]) != 0
+    captured = capsys.readouterr()
+    assert "RAW_SENTINEL" not in captured.out and captured.err == ""
+    assert json.loads(captured.out)["category"] == "inspection_invalid"
+    assert {p: p.read_bytes() for p in tmp_path.rglob("*") if p.is_file()} == before
+
+
 def test_bad_cli_arguments_are_safe_bounded_json(capsys: pytest.CaptureFixture[str]) -> None:
     assert cli.main(["run", "--unsupported", "synthetic-secret-sentinel"]) != 0
     captured = capsys.readouterr()

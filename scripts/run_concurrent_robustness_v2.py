@@ -255,6 +255,8 @@ def _error_category(stage: str, exc: BaseException) -> str:
         return exc.category
     if stage == "run":
         return "operator_error"
+    if stage == "status":
+        return "inspection_invalid"
     return "invalid_input"
 
 
@@ -285,6 +287,9 @@ def _parser() -> argparse.ArgumentParser:
     check_plan = subparsers.add_parser("check-plan")
     check_plan.add_argument("--plan", type=Path, required=True)
 
+    status = subparsers.add_parser("status")
+    status.add_argument("--plan", type=Path, required=True)
+
     run = subparsers.add_parser("run")
     run.add_argument("--plan", type=Path, required=True)
     return parser
@@ -303,6 +308,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             exit_code = 0
         elif stage == "check-plan":
             result = _check_plan(args)
+            exit_code = 0
+        elif stage == "status":
+            from llm_abm_sim.concurrent_robustness_operator import inspect_concurrent_robustness_formal
+
+            result = inspect_concurrent_robustness_formal(args.plan)
             exit_code = 0
         else:
             result, exit_code = _run(args)

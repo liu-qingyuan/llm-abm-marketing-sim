@@ -7,6 +7,7 @@ import os
 import re
 import stat
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Literal, cast
@@ -1382,6 +1383,75 @@ def validate_embedded_formal_execution_plan(
             "embedded Formal execution plan drifted from its legal lineage"
         )
     return document
+
+
+@dataclass(frozen=True)
+class FormalPlanInspection:
+    """Verified historical inputs and current time gates, never execution authority."""
+
+    plan: dict[str, object]
+    request: ConcurrentRobustnessFormalExecutionRequest
+    manifest: ConcurrentRobustnessManifestV2
+    current_gate: dict[str, object]
+
+
+def inspect_formal_execution_plan(plan_path: str | Path) -> FormalPlanInspection:
+    """Read hash-bound historical evidence even after expiry; never enable dispatch.
+
+    External inputs must still match their recorded bytes. Expiry is returned as
+    a current blocker, not hidden by changing a clock or rewriting qualification.
+    Live callers must continue using ``validate_formal_execution_plan``.
+    """
+    path = _absolute_path(plan_path)
+    plan, _ = _load_canonical_object(path, "Formal execution plan")
+    if path.stat().st_mode & (stat.S_IWUSR | stat.S_IWGRP | stat.S_IWOTH):
+        raise ConcurrentRobustnessFormalPreflightError("Formal execution plan must be immutable")
+    request = _request_from_plan(plan.get("request"))
+    manifest, _ = _manifest_from_request(request)
+    plan = validate_embedded_formal_execution_plan(
+        plan, expected_manifest=manifest, expected_output_root=request.output_root,
+    )
+    identity = cast(Mapping[str, object], plan["request_identity"])
+    if _validate_source_artifacts(manifest, request) != identity["source"]:
+        raise ConcurrentRobustnessFormalPreflightError("Historical Formal source identity is crossed")
+    authorization, _ = _load_referenced_object(
+        FormalArtifactReference(
+            path=Path(cast(str, plan["authorization_artifact_path"])),
+            sha256=cast(str, plan["authorization_sha256"]),
+        ),
+        "Formal authorization artifact",
+    )
+    if authorization != plan["authorization"]:
+        raise ConcurrentRobustnessFormalPreflightError("Historical Formal authorization is crossed")
+    now = _utc_now()
+
+    def window_status(start: object, end: object) -> str:
+        if now < _parse_utc(start, "historical start"):
+            return "not_yet_valid"
+        if now >= _parse_utc(end, "historical expiry"):
+            return "expired"
+        return "current"
+
+    qualifications = []
+    saved = cast(Sequence[Mapping[str, object]], identity["qualification_artifacts"])
+    for reference, recorded in zip(request.qualification_artifacts, saved, strict=True):
+        document, _ = _load_referenced_object(reference, "Formal model qualification artifact")
+        if document != recorded["evidence"]:
+            raise ConcurrentRobustnessFormalPreflightError("Historical Formal qualification is crossed")
+        qualifications.append({
+            "requested_model": reference.requested_model,
+            "status": window_status(document["qualified_at_utc"], document["expires_at_utc"]),
+            "expires_at_utc": document["expires_at_utc"],
+        })
+    authorization_status = window_status(authorization["authorized_at_utc"], authorization["expires_at_utc"])
+    return FormalPlanInspection(plan, request, manifest, {
+        "checked_at_utc": now.isoformat(),
+        "authorization_status": authorization_status,
+        "qualifications": qualifications,
+        "currently_valid": authorization_status == "current" and all(
+            row["status"] == "current" for row in qualifications
+        ),
+    })
 
 
 def validate_formal_execution_plan(

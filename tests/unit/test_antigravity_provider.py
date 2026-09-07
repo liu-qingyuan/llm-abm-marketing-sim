@@ -20,8 +20,12 @@ _DECISION = (
 )
 
 
+@pytest.mark.parametrize(("requested_model", "wire_model"), [
+    ("gemini-3.1-pro", "gemini-pro-agent"),
+    ("gemini-3.8-flash-high", "gemini-3.8-flash-high"),
+])
 def test_antigravity_gemini_client_uses_chat_completions_contract(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, requested_model: str, wire_model: str,
 ) -> None:
     monkeypatch.setenv("LLM_ABM_RUN_LIVE_LLM", "1")
     requests: list[httpx.Request] = []
@@ -34,7 +38,7 @@ def test_antigravity_gemini_client_uses_chat_completions_contract(
                 "id": "chatcmpl_test",
                 "object": "chat.completion",
                 "created": 0,
-                "model": "gemini-pro-agent",
+                "model": wire_model,
                 "choices": [
                     {
                         "index": 0,
@@ -62,7 +66,7 @@ def test_antigravity_gemini_client_uses_chat_completions_contract(
 
     envelope = client.create_response(
         [{"role": "user", "content": "test"}],
-        "gemini-3.1-pro",
+        requested_model,
         reasoning_effort=None,
         output_token_ceiling=256,
     )
@@ -81,7 +85,7 @@ def test_antigravity_gemini_client_uses_chat_completions_contract(
     assert len(requests) == 1
     assert requests[0].url.path == "/v1/chat/completions"
     body = json.loads(requests[0].content)
-    assert body["model"] == "gemini-pro-agent"
+    assert body["model"] == wire_model
     assert body["messages"] == [{"role": "user", "content": "test"}]
     assert body["max_tokens"] == 1024
     assert "max_completion_tokens" not in body
@@ -91,7 +95,7 @@ def test_antigravity_gemini_client_uses_chat_completions_contract(
     assert body["response_format"]["json_schema"]["strict"] is True
     assert body["response_format"]["json_schema"]["schema"]["additionalProperties"] is False
     assert envelope.decision_text == _DECISION
-    assert envelope.observed_model == "gemini-pro-agent"
+    assert envelope.observed_model == wire_model
     assert envelope.observed_model_status == "reported"
     assert envelope.usage_status == "complete"
     assert envelope.input_tokens == 20
@@ -99,6 +103,8 @@ def test_antigravity_gemini_client_uses_chat_completions_contract(
     assert envelope.total_tokens == 30
     assert envelope.cached_input_tokens == 0
     assert client.last_safe_usage_diagnostics == {
+        "schema_version": "chat-usage-diagnostics-v1",
+        "normalized_usage_status": "complete",
         "usage_status": "complete",
         "input_tokens": 20,
         "output_tokens": 10,
@@ -165,6 +171,8 @@ def test_antigravity_gemini_client_reconciles_additive_reasoning_usage(
             "input_tokens": 487,
             "output_tokens": 50,
             "total_tokens": 665,
+            "schema_version": "chat-usage-diagnostics-v1",
+            "normalized_usage_status": "complete",
             "cached_input_tokens": 0,
             "reasoning_tokens": 128,
             "failure_invariant": "total_mismatch",
@@ -225,12 +233,14 @@ def test_antigravity_gemini_client_does_not_guess_at_unexplained_usage(
             "input_tokens": 487,
             "output_tokens": 50,
             "total_tokens": 664,
+            "schema_version": "chat-usage-diagnostics-v1",
+            "normalized_usage_status": "malformed",
             "cached_input_tokens": None,
             "reasoning_tokens": 128,
             "failure_invariant": "total_mismatch",
             "total_delta": 127,
             "reasoning_reconciliation": "not_applied",
-            "normalized_output_tokens": 50,
+            "normalized_output_tokens": None,
         }
 
 
