@@ -233,6 +233,10 @@ _Avoid_: Model Accuracy Validation, Calibration Study
 
 独立的只读 `inspect_concurrent_robustness_formal(plan_path)` / CLI `status --plan` Interface。Formal Execution Module 关闭历史 plan/source/authorization/qualification 字节绑定并单独报告当前时间 gates；Study-owned reader 验证已有工作区、模型顺序、canonical pair ledgers、attempt/model/usage 与计数，Operator 只组合安全快照。不创建工作区、不读取凭证、不调用 Provider、不修复历史 artifact，也不把剩余 attempt budget 变成 stopped run 的恢复权限。
 
+### Formal Recovery Proposal（正式恢复提案）
+
+Study-owned 的零调用、无执行权限 artifact。`prepare_concurrent_robustness_recovery(...)` 在原路径只读验证已知 missing-usage 停止记录、成功 Judgment、Realization、runtime journal/snapshot/spool 与完整 batch feedback，将冻结上下文、immutable origins、已消费 attempts、剩余模型/全局预算绑定到独立 output identity。`inspect_concurrent_robustness_recovery_proposal(...)` 从持久化源独立复算，不信任提案中的汇总或自报 hash；准备时的过期 gates 保留为历史注记，当前 gates 单独返回。它不重启旧 run、不消费 slot、不生成 authorization，也不是新的 Formal Evidence 或 Release。恢复执行与跨窗口资格刷新仍需独立版本合同和明确批准。
+
 ### Provider-Aware Retry Lane
 
 Prompt–Model Robustness Extension 的每个 Provider/model condition 使用独立调用通道。单个 logical judgment 最多执行三次 physical attempts；明确余额/订阅额度耗尽单独标为不可重试的 `quota_exhausted`，停止后续请求且保留已完成证据；普通连接错误、超时、408/409/429/5xx 与 malformed structured response 才可重试，优先遵守 `Retry-After` 或可解析的 `Wait Ns`，否则使用有界指数退避。429/503 触发该模型通道共享冷却，不能让并发 worker 对同一受限账号盲目重试；成功 terminal 必须先持久化再推进，恢复时只处理 unresolved pair。重试耗尽必须停止相应 cell 并保留失败证据，禁止替换模型，也禁止把 Provider failure 写成用户 `ignore`。

@@ -2363,13 +2363,26 @@ def _runtime_terminal(
     plan: _PairExecutionPlan,
     terminal: _V2RealizedTerminal,
 ) -> dict[str, object]:
+    if (
+        plan.pair_id, plan.pair_schedule_position, plan.time_step,
+        plan.message.message_id, plan.user.user_id,
+    ) != (
+        terminal.pair_id, terminal.pair_schedule_position, terminal.time_step,
+        terminal.message_id, terminal.user_id,
+    ):
+        raise ValueError("v2 Realized terminal is crossed with its runtime plan")
+    return _realized_runtime_terminal(terminal)
+
+
+def _realized_runtime_terminal(terminal: _V2RealizedTerminal) -> dict[str, object]:
+    """One projection for live registration and read-only inherited evidence."""
     return {
-        "terminal_row_id": f"{plan.pair_id}:primary",
-        "pair_id": plan.pair_id,
-        "pair_schedule_position": plan.pair_schedule_position,
-        "time_step": plan.time_step,
-        "message_id": plan.message.message_id,
-        "user_id": plan.user.user_id,
+        "terminal_row_id": f"{terminal.pair_id}:primary",
+        "pair_id": terminal.pair_id,
+        "pair_schedule_position": terminal.pair_schedule_position,
+        "time_step": terminal.time_step,
+        "message_id": terminal.message_id,
+        "user_id": terminal.user_id,
         "decision_variant": "primary",
         "prompt_version": terminal.prompt_version,
         "context_source_key": f"{terminal.judgment_id}:realized",

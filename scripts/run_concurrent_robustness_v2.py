@@ -257,6 +257,8 @@ def _error_category(stage: str, exc: BaseException) -> str:
         return "operator_error"
     if stage == "status":
         return "inspection_invalid"
+    if stage in {"prepare-recovery", "inspect-recovery"}:
+        return "recovery_invalid"
     return "invalid_input"
 
 
@@ -290,6 +292,13 @@ def _parser() -> argparse.ArgumentParser:
     status = subparsers.add_parser("status")
     status.add_argument("--plan", type=Path, required=True)
 
+    recovery = subparsers.add_parser("prepare-recovery")
+    recovery.add_argument("--plan", type=Path, required=True)
+    recovery.add_argument("--output-dir", type=Path, required=True)
+
+    inspect_recovery = subparsers.add_parser("inspect-recovery")
+    inspect_recovery.add_argument("--proposal", type=Path, required=True)
+
     run = subparsers.add_parser("run")
     run.add_argument("--plan", type=Path, required=True)
     return parser
@@ -313,6 +322,21 @@ def main(argv: Sequence[str] | None = None) -> int:
             from llm_abm_sim.concurrent_robustness_operator import inspect_concurrent_robustness_formal
 
             result = inspect_concurrent_robustness_formal(args.plan)
+            exit_code = 0
+        elif stage == "prepare-recovery":
+            from llm_abm_sim.concurrent_robustness_recovery import prepare_concurrent_robustness_recovery
+
+            proposal = prepare_concurrent_robustness_recovery(args.plan, output_dir=args.output_dir)
+            result = {key: proposal[key] for key in (
+                "status", "proposal_identity_sha256", "output_root", "remaining_valid_judgments",
+                "maximum_new_physical_attempts", "execution_authority", "provider_calls_during_preparation",
+                "credential_reads_during_preparation", "current_gate_at_preparation",
+            )}
+            exit_code = 0
+        elif stage == "inspect-recovery":
+            from llm_abm_sim.concurrent_robustness_recovery import inspect_concurrent_robustness_recovery_proposal
+
+            result = inspect_concurrent_robustness_recovery_proposal(args.proposal)
             exit_code = 0
         else:
             result, exit_code = _run(args)

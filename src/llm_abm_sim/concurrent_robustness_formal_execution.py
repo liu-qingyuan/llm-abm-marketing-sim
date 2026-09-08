@@ -1395,6 +1395,36 @@ class FormalPlanInspection:
     current_gate: dict[str, object]
 
 
+def _inspection_time_gate(plan: Mapping[str, object], now: datetime) -> dict[str, object]:
+    """Project time annotations from already-verified legal bindings, not authority."""
+    authorization = cast(Mapping[str, object], plan["authorization"])
+    identity = cast(Mapping[str, object], plan["request_identity"])
+
+    def window_status(start: object, end: object) -> str:
+        if now < _parse_utc(start, "historical start"):
+            return "not_yet_valid"
+        if now >= _parse_utc(end, "historical expiry"):
+            return "expired"
+        return "current"
+
+    qualifications = []
+    for row in cast(Sequence[Mapping[str, object]], identity["qualification_artifacts"]):
+        document = cast(Mapping[str, object], row["evidence"])
+        qualifications.append({
+            "requested_model": document["requested_model"],
+            "status": window_status(document["qualified_at_utc"], document["expires_at_utc"]),
+            "expires_at_utc": document["expires_at_utc"],
+        })
+    authorization_status = window_status(authorization["authorized_at_utc"], authorization["expires_at_utc"])
+    return {
+        "checked_at_utc": now.isoformat(), "authorization_status": authorization_status,
+        "qualifications": qualifications,
+        "currently_valid": authorization_status == "current" and all(
+            row["status"] == "current" for row in qualifications
+        ),
+    }
+
+
 def inspect_formal_execution_plan(plan_path: str | Path) -> FormalPlanInspection:
     """Read hash-bound historical evidence even after expiry; never enable dispatch.
 
@@ -1423,35 +1453,12 @@ def inspect_formal_execution_plan(plan_path: str | Path) -> FormalPlanInspection
     )
     if authorization != plan["authorization"]:
         raise ConcurrentRobustnessFormalPreflightError("Historical Formal authorization is crossed")
-    now = _utc_now()
-
-    def window_status(start: object, end: object) -> str:
-        if now < _parse_utc(start, "historical start"):
-            return "not_yet_valid"
-        if now >= _parse_utc(end, "historical expiry"):
-            return "expired"
-        return "current"
-
-    qualifications = []
     saved = cast(Sequence[Mapping[str, object]], identity["qualification_artifacts"])
     for reference, recorded in zip(request.qualification_artifacts, saved, strict=True):
         document, _ = _load_referenced_object(reference, "Formal model qualification artifact")
         if document != recorded["evidence"]:
             raise ConcurrentRobustnessFormalPreflightError("Historical Formal qualification is crossed")
-        qualifications.append({
-            "requested_model": reference.requested_model,
-            "status": window_status(document["qualified_at_utc"], document["expires_at_utc"]),
-            "expires_at_utc": document["expires_at_utc"],
-        })
-    authorization_status = window_status(authorization["authorized_at_utc"], authorization["expires_at_utc"])
-    return FormalPlanInspection(plan, request, manifest, {
-        "checked_at_utc": now.isoformat(),
-        "authorization_status": authorization_status,
-        "qualifications": qualifications,
-        "currently_valid": authorization_status == "current" and all(
-            row["status"] == "current" for row in qualifications
-        ),
-    })
+    return FormalPlanInspection(plan, request, manifest, _inspection_time_gate(plan, _utc_now()))
 
 
 def validate_formal_execution_plan(
