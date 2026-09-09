@@ -196,9 +196,28 @@ def authorize_recovery_task(*, request: RecoveryTaskRequest, authorization_path:
 
 
 def inspect_recovery_task(plan_path: str | Path) -> dict[str, Any]:
-    """Read historical legality and current authority without credentials or writes."""
+    """Read legality/authority and optional report closure; original artifacts stay read-only.
+
+    A closed report's independent reader may use its declared disposable kernel
+    workspace. It never opens credentials or runs a Provider.
+    """
     context = _context(plan_path)
-    return {"schema_version": "concurrent-recovery-task-inspection-v1", **_task_status(context),
+    status = _task_status(context)
+    if status["status"] == "execution_complete":
+        report_path = Path(context.plan["request"]["report_destination"]) / "report.html"
+        if report_path.is_file():
+            try:
+                from .concurrent_robustness_recovery_report import inspect_concurrent_robustness_recovery_report
+
+                facts = inspect_concurrent_robustness_recovery_report(report_path)
+                bundle = Path(status["execution_bundle"])
+                if (facts.get("source_bundle") != {"path": str(bundle), "sha256": _formal._sha256_file(bundle)}
+                        or facts.get("formal_evidence_closed") is not True or facts.get("report_status") != "complete"):
+                    raise RecoveryCampaignError("Report closure differs from this task checkpoint")
+                status.update(status="complete", report_status="complete", report_path=str(report_path), formal_evidence_closed=True)
+            except Exception:
+                status.update(report_failure="evidence_or_report_unavailable_or_failed")
+    return {"schema_version": "concurrent-recovery-task-inspection-v1", **status,
             "inspection_only": True, "provider_calls": 0, "credential_reads": 0}
 
 

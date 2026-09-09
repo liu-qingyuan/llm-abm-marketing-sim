@@ -317,11 +317,38 @@ def _recovery_task(args: argparse.Namespace) -> tuple[dict[str, object], int]:
     return {key: plan[key] for key in ("schema_version", "plan_path", "plan_identity_sha256", "execution_authority")}, 0
 
 
+def _recovery_report(args: argparse.Namespace) -> tuple[dict[str, object], int]:
+    from llm_abm_sim.concurrent_robustness_recovery_evidence import (
+        close_concurrent_robustness_recovery_evidence,
+        read_concurrent_robustness_recovery_evidence,
+    )
+    from llm_abm_sim.concurrent_robustness_recovery_report import (
+        export_concurrent_robustness_recovery_report,
+        inspect_concurrent_robustness_recovery_report,
+    )
+
+    if args.command in {"close-recovery-evidence", "inspect-recovery-evidence"}:
+        path = (close_concurrent_robustness_recovery_evidence(args.bundle, output_dir=args.output_dir)
+                if args.command == "close-recovery-evidence" else args.evidence)
+        source = read_concurrent_robustness_recovery_evidence(path)
+        return {"status": "evidence_closed", "evidence_path": str(source.evidence_path),
+                "counts": source.document["counts"], "formal_evidence_closed": source.document["formal_evidence_closed"],
+                "provider_calls": 0, "credential_reads": 0, "production_deploy_eligible": False}, 0
+    path = (export_concurrent_robustness_recovery_report(args.bundle, output_dir=args.output_dir)
+            if args.command == "export-recovery-report" else args.report)
+    facts = inspect_concurrent_robustness_recovery_report(path)
+    return {"status": "complete", "report_path": str(path), "counts": facts["counts"],
+            "report_identity_sha256": facts["report_identity_sha256"], "formal_evidence_closed": True,
+            "provider_calls": 0, "credential_reads": 0, "production_deploy_eligible": False}, 0
+
+
 def _error_category(stage: str, exc: BaseException) -> str:
     if isinstance(exc, KeyboardInterrupt):
         return "interrupted"
     if isinstance(exc, _CliFailure) and exc.category in _SAFE_CATEGORIES:
         return exc.category
+    if stage in {"close-recovery-evidence", "inspect-recovery-evidence", "export-recovery-report", "inspect-recovery-report"}:
+        return "recovery_report_invalid"
     if stage in {"run", "run-recovery", "run-recovery-task"}:
         return "operator_error"
     if stage in {"prepare-recovery-task", "authorize-recovery-task", "status-recovery-task", "revoke-recovery-task"}:
@@ -410,6 +437,15 @@ def _parser() -> argparse.ArgumentParser:
         task_entry = subparsers.add_parser(command)
         task_entry.add_argument("--plan", type=Path, required=True)
 
+    for command in ("close-recovery-evidence", "export-recovery-report"):
+        report_entry = subparsers.add_parser(command)
+        report_entry.add_argument("--bundle", type=Path, required=True)
+        report_entry.add_argument("--output-dir", type=Path, required=True)
+    evidence_inspection = subparsers.add_parser("inspect-recovery-evidence")
+    evidence_inspection.add_argument("--evidence", type=Path, required=True)
+    report_inspection = subparsers.add_parser("inspect-recovery-report")
+    report_inspection.add_argument("--report", type=Path, required=True)
+
     run = subparsers.add_parser("run")
     run.add_argument("--plan", type=Path, required=True)
     return parser
@@ -456,6 +492,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             result, exit_code = _recovery_execution(args)
         elif stage in {"prepare-recovery-task", "authorize-recovery-task", "status-recovery-task", "run-recovery-task", "revoke-recovery-task"}:
             result, exit_code = _recovery_task(args)
+        elif stage in {"close-recovery-evidence", "inspect-recovery-evidence", "export-recovery-report", "inspect-recovery-report"}:
+            result, exit_code = _recovery_report(args)
         else:
             result, exit_code = _run(args)
         _emit(result)

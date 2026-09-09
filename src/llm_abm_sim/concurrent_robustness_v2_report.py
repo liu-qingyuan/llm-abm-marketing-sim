@@ -22,7 +22,7 @@ from openpyxl import load_workbook
 from openpyxl.utils import get_column_letter
 
 from .concurrent_message_mechanism_presentation import _MECHANISM_PRESENTATION
-from .concurrent_robustness_v2 import _V2_MODELS
+from .concurrent_robustness_v2 import _V2_MODELS, ConcurrentRobustnessManifestV2
 from .concurrent_robustness_v2_evidence import (
     _assert_concurrent_robustness_v2_report_source_unchanged,
     _ConcurrentRobustnessV2ReportSource,
@@ -38,6 +38,10 @@ from .providers.robustness import robustness_provider_disclosures
 
 _REPORT_SCHEMA = "concurrent-robustness-v2-report-payload-v1"
 _PROJECTION_SCHEMA = "concurrent-robustness-v2-report-projection-v1"
+_RECOVERY_PROJECTION_SCHEMA = "concurrent-recovery-report-projection-v1"
+_RECOVERY_REPORT_SCHEMA = "concurrent-recovery-report-payload-v1"
+_RECOVERY_ACCOUNTING_CSV = "recovery_accounting.csv"
+_RECOVERY_ACCOUNTING_FIELDS = ("scope", "metric", "value")
 _CANDIDATE_MANIFEST_SCHEMA = "concurrent-robustness-v2-report-candidate-manifest-v1"
 _PROMPT_CATALOG_SCHEMA = "concurrent-robustness-v2-prompt-catalog-v1"
 _CANDIDATE_TYPE = "prompt_model_realized_table_first_candidate"
@@ -214,10 +218,12 @@ class _ValidatedReportProjection:
     claim_boundary: Mapping[str, Any]
     mechanism_schema_version: str
     mechanism_identity_sha256: str
+    recovery_accounting: Mapping[str, Any] | None = None
 
     def document(self) -> dict[str, Any]:
         return {
-            "schema_version": _PROJECTION_SCHEMA,
+            "schema_version": _PROJECTION_SCHEMA if self.recovery_accounting is None else _RECOVERY_PROJECTION_SCHEMA,
+            **({"recovery_accounting": dict(self.recovery_accounting)} if self.recovery_accounting is not None else {}),
             "primary_outcome": "abm_realized_engagement",
             "source_lineage": dict(self.source_lineage),
             "formal_topology": dict(self.formal_topology),
@@ -512,8 +518,14 @@ def _normalize_judgment_rows(source: _ConcurrentRobustnessV2ReportSource) -> tup
 
 
 def _message_catalog(source: _ConcurrentRobustnessV2ReportSource) -> tuple[Mapping[str, Any], ...]:
-    rows = [_mapping(row, "v2 message snapshot row") for row in source.message_snapshot]
-    if tuple(row.get("message_id") for row in rows) != source.manifest.message_ids:
+    return _normalized_message_catalog(source.manifest, source.message_snapshot)
+
+
+def _normalized_message_catalog(
+    manifest: ConcurrentRobustnessManifestV2, message_snapshot: Sequence[Mapping[str, Any]],
+) -> tuple[Mapping[str, Any], ...]:
+    rows = [_mapping(row, "v2 message snapshot row") for row in message_snapshot]
+    if tuple(row.get("message_id") for row in rows) != manifest.message_ids:
         raise ConcurrentRobustnessV2ReportError("v2 message snapshot order is crossed")
     result: list[Mapping[str, Any]] = []
     for row in rows:
@@ -690,21 +702,27 @@ def _prompt_catalog(
 
 
 def _cell_batch_rows(source: _ConcurrentRobustnessV2ReportSource) -> tuple[Mapping[str, Any], ...]:
+    return _normalized_cell_batch_rows(source.manifest, source.batch_commits)
+
+
+def _normalized_cell_batch_rows(
+    manifest: ConcurrentRobustnessManifestV2, batch_commits: Sequence[Mapping[str, Any]],
+) -> tuple[Mapping[str, Any], ...]:
     result: list[Mapping[str, Any]] = []
     expected_keys = [
         (cell_index, time_step)
-        for cell_index in range(len(source.manifest.prompt_model_cells))
-        for time_step in range(source.manifest.ranking_contract.horizon)
+        for cell_index in range(len(manifest.prompt_model_cells))
+        for time_step in range(manifest.ranking_contract.horizon)
     ]
     actual_keys: list[tuple[int, int]] = []
-    for raw in source.batch_commits:
+    for raw in batch_commits:
         row = _mapping(raw, "v2 batch commit")
         cell_index = _strict_int(row.get("cell_index"), "cell index")
         time_step = _strict_int(row.get("time_step"), "batch time step")
         actual_keys.append((cell_index, time_step))
-        cell = source.manifest.prompt_model_cells[cell_index]
+        cell = manifest.prompt_model_cells[cell_index]
         messages = _object_rows(row.get("messages"), "v2 batch messages")
-        if tuple(item.get("message_id") for item in messages) != source.manifest.message_ids:
+        if tuple(item.get("message_id") for item in messages) != manifest.message_ids:
             raise ConcurrentRobustnessV2ReportError("Cell-batch message order is crossed")
         normalized: dict[str, Any] = {
             "cell_index": cell_index,
@@ -864,9 +882,19 @@ def _prompt_sheet_rows(projection: _ValidatedReportProjection) -> tuple[tuple[ob
     return tuple(rows)
 
 
+def _recovery_accounting_rows(projection: _ValidatedReportProjection) -> tuple[Mapping[str, Any], ...]:
+    if projection.recovery_accounting is None:
+        return ()
+    return tuple(
+        {"scope": scope, "metric": metric, "value": value}
+        for scope, fields in projection.recovery_accounting.items()
+        for metric, value in sorted(fields.items())
+    )
+
+
 def _readme_rows(projection: _ValidatedReportProjection) -> tuple[tuple[object, ...], ...]:
-    return (
-        ("Schema", _PROJECTION_SCHEMA),
+    rows: tuple[tuple[object, ...], ...] = (
+        ("Schema", projection.document()["schema_version"]),
         ("Primary result", "ABM Realized like/comment/share/engagement/exposure and engagement rate"),
         ("Judgment scope", "Provider Judgment remains in the separate Judgment Audit sheet"),
         ("Fee policy", "Optional best-effort: blank means unknown or not applicable, not free. "
@@ -881,6 +909,12 @@ def _readme_rows(projection: _ValidatedReportProjection) -> tuple[tuple[object, 
         ("Production deploy eligible", "false"),
         ("Provider calls during composition", 0),
     )
+    if projection.recovery_accounting is not None:
+        rows += (("Recovery usage scope", "Judgment/Provider token totals cover ALL attempts. "
+                  "Blank totals are unknown, not zero. Known partial subtotals and complete successful-sequence "
+                  "usage are separate in Recovery Accounting; historical missing usage is retained. "
+                  "Self-checks are not Formal attempts."),)
+    return rows
 
 
 def _workbook_tables(
@@ -892,7 +926,7 @@ def _workbook_tables(
     cell_batch_rows = tuple(
         tuple(row[field] for field in _CELL_BATCH_FIELDS) for row in projection.cell_batch_evidence_rows
     )
-    return (
+    tables: tuple[tuple[str, tuple[str, ...], tuple[tuple[object, ...], ...]], ...] = (
         ("README & Lineage", ("Field", "Value"), _readme_rows(projection)),
         ("Realized Main", _REALIZED_HEADERS, realized_rows),
         ("Judgment Audit", _JUDGMENT_HEADERS, judgment_rows),
@@ -900,6 +934,11 @@ def _workbook_tables(
         ("Provider Audit", _PROVIDER_HEADERS, provider_rows),
         ("Cell-Batch Evidence", _CELL_BATCH_HEADERS, cell_batch_rows),
     )
+    if projection.recovery_accounting is not None:
+        rows = tuple(tuple(row[field] for field in _RECOVERY_ACCOUNTING_FIELDS)
+                     for row in _recovery_accounting_rows(projection))
+        tables += (("Recovery Accounting", _RECOVERY_ACCOUNTING_FIELDS, rows),)
+    return tables
 
 
 def _xlsx_cell_value(value: object) -> object:
@@ -1141,7 +1180,7 @@ def _judgment_panels(projection: _ValidatedReportProjection) -> str:
                     f'<td>{float(row["positive_judgment_rate"]):.4%}</td>'
                     f'<td>{float(row["mean_probability"]):.4f}</td><td>{float(row["mean_confidence"]):.4f}</td>'
                     f'<td>{row["terminal_failure_count"]}</td><td>{row["physical_attempt_count"]}</td>'
-                    f'<td>{row["total_tokens"]}</td><td><code>{html.escape(str(row["observed_model_counts"]))}</code></td></tr>'
+                    f'<td>{_display(row["total_tokens"])}</td><td><code>{html.escape(str(row["observed_model_counts"]))}</code></td></tr>'
                     for row in rows
                 )
                 segments.append(
@@ -1215,7 +1254,7 @@ def _provider_audit_html(projection: _ValidatedReportProjection) -> str:
             f'<td>{html.escape(str(row["planned_provider_route"]))}</td>'
             f'<td><code>{html.escape(str(row["observed_provider_route_counts"]))}</code></td>'
             f'<td>{html.escape(str(row["planned_reasoning_effort"] or row["planned_thinking_mode"] or "default"))}</td>'
-            f'<td>{row["physical_attempt_count"]}</td><td>{row["total_tokens"]}</td>'
+            f'<td>{row["physical_attempt_count"]}</td><td>{_display(row["total_tokens"])}</td>'
             f'<td>{html.escape(str(row["planned_billing_semantics"]))}</td>'
             f'<td><code>{html.escape(str(row["observed_billing_semantics_counts"]))}</code></td></tr>'
         )
@@ -1368,6 +1407,38 @@ _V2_SCRIPT = r"""
 """
 
 
+def _recovery_accounting_html(projection: _ValidatedReportProjection) -> str:
+    if projection.recovery_accounting is None:
+        return ""
+    rows = "".join(
+        f'<tr><td>{html.escape(str(row["scope"]))}</td><td>{html.escape(str(row["metric"]))}</td>'
+        f'<td>{html.escape(_display(row["value"]))}</td></tr>'
+        for row in _recovery_accounting_rows(projection)
+    )
+    return (
+        '<section class="robustness-v2-block" data-testid="recovery-accounting" data-v2-interactive>'
+        f'<h3>{_bilingual("恢复账本与未知量", "Recovery accounting and uncertainty")}</h3>'
+        f'<p>{_bilingual("旧失败与缺失 usage 保留；全 attempt token 总额未知，不能用已知小计替代。每个最终成功序列 usage 完整，自检单独计数，不进入 Formal 分母。表格中的破折号和下载中的空白表示未知或不适用，不是零或免费。", "The historical failure and missing usage are retained. All-attempt token totals are unknown, not the known subtotal. Every final successful sequence has complete usage. Self-checks are separate from Formal attempts. Dashes and blank export cells mean unknown or not applicable, not zero or free.")}</p>'
+        '<div class="robustness-v2-table-wrap"><table><thead><tr><th>Scope</th><th>Metric</th><th>Value</th>'
+        f'</tr></thead><tbody>{rows}</tbody></table></div></section>'
+    )
+
+
+def _history_reference_html(projection: _ValidatedReportProjection) -> str:
+    if projection.recovery_accounting is not None:
+        return (
+            '<section class="robustness-v2-block"><div class="robustness-v2-history" '
+            'data-testid="robustness-v2-historical-reference"><strong>Independent recovered study</strong>'
+            f'<p>{_bilingual("这是独立恢复研究 artifact，不是 canonical 页面。历史 16-cell Judgment 与 Shadow 保留在原 source，不重跑、不混入此 Realized 分母；完整 lineage 见下载。", "This is an independent recovered research artifact, not the canonical page. Historical 16-cell Judgment and Shadow evidence remain at their original sources, are not rerun, and do not enter this Realized denominator. Downloads retain the exact lineage.")}</p></div></section>'
+        )
+    return (
+        '<section class="robustness-v2-block"><div class="robustness-v2-history" '
+        'data-testid="robustness-v2-historical-reference"><strong>Historical 16-cell Judgment Reference</strong>'
+        '<p>Historical OpenAI 4 × 4 cells remain immutable Judgment-era evidence and do not enter the new Realized Main denominator. '
+        '历史 16 cells 与六张机制图保持独立、原字节和原 hash。</p><a href="#historical-sensitivity-1000">Open Historical reference</a></div></section>'
+    )
+
+
 def _report_section(
     projection: _ValidatedReportProjection,
     downloads: Mapping[str, str],
@@ -1392,7 +1463,7 @@ def _report_section(
         f'data-production-deploy-eligible="{eligibility}" data-provider-calls-during-composition="0" '
         'data-canonical-deployment-triggered="false">'
         f'<style>{_V2_CSS}</style>'
-        '<p class="robustness-v2-kicker">Prompt–Model · Two-Stage Realized · v2</p>'
+        f'<p class="robustness-v2-kicker">{"Prompt–Model · Two-Stage Realized · v2" if projection.recovery_accounting is None else "Recovered Prompt–Model · Two-Stage Realized"}</p>'
         f'<h2>{_bilingual("五模型 Prompt–Model Realized 主结果", "Five-model Prompt–Model Realized results")}</h2>'
         f'<p>{_bilingual("默认表格只展示 ABM Realized 互动；Provider Judgment 位于独立审计视图。固定样本、固定互动图、共享 draw，每个 cell 只有一条 realized path。", "The default tables show ABM Realized interactions only; Provider Judgment stays in a separate audit view. The sample and graph are fixed, the draw is shared, and each cell has one realized path.")}</p>'
         '<p class="robustness-v2-status" data-testid="robustness-v2-state" data-v2-state="loading" aria-live="polite">'
@@ -1417,10 +1488,7 @@ def _report_section(
         f'<div class="robustness-v2-mechanism-scroll" data-v2-lang="zh-CN">{zh_svg}</div>'
         f'<div class="robustness-v2-mechanism-scroll" data-v2-lang="en-US" hidden>{en_svg}</div>'
         f'<div data-v2-lang="zh-CN">{zh_fallback}</div><div data-v2-lang="en-US" hidden>{en_fallback}</div></section>'
-        '<section class="robustness-v2-block"><div class="robustness-v2-history" '
-        'data-testid="robustness-v2-historical-reference"><strong>Historical 16-cell Judgment Reference</strong>'
-        '<p>Historical OpenAI 4 × 4 cells remain immutable Judgment-era evidence and do not enter the new Realized Main denominator. '
-        '历史 16 cells 与六张机制图保持独立、原字节和原 hash。</p><a href="#historical-sensitivity-1000">Open Historical reference</a></div></section>'
+        f'{_recovery_accounting_html(projection)}{_history_reference_html(projection)}'
         f'{_downloads_html(downloads)}</section>'
     )
     return section
@@ -1454,6 +1522,23 @@ def _render_report_html(
     return payload
 
 
+def _render_recovery_html(projection: _ValidatedReportProjection, downloads: Mapping[str, str]) -> bytes:
+    """Independent recovery surface, not a fabricated Full-Pool base bundle."""
+    if projection.recovery_accounting is None:
+        raise ConcurrentRobustnessV2ReportError("Recovery rendering requires its distinct accounting contract")
+    document = (
+        '<!doctype html><html lang="zh-CN"><head><meta charset="utf-8">'
+        '<meta name="viewport" content="width=device-width,initial-scale=1">'
+        '<title>Recovered Prompt–Model Research</title>'
+        '<style>body{margin:0;background:#f4f7fb;font-family:system-ui,sans-serif}*{box-sizing:border-box}</style>'
+        f'</head><body><main>{_report_section(projection, downloads)}</main>'
+        f'<script>{_V2_SCRIPT}</script></body></html>'
+    ).encode()
+    if len(document) >= _MAX_HTML_BYTES or b"realized_reason" in document:
+        raise ConcurrentRobustnessV2ReportError("Recovery report size or explanation contract is crossed")
+    return document
+
+
 def _prompt_catalog_document(projection: _ValidatedReportProjection) -> dict[str, Any]:
     return {
         "schema_version": _PROMPT_CATALOG_SCHEMA,
@@ -1481,7 +1566,7 @@ def _new_artifact_payloads(projection: _ValidatedReportProjection) -> dict[str, 
     if workbook != _workbook_bytes(projection):
         raise ConcurrentRobustnessV2ReportError("repeated workbook builds differ")
     _validate_workbook(workbook, projection)
-    return {
+    payloads = {
         _PROJECTION_JSON: projection_bytes,
         _REALIZED_CSV: _csv_bytes(_REALIZED_FIELDS, projection.realized_main_rows),
         _JUDGMENT_CSV: _csv_bytes(_JUDGMENT_FIELDS, projection.judgment_audit_rows),
@@ -1491,6 +1576,9 @@ def _new_artifact_payloads(projection: _ValidatedReportProjection) -> dict[str, 
         _WORKBOOK: workbook,
         _MECHANISM_MMD: mermaid.payload,
     }
+    if projection.recovery_accounting is not None:
+        payloads[_RECOVERY_ACCOUNTING_CSV] = _csv_bytes(_RECOVERY_ACCOUNTING_FIELDS, _recovery_accounting_rows(projection))
+    return payloads
 
 
 def _report_payload_document(
@@ -1500,7 +1588,7 @@ def _report_payload_document(
 ) -> dict[str, Any]:
     projection_bytes = _canonical_json_bytes(projection.document())
     return {
-        "schema_version": _REPORT_SCHEMA,
+        "schema_version": _REPORT_SCHEMA if projection.recovery_accounting is None else _RECOVERY_REPORT_SCHEMA,
         "candidate_type": _CANDIDATE_TYPE,
         "title": "Prompt–Model Realized Robustness · Table-First Teacher Report",
         "primary_outcome": "abm_realized_engagement",
@@ -1508,7 +1596,7 @@ def _report_payload_document(
         "source_lineage_identity_sha256": _sha256_bytes(
             _canonical_json_bytes(dict(projection.source_lineage))
         ),
-        "projection_schema_version": _PROJECTION_SCHEMA,
+        "projection_schema_version": projection.document()["schema_version"],
         "projection_sha256": _sha256_bytes(projection_bytes),
         "mechanism_schema_version": projection.mechanism_schema_version,
         "mechanism_identity_sha256": projection.mechanism_identity_sha256,

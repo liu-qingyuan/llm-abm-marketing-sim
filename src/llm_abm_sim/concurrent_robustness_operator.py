@@ -5,6 +5,7 @@ import os
 import stat
 from collections.abc import Callable, Iterator
 from contextlib import ExitStack, contextmanager
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -233,12 +234,25 @@ def run_concurrent_robustness_recovery(plan_path: str | Path) -> RecoveryExecuti
             raise ConcurrentRobustnessOperatorError("Recovery setup or execution failed closed") from None
 
 
-def _publish_task_report(bundle: Path, destination: Path) -> Path:
-    """Zero-call Report Interface; an unavailable producer leaves report_pending."""
+@dataclass(frozen=True)
+class _TaskReportHandoff:
+    report_path: Path
+    formal_evidence_closed: bool
+
+
+def _publish_task_report(bundle: Path, destination: Path) -> _TaskReportHandoff:
+    """Only the independent Report reader can attest Formal closure."""
     from importlib import import_module
 
+    from .concurrent_robustness_formal_execution import _sha256_file
+
     report = import_module(".concurrent_robustness_recovery_report", __package__)
-    return report.export_concurrent_robustness_recovery_report(bundle, output_dir=destination)
+    path = report.export_concurrent_robustness_recovery_report(bundle, output_dir=destination)
+    facts = report.inspect_concurrent_robustness_recovery_report(path)
+    if (facts.get("source_bundle") != {"path": str(bundle), "sha256": _sha256_file(bundle)}
+            or facts.get("formal_evidence_closed") is not True or facts.get("report_status") != "complete"):
+        raise ConcurrentRobustnessOperatorError("Report closure differs from the execution checkpoint")
+    return _TaskReportHandoff(path, True)
 
 
 def run_concurrent_robustness_recovery_task(plan_path: str | Path) -> dict[str, object]:
@@ -267,10 +281,12 @@ def run_concurrent_robustness_recovery_task(plan_path: str | Path) -> dict[str, 
     if result["status"] == "execution_complete":
         try:
             destination = Path(context.plan["request"]["report_destination"])
-            report = _publish_task_report(Path(result["execution_bundle"]), destination)
-            if report != destination / "report.html" or not report.is_file():
+            handoff = _publish_task_report(Path(result["execution_bundle"]), destination)
+            if (not isinstance(handoff, _TaskReportHandoff) or handoff.report_path != destination / "report.html"
+                    or not handoff.report_path.is_file()):
                 raise ConcurrentRobustnessOperatorError("Recovery Report returned an incompatible artifact")
-            result.update(status="complete", report_status="complete", report_path=str(report))
+            result.update(status="complete", report_status="complete", report_path=str(handoff.report_path),
+                          formal_evidence_closed=handoff.formal_evidence_closed)
         except Exception:
             result.update(report_status="report_pending", report_failure="evidence_or_report_unavailable_or_failed")
     return result

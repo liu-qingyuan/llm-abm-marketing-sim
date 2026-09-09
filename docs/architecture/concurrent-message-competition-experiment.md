@@ -160,6 +160,30 @@ python scripts/run_concurrent_robustness_v2.py revoke-recovery-task --plan <task
 - `status-recovery-task` 只读验证完整法律 lineage、head/内部 plan inventory 与当前期限/撤销状态，不创建锁、读取凭证或修复历史。异常后以 durable HEAD/events 重读结果，不推定请求尚未发出。已知安全暂停可用同一 task plan 续接，无新批准；未知、source drift、foreign/orphan、超限或新硬停都不自动修复。
 - 最终完整 bundle 自动进入零调用的 Evidence/Report Interface。Report Module 尚不可用或生成失败时只报告 `execution_complete / report_pending`，不是任务完成；同一命令可以零 Provider 续接报告，不需 live gate 或重新批准。#254 负责正式证据与同源报告的实际闭合，不是任务 dispatch 的开发前置。本 Interface 不负责 Release、Deployment 或 canonical cutover。
 
+#### 独立 Recovery Evidence 与同源 Report
+
+`concurrent_robustness_recovery_evidence.py` 拥有独立的 `concurrent-robustness-recovery-evidence-v1` / `concurrent-robustness-recovery-evidence-manifest-v1`，不放宽原 v2 Evidence reader。只接受显式 recovery bundle；该 bundle 的独立 reader 按原版本复验 legacy epoch 或 task-derived authorization lineage，并由原 kernel 在自有、自动清理的临时 workspace 重算 Realized、ranking、partial cursor 和 batch feedback。公开 bundle summary 与原 bundle bytes 不变，Evidence 只获得内部已验证 facts/commit rows，不建立第二个 scheduler。
+
+- `close_concurrent_robustness_recovery_evidence(bundle, output_dir=...) -> evidence.json` 在完整20×1,800 final Judgments、36,000 terminals、600 barriers、无 in-flight/partial/unknown 的前提下发布。每条最终 Judgment 保留旧 v2 或 recovery origin 的绝对路径、hash、event sequence/checksum，旧失败与全部新 physical attempts 按 `(cell, pair position, attempt ordinal)` 无重复合并，与累计账本对账。不能把旧失败重新计为新成功序列的一部分，也不能漏掉继承 physical 计数。
+- `read_concurrent_robustness_recovery_evidence(evidence.json) -> ClosedRecoveryEvidence` 不信自报汇总或重算后的本地 hash：再次读取 hash-bound bundle/source，复算每个 payload、exact manifest、完整 inventory 与 output identity。新 Evidence 文件必须 readonly、regular、单 hardlink；source/qualification 保留原 mode。危险凭证路径在内容读取前拒绝。source/campaign/protected artifact scope 不能成为输出，consumer 同样复验此边界。
+- 目录包含 `evidence.json`、`final_judgments.jsonl`、`realized_terminals.jsonl`、`all_attempts.jsonl`、`self_checks.jsonl`、`batch_commits.jsonl`、`membership.json`、`messages.jsonl` 和最后原子提交的 `artifact_manifest.json`。新目录 create-once；完整同源 root 可只读复用，不完整/foreign/crossed source 不 repair、覆盖或删除。
+- 全历史 attempt token 总额因旧 missing usage 保持 `null`；四类 token 的 known subtotal 与 complete/missing/malformed response counters 独立给出。最终成功序列必须满足严格 usage 完整性。自检独立保存、不计入 Formal 36k 或 physical union。费用继续 nullable，known subtotal / observed / missing 分列，CNY 与 subscription nominal USD 不混加，无现金上限承诺。
+
+`concurrent_robustness_recovery_report.py` 从 `ClosedRecoveryEvidence` 生成独立 `concurrent-recovery-report-projection-v1`，只共享中性表格 reducers、Prompt/message normalization、确定性 XLSX 和既有交互 presentation，不伪造旧 v2 DTO、不调用 v2 专属 source projection、不复制 Full-Pool HTML 空壳。默认 Realized，Judgment Audit 单独切换；HTML/XLSX/CSV 的180行维度、分母、lineage、nullable accounting 来自同一 projection。历史16-cell/Shadow 保留原 source、不重跑、不混分母；此页面不声称复制 canonical 历史区或六张机制图。
+
+`export_concurrent_robustness_recovery_report(bundle, output_dir=...) -> report.html` 先在 `output_dir/evidence/` 闭合 Evidence，再创建同源 exports，最后原子提交 `concurrent-recovery-report-manifest-v1`。`inspect_concurrent_robustness_recovery_report(report.html)` 从 Evidence/bundle 重建全部预期 bytes 与 exact download inventory。Report 失败不撤销已闭合 Evidence；同命令只读复用同源、已完整写入的 readonly 文件，继续尚未发布的 Report，不覆盖损坏或 foreign 文件。Operator 与 task status 仅在该独立 reader 确认闭合且 bundle path/hash exact 匹配时声明 `complete / formal_evidence_closed=true`；injected handoff 保持 false。此前状态为 `execution_complete / report_pending`，无需新 live gate、任务窗口或批准。
+
+离线 CLI（同一 `scripts/run_concurrent_robustness_v2.py`）：
+
+```text
+close-recovery-evidence --bundle <explicit-bundle.json> --output-dir <new-evidence-root>
+inspect-recovery-evidence --evidence <explicit-evidence.json>
+export-recovery-report --bundle <explicit-bundle.json> --output-dir <independent-report-root>
+inspect-recovery-report --report <explicit-report.html>
+```
+
+四个入口不读取凭证、不调 Provider、不签发批准，错误仅返回安全 `recovery_report_invalid` category。所有输出保持 `production_deploy_eligible=false`；报告闭合不等于真实实验已完成，更不构成 Release、Deployment 或 canonical cutover。
+
 #### 原 v2 执行与证据合同
 
 v2 私有 pair ledger 依次持久化 `pending → reserved → attempting → judgment_persisted → realized_persisted → settled`。Provider Judgment 使用 cell-specific source identity；Realized terminal 使用 panel-wide source identity。concrete Provider Adapter 把 requested/observed identity、Prompt hash、wire/structured-output/reasoning 设置、usage 和安全错误事实归一化；同一模型的 P0–P3 共用私有 lane cooldown，单 pair 只允许三次 physical attempts。Formal 调用只恢复并推进当前模型，四个 cells 全部闭合后写入 model checkpoint 并返回 `resumable`；下一次调用才能进入下一模型，直到第五个 checkpoint 后才发布完整 execution。普通 rate-limit pause 留在当前模型，不能跳模。明确余额/订阅额度耗尽为 `quota_exhausted`，优先于其 HTTP status（包括 429）分类，不重试、不等待冷却，保存已有 Judgment 和本次 failure attempt 后返回 `stopped`，同输出目录不能自动续跑。只含 `quota`、`RESOURCE_EXHAUSTED` 或普通限流提示不等于额度耗尽。连接、timeout、408、409、普通 429、5xx 与 malformed structured response 才能 retry，普通 429/503 触发 lane cooldown；其他 4xx、认证、权限、identity drift 与 attempts exhausted 形成 `stopped`，unknown post-dispatch provenance 形成 `reconciliation_required`。Judgment 已落盘时恢复不再调用 Adapter，Realized terminal 已落盘时恢复只继续 kernel registration/settlement；两种失败都不能生成 runtime terminal 或提交当前 batch。kernel 继续拥有 full-batch barrier 和 next-batch feedback，只把 campaign-level 去重 realized-positive users 提交。

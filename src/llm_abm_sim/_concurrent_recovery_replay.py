@@ -5,6 +5,7 @@ import hashlib
 import json
 import tempfile
 from collections.abc import Mapping
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -19,13 +20,19 @@ class _MissingTerminal(RuntimeError):
     """Stop replay at the first terminal which has not been persisted."""
 
 
-def verify_recovery_realization(
+@dataclass(frozen=True)
+class _RecoveryReplayFacts:
+    summary: dict[str, Any]
+    batch_commits: tuple[dict[str, Any], ...]
+
+
+def _verified_recovery_realization(
     *,
     proposal: Mapping[str, Any],
     manifest: _v2.ConcurrentRobustnessManifestV2,
     state: CampaignProgress,
     records: tuple[dict[str, Any], ...],
-) -> dict[str, Any]:
+) -> _RecoveryReplayFacts:
     """Recompute the runtime prefix without dispatching or writing durable outputs."""
     manifest_sha = str(proposal["frozen_context"]["manifest_sha256"])
     _v2._require_sha256(manifest_sha, "frozen manifest SHA")
@@ -84,6 +91,7 @@ def verify_recovery_realization(
     encountered_commits: set[tuple[int, int, int]] = set()
     verified_terminals = 0
     verified_batches = 0
+    recomputed_batches: list[dict[str, Any]] = []
     stopped = False
     with tempfile.TemporaryDirectory(prefix="concurrent-recovery-replay-") as directory:
         root = Path(directory)
@@ -134,6 +142,7 @@ def verify_recovery_realization(
                         encountered_commits.add(key)
                     if expected and any(_v2._canonical_json_bytes(item) != _v2._canonical_json_bytes(row) for item in expected):
                         raise RecoveryCampaignError("replayed batch differs from campaign records")
+                    recomputed_batches.append(row)
                     verified_batches += 1
 
                 _v2._drive_primary_runtime(kernel, resolve_pair=resolve, pair_settled=settled, batch_committed=committed)
@@ -149,9 +158,23 @@ def verify_recovery_realization(
         raise RecoveryCampaignError("replay did not encounter the complete terminal and reservation prefix")
     if set(recorded_commits) != {(key[1], key[2]) for key in encountered_commits} or set(state.batch_commits) != encountered_commits:
         raise RecoveryCampaignError("replay did not encounter every persisted batch commit")
-    return {
+    summary = {
         "verified_terminal_count": verified_terminals,
         "verified_reserved_pair_count": len(encountered_reserved),
         "verified_batch_commit_count": verified_batches,
         "provider_calls": 0,
     }
+    return _RecoveryReplayFacts(summary=summary, batch_commits=tuple(recomputed_batches))
+
+
+def verify_recovery_realization(
+    *,
+    proposal: Mapping[str, Any],
+    manifest: _v2.ConcurrentRobustnessManifestV2,
+    state: CampaignProgress,
+    records: tuple[dict[str, Any], ...],
+) -> dict[str, Any]:
+    """Preserve the historical summary API while hiding recomputed rows."""
+    return _verified_recovery_realization(
+        proposal=proposal, manifest=manifest, state=state, records=records
+    ).summary

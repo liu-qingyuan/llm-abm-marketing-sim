@@ -3,9 +3,11 @@ from __future__ import annotations
 
 import hashlib
 import os
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, cast
 
+from . import _concurrent_recovery_replay as _concurrent_replay
 from . import concurrent_robustness_formal_execution as _formal
 from . import concurrent_robustness_recovery as _proposals
 from . import concurrent_robustness_recovery_epoch as _initial
@@ -17,6 +19,18 @@ from ._concurrent_recovery_replay import verify_recovery_realization
 
 BUNDLE_SCHEMA = "concurrent-recovery-execution-bundle-v1"
 TASK_BUNDLE_SCHEMA = "concurrent-recovery-task-execution-bundle-v1"
+
+
+@dataclass(frozen=True)
+class _VerifiedRecoveryBundleFacts:
+    """Private, independently reconstructed bundle facts for Evidence."""
+
+    bundle_path: Path
+    document: dict[str, Any]
+    origins: _execution._Origins
+    state: CampaignProgress
+    records: tuple[dict[str, Any], ...]
+    batch_commits: tuple[dict[str, Any], ...]
 
 
 def _bound_facts(origins: _execution._Origins, records: tuple[dict[str, Any], ...]) -> list[dict[str, Any]]:
@@ -99,12 +113,8 @@ def publish_recovery_bundle(context: _execution._ExecutionContext) -> Path:
     return target
 
 
-def read_recovery_bundle(path: str | Path) -> dict[str, Any]:
-    """Verify persisted source origins, legal epochs and recomputed ABM feedback.
-
-    Inputs/campaign remain untouched. Only an owned, automatically removed
-    temporary kernel workspace is written; no credentials or Provider are used.
-    """
+def _read_verified_recovery_bundle(path: str | Path) -> _VerifiedRecoveryBundleFacts:
+    """Verify persisted source origins and return private frozen facts."""
     target = _proposals._safe_path(path)
     fact = _proposals._file_fact(target)
     if cast(int, fact["mode"]) & 0o222:
@@ -130,11 +140,23 @@ def read_recovery_bundle(path: str | Path) -> dict[str, Any]:
     _verify_event_origins(origins, records)
     state = _execution._legal_history(origins, records)
     facts = _bound_facts(origins, records)
-    realization = verify_recovery_realization(proposal=origins.proposal, manifest=origins.source.manifest, state=state, records=records)
+    replay = _concurrent_replay._verified_recovery_realization(
+        proposal=origins.proposal, manifest=origins.source.manifest,
+        state=state, records=records,
+    )
+    realization = replay.summary
     body = _body(target, origins, records, state, facts, realization)
     expected = {**body, "bundle_identity_sha256": _v2._json_sha256(body)}
     if _formal._canonical_json_bytes(expected) != _formal._canonical_json_bytes(document):
         raise RecoveryCampaignError("Recovery bundle differs from independently verified origins")
     if facts != _bound_facts(origins, records) or hashlib.sha256(target.read_bytes()).hexdigest() != fact["sha256"]:
         raise RecoveryCampaignError("Recovery bundle or origins changed during inspection")
-    return expected
+    return _VerifiedRecoveryBundleFacts(
+        bundle_path=target, document=expected, origins=origins, state=state,
+        records=records, batch_commits=replay.batch_commits,
+    )
+
+
+def read_recovery_bundle(path: str | Path) -> dict[str, Any]:
+    """Verify a recovery bundle while preserving the public summary dict."""
+    return _read_verified_recovery_bundle(path).document

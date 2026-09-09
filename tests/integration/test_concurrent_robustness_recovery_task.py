@@ -379,12 +379,12 @@ def test_one_task_command_closes_full_shape_across_days_then_retries_report_with
     bundle = read_recovery_bundle(path)
     assert bundle["progress"]["cell_prefixes"] == [1800] * 20
     assert bundle["realization_verification"]["verified_batch_commit_count"] == 600
-    def report(bundle_path: Path, destination: Path) -> Path:
+    def report(bundle_path: Path, destination: Path) -> operator._TaskReportHandoff:
         assert read_recovery_bundle(bundle_path)["progress"]["successful_judgments"] == 36000
         destination.mkdir()
         target = destination / "report.html"
         target.write_text("Synthetic Report Interface test; not Formal Evidence.")
-        return target
+        return operator._TaskReportHandoff(target, False)
     def denied(*_args: Any, **_kwargs: Any) -> Any:
         pytest.fail("Report-only continuation must not enter Provider/Study execution")
     monkeypatch.setattr(operator, "_publish_task_report", report)
@@ -397,3 +397,4 @@ def test_one_task_command_closes_full_shape_across_days_then_retries_report_with
     assert final["successful_judgments"] == 36000
     assert final["physical_attempts"] == 36001 and final["self_check_attempts"] == 5
     assert final["production_deploy_eligible"] is False
+    assert final["formal_evidence_closed"] is False

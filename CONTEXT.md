@@ -255,6 +255,14 @@ Study-owned 的零调用、无执行权限 artifact。`prepare_concurrent_robust
 
 Task execution bundle 使用显式 task schema 并复用同一个独立 consumer；旧 bundle/授权按原合同验证。完成执行后，Operator 零调用交接 Evidence/Report，未交付报告时保持 `execution_complete / report_pending`。报告续接无需新的 live gate 或批准，不触发 Release/Deployment。
 
+### Closed Recovery Evidence（独立恢复证据）
+
+`concurrent_robustness_recovery_evidence.py` 从显式、版本化的 recovery bundle 独立重建最终 Judgment、Realized terminals、600 个完整 batch barriers 及无重复的 physical attempt union。`ClosedRecoveryEvidence` 只由持久化 reader 返回；legacy 与 recovery origin 保留各自路径、hash、event sequence/checksum，旧 missing-usage failure 恰好保留一次。成功序列 usage 必须完整；全历史 token 总额保持 nullable，known subtotal 与 missing/malformed response counts 分列，自检另列且不进入 Formal 分母。新 Evidence 使用独立只读 closed inventory 与原子 manifest，不能改标签借用旧 v2 root，也不授予调用或部署权限。
+
+### Recovery Report（独立恢复报告）
+
+`concurrent_robustness_recovery_report.py` 只消费重新验证的 Closed Recovery Evidence，生成同一 projection 的 HTML、XLSX、CSV、Prompt catalog 与 accounting。默认 Realized，Judgment Audit 独立；不复制 Full-Pool 空壳，不重跑或混入历史16-cell/Shadow分母。Evidence 先闭合、Report manifest 后提交；报告失败保留 `execution_complete / report_pending`，同源不可变已写文件可零 Provider 续接，不覆盖 foreign 或不完整 Evidence。Operator/status 仅在独立报告 reader 证明闭合且 exact bundle path/hash 匹配时声明完成，injected report 不授 Formal 身份。此报告始终是独立、nondeployable artifact，不触发 canonical cutover。
+
 ### Provider-Aware Retry Lane
 
 Prompt–Model Robustness Extension 的每个 Provider/model condition 使用独立调用通道。单个 logical judgment 最多执行三次 physical attempts；明确余额/订阅额度耗尽单独标为不可重试的 `quota_exhausted`，停止后续请求且保留已完成证据；普通连接错误、超时、408/409/429/5xx 与 malformed structured response 才可重试，优先遵守 `Retry-After` 或可解析的 `Wait Ns`，否则使用有界指数退避。429/503 触发该模型通道共享冷却，不能让并发 worker 对同一受限账号盲目重试；成功 terminal 必须先持久化再推进，恢复时只处理 unresolved pair。重试耗尽必须停止相应 cell 并保留失败证据，禁止替换模型，也禁止把 Provider failure 写成用户 `ignore`。
