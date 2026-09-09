@@ -239,7 +239,15 @@ Study-owned 的零调用、无执行权限 artifact。`prepare_concurrent_robust
 
 ### Initial Recovery Epoch Handoff（初始恢复 epoch 授权交接）
 
-`concurrent_robustness_recovery_epoch.py` 提供独立的 initial-epoch request/readiness/approval handoff 与只读消费者。它复用已验证的 Formal Recovery Proposal，从原证据重算预算并绑定五份独立 qualification、明确批准、初始 head、唯一 source anchor 的预定路径和 campaign control identity；新 plan create-once、只读、no-overwrite，消费者按批准时刻重验历史、另报当前时效。qualification/authorization 沿用 path+canonical hash 的既有合同，不能通过 chmod 或改日期修复原证据。交接不 claim anchor、不准入 epoch、不计数或占用 attempt，也不是可由旧 v2 Operator 执行的 plan。实际 campaign ledger、互斥准入、后续 epochs、恢复执行与 `RecoveryExecutionBundleV1` 仍由 #253 的后续实现闭合。
+`concurrent_robustness_recovery_epoch.py` 提供独立的 initial-epoch request/readiness/approval handoff 与只读消费者。它复用已验证的 Formal Recovery Proposal，从原证据重算预算并绑定五份独立 qualification、明确批准、初始 head、唯一 source anchor 的预定路径和 campaign control identity；新 plan create-once、只读、no-overwrite，消费者按批准时刻重验历史、另报当前时效。qualification/authorization 沿用 path+canonical hash 的既有合同，不能通过 chmod 或改日期修复原证据。交接不 claim anchor、不准入 epoch、不计数或占用 attempt，也不是可由旧 v2 Operator 执行的 plan。实际 campaign ledger、互斥准入、后续 epochs 和恢复执行由独立 Recovery Execution Interface 拥有。
+
+### Recovery Campaign（恢复 campaign）
+
+以原 source 稳定派生的唯一 anchor 绑定一个 control identity 的恢复执行范围。Study 拥有累计 ordinal/预算、单调 event head、epoch 法律 lineage、reserve/intent/settlement 和模型顺序；Operator 持有整个 invocation 的本机 source-bound scope 并组合原 Provider 资源。数字剩余额度或锁 descriptor 不等于执行权。已落盘成功不重发，intent 无 settlement 不重发，新硬停不能通过重签 epoch 绕过。
+
+### Recovery Execution Bundle（恢复执行交接包）
+
+绑定 immutable ledger-prefix、完整 parent/epoch artifact facts 与唯一事件 origins 的版本化 checkpoint。消费者从合法历史和 persisted Realized 序列复算 ranking、partial cursor、完整 batch barrier 与反馈；原 source/campaign 不写入，内部临时 kernel workspace 独立创建并清理。执行完整不等于最终 Formal Evidence/Report 闭合；旧 missing-usage 前史保留，全历史 token 总额仍 unknown。
 
 ### Provider-Aware Retry Lane
 

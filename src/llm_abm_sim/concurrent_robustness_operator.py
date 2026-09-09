@@ -6,6 +6,10 @@ import stat
 from collections.abc import Iterator
 from contextlib import ExitStack, contextmanager
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .concurrent_robustness_recovery_execution import RecoveryExecutionResult
 
 from .concurrent_robustness_formal_execution import (
     _manifest_from_request,
@@ -176,3 +180,41 @@ def run_concurrent_robustness_formal(plan_path: str | Path) -> ConcurrentRobustn
             # SDK/worker setup or cleanup errors may contain raw values. Durable
             # attempt provenance, if any, remains owned by Study; never infer zero.
             raise ConcurrentRobustnessOperatorError("Provider setup or execution failed closed") from None
+
+
+def run_concurrent_robustness_recovery(plan_path: str | Path) -> RecoveryExecutionResult:
+    """One explicitly approved recovery model, under the original source lock.
+
+    Qualification refresh and new approval are separate operations. A terminal
+    campaign can publish its frozen checkpoint with zero client construction.
+    """
+    from . import concurrent_robustness_formal_execution as formal
+    from . import concurrent_robustness_recovery_execution as recovery
+    from ._concurrent_recovery_bundle import publish_recovery_bundle
+    from ._concurrent_recovery_campaign import recovery_scope
+
+    context = recovery._load_context(plan_path)
+    action = recovery._action(context)
+    if os.environ.get("LLM_ABM_RUN_LIVE_LLM") != "1":
+        raise ConcurrentRobustnessOperatorError("Formal Operator requires the explicit live gate")
+    if action != "return" and not recovery._window_current(context.plan, formal._utc_now()):
+        raise ConcurrentRobustnessOperatorError("Recovery authorization or qualifications are not current")
+    with recovery_scope(context.origins.campaign):
+        context = recovery._load_context(plan_path)
+        if recovery._action(context) == "return":
+            return recovery._result(context, publish_recovery_bundle(context))
+        if not recovery._window_current(context.plan, formal._utc_now()):
+            raise ConcurrentRobustnessOperatorError("Recovery authorization or qualifications are not current")
+        manifest = recovery.RecoveryExecutionManifest(execution_plan=formal.FormalArtifactReference(
+            path=Path(context.plan["plan_path"]), sha256=formal._sha256_file(Path(context.plan["plan_path"])),
+        ))
+        try:
+            with ExitStack() as resources:
+                adapters = _build_adapters(context.origins.source.manifest,
+                    context.origins.source.request.run_parameters.request_timeout_seconds, resources)
+                result = ConcurrentRobustnessStudy().run(manifest, adapters, context.journal.root)
+                if not isinstance(result, recovery.RecoveryExecutionResult):
+                    raise ConcurrentRobustnessOperatorError("Recovery Study returned an incompatible result")
+                return result
+        except Exception:
+            raise ConcurrentRobustnessOperatorError("Recovery setup or execution failed closed") from None

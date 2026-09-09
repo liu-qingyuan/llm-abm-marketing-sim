@@ -89,11 +89,9 @@ def _campaign_identity(proposal: dict[str, Any]) -> dict[str, Any]:
     return {**body, "campaign_identity_sha256": _v2._json_sha256(body)}
 
 
-def _initial_readiness(
-    request: RecoveryInitialEpochRequest, *, now: datetime,
-) -> tuple[dict[str, Any], dict[str, Any]]:
-    proposal, inherited = _inherited_context(request.proposal)
-    campaign = _campaign_identity(proposal)
+def _qualified_artifacts(
+    request: RecoveryInitialEpochRequest, inherited: _formal.FormalPlanInspection, *, now: datetime,
+) -> list[dict[str, Any]]:
     qualifications = []
     for reference, route in zip(request.qualification_artifacts, inherited.request.provider_routes, strict=True):
         _checked_reference(reference)
@@ -105,6 +103,15 @@ def _initial_readiness(
         )):
             raise RecoveryInitialEpochError("Recovery qualification flags must be booleans")
         qualifications.append({**reference.model_dump(mode="json"), "evidence": evidence})
+    return qualifications
+
+
+def _initial_readiness(
+    request: RecoveryInitialEpochRequest, *, now: datetime,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    proposal, inherited = _inherited_context(request.proposal)
+    campaign = _campaign_identity(proposal)
+    qualifications = _qualified_artifacts(request, inherited, now=now)
     remaining = next(row for row in proposal["model_budgets"] if row["remaining_valid_judgments"] > 0)
     identity = {
         "schema_version": "concurrent-robustness-recovery-initial-epoch-identity-v1",

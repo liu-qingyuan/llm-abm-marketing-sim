@@ -4309,6 +4309,18 @@ class ConcurrentRobustnessStudy:
         formal_execution_plan: str | Path | None = None,
     ) -> ConcurrentRobustnessStudyResult:
         schema_version = getattr(manifest, "schema_version", None)
+        if schema_version == "concurrent-robustness-recovery-manifest-v1":
+            from .concurrent_robustness_recovery_execution import RecoveryExecutionManifest, _run_recovery_study
+
+            if not isinstance(manifest, RecoveryExecutionManifest):
+                raise ConcurrentRobustnessError(
+                    ConcurrentRobustnessErrorCode.INVALID_MANIFEST,
+                    "Recovery requires its typed immutable manifest",
+                )
+            return _run_recovery_study(
+                manifest=manifest, adapters_by_cell=adapters_by_cell, output_dir=output_dir,
+                report_destination=report_destination, formal_execution_plan=formal_execution_plan,
+            )
         if schema_version == "concurrent-robustness-manifest-v2":
             from .concurrent_robustness_v2 import (
                 ConcurrentRobustnessManifestV2,

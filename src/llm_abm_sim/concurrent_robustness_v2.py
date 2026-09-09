@@ -2540,6 +2540,281 @@ def _assert_adapter_transport_progress(
         )
 
 
+def _resolve_v2_pair(
+    plan: _PairExecutionPlan,
+    *,
+    kernel: _ConcurrentRuntimeKernel,
+    ledger: _V2PairLedger,
+    manifest: ConcurrentRobustnessManifestV2,
+    cell_index: int,
+    cell: _PromptModelCell,
+    execution_adapter: LLMDecisionAdapter,
+    policy: EngagementRealizationPolicy,
+    judgment_source_identity: str,
+    request_baseline: int,
+    external_baseline: int,
+) -> _V2RealizedTerminal:
+    lifecycle = ledger.state(plan.pair_id)
+    if lifecycle is None:
+        ledger.append_state(plan, "pending")
+        lifecycle = "pending"
+    terminal_evidence = kernel.terminal_evidence(plan, "primary")
+    if terminal_evidence is not None:
+        if lifecycle != "realized_persisted":
+            raise ValueError("runtime terminal is crossed with the v2 Realized lifecycle")
+        latest = ledger.latest(plan.pair_id)
+        assert latest is not None
+        payload = cast(Mapping[str, object], latest["payload"])
+        realized_terminal = _V2RealizedTerminal.model_validate(payload["terminal"])
+        expected_runtime = _runtime_terminal(plan, realized_terminal)
+        if terminal_evidence[0] != expected_runtime:
+            raise ValueError("persisted runtime terminal is crossed")
+    else:
+        if lifecycle == "pending":
+            ledger.append_state(
+                plan,
+                "reserved",
+                payload={"maximum_physical_attempts": _V2_MAXIMUM_ATTEMPTS},
+            )
+            lifecycle = "reserved"
+        prior_attempt_evidence: tuple[_V2AttemptEvidence, ...] = ()
+        if lifecycle == "reserved":
+            kernel.start_pair(plan)
+            ledger.append_state(
+                plan,
+                "attempting",
+                payload=(
+                    _attempting_payload(
+                        phase="pre_dispatch",
+                        next_attempt_number=1,
+                        evidence=(),
+                        retry_delay_seconds=None,
+                    )
+                    if isinstance(execution_adapter, _V2LaneDecisionAdapter)
+                    else None
+                ),
+            )
+            lifecycle = "attempting"
+        if lifecycle == "attempting" and isinstance(execution_adapter, _V2LaneDecisionAdapter):
+            resumable = _safe_resumable_attempts(ledger.latest(plan.pair_id))
+            should_dispatch = resumable is not None
+            if resumable is not None:
+                prior_attempt_evidence, resume_delay = resumable
+                if resume_delay > 0.0:
+                    _V2_SLEEP(resume_delay)
+        else:
+            should_dispatch = False
+
+        if lifecycle == "attempting":
+            if not should_dispatch and isinstance(execution_adapter, _V2LaneDecisionAdapter):
+                raise _V2ReconciliationRequired(f"pair {plan.pair_id} has an unresolved dispatched attempt")
+            if not should_dispatch:
+                should_dispatch = ledger.latest(plan.pair_id) is not None and not isinstance(
+                    execution_adapter, _V2LaneDecisionAdapter
+                )
+            if not should_dispatch:
+                raise _V2ReconciliationRequired(f"pair {plan.pair_id} has an unresolved dispatched attempt")
+            if isinstance(execution_adapter, _V2LaneDecisionAdapter):
+
+                def observe_attempt(
+                    phase: str,
+                    next_attempt_number: int,
+                    evidence: tuple[_V2AttemptEvidence, ...],
+                    retry_delay_seconds: float | None,
+                    *,
+                    bound_plan: _PairExecutionPlan = plan,
+                ) -> None:
+                    ledger.append_state(
+                        bound_plan,
+                        "attempting",
+                        payload=_attempting_payload(
+                            phase=cast(Literal["pre_dispatch", "dispatching", "retry_wait"], phase),
+                            next_attempt_number=next_attempt_number,
+                            evidence=evidence,
+                            retry_delay_seconds=retry_delay_seconds,
+                        ),
+                    )
+
+                execution_adapter.prepare_attempt(
+                    prior_evidence=prior_attempt_evidence,
+                    observer=observe_attempt,
+                )
+            context = _primary_variant_context(
+                plan,
+                prompt_token=cell.prompt_version,
+            )
+            try:
+                attempt, accounting = _execute_runtime_variant(
+                    adapter=execution_adapter,
+                    context=context,
+                    pair_schedule_position=plan.pair_schedule_position,
+                    time_step=plan.time_step,
+                    message_id=plan.message.message_id,
+                    default_provider_metadata={
+                        "adapter": (
+                            "formal-frozen-provider-v2"
+                            if manifest.execution_profile == "formal"
+                            else "injected-deterministic-v2"
+                        ),
+                        "requested_model": cell.requested_model,
+                    },
+                )
+            except ProviderResponseProvenanceUnknown as exc:
+                _assert_adapter_transport_progress(
+                    manifest=manifest,
+                    adapter=execution_adapter,
+                    request_baseline=request_baseline,
+                    external_baseline=external_baseline,
+                )
+                raise _V2ReconciliationRequired(
+                    f"pair {plan.pair_id} requires explicit reconciliation"
+                ) from exc
+            except ValueError as exc:
+                _assert_adapter_transport_progress(
+                    manifest=manifest,
+                    adapter=execution_adapter,
+                    request_baseline=request_baseline,
+                    external_baseline=external_baseline,
+                )
+                raise _V2ReconciliationRequired(
+                    f"pair {plan.pair_id} returned unverifiable response accounting"
+                ) from exc
+            if (
+                isinstance(execution_adapter, _V2LaneDecisionAdapter)
+                and execution_adapter.last_attempt_evidence
+            ):
+                accounting = _variant_accounting_from_attempts(
+                    execution_adapter.last_attempt_evidence
+                )
+            _assert_adapter_transport_progress(
+                manifest=manifest,
+                adapter=execution_adapter,
+                request_baseline=request_baseline,
+                external_baseline=external_baseline,
+            )
+            terminal_row, _, _ = _build_runtime_terminal_row(
+                pair_id=plan.pair_id,
+                pair_schedule_position=plan.pair_schedule_position,
+                time_step=plan.time_step,
+                message_id=plan.message.message_id,
+                user_id=plan.user.user_id,
+                context=context,
+                attempt=attempt,
+                accounting=accounting,
+                default_provider_metadata={
+                    "adapter": (
+                        "formal-frozen-provider-v2"
+                        if manifest.execution_profile == "formal"
+                        else "injected-deterministic-v2"
+                    ),
+                    "model": cell.required_observed_model,
+                },
+            )
+            if attempt.provider_failure is not None:
+                ledger.append_state(
+                    plan,
+                    "stopped",
+                    payload={
+                        "terminal_status": "provider_failed",
+                        "failure_type": terminal_row["failure_type"],
+                        "request_invocations": accounting.request_invocations,
+                        "attempt_evidence": (
+                            [
+                                row.model_dump(mode="json")
+                                for row in execution_adapter.last_attempt_evidence
+                            ]
+                            if isinstance(execution_adapter, _V2LaneDecisionAdapter)
+                            else []
+                        ),
+                    },
+                )
+                raise _V2CellStopped(f"cell {cell.cell_id} stopped on Provider failure")
+            if not isinstance(attempt.decision, EngageDecision):
+                raise ValueError("v2 Adapter did not return an EngageDecision")
+            judgment = _build_judgment(
+                manifest=manifest,
+                cell_index=cell_index,
+                cell=cell,
+                judgment_source_identity=judgment_source_identity,
+                plan=plan,
+                decision=attempt.decision,
+                accounting=accounting,
+                attempt_evidence=(
+                    execution_adapter.last_attempt_evidence
+                    if isinstance(execution_adapter, _V2LaneDecisionAdapter)
+                    else None
+                ),
+            )
+            ledger.append_state(
+                plan,
+                "judgment_persisted",
+                payload={"judgment": judgment.model_dump(mode="json")},
+            )
+            lifecycle = "judgment_persisted"
+
+        if lifecycle == "judgment_persisted":
+            latest = ledger.latest(plan.pair_id)
+            assert latest is not None
+            payload = cast(Mapping[str, object], latest["payload"])
+            judgment = _V2Judgment.model_validate(payload["judgment"])
+            realization = policy.realize(
+                judgment.decision(),
+                user_id=plan.user.user_id,
+                message_id=plan.message.message_id,
+            )
+            realized_terminal = _build_realized_terminal(
+                manifest=manifest,
+                judgment=judgment,
+                realization=realization,
+            )
+            ledger.append_state(
+                plan,
+                "realized_persisted",
+                payload={"terminal": realized_terminal.model_dump(mode="json")},
+            )
+            lifecycle = "realized_persisted"
+        if lifecycle != "realized_persisted":
+            raise ValueError("v2 pair did not reach a Realized terminal")
+        latest = ledger.latest(plan.pair_id)
+        assert latest is not None
+        payload = cast(Mapping[str, object], latest["payload"])
+        realized_terminal = _V2RealizedTerminal.model_validate(payload["terminal"])
+        runtime_terminal = _runtime_terminal(plan, realized_terminal)
+        kernel.register_terminal(
+            plan=plan,
+            decision_variant="primary",
+            terminal_row=runtime_terminal,
+            variant_evidence=_runtime_evidence(plan, runtime_terminal),
+        )
+    return realized_terminal
+
+
+def _drive_primary_runtime(
+    kernel: _ConcurrentRuntimeKernel,
+    *,
+    resolve_pair: Callable[[_PairExecutionPlan], _V2RealizedTerminal],
+    pair_settled: Callable[[_PairExecutionPlan, _V2RealizedTerminal], None],
+    batch_committed: Callable[[_ConcurrentRuntimeBatchCommit], None],
+) -> None:
+    while kernel.state.next_time_step < kernel.config.horizon:
+        if kernel.active_batch is None:
+            kernel.plan_batch()
+        for plan in kernel.pending_plans():
+            realized_terminal = resolve_pair(plan)
+            kernel.start_pair(plan)
+            runtime_terminal = _runtime_terminal(plan, realized_terminal)
+            kernel.close_primary_pair(
+                plan,
+                _PrimaryOnlyConcurrentRuntimeConsumer._primary_result_row(
+                    plan,
+                    runtime_terminal,
+                ),
+            )
+            pair_settled(plan, realized_terminal)
+        commit = kernel.commit_primary_batch()
+        batch_committed(commit)
+
+
 def _run_cell(
     *,
     config: Any,
@@ -2636,257 +2911,29 @@ def _run_cell(
                     raise _V2ReconciliationRequired(
                         f"cell {cell.cell_id} contains an unresolved dispatched attempt"
                     )
-        while state.next_time_step < config.horizon:
-            if kernel.active_batch is None:
-                kernel.plan_batch()
-            for plan in kernel.pending_plans():
-                lifecycle = ledger.state(plan.pair_id)
-                if lifecycle is None:
-                    ledger.append_state(plan, "pending")
-                    lifecycle = "pending"
-                terminal_evidence = kernel.terminal_evidence(plan, "primary")
-                if terminal_evidence is not None:
-                    if lifecycle != "realized_persisted":
-                        raise ValueError("runtime terminal is crossed with the v2 Realized lifecycle")
-                    latest = ledger.latest(plan.pair_id)
-                    assert latest is not None
-                    payload = cast(Mapping[str, object], latest["payload"])
-                    realized_terminal = _V2RealizedTerminal.model_validate(payload["terminal"])
-                    expected_runtime = _runtime_terminal(plan, realized_terminal)
-                    if terminal_evidence[0] != expected_runtime:
-                        raise ValueError("persisted runtime terminal is crossed")
-                else:
-                    if lifecycle == "pending":
-                        ledger.append_state(
-                            plan,
-                            "reserved",
-                            payload={"maximum_physical_attempts": _V2_MAXIMUM_ATTEMPTS},
-                        )
-                        lifecycle = "reserved"
-                    prior_attempt_evidence: tuple[_V2AttemptEvidence, ...] = ()
-                    if lifecycle == "reserved":
-                        kernel.start_pair(plan)
-                        ledger.append_state(
-                            plan,
-                            "attempting",
-                            payload=(
-                                _attempting_payload(
-                                    phase="pre_dispatch",
-                                    next_attempt_number=1,
-                                    evidence=(),
-                                    retry_delay_seconds=None,
-                                )
-                                if isinstance(execution_adapter, _V2LaneDecisionAdapter)
-                                else None
-                            ),
-                        )
-                        lifecycle = "attempting"
-                    if lifecycle == "attempting" and isinstance(execution_adapter, _V2LaneDecisionAdapter):
-                        resumable = _safe_resumable_attempts(ledger.latest(plan.pair_id))
-                        should_dispatch = resumable is not None
-                        if resumable is not None:
-                            prior_attempt_evidence, resume_delay = resumable
-                            if resume_delay > 0.0:
-                                _V2_SLEEP(resume_delay)
-                    else:
-                        should_dispatch = False
+        def resolve_pair(plan: _PairExecutionPlan) -> _V2RealizedTerminal:
+            return _resolve_v2_pair(
+                plan,
+                kernel=kernel,
+                ledger=ledger,
+                manifest=manifest,
+                cell_index=cell_index,
+                cell=cell,
+                execution_adapter=execution_adapter,
+                policy=policy,
+                judgment_source_identity=judgment_source_identity,
+                request_baseline=request_baseline,
+                external_baseline=external_baseline,
+            )
 
-                    if lifecycle == "attempting":
-                        if not should_dispatch and isinstance(execution_adapter, _V2LaneDecisionAdapter):
-                            raise _V2ReconciliationRequired(f"pair {plan.pair_id} has an unresolved dispatched attempt")
-                        if not should_dispatch:
-                            should_dispatch = ledger.latest(plan.pair_id) is not None and not isinstance(
-                                execution_adapter, _V2LaneDecisionAdapter
-                            )
-                        if not should_dispatch:
-                            raise _V2ReconciliationRequired(f"pair {plan.pair_id} has an unresolved dispatched attempt")
-                        if isinstance(execution_adapter, _V2LaneDecisionAdapter):
+        def pair_settled(plan: _PairExecutionPlan, realized_terminal: _V2RealizedTerminal) -> None:
+            ledger.append_state(
+                plan,
+                "settled",
+                payload={"realized_terminal_id": realized_terminal.realized_terminal_id},
+            )
 
-                            def observe_attempt(
-                                phase: str,
-                                next_attempt_number: int,
-                                evidence: tuple[_V2AttemptEvidence, ...],
-                                retry_delay_seconds: float | None,
-                                *,
-                                bound_plan: _PairExecutionPlan = plan,
-                            ) -> None:
-                                ledger.append_state(
-                                    bound_plan,
-                                    "attempting",
-                                    payload=_attempting_payload(
-                                        phase=cast(Literal["pre_dispatch", "dispatching", "retry_wait"], phase),
-                                        next_attempt_number=next_attempt_number,
-                                        evidence=evidence,
-                                        retry_delay_seconds=retry_delay_seconds,
-                                    ),
-                                )
-
-                            execution_adapter.prepare_attempt(
-                                prior_evidence=prior_attempt_evidence,
-                                observer=observe_attempt,
-                            )
-                        context = _primary_variant_context(
-                            plan,
-                            prompt_token=cell.prompt_version,
-                        )
-                        try:
-                            attempt, accounting = _execute_runtime_variant(
-                                adapter=execution_adapter,
-                                context=context,
-                                pair_schedule_position=plan.pair_schedule_position,
-                                time_step=plan.time_step,
-                                message_id=plan.message.message_id,
-                                default_provider_metadata={
-                                    "adapter": (
-                                        "formal-frozen-provider-v2"
-                                        if manifest.execution_profile == "formal"
-                                        else "injected-deterministic-v2"
-                                    ),
-                                    "requested_model": cell.requested_model,
-                                },
-                            )
-                        except ProviderResponseProvenanceUnknown as exc:
-                            _assert_adapter_transport_progress(
-                                manifest=manifest,
-                                adapter=execution_adapter,
-                                request_baseline=request_baseline,
-                                external_baseline=external_baseline,
-                            )
-                            raise _V2ReconciliationRequired(
-                                f"pair {plan.pair_id} requires explicit reconciliation"
-                            ) from exc
-                        except ValueError as exc:
-                            _assert_adapter_transport_progress(
-                                manifest=manifest,
-                                adapter=execution_adapter,
-                                request_baseline=request_baseline,
-                                external_baseline=external_baseline,
-                            )
-                            raise _V2ReconciliationRequired(
-                                f"pair {plan.pair_id} returned unverifiable response accounting"
-                            ) from exc
-                        if (
-                            isinstance(execution_adapter, _V2LaneDecisionAdapter)
-                            and execution_adapter.last_attempt_evidence
-                        ):
-                            accounting = _variant_accounting_from_attempts(
-                                execution_adapter.last_attempt_evidence
-                            )
-                        _assert_adapter_transport_progress(
-                            manifest=manifest,
-                            adapter=execution_adapter,
-                            request_baseline=request_baseline,
-                            external_baseline=external_baseline,
-                        )
-                        terminal_row, _, _ = _build_runtime_terminal_row(
-                            pair_id=plan.pair_id,
-                            pair_schedule_position=plan.pair_schedule_position,
-                            time_step=plan.time_step,
-                            message_id=plan.message.message_id,
-                            user_id=plan.user.user_id,
-                            context=context,
-                            attempt=attempt,
-                            accounting=accounting,
-                            default_provider_metadata={
-                                "adapter": (
-                                    "formal-frozen-provider-v2"
-                                    if manifest.execution_profile == "formal"
-                                    else "injected-deterministic-v2"
-                                ),
-                                "model": cell.required_observed_model,
-                            },
-                        )
-                        if attempt.provider_failure is not None:
-                            ledger.append_state(
-                                plan,
-                                "stopped",
-                                payload={
-                                    "terminal_status": "provider_failed",
-                                    "failure_type": terminal_row["failure_type"],
-                                    "request_invocations": accounting.request_invocations,
-                                    "attempt_evidence": (
-                                        [
-                                            row.model_dump(mode="json")
-                                            for row in execution_adapter.last_attempt_evidence
-                                        ]
-                                        if isinstance(execution_adapter, _V2LaneDecisionAdapter)
-                                        else []
-                                    ),
-                                },
-                            )
-                            raise _V2CellStopped(f"cell {cell.cell_id} stopped on Provider failure")
-                        if not isinstance(attempt.decision, EngageDecision):
-                            raise ValueError("v2 Adapter did not return an EngageDecision")
-                        judgment = _build_judgment(
-                            manifest=manifest,
-                            cell_index=cell_index,
-                            cell=cell,
-                            judgment_source_identity=judgment_source_identity,
-                            plan=plan,
-                            decision=attempt.decision,
-                            accounting=accounting,
-                            attempt_evidence=(
-                                execution_adapter.last_attempt_evidence
-                                if isinstance(execution_adapter, _V2LaneDecisionAdapter)
-                                else None
-                            ),
-                        )
-                        ledger.append_state(
-                            plan,
-                            "judgment_persisted",
-                            payload={"judgment": judgment.model_dump(mode="json")},
-                        )
-                        lifecycle = "judgment_persisted"
-
-                    if lifecycle == "judgment_persisted":
-                        latest = ledger.latest(plan.pair_id)
-                        assert latest is not None
-                        payload = cast(Mapping[str, object], latest["payload"])
-                        judgment = _V2Judgment.model_validate(payload["judgment"])
-                        realization = policy.realize(
-                            judgment.decision(),
-                            user_id=plan.user.user_id,
-                            message_id=plan.message.message_id,
-                        )
-                        realized_terminal = _build_realized_terminal(
-                            manifest=manifest,
-                            judgment=judgment,
-                            realization=realization,
-                        )
-                        ledger.append_state(
-                            plan,
-                            "realized_persisted",
-                            payload={"terminal": realized_terminal.model_dump(mode="json")},
-                        )
-                        lifecycle = "realized_persisted"
-                    if lifecycle != "realized_persisted":
-                        raise ValueError("v2 pair did not reach a Realized terminal")
-                    latest = ledger.latest(plan.pair_id)
-                    assert latest is not None
-                    payload = cast(Mapping[str, object], latest["payload"])
-                    realized_terminal = _V2RealizedTerminal.model_validate(payload["terminal"])
-                    runtime_terminal = _runtime_terminal(plan, realized_terminal)
-                    kernel.register_terminal(
-                        plan=plan,
-                        decision_variant="primary",
-                        terminal_row=runtime_terminal,
-                        variant_evidence=_runtime_evidence(plan, runtime_terminal),
-                    )
-                kernel.start_pair(plan)
-                runtime_terminal = _runtime_terminal(plan, realized_terminal)
-                kernel.close_primary_pair(
-                    plan,
-                    _PrimaryOnlyConcurrentRuntimeConsumer._primary_result_row(
-                        plan,
-                        runtime_terminal,
-                    ),
-                )
-                ledger.append_state(
-                    plan,
-                    "settled",
-                    payload={"realized_terminal_id": realized_terminal.realized_terminal_id},
-                )
-            commit = kernel.commit_primary_batch()
+        def batch_committed(commit: _ConcurrentRuntimeBatchCommit) -> None:
             commits.append(
                 _commit_row(
                     cell_index=cell_index,
@@ -2894,6 +2941,13 @@ def _run_cell(
                     commit=commit,
                 )
             )
+
+        _drive_primary_runtime(
+            kernel,
+            resolve_pair=resolve_pair,
+            pair_settled=pair_settled,
+            batch_committed=batch_committed,
+        )
         if kernel.runtime_resident_row_count != 0:
             raise ValueError("v2 runtime retained rows after full-batch commit")
         replay = journal._replay_runtime()

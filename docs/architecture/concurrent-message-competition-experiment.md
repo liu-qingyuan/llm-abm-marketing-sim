@@ -98,11 +98,11 @@ python scripts/run_concurrent_robustness_v2.py inspect-recovery --proposal <new-
 
 准备只接受一个已知 missing-usage、尚有 attempt slots 的失败及其完整成功前缀；原路径关闭 plan、source、sample/graph、Prompt/model、shared draw、ledger 与 runtime journal/snapshot/spool，并逐条核对 Judgment→Realization、完整 batch feedback 和失败 cursor。新 `concurrent-robustness-formal-recovery-proposal-v1` 绑定源文件 SHA/mode inventory、原始 cell/Judgment/terminal origins、失败 attempt、累计及剩余额度和独立 output identity。已成功 pair 不重发；失败 pair 的剩余 slots 仍是待批准的数字而非权限。它标记 `execution_authority=false`、全历史 attempt token 总额 unknown，不把缺 usage 前史补零、估算或隐藏为完整调用记录；原 v2 仍不能据此关闭 Formal Evidence。
 
-提案消费者重读源并复算全部字段与 canonical identity，准备时的时间 gates 与当前 gates 分开。输出文件 create-once、只读、原子 no-overwrite 安装；碰撞或崩溃可以留下明确未完成的新目标，不能自动修复、覆盖或当作 ready。缺失、重复、crossed/tampered、symlink、source drift、unknown、其他硬停、耗尽和已存在目标均失败关闭。两个 Interface 都不进入凭证/Provider/Study 执行、不创建旧锁或改写历史。下一阶段的 versioned campaign ledger、恢复执行、独立 Evidence/Report 仍分别由 #253/#254 交付；新的 qualification/live 授权与 Release/Deployment 不由提案或 Ticket 推定。
+提案消费者重读源并复算全部字段与 canonical identity，准备时的时间 gates 与当前 gates 分开。输出文件 create-once、只读、原子 no-overwrite 安装；碰撞或崩溃可以留下明确未完成的新目标，不能自动修复、覆盖或当作 ready。缺失、重复、crossed/tampered、symlink、source drift、unknown、其他硬停、耗尽和已存在目标均失败关闭。两个 Interface 都不进入凭证/Provider/Study 执行、不创建旧锁或改写历史。versioned campaign ledger 与恢复执行由下述 Recovery Execution Module 拥有，独立 Evidence/Report 由 #254 交付；新的 qualification/live 授权与 Release/Deployment 不由提案或 Ticket 推定。
 
 #### 初始 recovery epoch 授权准备（#253 的独立增量）
 
-`concurrent_robustness_recovery_epoch.py` 只提供初始 epoch 的准备和持久化授权交接，**没有实现 campaign ledger、epoch admission、恢复 runtime 或 `RecoveryExecutionBundleV1`**；#253 仍 open，#254 未开始。现有 `ConcurrentRobustnessStudy.run(...)`、Operator、Provider Adapter、旧 v2 Evidence/Report validator 均不因这个交接而获得新执行路径。
+`concurrent_robustness_recovery_epoch.py` 只提供初始 epoch 的准备和持久化授权交接，不拥有 campaign ledger、epoch admission 或恢复 runtime。恢复执行必须另走下述 Recovery Execution Interface；初始交接不能直接执行，旧 v2 Evidence/Report validator 不因它而放宽。
 
 ```bash
 python scripts/run_concurrent_robustness_v2.py prepare-recovery-epoch --request <initial-epoch-request.json>
@@ -116,7 +116,31 @@ request schema 为 `concurrent-robustness-recovery-initial-epoch-request-v1`：�
 
 初始 scope 将原剩余上界绑定到 epoch ordinal 1 和确定的初始 head，而不是重新发放 108,000。source anchor 的预定路径由原 output identity 与原 plan hash 派生在原 output 的 grandparent 下，进入批准 scope，并拒绝与原 evidence overlap；更换 proposal 或复制原 plan 不会选出另一 anchor。准备拒绝已有 anchor/control scope，但不会 claim anchor 或加锁。这只是后续唯一 campaign 准入的地址合同，不能宣称已经实现跨 root 防重领或并发执行保护。
 
-`inspect` 重读 proposal、原 ledger/runtime 和独立 qualification/authorization，从批准时的合法事实重建交接，拒绝重新计算了所有自报 hash 的 budget/origin/head/authority 篡改；原 plan 过期仍可被合法检查，当前 gates 独立返回。它不是 campaign 状态探针，不读取或修复尚未实现的 control ledger。CLI 错误只返回 `recovery_epoch_invalid` 等安全 category，不回显 Provider error、输入或凭证。此增量、测试 fixture 或 Ticket 状态均不授权 live qualification/恢复、Release 或 Deployment。
+`inspect` 重读 proposal、原 ledger/runtime 和独立 qualification/authorization，从批准时的合法事实重建交接，拒绝重新计算了所有自报 hash 的 budget/origin/head/authority 篡改；原 plan 过期仍可被合法检查，当前 gates 独立返回。它不是 campaign 状态探针，不读取或修复 control ledger。CLI 错误只返回 `recovery_epoch_invalid` 等安全 category，不回显 Provider error、输入或凭证。此增量、测试 fixture 或 Ticket 状态均不授权 live qualification/恢复、Release 或 Deployment。
+
+#### Recovery Execution 与独立 checkpoint
+
+`concurrent_robustness_recovery_execution.py` 是初始交接之后的独立 Interface，接收 `RecoveryExecutionRequest(initial_handoff, qualification_artifacts, expected_head_sha256)`。模型、路径 scope、样本、Prompt、route/caps、剩余判断与累计物理额度均从原 source、唯一 campaign 和 committed prefix 重算，不能由调用者覆盖。每份 execution approval 精确绑定当时 head、下一个 epoch ordinal 和当前模型，五份资格须在批准和执行时都有效；重签发过期资格与授权不能修改原文件或自动延长时窗。
+
+```bash
+python scripts/run_concurrent_robustness_v2.py prepare-recovery-execution --request <request.json>
+python scripts/run_concurrent_robustness_v2.py authorize-recovery-execution --request <request.json> --authorization <approval.json> --authorization-sha256 <sha256> --plan-output <new-plan.json>
+python scripts/run_concurrent_robustness_v2.py status-recovery --plan <plan.json>
+python scripts/run_concurrent_robustness_v2.py run-recovery --plan <plan.json>
+python scripts/run_concurrent_robustness_v2.py inspect-recovery-bundle --bundle <bundle.json>
+```
+
+- `status-recovery` 是只读合法历史与当前窗口检查，不读取凭证、不 claim scope、不修复账本。其 `execution_action` 只描述对应合法 stage，仍须当前窗口和显式 live gate 才可执行。旧 `run --plan` 不接受 recovery plan；新 `run-recovery` 不接受 initial handoff 或原 v2 plan，没有 fallback。
+- Operator 在 credential/client setup 之前验证 source、完整 epoch 法律 lineage、当前窗口、head/status，并在整个 invocation 持有 source-anchor-bound 本机 nonblocking `flock` descriptor。所有模型资源继续通过原 `_build_adapters`/`ExitStack` 管理。已终止状态只允许零 client 的 checkpoint 发布/复验，不重发。Study 的 exact `RecoveryExecutionManifest` dispatch 自身也核验正确 live descriptor；锁或存储 handle 不是调用授权。
+- 私有 campaign store 先 create-once 绑定 source owner 与 control root；immutable canonical events 以 严格递增 sequence、previous hash、非递减 UTC 时间形成链，HEAD 原子推进。fork/stale writer、重复 grant、跨 root、orphan/缺尾/错误 hash 均拒绝，无自动 truncation/repair。anchor 只绑定唯一 scope，不是第二份计数账本。
+- Study 复用 `_drive_primary_runtime`，只有 resolver 决定读取历史 origin 还是调用既有 Provider Adapter。每次 invocation 建立独立新 native runtime identity，使用正常 kernel plan/start/register/close/commit 重建成功前缀，不复制 scheduler、不改挂旧 journal、不使用 Provider replay Adapter。一个 invocation 最多推进一个模型。
+- 每个 logical 先 reserved，intent durable 后才能 dispatch；新 attempt 接续完整历史 ordinal，总数最多三次。settlement 同时保存安全 attempt evidence 与成功 Decision，随后持久化 versioned Judgment、Realized、pair settlement 和完整 batch commit。异常时重读 durable HEAD/事件而不是相信可能尚未更新的内存状态；已落盘成功不重发，已落盘 intent 无 settlement 一律 reconciliation。新硬停/额度耗尽/attempt exhausted 终止 campaign，不能靠新 epoch 解锁。
+- 同一 active plan 只可在当前窗口接续已知安全 stage；新 plan 必须绑定当前 head，保留累计 attempts 和最后成功响应的原 epoch identity。完整模型 checkpoint 后才可准入下一模型。`cells_complete` 只表示 execution 完整，不是最终 Formal Evidence 或 Report 已闭合。
+- `RecoveryExecutionBundleV1` 固定 closed inventory（`bundle.json`、只读 `ledger-prefix.jsonl`）、完整 parent/epoch artifact facts 与原 immutable event origins。消费者不读取未来可变 HEAD/native runtime 来冒充旧 checkpoint；它独立关闭全部 epoch 授权、资格与累计预算，并在自己拥有、自动清理的 temporary kernel workspace 内复算 persisted Realized prefix、ranking/partial cursor/full-batch barrier/feedback。源 evidence、campaign 和 bundle 均不写入；此临时 workspace 是公开声明的内部副作用，Provider/credential 调用均为零。
+
+原 missing-usage failure 和跨 epoch ordinal 始终保留；`RecoveryJudgmentV1` 只把新增成功序列作为完整 usage 的证明，不使全部历史 attempt token 总额从 unknown 变成数字。Bundle 不授予新调用权限、不升级为 Formal Evidence，也不触发 Report、Release 或 Deployment。
+
+#### 原 v2 执行与证据合同
 
 v2 私有 pair ledger 依次持久化 `pending → reserved → attempting → judgment_persisted → realized_persisted → settled`。Provider Judgment 使用 cell-specific source identity；Realized terminal 使用 panel-wide source identity。concrete Provider Adapter 把 requested/observed identity、Prompt hash、wire/structured-output/reasoning 设置、usage 和安全错误事实归一化；同一模型的 P0–P3 共用私有 lane cooldown，单 pair 只允许三次 physical attempts。Formal 调用只恢复并推进当前模型，四个 cells 全部闭合后写入 model checkpoint 并返回 `resumable`；下一次调用才能进入下一模型，直到第五个 checkpoint 后才发布完整 execution。普通 rate-limit pause 留在当前模型，不能跳模。明确余额/订阅额度耗尽为 `quota_exhausted`，优先于其 HTTP status（包括 429）分类，不重试、不等待冷却，保存已有 Judgment 和本次 failure attempt 后返回 `stopped`，同输出目录不能自动续跑。只含 `quota`、`RESOURCE_EXHAUSTED` 或普通限流提示不等于额度耗尽。连接、timeout、408、409、普通 429、5xx 与 malformed structured response 才能 retry，普通 429/503 触发 lane cooldown；其他 4xx、认证、权限、identity drift 与 attempts exhausted 形成 `stopped`，unknown post-dispatch provenance 形成 `reconciliation_required`。Judgment 已落盘时恢复不再调用 Adapter，Realized terminal 已落盘时恢复只继续 kernel registration/settlement；两种失败都不能生成 runtime terminal 或提交当前 batch。kernel 继续拥有 full-batch barrier 和 next-batch feedback，只把 campaign-level 去重 realized-positive users 提交。
 
