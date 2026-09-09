@@ -140,6 +140,8 @@ class CampaignJournal:
             (root / "events").mkdir()
             (root / "invocations").mkdir()
             (root / "bundles").mkdir()
+            if identity.get("schema_version") == "concurrent-recovery-task-campaign-v1":
+                (root / "plans").mkdir()
             _epoch._publish_immutable(root / "identity.json", dict(identity))
             _epoch._publish_immutable(root / "HEAD", {
                 "sequence": 0, "record_sha256": identity["campaign_identity_sha256"],
@@ -155,11 +157,16 @@ class CampaignJournal:
         anchor, root = _paths(identity)
         if not _equal(_read(anchor), _owner(identity)):
             raise RecoveryCampaignError("Recovery source owner is crossed")
-        if {p.name for p in root.iterdir()} != {"identity.json", "events", "HEAD", "invocations", "bundles"}:
+        inventory = {"identity.json", "events", "HEAD", "invocations", "bundles"}
+        children = ["invocations", "bundles"]
+        if identity.get("schema_version") == "concurrent-recovery-task-campaign-v1":
+            inventory.add("plans")
+            children.append("plans")
+        if {p.name for p in root.iterdir()} != inventory:
             raise RecoveryCampaignError("Recovery control inventory is incomplete or crossed")
         if not _equal(_read(root / "identity.json"), dict(identity)):
             raise RecoveryCampaignError("Recovery control identity is crossed")
-        for directory in ("invocations", "bundles"):
+        for directory in children:
             if not _proposals._safe_path(root / directory).is_dir():
                 raise RecoveryCampaignError("Recovery child scope is not a real directory")
         events = _proposals._safe_path(root / "events")

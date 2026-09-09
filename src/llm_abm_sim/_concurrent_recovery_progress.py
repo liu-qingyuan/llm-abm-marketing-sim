@@ -48,6 +48,11 @@ class CampaignProgress:
         self.invocations: list[dict[str, Any]] = []
         self.batch_commits: dict[tuple[int, int, int], dict[str, Any]] = {}
         self.status = "ready"
+        self.task_plan: dict[str, Any] | None = None
+        self.task_revoked = False
+        self.self_check_intents: dict[str, dict[str, Any]] = {}
+        self.self_checks: dict[str, dict[str, Any]] = {}
+        self.self_check_inflight: str | None = None
 
     @property
     def current_model(self) -> str | None:
@@ -90,9 +95,49 @@ class CampaignProgress:
 
     def transition(self, kind: str, payload: dict[str, Any]) -> Callable[[], None]:
         """Validate before durable append; apply its returned effect only afterwards."""
-        if self.status in {"stopped", "reconciliation_required", "complete"}:
+        if kind == "task_admitted":
+            self._exact(payload, {"task_plan"})
+            if self.task_plan is not None or self.epochs or self.status != "ready":
+                raise RecoveryCampaignError("Recovery task grant was already consumed")
+            return lambda: setattr(self, "task_plan", dict(payload["task_plan"]))
+        if kind == "task_revoked":
+            self._exact(payload, {"revocation"})
+            if self.task_plan is None or self.task_revoked:
+                raise RecoveryCampaignError("Recovery revocation is unbound or duplicated")
+            return lambda: setattr(self, "task_revoked", True)
+        if self.status in {"stopped", "reconciliation_required", "complete"} or self.task_revoked:
             raise RecoveryCampaignError("Recovery terminal campaign cannot admit more work")
+        if kind == "self_check_intent":
+            self._exact(payload, {"requested_model", "contract_sha256"})
+            model = payload["requested_model"]
+            if (self.task_plan is None or model != self.current_model or model in self.self_check_intents
+                or self.inflight is not None or self.self_check_inflight is not None
+                or self.status not in {"ready", "checkpoint"}):
+                raise RecoveryCampaignError("Recovery self-check is duplicated, concurrent or out of order")
+            _v2._require_sha256(payload["contract_sha256"], "self-check contract")
+            def start_check() -> None:
+                self.self_check_intents[model] = dict(payload)
+                self.self_check_inflight = model
+            return start_check
+        if kind == "self_check_settled":
+            self._exact(payload, {"requested_model", "attempt", "decision"})
+            model = payload["requested_model"]
+            if model != self.self_check_inflight or model in self.self_checks:
+                raise RecoveryCampaignError("Recovery self-check has no unique unsettled intent")
+            attempt = _v2._V2AttemptEvidence.model_validate(payload["attempt"])
+            if attempt.attempt_number != 1 or attempt.outcome not in {"succeeded", "nonretryable_failure"}:
+                raise RecoveryCampaignError("Recovery self-check permits one attempt and no retry")
+            if (attempt.outcome == "succeeded") != (payload["decision"] is not None):
+                raise RecoveryCampaignError("Recovery self-check Decision and attempt are crossed")
+            def finish_check() -> None:
+                self.self_checks[model] = dict(payload)
+                self.self_check_inflight = None
+                if attempt.outcome != "succeeded":
+                    self.status = "stopped"
+            return finish_check
         if kind == "epoch_admitted":
+            if self.self_check_inflight is not None or (self.task_plan is not None and self.current_model not in self.self_checks):
+                raise RecoveryCampaignError("Recovery task epoch requires a settled successful self-check")
             self._exact(payload, {"ordinal", "requested_model", "epoch_identity_sha256", "plan_path", "plan_sha256"})
             if self.status not in {"ready", "checkpoint", "paused", "running"} or self.inflight is not None:
                 raise RecoveryCampaignError("Recovery epoch requires a safe committed checkpoint")

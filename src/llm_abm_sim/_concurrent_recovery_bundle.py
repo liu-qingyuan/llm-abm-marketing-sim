@@ -16,6 +16,7 @@ from ._concurrent_recovery_progress import CampaignProgress
 from ._concurrent_recovery_replay import verify_recovery_realization
 
 BUNDLE_SCHEMA = "concurrent-recovery-execution-bundle-v1"
+TASK_BUNDLE_SCHEMA = "concurrent-recovery-task-execution-bundle-v1"
 
 
 def _bound_facts(origins: _execution._Origins, records: tuple[dict[str, Any], ...]) -> list[dict[str, Any]]:
@@ -23,12 +24,17 @@ def _bound_facts(origins: _execution._Origins, records: tuple[dict[str, Any], ..
     paths.update((origins.proposal_reference.path, origins.handoff.path))
     handoff = _initial._checked_reference(origins.handoff)
     paths.add(Path(handoff["authorization_artifact"]["path"]))
-    paths.update(Path(row["path"]) for row in handoff["request"]["qualification_artifacts"])
+    if origins.task_plan is None:
+        paths.update(Path(row["path"]) for row in handoff["request"]["qualification_artifacts"])
     for row in records:
         if row["kind"] == "epoch_admitted":
             plan = _execution._plan_document(row["payload"]["plan_path"])
-            paths.update((Path(plan["plan_path"]), Path(plan["authorization_artifact"]["path"])))
-            paths.update(Path(ref["path"]) for ref in plan["request"]["qualification_artifacts"])
+            paths.add(Path(plan["plan_path"]))
+            if origins.task_plan is None:
+                paths.add(Path(plan["authorization_artifact"]["path"]))
+                paths.update(Path(ref["path"]) for ref in plan["request"]["qualification_artifacts"])
+        elif row["kind"] == "task_revoked":
+            paths.add(Path(row["payload"]["revocation"]["path"]))
     return [_proposals._file_fact(path) for path in sorted(paths)]
 
 
@@ -49,8 +55,9 @@ def _body(path: Path, origins: _execution._Origins, records: tuple[dict[str, Any
           facts: list[dict[str, Any]], realization: dict[str, Any]) -> dict[str, Any]:
     prefix = path.parent / "ledger-prefix.jsonl"
     head = records[-1]["record_sha256"] if records else origins.campaign["campaign_identity_sha256"]
-    return {"schema_version": BUNDLE_SCHEMA, "bundle_path": str(path),
-            "initial_handoff": origins.handoff.model_dump(mode="json"), "campaign": origins.campaign,
+    task = origins.task_plan is not None
+    return {"schema_version": TASK_BUNDLE_SCHEMA if task else BUNDLE_SCHEMA, "bundle_path": str(path),
+            "task_plan" if task else "initial_handoff": origins.handoff.model_dump(mode="json"), "campaign": origins.campaign,
             "head_sha256": head, "ledger_prefix": {"relative_path": prefix.name, "sha256": _formal._sha256_file(prefix),
                                                       "records": len(records), "bytes": prefix.stat().st_size},
             "source_event_origin_policy": "immutable-source-control-events-sequence-v1",
@@ -103,9 +110,12 @@ def read_recovery_bundle(path: str | Path) -> dict[str, Any]:
     if cast(int, fact["mode"]) & 0o222:
         raise RecoveryCampaignError("Recovery bundle must be immutable")
     document, _ = _formal._load_canonical_object(target, "recovery bundle")
-    if document.get("schema_version") != BUNDLE_SCHEMA or document.get("bundle_path") != str(target):
+    if document.get("schema_version") not in {BUNDLE_SCHEMA, TASK_BUNDLE_SCHEMA} or document.get("bundle_path") != str(target):
         raise RecoveryCampaignError("Recovery requires its exact path-bound bundle schema")
-    origins = _execution._origins(_formal.FormalArtifactReference.model_validate(document["initial_handoff"]))
+    key = "task_plan" if document["schema_version"] == TASK_BUNDLE_SCHEMA else "initial_handoff"
+    origins = _execution._origins(_formal.FormalArtifactReference.model_validate(document[key]))
+    if (origins.task_plan is not None) != (key == "task_plan"):
+        raise RecoveryCampaignError("Recovery bundle authority schema is crossed")
     raw_head = document.get("head_sha256")
     if not isinstance(raw_head, str):
         raise RecoveryCampaignError("Recovery bundle head must be a SHA-256 string")

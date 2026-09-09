@@ -1,8 +1,9 @@
 """Explicit recovery epochs, legal lineage and Study execution.
 
 Plans name one source-bound campaign and committed head. Neither preparation nor
-inspection grants execution permission; the Operator must hold the live local
-scope and every dispatch must remain inside all five qualification windows.
+inspection grants execution permission. Legacy epochs retain all five current
+qualification windows; explicitly versioned task epochs derive their authority
+from one task approval and persisted model self-checks, under the same live lock.
 """
 from __future__ import annotations
 
@@ -62,6 +63,7 @@ class _Origins:
     proposal: dict[str, Any]
     source: _formal.FormalPlanInspection
     campaign: dict[str, Any]
+    task_plan: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -73,7 +75,10 @@ class _ExecutionContext:
 
 
 def _origins(reference: _formal.FormalArtifactReference) -> _Origins:
-    _initial._checked_reference(reference)
+    document = _initial._checked_reference(reference)
+    if document.get("schema_version") == "concurrent-recovery-task-plan-v1":
+        from .concurrent_robustness_recovery_task import _task_origins
+        return _task_origins(reference)
     handoff = _initial._read_initial_epoch_plan(reference.path)
     _initial._checked_reference(reference)
     request = _initial.RecoveryInitialEpochRequest.model_validate(handoff["request"])
@@ -91,6 +96,8 @@ def _journal(origins: _Origins) -> CampaignJournal:
 
 
 def _readiness(request: RecoveryExecutionRequest, origins: _Origins, state: CampaignProgress, head: str, *, now: datetime) -> dict[str, Any]:
+    if origins.task_plan is not None:
+        raise RecoveryCampaignError("Legacy execution approval cannot use task-policy origins")
     if request.initial_handoff != origins.handoff or request.expected_head_sha256 != head:
         raise RecoveryCampaignError("Recovery execution uses crossed origins or a stale head")
     if state.inflight is not None or state.status in {"stopped", "reconciliation_required", "complete"} or state.current_model is None:
@@ -137,12 +144,15 @@ def _plan_document(path: str | Path) -> dict[str, Any]:
     if cast(int, fact["mode"]) & 0o222:
         raise RecoveryCampaignError("Recovery execution plan must be immutable")
     document = _initial._checked_reference(_formal.FormalArtifactReference(path=target, sha256=str(fact["sha256"])))
-    if document.get("schema_version") != RECOVERY_EXECUTION_PLAN_SCHEMA or document.get("plan_path") != str(target):
+    if document.get("schema_version") not in {RECOVERY_EXECUTION_PLAN_SCHEMA, "concurrent-recovery-task-epoch-v1"} or document.get("plan_path") != str(target):
         raise RecoveryCampaignError("Recovery execution requires its exact path-bound plan schema")
     return document
 
 
 def _verify_plan(document: dict[str, Any], origins: _Origins, state: CampaignProgress, head: str) -> dict[str, Any]:
+    if document["schema_version"] == "concurrent-recovery-task-epoch-v1":
+        from .concurrent_robustness_recovery_task import _verify_epoch
+        return _verify_epoch(document, origins, state, head)
     request = RecoveryExecutionRequest.model_validate(document.get("request"))
     reference = _formal.FormalArtifactReference.model_validate(document.get("authorization_artifact"))
     approval = _initial._checked_reference(reference)
@@ -158,6 +168,11 @@ def _verify_plan(document: dict[str, Any], origins: _Origins, state: CampaignPro
 
 
 def _window_current(plan: dict[str, Any], now: datetime) -> bool:
+    if plan["schema_version"] == "concurrent-recovery-task-epoch-v1":
+        authority = plan["task_authority"]
+        end = authority["deadline_utc"]
+        return (_formal._parse_utc(authority["approved_at_utc"], "task approval") <= now
+                and (end is None or now < _formal._parse_utc(end, "task deadline")))
     approval = plan["authorization"]
     windows = [(approval["approved_at_utc"], approval["expires_at_utc"])]
     windows.extend((row["evidence"]["qualified_at_utc"], row["evidence"]["expires_at_utc"]) for row in approval["request_identity"]["qualification_artifacts"])
@@ -188,6 +203,11 @@ def _legal_history(origins: _Origins, records: tuple[dict[str, Any], ...], targe
         if previous_time is not None and when < previous_time:
             raise RecoveryCampaignError("Recovery event clock moved backwards")
         payload = row["payload"]
+        if row["kind"] in {"task_admitted", "task_revoked", "self_check_intent", "self_check_settled"}:
+            from .concurrent_robustness_recovery_task import _validate_task_event
+            _validate_task_event(origins, state, row["kind"], payload, when)
+        elif origins.task_plan is not None and state.task_plan != origins.handoff.model_dump(mode="json"):
+            raise RecoveryCampaignError("Task history lacks its unique admitted authority")
         if row["kind"] == "epoch_admitted":
             reference = _formal.FormalArtifactReference(path=payload["plan_path"], sha256=payload["plan_sha256"])
             _initial._checked_reference(reference)
@@ -206,10 +226,16 @@ def _legal_history(origins: _Origins, records: tuple[dict[str, Any], ...], targe
 
 def _load_context(plan_path: str | Path) -> _ExecutionContext:
     document = _plan_document(plan_path)
-    request = RecoveryExecutionRequest.model_validate(document.get("request"))
-    origins = _origins(request.initial_handoff)
+    if document["schema_version"] == "concurrent-recovery-task-epoch-v1":
+        reference = _formal.FormalArtifactReference.model_validate(document["task_plan"])
+    else:
+        reference = RecoveryExecutionRequest.model_validate(document.get("request")).initial_handoff
+    origins = _origins(reference)
     journal = _journal(origins)
     state = _legal_history(origins, journal.records, document)
+    if origins.task_plan is not None:
+        from .concurrent_robustness_recovery_task import _plan_inventory
+        _plan_inventory(origins, journal, state)
     return _ExecutionContext(document, origins, journal, state)
 
 
@@ -265,7 +291,7 @@ def _progress(origins: _Origins, state: CampaignProgress) -> dict[str, Any]:
     attempted = set(state.new_attempts)
     if state.inflight is not None:
         attempted.add(state.inflight[0])
-    return {"status": "reconciliation_required" if state.inflight is not None else state.status,
+    return {"status": "reconciliation_required" if state.inflight is not None or state.self_check_inflight is not None else state.status,
             "successful_judgments": old["successful_judgments"] + state.new_valid_judgments,
             "attempted_logical_judgments": old["attempted_logical_judgments"] + len(attempted - {state.failed_key}),
             "physical_attempts": old["physical_attempts"] + state.physical_attempts,
@@ -310,13 +336,22 @@ def _run_recovery_study(*, manifest: RecoveryExecutionManifest, adapters_by_cell
         return _result(context)
     if os.environ.get("LLM_ABM_RUN_LIVE_LLM") != "1" or not _window_current(context.plan, _formal._utc_now()):
         raise RecoveryCampaignError("Recovery execution requires its current explicit live window")
-    _v2._preflight_adapters(context.origins.source.manifest, adapters_by_cell)
+    if context.origins.task_plan is None:
+        _v2._preflight_adapters(context.origins.source.manifest, adapters_by_cell)
+    else:
+        from .concurrent_robustness_recovery_task import _read_revocation
+        if _read_revocation(context.origins.task_plan) is not None or context.state.task_revoked:
+            raise RecoveryCampaignError("Recovery task has been revoked")
+        cells = tuple(cell for cell in context.origins.source.manifest.prompt_model_cells
+                      if cell.requested_model == context.state.current_model)
+        _v2._preflight_cell_adapters(context.origins.source.manifest, cells, adapters_by_cell)
     journal = CampaignJournal.open(context.origins.campaign)
     if journal.head != context.journal.head:
         raise RecoveryCampaignError("Recovery head changed before epoch admission")
     state = context.state
     if _action(context) == "admit":
-        identity = context.plan["authorization"]["request_identity"]
+        identity = (context.plan["derivation"] if context.origins.task_plan is not None
+                    else context.plan["authorization"]["request_identity"])
         state.append(journal, "epoch_admitted", {"ordinal": identity["epoch_ordinal"], "requested_model": identity["requested_model"],
             "epoch_identity_sha256": context.plan["plan_identity_sha256"], "plan_path": str(manifest.execution_plan.path), "plan_sha256": manifest.execution_plan.sha256})
     context = _ExecutionContext(context.plan, context.origins, journal, state)
@@ -330,6 +365,10 @@ def _run_recovery_study(*, manifest: RecoveryExecutionManifest, adapters_by_cell
         _require_scope(context.origins.campaign)
         if not _window_current(context.plan, _formal._utc_now()):
             raise RecoverySafePause("Recovery window ended before the next dispatch")
+        if context.origins.task_plan is not None:
+            from .concurrent_robustness_recovery_task import _read_revocation
+            if _read_revocation(context.origins.task_plan) is not None:
+                raise RecoverySafePause("Recovery task was revoked before the next dispatch")
 
     try:
         run_recovery_model(config=config, prepared=prepared, manifest=source_manifest, state=state, journal=journal,

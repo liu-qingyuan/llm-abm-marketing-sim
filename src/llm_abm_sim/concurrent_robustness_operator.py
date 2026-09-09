@@ -3,7 +3,7 @@ from __future__ import annotations
 import fcntl
 import os
 import stat
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import ExitStack, contextmanager
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -22,7 +22,7 @@ from .concurrent_robustness_study import (
     ConcurrentRobustnessStudyResult,
     ConcurrentRobustnessStudyStatus,
 )
-from .concurrent_robustness_v2 import ConcurrentRobustnessManifestV2, _inspect_v2_progress
+from .concurrent_robustness_v2 import ConcurrentRobustnessManifestV2, _inspect_v2_progress, _PromptModelCell
 from .decision import LLMDecisionAdapter
 from .providers.antigravity import AntigravityGeminiProviderClient
 from .providers.openai_compatible import _OpenAISDKClient
@@ -97,6 +97,29 @@ def _new_client(model: str, timeout: float) -> _Transport:
         raise
 
 
+def _adapter_for_cell(cell: _PromptModelCell, client: _Transport) -> LLMDecisionAdapter:
+    model = cell.requested_model
+    if model == "deepseek-v4-flash":
+        return DeepSeekV4FlashDecisionAdapter(prompt_version=cell.prompt_version, client=client)
+    if model in {"gemini-3.1-pro", "gemini-3.8-flash-high"}:
+        return AntigravityGeminiDecisionAdapter(requested_model=model, prompt_version=cell.prompt_version, client=client)
+    if model == "kimi-coding/k3-256k":
+        return PiKimiDecisionAdapter(prompt_version=cell.prompt_version, client=client)
+    return PiOpenAIDecisionAdapter(prompt_version=cell.prompt_version, client=client)
+
+
+@contextmanager
+def _task_model_resources(manifest: ConcurrentRobustnessManifestV2, timeout: float,
+                          model: str) -> Iterator[Callable[[], dict[str, LLMDecisionAdapter]]]:
+    cells = tuple(cell for cell in manifest.prompt_model_cells if cell.requested_model == model)
+    if not cells:
+        raise ConcurrentRobustnessOperatorError("Task requested an unknown model")
+    with ExitStack() as resources:
+        client = _new_client(model, timeout)
+        resources.callback(client.close)
+        yield lambda: {cell.cell_id: _adapter_for_cell(cell, client) for cell in cells}
+
+
 def _build_adapters(
     manifest: ConcurrentRobustnessManifestV2, timeout: float, resources: ExitStack,
 ) -> dict[str, LLMDecisionAdapter]:
@@ -108,19 +131,7 @@ def _build_adapters(
             client = _new_client(model, timeout)
             resources.callback(client.close)
             clients[model] = client
-        client = clients[model]
-        adapter: LLMDecisionAdapter
-        if model == "deepseek-v4-flash":
-            adapter = DeepSeekV4FlashDecisionAdapter(prompt_version=cell.prompt_version, client=client)
-        elif model in {"gemini-3.1-pro", "gemini-3.8-flash-high"}:
-            adapter = AntigravityGeminiDecisionAdapter(
-                requested_model=model, prompt_version=cell.prompt_version, client=client,
-            )
-        elif model == "kimi-coding/k3-256k":
-            adapter = PiKimiDecisionAdapter(prompt_version=cell.prompt_version, client=client)
-        else:
-            adapter = PiOpenAIDecisionAdapter(prompt_version=cell.prompt_version, client=client)
-        adapters[cell.cell_id] = adapter
+        adapters[cell.cell_id] = _adapter_for_cell(cell, clients[model])
     return adapters
 
 
@@ -194,6 +205,8 @@ def run_concurrent_robustness_recovery(plan_path: str | Path) -> RecoveryExecuti
     from ._concurrent_recovery_campaign import recovery_scope
 
     context = recovery._load_context(plan_path)
+    if context.origins.task_plan is not None:
+        raise ConcurrentRobustnessOperatorError("Derived task epochs require the single task entry")
     action = recovery._action(context)
     if os.environ.get("LLM_ABM_RUN_LIVE_LLM") != "1":
         raise ConcurrentRobustnessOperatorError("Formal Operator requires the explicit live gate")
@@ -218,3 +231,46 @@ def run_concurrent_robustness_recovery(plan_path: str | Path) -> RecoveryExecuti
                 return result
         except Exception:
             raise ConcurrentRobustnessOperatorError("Recovery setup or execution failed closed") from None
+
+
+def _publish_task_report(bundle: Path, destination: Path) -> Path:
+    """Zero-call Report Interface; an unavailable producer leaves report_pending."""
+    from importlib import import_module
+
+    report = import_module(".concurrent_robustness_recovery_report", __package__)
+    return report.export_concurrent_robustness_recovery_report(bundle, output_dir=destination)
+
+
+def run_concurrent_robustness_recovery_task(plan_path: str | Path) -> dict[str, object]:
+    """Run one approved task, automatically advancing its internal model epochs.
+
+    Only unfinished models construct clients. Self-checks and Formal calls are
+    admitted by Study under the same source lock and durable cumulative ledger.
+    Report-only continuation needs neither credentials, a live gate nor renewed
+    approval; a failed/unavailable report never restarts Provider execution.
+    """
+    from . import concurrent_robustness_recovery_task as task
+    from ._concurrent_recovery_campaign import recovery_scope
+    from ._concurrent_recovery_task_runtime import _TERMINAL
+
+    context = task._context(plan_path)
+    status = task._task_status(context)
+    if status["status"] not in _TERMINAL and os.environ.get("LLM_ABM_RUN_LIVE_LLM") != "1":
+        raise ConcurrentRobustnessOperatorError("Formal Operator requires the explicit live gate")
+    try:
+        with recovery_scope(context.origins.campaign):
+            result = ConcurrentRobustnessStudy().run_task(plan_path, model_resources=lambda model:
+                _task_model_resources(context.origins.source.manifest,
+                    context.origins.source.request.run_parameters.request_timeout_seconds, model))
+    except Exception:
+        raise ConcurrentRobustnessOperatorError("Recovery task setup or execution failed closed") from None
+    if result["status"] == "execution_complete":
+        try:
+            destination = Path(context.plan["request"]["report_destination"])
+            report = _publish_task_report(Path(result["execution_bundle"]), destination)
+            if report != destination / "report.html" or not report.is_file():
+                raise ConcurrentRobustnessOperatorError("Recovery Report returned an incompatible artifact")
+            result.update(status="complete", report_status="complete", report_path=str(report))
+        except Exception:
+            result.update(report_status="report_pending", report_failure="evidence_or_report_unavailable_or_failed")
+    return result

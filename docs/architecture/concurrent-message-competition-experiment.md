@@ -140,6 +140,26 @@ python scripts/run_concurrent_robustness_v2.py inspect-recovery-bundle --bundle 
 
 原 missing-usage failure 和跨 epoch ordinal 始终保留；`RecoveryJudgmentV1` 只把新增成功序列作为完整 usage 的证明，不使全部历史 attempt token 总额从 unknown 变成数字。Bundle 不授予新调用权限、不升级为 Formal Evidence，也不触发 Report、Release 或 Deployment。
 
+#### 单次任务授权入口
+
+`concurrent_robustness_recovery_task.py` 的 `RecoveryTaskRequest` 只接收 `proposal: {path, sha256}`、独立 `report_destination` 和可选 `deadline_utc`。`prepare_recovery_task` 只读派生一个精确的任务批准摘要，`authorize_recovery_task` 接收明确批准并 create-once 发布 readonly plan；它们不 claim source，不调用 Provider。默认任务生命周期到完成、明确撤销、额度耗尽或新硬停为止，不采用旧24小时资格 TTL；指定 deadline 时严格执行。任务只能从未被占用的 recovery campaign 开始，不能给已经准入的 legacy campaign 换授权标签。
+
+```bash
+python scripts/run_concurrent_robustness_v2.py prepare-recovery-task --request <task-request.json>
+python scripts/run_concurrent_robustness_v2.py authorize-recovery-task --request <task-request.json> --authorization <one-explicit-approval.json> --authorization-sha256 <sha256> --plan-output <task-plan.json>
+python scripts/run_concurrent_robustness_v2.py status-recovery-task --plan <task-plan.json>
+python scripts/run_concurrent_robustness_v2.py run-recovery-task --plan <task-plan.json>
+python scripts/run_concurrent_robustness_v2.py revoke-recovery-task --plan <task-plan.json>
+```
+
+- `run_concurrent_robustness_recovery_task` 是 production composition root；`ConcurrentRobustnessStudy.run_task` 独占内部模型推进。外部一次 invocation 持有同一 source-bound 锁，内部仍每次只推进一个模型、单 worker/单 in-flight；每个模型使用原 client 和协议，自检与 Formal 使用不同 fresh Adapter，不能通过重置 Adapter counters 隐藏请求。
+- 自检采用固定、同模型无关的 P0 client-submitted Prompt bytes，只对未完成模型各最多一次、零重试。自检 intent 和严格 identity/Decision/usage 结果进入同一个 campaign ledger，与 Formal accounting 分开；健康事实不因旧 TTL 失效。成功自检、已成功响应及已结算判断不重发；intent 无 settlement 为 reconciliation，失败自检或新 Formal 硬停不能通过重复入口刷新。
+- `concurrent-recovery-task-plan-v1`、`concurrent-recovery-task-campaign-v1`、`concurrent-recovery-task-epoch-v1` 明确承载新 policy。内部 plan 由已批准 task、当前 committed head、健康事实和累计剩余预算派生，不伪造逐 epoch 人工批准。旧单 epoch plan 和 bundle 按原 schema/窗口验证；`run-recovery` 拒绝 task 派生 plan，必须使用任务入口。
+- 新 task bundle schema 为 `concurrent-recovery-task-execution-bundle-v1`；它保留既有 closed inventory 和独立 replay consumer，以 `task_plan` 而非 `initial_handoff` 绑定批准来源，并绑定所有 immutable event/epoch origins。它仍不是最终 Formal Evidence，不改变旧 missing-usage 前史的 unknown 总量。
+- 撤销信号由原 source 派生稳定路径，写入范围包含在任务批准摘要中。`revoke-recovery-task` 不等待运行中的长锁；下一 dispatch gate 停止新请求，已准入的响应可以结算。Study 将观察到的撤销写入原 ledger；复制 plan、重复使用同一批准不解除撤销。旧 checkpoint 不因未来撤销或 HEAD 追加而失效。
+- `status-recovery-task` 只读验证完整法律 lineage、head/内部 plan inventory 与当前期限/撤销状态，不创建锁、读取凭证或修复历史。异常后以 durable HEAD/events 重读结果，不推定请求尚未发出。已知安全暂停可用同一 task plan 续接，无新批准；未知、source drift、foreign/orphan、超限或新硬停都不自动修复。
+- 最终完整 bundle 自动进入零调用的 Evidence/Report Interface。Report Module 尚不可用或生成失败时只报告 `execution_complete / report_pending`，不是任务完成；同一命令可以零 Provider 续接报告，不需 live gate 或重新批准。#254 负责正式证据与同源报告的实际闭合，不是任务 dispatch 的开发前置。本 Interface 不负责 Release、Deployment 或 canonical cutover。
+
 #### 原 v2 执行与证据合同
 
 v2 私有 pair ledger 依次持久化 `pending → reserved → attempting → judgment_persisted → realized_persisted → settled`。Provider Judgment 使用 cell-specific source identity；Realized terminal 使用 panel-wide source identity。concrete Provider Adapter 把 requested/observed identity、Prompt hash、wire/structured-output/reasoning 设置、usage 和安全错误事实归一化；同一模型的 P0–P3 共用私有 lane cooldown，单 pair 只允许三次 physical attempts。Formal 调用只恢复并推进当前模型，四个 cells 全部闭合后写入 model checkpoint 并返回 `resumable`；下一次调用才能进入下一模型，直到第五个 checkpoint 后才发布完整 execution。普通 rate-limit pause 留在当前模型，不能跳模。明确余额/订阅额度耗尽为 `quota_exhausted`，优先于其 HTTP status（包括 429）分类，不重试、不等待冷却，保存已有 Judgment 和本次 failure attempt 后返回 `stopped`，同输出目录不能自动续跑。只含 `quota`、`RESOURCE_EXHAUSTED` 或普通限流提示不等于额度耗尽。连接、timeout、408、409、普通 429、5xx 与 malformed structured response 才能 retry，普通 429/503 触发 lane cooldown；其他 4xx、认证、权限、identity drift 与 attempts exhausted 形成 `stopped`，unknown post-dispatch provenance 形成 `reconciliation_required`。Judgment 已落盘时恢复不再调用 Adapter，Realized terminal 已落盘时恢复只继续 kernel registration/settlement；两种失败都不能生成 runtime terminal 或提交当前 batch。kernel 继续拥有 full-batch barrier 和 next-batch feedback，只把 campaign-level 去重 realized-positive users 提交。

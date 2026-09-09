@@ -13,7 +13,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
-from typing import Any, Literal, cast
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -55,6 +55,9 @@ from .providers.pi_subscription import (
     PI_SUBSCRIPTION_MODEL_ALIASES,
     PiSubscriptionProviderClient,
 )
+
+if TYPE_CHECKING:
+    from ._concurrent_recovery_task_runtime import ModelResources
 
 __all__ = [
     "ConcurrentRobustnessError",
@@ -4298,6 +4301,16 @@ class ConcurrentRobustnessStudy:
     external request. Complete cell evidence is closed into an immutable study root
     and a separate non-deployable report candidate behind this same Interface.
     """
+
+    def run_task(self, plan_path: str | Path, *, model_resources: ModelResources) -> dict[str, Any]:
+        """Advance a single approved task under the Operator's live source lock.
+
+        The Operator owns per-model resource lifetimes. Study alone owns one-shot
+        self-checks, derived epochs, model order and safe resumption; the existing
+        single-model run Interface still owns every Formal attempt and checkpoint.
+        """
+        from ._concurrent_recovery_task_runtime import _run_task_study
+        return _run_task_study(self, plan_path, model_resources)
 
     def run(
         self,

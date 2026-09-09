@@ -227,7 +227,7 @@ _Avoid_: Model Accuracy Validation, Calibration Study
 
 ### Robustness Formal Operator
 
-五模型 Formal 研究的 production composition root：消费显式、当前有效的 immutable execution plan，在凭证初始化之前关闭授权/source/进度 gates，并以 output-root-bound 本机锁排斥并发 invocation。它拥有 concrete client 与 fresh Adapter 的生命周期；Study 仍独占调度、重试、模型 checkpoint、停止与恢复知识。Operator 不隐式刷新 qualification、不生成授权、不扫描 latest，也不负责 Release 或 Deployment。
+五模型 Formal 研究的 production composition root：消费显式、当前有效的 immutable execution plan，在凭证初始化之前关闭授权/source/进度 gates，并以 output-root-bound 本机锁排斥并发 invocation。它拥有 concrete client 与 fresh Adapter 的生命周期；Study 仍独占调度、重试、模型 checkpoint、停止与恢复知识。旧单 epoch 入口不隐式刷新 qualification 或生成授权；单次任务入口只在明确任务授权内执行自检和派生内部计划。两者都不扫描 latest，也不负责 Release 或 Deployment。
 
 ### Robustness Formal Inspection
 
@@ -248,6 +248,12 @@ Study-owned 的零调用、无执行权限 artifact。`prepare_concurrent_robust
 ### Recovery Execution Bundle（恢复执行交接包）
 
 绑定 immutable ledger-prefix、完整 parent/epoch artifact facts 与唯一事件 origins 的版本化 checkpoint。消费者从合法历史和 persisted Realized 序列复算 ranking、partial cursor、完整 batch barrier 与反馈；原 source/campaign 不写入，内部临时 kernel workspace 独立创建并清理。执行完整不等于最终 Formal Evidence/Report 闭合；旧 missing-usage 前史保留，全历史 token 总额仍 unknown。
+
+### Recovery Task（单次授权恢复任务）
+
+`RecoveryTaskRequest` 只表达已验证 proposal、独立 report destination 和可选 deadline。不可变的 `single-task-bounded-recovery-v1` 授权覆盖未完成模型的各一次自检和全部剩余 Formal slots，旧五资格的24小时合同不支配这个独立版本。Study 在同一 source-bound campaign/ledger 中持久化任务准入、自检 intent/结果及内部 epoch；Operator 只组合当前模型的一个 client 与独立 fresh Adapters。未知 intent 不重发，新硬停、撤销与累计额度不可由重启或复制 plan 解锁。source-bound 的不可变撤销信号不等待长任务的锁，下一 dispatch gate 观察后停止；已准入的响应可以结算。
+
+Task execution bundle 使用显式 task schema 并复用同一个独立 consumer；旧 bundle/授权按原合同验证。完成执行后，Operator 零调用交接 Evidence/Report，未交付报告时保持 `execution_complete / report_pending`。报告续接无需新的 live gate 或批准，不触发 Release/Deployment。
 
 ### Provider-Aware Retry Lane
 

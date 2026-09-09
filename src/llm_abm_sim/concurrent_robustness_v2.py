@@ -2103,7 +2103,20 @@ def _preflight_adapters(
     manifest: ConcurrentRobustnessManifestV2,
     adapters_by_cell: Mapping[str, LLMDecisionAdapter],
 ) -> tuple[tuple[_PromptModelCell, LLMDecisionAdapter], ...]:
-    expected_keys = tuple(cell.cell_id for cell in manifest.prompt_model_cells)
+    return _preflight_cell_adapters(manifest, manifest.prompt_model_cells, adapters_by_cell)
+
+
+def _preflight_cell_adapters(
+    manifest: ConcurrentRobustnessManifestV2,
+    cells: tuple[_PromptModelCell, ...],
+    adapters_by_cell: Mapping[str, LLMDecisionAdapter],
+) -> tuple[tuple[_PromptModelCell, LLMDecisionAdapter], ...]:
+    if not cells or (cells != manifest.prompt_model_cells and cells != tuple(
+        cell for cell in manifest.prompt_model_cells if cell.requested_model == cells[0].requested_model
+    )):
+        raise ConcurrentRobustnessError(ConcurrentRobustnessErrorCode.UNSUPPORTED_ADAPTERS,
+                                       "v2 selected cells differ from the frozen model scope")
+    expected_keys = tuple(cell.cell_id for cell in cells)
     try:
         actual_keys = tuple(adapters_by_cell)
     except Exception as exc:
@@ -2114,11 +2127,11 @@ def _preflight_adapters(
     if len(actual_keys) != len(set(actual_keys)) or set(actual_keys) != set(expected_keys):
         raise ConcurrentRobustnessError(
             ConcurrentRobustnessErrorCode.UNSUPPORTED_ADAPTERS,
-            "v2 Adapter map must contain exactly the 20 canonical cell keys",
+            f"v2 Adapter map must contain exactly the {len(cells)} canonical cell keys",
         )
     adapters: list[tuple[_PromptModelCell, LLMDecisionAdapter]] = []
     identities: set[int] = set()
-    for cell in manifest.prompt_model_cells:
+    for cell in cells:
         adapter = adapters_by_cell[cell.cell_id]
         if not isinstance(adapter, LLMDecisionAdapter):
             raise ConcurrentRobustnessError(

@@ -294,13 +294,38 @@ def _recovery_execution(args: argparse.Namespace) -> tuple[dict[str, object], in
     return {key: plan[key] for key in ("schema_version", "plan_path", "plan_identity_sha256", "execution_authority")}, 0
 
 
+def _recovery_task(args: argparse.Namespace) -> tuple[dict[str, object], int]:
+    from llm_abm_sim import concurrent_robustness_recovery as proposals
+    from llm_abm_sim import concurrent_robustness_recovery_task as task
+
+    if args.command == "status-recovery-task":
+        return task.inspect_recovery_task(args.plan), 0
+    if args.command == "revoke-recovery-task":
+        return task.revoke_recovery_task(args.plan), 0
+    if args.command == "run-recovery-task":
+        from llm_abm_sim.concurrent_robustness_operator import run_concurrent_robustness_recovery_task
+        result = run_concurrent_robustness_recovery_task(args.plan)
+        return result, 0 if result["status"] == "complete" else 2
+    path = proposals._safe_path(args.request)
+    proposals._file_fact(path)
+    document, _ = _formal._load_canonical_object(path, "recovery task request")
+    request = task.RecoveryTaskRequest.model_validate(document)
+    if args.command == "prepare-recovery-task":
+        return task.prepare_recovery_task(request), 0
+    plan = task.authorize_recovery_task(request=request, authorization_path=args.authorization,
+        authorization_sha256=args.authorization_sha256, plan_output=args.plan_output)
+    return {key: plan[key] for key in ("schema_version", "plan_path", "plan_identity_sha256", "execution_authority")}, 0
+
+
 def _error_category(stage: str, exc: BaseException) -> str:
     if isinstance(exc, KeyboardInterrupt):
         return "interrupted"
     if isinstance(exc, _CliFailure) and exc.category in _SAFE_CATEGORIES:
         return exc.category
-    if stage in {"run", "run-recovery"}:
+    if stage in {"run", "run-recovery", "run-recovery-task"}:
         return "operator_error"
+    if stage in {"prepare-recovery-task", "authorize-recovery-task", "status-recovery-task", "revoke-recovery-task"}:
+        return "recovery_task_invalid"
     if stage in {"prepare-recovery-execution", "authorize-recovery-execution", "status-recovery", "inspect-recovery-bundle"}:
         return "recovery_execution_invalid"
     if stage == "status":
@@ -374,6 +399,17 @@ def _parser() -> argparse.ArgumentParser:
     bundle = subparsers.add_parser("inspect-recovery-bundle")
     bundle.add_argument("--bundle", type=Path, required=True)
 
+    task_prepare = subparsers.add_parser("prepare-recovery-task")
+    task_prepare.add_argument("--request", type=Path, required=True)
+    task_authorize = subparsers.add_parser("authorize-recovery-task")
+    task_authorize.add_argument("--request", type=Path, required=True)
+    task_authorize.add_argument("--authorization", type=Path, required=True)
+    task_authorize.add_argument("--authorization-sha256", required=True)
+    task_authorize.add_argument("--plan-output", type=Path, required=True)
+    for command in ("status-recovery-task", "run-recovery-task", "revoke-recovery-task"):
+        task_entry = subparsers.add_parser(command)
+        task_entry.add_argument("--plan", type=Path, required=True)
+
     run = subparsers.add_parser("run")
     run.add_argument("--plan", type=Path, required=True)
     return parser
@@ -418,6 +454,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             exit_code = 0
         elif stage in {"prepare-recovery-execution", "authorize-recovery-execution", "status-recovery", "inspect-recovery-bundle", "run-recovery"}:
             result, exit_code = _recovery_execution(args)
+        elif stage in {"prepare-recovery-task", "authorize-recovery-task", "status-recovery-task", "run-recovery-task", "revoke-recovery-task"}:
+            result, exit_code = _recovery_task(args)
         else:
             result, exit_code = _run(args)
         _emit(result)
