@@ -401,12 +401,10 @@ def prepare_concurrent_robustness_recovery(
     return proposal
 
 
-def inspect_concurrent_robustness_recovery_proposal(proposal_path: str | Path) -> dict[str, object]:
-    """Re-read immutable origins and proposal facts without locks, writes or calls.
-
-    The returned current gates are fresh; the proposal's preparation-time gates
-    remain a historical annotation and cannot authorize any dispatch.
-    """
+def _read_recovery_proposal(
+    proposal_path: str | Path,
+) -> tuple[dict[str, Any], _formal.FormalPlanInspection]:
+    """Private inherited-context Seam shared by inspection and recovery execution."""
     path = _safe_path(proposal_path)
     fact = _file_fact(path)
     if cast(int, fact["mode"]) & 0o222:
@@ -428,6 +426,17 @@ def inspect_concurrent_robustness_recovery_proposal(proposal_path: str | Path) -
     expected = {**body, "proposal_identity_sha256": _v2._json_sha256(body)}
     if payload != _formal._canonical_json_bytes(expected):
         raise ConcurrentRobustnessRecoveryError("Recovery proposal differs from its persisted origins")
+    return expected, inspected
+
+
+def inspect_concurrent_robustness_recovery_proposal(proposal_path: str | Path) -> dict[str, object]:
+    """Re-read immutable origins and proposal facts without locks, writes or calls.
+
+    The returned current gates are fresh; the proposal's preparation-time gates
+    remain a historical annotation and cannot authorize any dispatch.
+    """
+    expected, inspected = _read_recovery_proposal(proposal_path)
+    body = expected
     return {
         "schema_version": "concurrent-robustness-recovery-proposal-inspection-v1",
         "status": "ready_for_human", "proposal_identity_sha256": expected["proposal_identity_sha256"],

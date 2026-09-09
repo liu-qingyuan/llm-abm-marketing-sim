@@ -248,6 +248,28 @@ def _run(args: argparse.Namespace) -> tuple[dict[str, object], int]:
     return cast(dict[str, object], dumped), 1
 
 
+def _recovery_epoch(args: argparse.Namespace) -> dict[str, object]:
+    from llm_abm_sim import concurrent_robustness_recovery as proposals
+    from llm_abm_sim import concurrent_robustness_recovery_epoch as epoch
+
+    if args.command == "inspect-recovery-epoch":
+        return epoch.inspect_recovery_initial_epoch_plan(args.plan)
+    path = proposals._safe_path(args.request)
+    proposals._file_fact(path)
+    document, _ = _formal._load_canonical_object(path, "initial recovery epoch request")
+    request = epoch.RecoveryInitialEpochRequest.model_validate(document)
+    if args.command == "prepare-recovery-epoch":
+        return epoch.prepare_recovery_initial_epoch(request)
+    plan = epoch.authorize_recovery_initial_epoch(
+        request=request, authorization_path=args.authorization,
+        authorization_sha256=args.authorization_sha256, plan_output=args.plan_output,
+    )
+    return {key: plan[key] for key in (
+        "schema_version", "plan_path", "plan_identity_sha256", "initial_epoch_only",
+        "execution_authority", "recovery_slots_consumed",
+    )}
+
+
 def _error_category(stage: str, exc: BaseException) -> str:
     if isinstance(exc, KeyboardInterrupt):
         return "interrupted"
@@ -259,6 +281,8 @@ def _error_category(stage: str, exc: BaseException) -> str:
         return "inspection_invalid"
     if stage in {"prepare-recovery", "inspect-recovery"}:
         return "recovery_invalid"
+    if stage in {"prepare-recovery-epoch", "authorize-recovery-epoch", "inspect-recovery-epoch"}:
+        return "recovery_epoch_invalid"
     return "invalid_input"
 
 
@@ -299,6 +323,18 @@ def _parser() -> argparse.ArgumentParser:
     inspect_recovery = subparsers.add_parser("inspect-recovery")
     inspect_recovery.add_argument("--proposal", type=Path, required=True)
 
+    epoch = subparsers.add_parser("prepare-recovery-epoch")
+    epoch.add_argument("--request", type=Path, required=True)
+
+    authorize_epoch = subparsers.add_parser("authorize-recovery-epoch")
+    authorize_epoch.add_argument("--request", type=Path, required=True)
+    authorize_epoch.add_argument("--authorization", type=Path, required=True)
+    authorize_epoch.add_argument("--authorization-sha256", required=True)
+    authorize_epoch.add_argument("--plan-output", type=Path, required=True)
+
+    inspect_epoch = subparsers.add_parser("inspect-recovery-epoch")
+    inspect_epoch.add_argument("--plan", type=Path, required=True)
+
     run = subparsers.add_parser("run")
     run.add_argument("--plan", type=Path, required=True)
     return parser
@@ -337,6 +373,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             from llm_abm_sim.concurrent_robustness_recovery import inspect_concurrent_robustness_recovery_proposal
 
             result = inspect_concurrent_robustness_recovery_proposal(args.proposal)
+            exit_code = 0
+        elif stage in {"prepare-recovery-epoch", "authorize-recovery-epoch", "inspect-recovery-epoch"}:
+            result = _recovery_epoch(args)
             exit_code = 0
         else:
             result, exit_code = _run(args)
