@@ -287,7 +287,7 @@ def _epoch_body(origins: _execution._Origins, state: CampaignProgress, head: str
     health = None if model is None else state.effective_self_check(model)
     if (plan is None or state.task_plan != origins.handoff.model_dump(mode="json") or state.task_revoked
         or state.has_inflight or state.self_check_inflight is not None
-        or state.status in {"stopped", "reconciliation_required", "complete"}
+        or state.status in {"stopped", "reconciliation_required", "complete", "model_complete"}
         or model is None or health is None or health["attempt"]["outcome"] != "succeeded"):
         raise RecoveryCampaignError("Task epoch requires its admitted authority and successful model self-check")
     path = Path(origins.campaign["control_root"]) / "plans" / f"{head}.json"
@@ -500,5 +500,41 @@ def accept_recovery_task_quota_retry(plan_path: str | Path, *, approval_path: Pa
         _context(plan_path)
         path = context.journal.root / 'events' / f'{row["sequence"]:08d}.json'
         return {'schema_version': 'concurrent-recovery-quota-retry-acceptance-v1',
+                'receipt': {'path': str(path), 'sha256': _formal._sha256_file(path)},
+                'accepted_head_sha256': row['record_sha256'], 'provider_calls': 0, 'credential_reads': 0}
+
+
+def accept_recovery_task_model_lane(plan_path: str | Path, *, approval_path: Path,
+                                    approval_sha256: str) -> dict[str, Any]:
+    """Admit Kimi only on the same drained quota-stopped task and cumulative ledger.
+
+    Requires a hash-bound explicit confirmation referencing the exact stopped
+    HEAD. Gemini's stop, receipts and unfinished batch are retained; this grants
+    no Gemini retry. Kimi receives one original self-check and at most ten
+    in-flight requests under Study's exclusive source lock. Other models never
+    dispatch. A new hard stop is terminal; Kimi completion is not Study closure.
+    Repeating this same approval returns its original receipt without calls.
+    """
+    from . import _concurrent_recovery_model_lane as lane
+    from ._concurrent_recovery_campaign import recovery_scope
+    context = _context(plan_path)
+    reference = _formal.FormalArtifactReference(path=approval_path, sha256=approval_sha256).model_dump(mode='json')
+    with recovery_scope(context.origins.campaign):
+        context = _context(plan_path)
+        approval = lane._checked(reference)
+        existing = next((row for row in context.journal.records if row['kind'] == lane.EVENT), None)
+        if existing is not None:
+            if existing['payload']['approval'] != reference:
+                raise RecoveryCampaignError('Task already accepted a different model lane')
+            row = existing
+        else:
+            if _read_revocation(context.plan) is not None:
+                raise RecoveryCampaignError('Revoked task cannot admit a model lane')
+            payload = {'approval': reference, **{key: approval[key] for key in lane.FIELDS}}
+            lane.validate_receipt(context.origins, context.state, payload, _formal._utc_now(), context.journal.head)
+            row = context.state.append(context.journal, lane.EVENT, payload)
+        _context(plan_path)
+        path = context.journal.root / 'events' / f'{row["sequence"]:08d}.json'
+        return {'schema_version': 'concurrent-recovery-model-lane-acceptance-v1',
                 'receipt': {'path': str(path), 'sha256': _formal._sha256_file(path)},
                 'accepted_head_sha256': row['record_sha256'], 'provider_calls': 0, 'credential_reads': 0}

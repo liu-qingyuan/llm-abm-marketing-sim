@@ -115,8 +115,10 @@ def _task_model_resources(manifest: ConcurrentRobustnessManifestV2, timeout: flo
     cells = tuple(cell for cell in manifest.prompt_model_cells if cell.requested_model == model)
     if not cells:
         raise ConcurrentRobustnessOperatorError("Task requested an unknown model")
-    if type(maximum_inflight) is not int or maximum_inflight not in {1, 4} or (maximum_inflight == 4 and model != "gemini-3.1-pro"):
-        raise ConcurrentRobustnessOperatorError("Parallel resources require the approved Gemini-only scope")
+    if (type(maximum_inflight) is not int or not 1 <= maximum_inflight <= 10
+        or (model != "kimi-coding/k3-256k" and maximum_inflight != 1
+            and not (model == "gemini-3.1-pro" and maximum_inflight == 4))):
+        raise ConcurrentRobustnessOperatorError("Parallel resources require the approved model capacity")
     with ExitStack() as resources:
         clients = []
         for _ in range(maximum_inflight):
@@ -290,7 +292,8 @@ def run_concurrent_robustness_recovery_task(plan_path: str | Path) -> dict[str, 
             result = ConcurrentRobustnessStudy().run_task(plan_path, model_resources=lambda model:
                 _task_model_resources(context.origins.source.manifest,
                     context.origins.source.request.run_parameters.request_timeout_seconds, model,
-                    maximum_inflight=4 if context.state.parallel_approval is not None else 1))
+                    maximum_inflight=context.state.effective_parallel_approval["maximum_inflight"]
+                    if context.state.effective_parallel_approval is not None else 1))
     except Exception:
         raise ConcurrentRobustnessOperatorError("Recovery task setup or execution failed closed") from None
     if result["status"] == "execution_complete":

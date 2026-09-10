@@ -20,7 +20,7 @@ EVENT = 'quota_retry_accepted'
 
 def terms(state: CampaignProgress) -> list[dict[str, Any]]:
     """Identify every unresolved hard failure; only bounded quota failures qualify."""
-    if (state.status != 'stopped' or state.quota_retry_approval is not None
+    if (state.model_lane_approval is not None or state.status != 'stopped' or state.quota_retry_approval is not None
         or state.task_plan is None or state.task_revoked or state.has_inflight
         or state.parallel_unknown or state.self_check_inflight is not None
         or state.pending_judgment is not None or state.pending_realized is not None

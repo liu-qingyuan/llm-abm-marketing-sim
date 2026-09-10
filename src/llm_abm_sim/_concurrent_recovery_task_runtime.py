@@ -19,7 +19,7 @@ if TYPE_CHECKING:
     from .concurrent_robustness_study import ConcurrentRobustnessStudy
 
 ModelResources = Callable[[str], AbstractContextManager[Callable[[], Mapping[str, LLMDecisionAdapter]]]]
-_TERMINAL = {"stopped", "reconciliation_required", "revoked", "authorization_not_current", "execution_complete"}
+_TERMINAL = {"stopped", "reconciliation_required", "revoked", "authorization_not_current", "execution_complete", "model_complete"}
 
 
 def _append(context: _execution._ExecutionContext, kind: str, payload: dict[str, Any]) -> None:
@@ -39,6 +39,10 @@ def _check_model(context: _execution._ExecutionContext, adapters: Mapping[str, L
     model = context.state.current_model
     assert model is not None
     cells = tuple(cell for cell in context.origins.source.manifest.prompt_model_cells if cell.requested_model == model)
+    from ._concurrent_recovery_parallel_runtime import ParallelAdapterPool, preflight_pools
+    if any(isinstance(a, ParallelAdapterPool) for a in adapters.values()):
+        preflight_pools(context.origins.source.manifest, cells, adapters)
+        adapters = {key: value.lanes[0] if isinstance(value, ParallelAdapterPool) else value for key, value in adapters.items()}
     _v2._preflight_cell_adapters(context.origins.source.manifest, cells, adapters)
     adapter = adapters[cells[0].cell_id]
     before = _v2._v2_adapter_snapshot(adapter)
@@ -85,7 +89,7 @@ def _run_task_study(study: ConcurrentRobustnessStudy, plan_path: str | Path,
         while _task._task_status(context)["status"] not in _TERMINAL:
             model = context.state.current_model
             assert model is not None
-            if context.state.parallel_approval is not None and model != context.state.parallel_approval["requested_model"]:
+            if context.state.effective_parallel_approval is not None and model != context.state.effective_parallel_approval["requested_model"]:
                 break
             with model_resources(model) as fresh_adapters:
                 if model not in context.state.self_checks:

@@ -203,6 +203,9 @@ def _legal_history(origins: _Origins, records: tuple[dict[str, Any], ...], targe
         if previous_time is not None and when < previous_time:
             raise RecoveryCampaignError("Recovery event clock moved backwards")
         payload = row["payload"]
+        if row["kind"] == "model_lane_accepted":
+            from ._concurrent_recovery_model_lane import validate_receipt as validate_model_lane
+            validate_model_lane(origins, state, payload, when, head)
         if row["kind"] == "quota_retry_accepted":
             from ._concurrent_recovery_quota_retry import validate_receipt as validate_quota
             validate_quota(origins, state, payload, when, head)
@@ -289,7 +292,7 @@ def read_recovery_execution_plan(plan_path: str | Path) -> dict[str, Any]:
 
 def _action(context: _ExecutionContext) -> str:
     plan, state, journal = context.plan, context.state, context.journal
-    if state.has_inflight or state.status in {"complete", "stopped", "reconciliation_required"}:
+    if state.has_inflight or state.status in {"complete", "stopped", "reconciliation_required", "model_complete"}:
         return "return"
     used = [row for row in state.epochs if row["epoch_identity_sha256"] == plan["plan_identity_sha256"]]
     if used:
@@ -360,7 +363,7 @@ def _run_recovery_study(*, manifest: RecoveryExecutionManifest, adapters_by_cell
             raise RecoveryCampaignError("Recovery task has been revoked")
         cells = tuple(cell for cell in context.origins.source.manifest.prompt_model_cells
                       if cell.requested_model == context.state.current_model)
-        if context.state.parallel_approval is not None:
+        if context.state.effective_parallel_approval is not None:
             from ._concurrent_recovery_parallel_runtime import preflight_pools
             preflight_pools(context.origins.source.manifest, cells, adapters_by_cell)
         else:
@@ -381,7 +384,18 @@ def _run_recovery_study(*, manifest: RecoveryExecutionManifest, adapters_by_cell
     prepared = _v2._prepare_concurrent_runtime_inputs(config)
     inherited = inherited_terminals(context.origins.proposal, source_manifest)
 
+    guard = None
+    if state.model_lane_approval is not None:
+        from ._concurrent_recovery_model_lane import source_guard
+        guard = source_guard(context.origins.proposal["source_artifacts"])
+
     def check_window() -> None:
+        if guard is not None:
+            try:
+                guard()
+            except RecoveryCampaignError:
+                state.append(journal, "model_lane_source_drift", {"failure_category": "source_drift"})
+                raise
         _require_scope(context.origins.campaign)
         if not _window_current(context.plan, _formal._utc_now()):
             raise RecoverySafePause("Recovery window ended before the next dispatch")

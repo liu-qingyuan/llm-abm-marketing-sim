@@ -165,7 +165,7 @@ def _verified_recovery_realization(
                 stopped = True
             finally:
                 native_journal.close()
-            if stopped:
+            if stopped and state.model_lane_approval is None:
                 break
 
     _v2._assert_source_unchanged(closure)

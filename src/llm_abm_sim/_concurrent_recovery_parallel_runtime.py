@@ -18,8 +18,8 @@ class ParallelAdapterPool(LLMDecisionAdapter):
     """Resource carrier at the existing recovery map Seam, never a serial adapter."""
 
     def __init__(self, lanes: tuple[LLMDecisionAdapter, ...]) -> None:
-        if len(lanes) != 4 or len({id(lane) for lane in lanes}) != 4:
-            raise RecoveryCampaignError("Parallel recovery requires four independent adapters")
+        if not 1 <= len(lanes) <= 10 or len({id(lane) for lane in lanes}) != len(lanes):
+            raise RecoveryCampaignError("Parallel recovery requires one to ten independent adapters")
         self.lanes = lanes
 
     def decide(
@@ -39,7 +39,10 @@ def preflight_pools(
         raise RecoveryCampaignError("Parallel resources differ from the frozen model cells")
     pools = {key: value for key, value in adapters.items() if isinstance(value, ParallelAdapterPool)}
     clients: set[int] = set()
-    for lane in range(4):
+    sizes = {len(pool.lanes) for pool in pools.values()}
+    if len(sizes) != 1:
+        raise RecoveryCampaignError("Parallel cell resources have different capacities")
+    for lane in range(next(iter(sizes))):
         mapping = {key: pool.lanes[lane] for key, pool in pools.items()}
         v2._preflight_cell_adapters(manifest, cells, mapping)
         lane_clients = {id(getattr(adapter, "client", None)) for adapter in mapping.values()}
@@ -99,14 +102,17 @@ def run_frozen_batch(
     check_dispatch_window: Callable[[], None],
     backoff_seconds: float,
 ) -> None:
-    """Reserve one frozen batch; dispatch/drain four single-request workers.
+    """Reserve one frozen batch; dispatch/drain the admitted single-request workers.
 
     Only the calling Study thread writes durable records or decides retries.
     Persisted successes are reused. A hard failure/unknown stops admission while
     previously dispatched responses drain; unresolved provenance stays unresolved.
     """
-    if state.parallel_approval is None or state.status != "running" or state.has_inflight:
+    if state.effective_parallel_approval is None or state.status != "running" or state.has_inflight:
         raise RecoveryCampaignError("Parallel batch lacks a resumable admitted extension")
+    capacity = state.effective_parallel_approval["maximum_inflight"]
+    if len(pool.lanes) != capacity:
+        raise RecoveryCampaignError("Parallel pool differs from admitted capacity")
     if not work:
         raise RecoveryCampaignError("Parallel batch cannot be empty")
     batch_key = work[0].coordinates["cell_index"], work[0].coordinates["time_step"]
@@ -135,9 +141,9 @@ def run_frozen_batch(
         if prior and prior[-1].lane_cooldown:
             cooldown_until = max(cooldown_until, now + delay)
     pending: dict[Future[Any], tuple[FrozenWork, int, int, Any, int]] = {}
-    free = list(range(4))
+    free = list(range(capacity))
     pause: Exception | None = None
-    with ThreadPoolExecutor(max_workers=4, thread_name_prefix="recovery-physical") as workers:
+    with ThreadPoolExecutor(max_workers=capacity, thread_name_prefix="recovery-physical") as workers:
         while remaining or pending:
             # Drain every already observed completion before any replacement call.
             done = [future for future in pending if future.done()]

@@ -88,7 +88,7 @@ def run_recovery_model(
             continue
         from ._concurrent_recovery_parallel_runtime import ParallelAdapterPool, freeze_work, run_frozen_batch
         resource = adapters_by_cell[cell.cell_id]
-        if state.parallel_approval is not None and not isinstance(resource, ParallelAdapterPool):
+        if state.effective_parallel_approval is not None and not isinstance(resource, ParallelAdapterPool):
             raise RecoveryCampaignError("Approved parallel execution requires independent lane resources")
         adapter = _v2._V2LaneDecisionAdapter(resource.lanes[0] if isinstance(resource, ParallelAdapterPool) else resource, lane)
         request_baseline = _v2._adapter_request_invocations(adapter)
@@ -188,7 +188,7 @@ def run_recovery_model(
                     backoff_seconds=manifest.request_contract.retry_backoff_seconds)
         try:
             _v2._drive_primary_runtime(kernel, resolve_pair=resolve, pair_settled=settled, batch_committed=committed,
-                                      batch_ready=batch_ready if state.parallel_approval is not None else None)
+                                      batch_ready=batch_ready if state.effective_parallel_approval is not None else None)
             replay = runtime_journal._replay_runtime()
             if kernel.validate_spool(replay) != manifest.ranking_contract.horizon or kernel.runtime_resident_row_count:
                 raise RecoveryCampaignError("Recovery runtime did not close every batch")

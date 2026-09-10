@@ -62,6 +62,9 @@ class CampaignProgress:
         self.parallel_unknown: set[tuple[int, int]] = set()
         self.quota_retry_approval: dict[str, Any] | None = None
         self.quota_retry_pending: tuple[int, int] | None = None
+        self.model_lane_approval: dict[str, Any] | None = None
+        self.suspended_models: dict[str, dict[str, Any]] = {}
+        self.model_stage_complete = False
 
     @property
     def has_inflight(self) -> bool:
@@ -72,7 +75,13 @@ class CampaignProgress:
         return self.accepted_rechecks.get(model, self.self_checks.get(model))
 
     @property
+    def effective_parallel_approval(self) -> dict[str, Any] | None:
+        return self.model_lane_approval if self.model_lane_approval is not None else self.parallel_approval
+
+    @property
     def current_model(self) -> str | None:
+        if self.model_lane_approval is not None:
+            return self.model_lane_approval["requested_model"]
         return self.model_order[self.model_index] if self.model_index < len(self.model_order) else None
 
     @property
@@ -134,7 +143,7 @@ class CampaignProgress:
                 or any(n % (self.per_cell // 30) for n in self.prefix)):
                 raise RecoveryCampaignError("Parallel acceptance requires a settled paused Gemini batch boundary")
             return lambda: setattr(self, "parallel_approval", deepcopy(payload))
-        if self.parallel_approval is None or not self.epochs:
+        if self.effective_parallel_approval is None or not self.epochs:
             raise RecoveryCampaignError("Parallel event lacks its approved task extension")
         if kind == "parallel_attempt_settled":
             # A stop/revocation prevents dispatch, not recording earlier responses.
@@ -178,7 +187,7 @@ class CampaignProgress:
             return mark_unknown
         if self.status != "running" or self.task_revoked:
             raise RecoveryCampaignError("Parallel dispatch requires a running nonterminal task")
-        if self.current_model != self.parallel_approval["requested_model"]:
+        if self.current_model != self.effective_parallel_approval["requested_model"]:
             raise RecoveryCampaignError("Parallel scope excludes other models")
         if kind == "parallel_batch_reserved":
             self._exact(payload, {"cell_index", "time_step", "pairs"})
@@ -219,7 +228,7 @@ class CampaignProgress:
                 raise RecoveryCampaignError("Explicit quota retry permits one original failed pair before recovery")
             if (self.parallel_active_batch != batch_key or self.inflight is not None
                 or key in self.parallel_inflight or key in self.success_decisions or key in self.old_successes
-                or len(self.parallel_inflight) >= self.parallel_approval["maximum_inflight"]
+                or len(self.parallel_inflight) >= self.effective_parallel_approval["maximum_inflight"]
                 or type(ordinal) is not int or ordinal != len(self.attempts(key)) + 1 or ordinal > 3):
                 raise RecoveryCampaignError("Parallel attempt is unreserved, duplicated, successful or exhausted")
             model = self.cells[key[0]].requested_model
@@ -236,15 +245,23 @@ class CampaignProgress:
 
     def transition(self, kind: str, payload: dict[str, Any]) -> Callable[[], None]:
         """Validate before durable append; apply its returned effect only afterwards."""
+        if kind == "model_lane_source_drift":
+            self._exact(payload, {"failure_category"})
+            if self.model_lane_approval is None or self.status != "running" or payload["failure_category"] != "source_drift":
+                raise RecoveryCampaignError("Source drift stop lacks an active model lane")
+            return lambda: setattr(self, "status", "stopped")
+        if kind == "model_lane_accepted":
+            from ._concurrent_recovery_model_lane import transition
+            return transition(self, payload)
         if kind == "quota_retry_accepted":
             from ._concurrent_recovery_quota_retry import transition
             return transition(self, payload)
         if kind.startswith("parallel_"):
             return self._parallel_transition(kind, payload)
-        if self.parallel_approval is not None:
+        if self.effective_parallel_approval is not None:
             if kind == "attempt_intent":
                 raise RecoveryCampaignError("Parallel task cannot bypass keyed intent accounting")
-            if kind in {"self_check_intent", "epoch_admitted"} and payload.get("requested_model") != self.parallel_approval["requested_model"]:
+            if kind in {"self_check_intent", "epoch_admitted"} and payload.get("requested_model") != self.effective_parallel_approval["requested_model"]:
                 raise RecoveryCampaignError("Parallel stage cannot advance to another model")
         if kind == "task_admitted":
             self._exact(payload, {"task_plan"})
@@ -281,7 +298,7 @@ class CampaignProgress:
                 self.accepted_rechecks[model] = dict(payload)
                 self.status = "ready"
             return accept_check
-        if self.status in {"stopped", "reconciliation_required", "complete"} or self.task_revoked:
+        if self.status in {"stopped", "reconciliation_required", "complete", "model_complete"} or self.task_revoked:
             raise RecoveryCampaignError("Recovery terminal campaign cannot admit more work")
         if kind == "self_check_intent":
             self._exact(payload, {"requested_model", "contract_sha256"})
@@ -350,7 +367,7 @@ class CampaignProgress:
                 raise RecoveryCampaignError("One recovery invocation cannot enter another model")
             if len(self.attempts(key)) >= 3 and key not in self.success_decisions:
                 raise RecoveryCampaignError("Recovery logical pair exhausted its cumulative slots")
-            if self.parallel_approval is not None:
+            if self.effective_parallel_approval is not None:
                 batch_key = key[0], key[1] // (self.per_cell // 30)
                 if self.parallel_active_batch != batch_key or key not in self.success_decisions:
                     raise RecoveryCampaignError("Parallel projection requires its settled frozen response")
@@ -479,6 +496,10 @@ class CampaignProgress:
                 if any((len(self.epochs), i, step) not in self.batch_commits for i in indexes for step in range(30)):
                     raise RecoveryCampaignError("Recovery checkpoint lacks full batch barriers")
                 def finish_model() -> None:
+                    if self.model_lane_approval is not None:
+                        self.model_stage_complete = True
+                        self.status = "model_complete"
+                        return
                     self.model_index += 1
                     self.status = "complete" if self.current_model is None else "checkpoint"
                 return finish_model
