@@ -151,6 +151,7 @@ def run_recovery_model(
                         raise _v2._V2CellStopped("Recovery stopped on a new hard Provider failure")
                 if state.pending_judgment is None:
                     from ._concurrent_recovery_kimi_migration import judgment_reference as migration_reference
+                    from ._concurrent_recovery_manual_retry import judgment_fields
                     from ._concurrent_recovery_quota_retry import judgment_reference
                     migration = migration_reference(state, key)
                     judgment = build_recovery_judgment(cell_index=index, cell=cell, plan=plan,
@@ -159,7 +160,7 @@ def run_recovery_model(
                         epoch_identity_sha256=state.attempt_epochs[key, state.new_attempts[key][-1].attempt_number],
                         judgment_source_identity=source_id, quota_retry_approval=judgment_reference(state, key),
                         output_amendment_approval=None if migration else output_reference(state, cell.requested_model),
-                        official_migration_approval=migration)
+                        official_migration_approval=migration, **judgment_fields(state, key))
                     state.append(journal, "judgment_persisted", {"judgment": judgment.model_dump(mode="json")})
                 judgment = RecoveryJudgmentV1.model_validate(state.pending_judgment)
                 terminal = judgment.realized_projection(realization_source_identity=manifest.realization_source.source_identity)

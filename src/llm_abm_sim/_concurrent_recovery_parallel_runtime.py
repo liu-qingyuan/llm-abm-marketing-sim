@@ -256,7 +256,7 @@ def run_frozen_batch(
                     remaining.clear()
                     break
                 item = remaining.pop(key)
-                ordinal = len(state.attempts(key)) + 1
+                ordinal = state.next_attempt_number(key)
                 lane = free.pop(0)
                 adapter = pool.lanes[lane]
                 before = v2._v2_adapter_snapshot(adapter)

@@ -234,6 +234,10 @@ def validate_dispatch(state: CampaignProgress, key: tuple[int, int]) -> None:
     assert grant is not None
     _require(cash_budget(state)["can_reserve_one"])
     prior = state.attempts(key)
+    if key in state.kimi_archived_unknown:
+        _require(state.kimi_manual_retry_approval is not None and not prior
+                 and state.next_attempt_number(key) == 2)
+        return
     if prior:
         _require(len(prior) == 1 and any(
             row["cell_index"] == key[0] and row["pair_schedule_position"] == key[1]
@@ -286,6 +290,8 @@ def cash_budget(state: CampaignProgress) -> dict[str, Any]:
             else:
                 spent += _RESERVE_MICRO_CNY
                 unpriced += 1
+    spent += len(state.kimi_archived_unknown) * _RESERVE_MICRO_CNY
+    unpriced += len(state.kimi_archived_unknown)
     reserved = len(state.parallel_inflight) * _RESERVE_MICRO_CNY if state.kimi_migration_active else 0
     cap = int(Decimal(str(grant["maximum_spend_cny"])) * 1000000)
     return {"policy": "kimi-k3-full-context-reservation-v1", "currency": "CNY",

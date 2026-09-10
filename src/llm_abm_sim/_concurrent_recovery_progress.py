@@ -71,6 +71,8 @@ class CampaignProgress:
         self.model_stage_complete = False
         self.kimi_migration_approval: dict[str, Any] | None = None
         self.kimi_migration_active = False
+        self.kimi_manual_retry_approval: dict[str, Any] | None = None
+        self.kimi_archived_unknown: dict[tuple[int, int], dict[str, Any]] = {}
 
     @property
     def has_inflight(self) -> bool:
@@ -114,6 +116,9 @@ class CampaignProgress:
     @property
     def new_valid_judgments(self) -> int:
         return sum(self.prefix) - len(self.old_successes)
+
+    def next_attempt_number(self, key: tuple[int, int]) -> int:
+        return len(self.attempts(key)) + int(key in self.kimi_archived_unknown) + 1
 
     def attempts(self, key: tuple[int, int]) -> tuple[_v2._V2AttemptEvidence, ...]:
         old = self.historical_failure if key == self.failed_key else ()
@@ -252,7 +257,7 @@ class CampaignProgress:
             if (self.parallel_active_batch != batch_key or self.inflight is not None
                 or key in self.parallel_inflight or key in self.success_decisions or key in self.old_successes
                 or len(self.parallel_inflight) >= self.effective_parallel_approval["maximum_inflight"]
-                or type(ordinal) is not int or ordinal != len(self.attempts(key)) + 1 or ordinal > 3):
+                or type(ordinal) is not int or ordinal != self.next_attempt_number(key) or ordinal > 3):
                 raise RecoveryCampaignError("Parallel attempt is unreserved, duplicated, successful or exhausted")
             if self.kimi_migration_active:
                 from ._concurrent_recovery_kimi_migration import validate_dispatch
@@ -271,6 +276,9 @@ class CampaignProgress:
 
     def transition(self, kind: str, payload: dict[str, Any]) -> Callable[[], None]:
         """Validate before durable append; apply its returned effect only afterwards."""
+        if kind == "kimi_manual_retry_accepted":
+            from ._concurrent_recovery_manual_retry import transition as manual_retry
+            return manual_retry(self, payload)
         if kind == "kimi_official_cash_budget_stopped":
             from ._concurrent_recovery_kimi_migration import cash_stop
             return cash_stop(self, payload)
@@ -409,7 +417,7 @@ class CampaignProgress:
             key = payload["cell_index"], payload["pair_schedule_position"]
             if self.cells[key[0]].requested_model != self.epochs[-1]["requested_model"]:
                 raise RecoveryCampaignError("One recovery invocation cannot enter another model")
-            if len(self.attempts(key)) >= 3 and key not in self.success_decisions:
+            if self.next_attempt_number(key) > 3 and key not in self.success_decisions:
                 raise RecoveryCampaignError("Recovery logical pair exhausted its cumulative slots")
             if self.effective_parallel_approval is not None:
                 batch_key = key[0], key[1] // (self.per_cell // 30)
@@ -427,7 +435,7 @@ class CampaignProgress:
             ordinal = payload["attempt_number"]
             if key in self.success_decisions:
                 raise RecoveryCampaignError("Recovery cannot redispatch a persisted successful response")
-            if type(ordinal) is not int or ordinal != len(self.attempts(key)) + 1 or ordinal > 3:
+            if type(ordinal) is not int or ordinal != self.next_attempt_number(key) or ordinal > 3:
                 raise RecoveryCampaignError("Recovery attempt ordinal is duplicated or exhausted")
             model = self.cells[key[0]].requested_model
             cap = next(row["maximum_new_physical_attempts"] for row in self.proposal["model_budgets"] if row["requested_model"] == model)
@@ -475,6 +483,12 @@ class CampaignProgress:
             expected_migration = migration_reference(self, key)
             actual_migration = (judgment.official_migration_approval.model_dump(mode="json")
                                 if judgment.official_migration_approval is not None else None)
+            from ._concurrent_recovery_manual_retry import judgment_fields
+            fields = judgment_fields(self, key)
+            actual_manual = (judgment.manual_retry_approval.model_dump(mode="json")
+                             if judgment.manual_retry_approval is not None else None)
+            if actual_manual != fields["manual_retry_approval"] or judgment.unknown_attempts != fields["unknown_attempts"]:
+                raise RecoveryCampaignError("Manual retry Judgment differs from its original archived intent")
             if actual_migration != expected_migration:
                 raise RecoveryCampaignError("Official Judgment differs from its admitted migration")
             if actual_output != (None if expected_migration else output_reference(self, judgment.cell.requested_model)):
