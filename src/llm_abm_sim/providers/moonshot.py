@@ -84,7 +84,10 @@ class MoonshotOfficialClient:
                 403: "entitlement", 429: "rate_limited",
             }.get(response.status_code, "provider_stop")
             # Status alone does not prove the provider's detailed reason; no body is retained.
-            raise ProviderAttemptFailure(category=category, retryable=False, status_code=response.status_code)
+            raise ProviderAttemptFailure(
+                category=category, retryable=False, status_code=response.status_code,
+                lane_cooldown=response.status_code in {429, 503},
+            )
         try:
             payload = response.json()
             if not isinstance(payload, dict):

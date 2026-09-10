@@ -213,7 +213,7 @@ def test_official_batch_parallel_drain_and_duplicate_zero_resend(tmp_path, monke
         assert not state.has_inflight
 
 
-@pytest.mark.parametrize('failure', ['quota', 'unknown'])
+@pytest.mark.parametrize('failure', ['quota', 'unknown', 'evidence_rejected'])
 def test_official_new_hard_stop_drains_and_never_retries(tmp_path, monkeypatch, failure):
     import threading
 
@@ -234,13 +234,24 @@ def test_official_new_hard_stop_drains_and_never_retries(tmp_path, monkeypatch, 
             if first:
                 if failure == 'quota':
                     raise ProviderAttemptFailure(category='quota_exhausted', retryable=False, status_code=429)
-                raise ProviderResponseProvenanceUnknown('fixture unknown')
+                if failure == 'unknown':
+                    raise ProviderResponseProvenanceUnknown('fixture unknown')
             return super().create_response(*args, **kwargs)
     clients: list[Any] = [Transport() for _ in range(5)]
     for c in clients:
         c.external_provider_client = True
         c.output_token_ceiling_enforcement = 'wire_only'
     monkeypatch.setattr(runtime, '_OFFICIAL_DISPATCH_INTERVAL_SECONDS', 0)
+    if failure == 'evidence_rejected':
+        original = runtime.v2._v2_attempt_evidence
+        rejected = False
+        def broken_evidence(**kwargs):
+            nonlocal rejected
+            if not rejected:
+                rejected = True
+                raise ValueError('fixture accounting validation failure')
+            return original(**kwargs)
+        monkeypatch.setattr(runtime.v2, '_v2_attempt_evidence', broken_evidence)
     identity = _journal(tmp_path)
     with recovery_scope(identity):
         journal = CampaignJournal.open(identity)
@@ -257,7 +268,7 @@ def test_official_new_hard_stop_drains_and_never_retries(tmp_path, monkeypatch, 
                                      check_dispatch_window=lambda: None, backoff_seconds=0)
         assert len(entered) == 4
         assert state.status == ('stopped' if failure == 'quota' else 'reconciliation_required')
-        assert state.has_inflight == (failure == 'unknown')
+        assert state.has_inflight == (failure != 'quota')
         assert len([k for k in state.success_decisions if k[0] == 12]) == 3
         with pytest.raises((RecoveryCampaignError, runtime.v2._V2CellStopped)):
             runtime.run_frozen_batch(state=state, journal=journal, pool=pool, work=work,

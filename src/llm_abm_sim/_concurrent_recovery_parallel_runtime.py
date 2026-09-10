@@ -192,17 +192,26 @@ def run_frozen_batch(
                     if error.retryable
                     else "nonretryable_failure"
                 )
-                attempt = v2._v2_attempt_evidence(
-                    adapter=adapter,
-                    before=before,
-                    attempt_number=ordinal,
-                    outcome=outcome,
-                    error=error,
-                    wait_seconds=delay,
-                    wait_source=source,
-                )
-                if v2._adapter_external_request_invocations(adapter) - external_before != 1:
-                    raise RecoveryCampaignError("Parallel worker transport count differs from one physical intent")
+                try:
+                    attempt = v2._v2_attempt_evidence(
+                        adapter=adapter,
+                        before=before,
+                        attempt_number=ordinal,
+                        outcome=outcome,
+                        error=error,
+                        wait_seconds=delay,
+                        wait_source=source,
+                    )
+                    if v2._adapter_external_request_invocations(adapter) - external_before != 1:
+                        raise RecoveryCampaignError("Parallel worker transport count differs from one physical intent")
+                except Exception:
+                    # A malformed accounting candidate must not discard the other
+                    # already-dispatched responses. Its own intent stays unknown.
+                    state.append(journal, "parallel_dispatch_unknown", {
+                        "cell_index": item.key[0], "pair_schedule_position": item.key[1], "attempt_number": ordinal,
+                    })
+                    free.append(lane)
+                    continue
                 state.append(
                     journal,
                     "parallel_attempt_settled",

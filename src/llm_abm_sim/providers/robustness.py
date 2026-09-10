@@ -637,6 +637,7 @@ class OfficialKimiDecisionAdapter(_FrozenRobustnessDecisionAdapter):
             # Migration grants no automatic retry, including malformed decisions.
             failure = ProviderAttemptFailure(
                 category=exc.failure_category, retryable=False, status_code=exc.status_code,
+                lane_cooldown=exc.lane_cooldown,
             )
             raise ProviderDecisionError(failure) from failure
 
