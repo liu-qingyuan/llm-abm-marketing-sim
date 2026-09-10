@@ -203,6 +203,9 @@ def _legal_history(origins: _Origins, records: tuple[dict[str, Any], ...], targe
         if previous_time is not None and when < previous_time:
             raise RecoveryCampaignError("Recovery event clock moved backwards")
         payload = row["payload"]
+        if row["kind"] == "kimi_official_migration_accepted":
+            from ._concurrent_recovery_kimi_migration import validate_receipt as validate_kimi_migration
+            validate_kimi_migration(origins, state, payload, when, head)
         if row["kind"] == "gemini_restoration_accepted":
             from ._concurrent_recovery_gemini_restoration import validate_receipt as validate_restoration
             validate_restoration(origins, state, payload, when, head)

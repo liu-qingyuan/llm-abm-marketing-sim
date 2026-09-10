@@ -1,15 +1,19 @@
 """Kimi migration invariants over the original, fully replayed Study state.
 
-This Module never opens credentials, dispatches requests, mutates state, or admits
-an approval. Its exact terms are the input to the pending hash-bound admission.
+This Module owns migration terms and hash-bound authorization admission.
+Admission never opens credentials, dispatches work, or activates a model.
 """
 from __future__ import annotations
 
-from typing import Any
+from collections.abc import Callable
+from copy import deepcopy
+from typing import TYPE_CHECKING, Any, cast
 
 from . import concurrent_robustness_v2 as v2
 from ._concurrent_recovery_campaign import RecoveryCampaignError
-from ._concurrent_recovery_progress import CampaignProgress
+
+if TYPE_CHECKING:
+    from ._concurrent_recovery_progress import CampaignProgress
 
 MODEL = "kimi-coding/k3-256k"
 OFFICIAL_MODEL = "kimi-k3"
@@ -90,3 +94,118 @@ def terms(state: CampaignProgress) -> dict[str, Any]:
             "frozen_batch": [indexes[0], 0], "remaining_logical_judgments": remaining,
             "remaining_global_physical_budget": global_remaining,
             "remaining_model_physical_budget": model_remaining}
+
+
+EVENT = "kimi_official_migration_accepted"
+FIELDS = {"destination_model", "maximum_inflight", "output_token_ceiling", "maximum_spend_cny", "terms"}
+
+
+def transition(state: CampaignProgress, payload: dict[str, Any]) -> Callable[[], None]:
+    """Record one authorization only; execution activation is a separate gate."""
+    state._exact(payload, {"approval", *FIELDS})
+    state._exact(payload["approval"], {"path", "sha256"})
+    v2._require_sha256(payload["approval"]["sha256"], "Kimi migration approval")
+    _require(
+        state.kimi_migration_approval is None
+        and isinstance(payload["approval"]["path"], str) and payload["approval"]["path"].startswith("/")
+        and payload["destination_model"] == OFFICIAL_MODEL
+        and type(payload["maximum_inflight"]) is int and payload["maximum_inflight"] == 5
+        and type(payload["output_token_ceiling"]) is int and payload["output_token_ceiling"] == 1024
+        and type(payload["maximum_spend_cny"]) in {int, float} and 0 < payload["maximum_spend_cny"] <= 100
+        and v2._json_sha256(payload["terms"]) == v2._json_sha256(terms(state))
+    )
+    def accept() -> None:
+        state.kimi_migration_approval = deepcopy(payload)
+    return accept
+
+
+REFERENCES = ('user_consent', 'health_intent', 'health_result')
+
+
+def receipt_references(reference: dict[str, Any]) -> list[dict[str, Any]]:
+    from ._concurrent_recovery_recheck import _checked
+    document = _checked(reference)
+    return [reference, *(document[k] for k in REFERENCES)]
+
+
+def _evidence(reference: dict[str, Any]) -> dict[str, Any]:
+    """Read immutable external qualification JSON without rewriting its bytes."""
+    import json
+
+    from . import concurrent_robustness_formal_execution as formal
+    from . import concurrent_robustness_recovery as proposal
+
+    ref = formal.FormalArtifactReference.model_validate(reference)
+    fact = proposal._file_fact(ref.path)
+    _require(fact['sha256'] == ref.sha256 and not cast(int, fact['mode']) & 0o222)
+    value = json.loads(ref.path.read_text(), object_pairs_hook=formal._collect_object_pairs('Kimi qualification'))
+    _require(isinstance(value, dict))
+    return value
+
+
+def validate_receipt(origins: Any, state: CampaignProgress, payload: dict[str, Any], when: Any, head: str) -> None:
+    """Verify the original user consent and already-settled official qualification."""
+    import hashlib
+    import json
+
+    from . import concurrent_robustness_formal_execution as formal
+    from . import concurrent_robustness_recovery_task as task
+    from ._concurrent_recovery_recheck import _checked
+    from .decision import EngageDecision
+    from .prompting import build_engagement_prompt
+    from .provider_request_contract import engage_decision_json_schema
+
+    state._exact(payload, {'approval', *FIELDS})
+    approval = _checked(payload['approval'])
+    state._exact(approval, {'schema_version', 'status', 'authorization_reference', 'approved_at_utc',
+                            'task_plan', 'expected_head_sha256', *FIELDS, *REFERENCES})
+    _require(approval['schema_version'] == 'concurrent-recovery-kimi-official-migration-approval-v1'
+             and approval['status'] == 'approved' and origins.task_plan is not None
+             and approval['task_plan'] == origins.handoff.model_dump(mode='json')
+             and approval['expected_head_sha256'] == head
+             and all(approval[k] == payload[k] for k in FIELDS))
+    formal._safe_reference(approval['authorization_reference'], 'Kimi migration authorization')
+    _require(bool(approval['authorization_reference']) and not approval['authorization_reference'].startswith('REPLACE-'))
+    assert origins.task_plan is not None
+    start = formal._parse_utc(origins.task_plan['authorization']['approved_at_utc'], 'task approval time')
+    approved = formal._parse_utc(approval['approved_at_utc'], 'migration approval time')
+    _require(start <= approved <= when and task._current(origins.task_plan, when))
+    consent, intent, result = (_evidence(approval[k]) for k in REFERENCES)
+    _require(consent['schema_version'] == 'kimi-official-migration-user-consent-v1'
+             and consent['status'] == 'user_confirmed_pending_implementation' and consent['user_confirmation'] == '确认'
+             and consent['plan'] == approval['task_plan'] and consent['control_head']['record_sha256'] == head
+             and consent['destination_requested_model'] == consent['destination_required_observed_model'] == OFFICIAL_MODEL
+             and consent['remaining_logical'] == payload['terms']['remaining_logical_judgments']
+             and consent['maximum_inflight'] == payload['maximum_inflight']
+             and consent['output_token_ceiling'] == payload['output_token_ceiling'])
+    for consent_key, term_key in [('existing_successes', 'preserved_successes'), ('existing_failures', 'failed_attempts')]:
+        observed = [{'cell_index': row['cell_index'], 'pair_schedule_position': row['pair_schedule_position'],
+                     'attempt_sha256': v2._json_sha256(row['attempt'])} for row in consent[consent_key]]
+        expected = [{k: row[k] for k in ('cell_index', 'pair_schedule_position', 'attempt_sha256')}
+                    for row in payload['terms'][term_key]]
+        def key(row: dict[str, Any]) -> tuple[int, int]:
+            return row['cell_index'], row['pair_schedule_position']
+        _require(sorted(observed, key=key) == sorted(expected, key=key))
+    data = task._self_check_input()
+    body = {'model': OFFICIAL_MODEL, 'messages': build_engagement_prompt(data), 'max_tokens': 1024,
+            'reasoning_effort': 'low', 'tools': [{'type': 'function', 'function': {
+                'name': 'engage_decision', 'description': 'Return one structured engagement decision.',
+                'parameters': engage_decision_json_schema()['schema']}}], 'tool_choice': 'required'}
+    _require(intent['requested_model'] == OFFICIAL_MODEL and intent['base_url'] == 'https://api.moonshot.cn/v1'
+             and intent['input_sha256'] == data.cache_key()
+             and intent['request_sha256'] == hashlib.sha256(json.dumps(body, sort_keys=True).encode()).hexdigest()
+             and type(intent['maximum_client_attempts']) is int and intent['maximum_client_attempts'] == 1
+             and type(intent['automatic_retries']) is int and intent['automatic_retries'] == 0
+             and type(intent['formal_calls']) is int and intent['formal_calls'] == 0)
+    _require(result['requested_model'] == result['observed_model'] == OFFICIAL_MODEL
+             and result['status'] == 'succeeded' and type(result['http_status']) is int and result['http_status'] == 200
+             and type(result['client_attempts']) is int and result['client_attempts'] == 1
+             and type(result['automatic_retries']) is int and result['automatic_retries'] == 0
+             and type(result['formal_calls']) is int and result['formal_calls'] == 0
+             and result['finish_reason'] == 'tool_calls')
+    usage = result['usage']
+    _require(all(type(usage[k]) is int and usage[k] >= 0 for k in ('prompt_tokens', 'completion_tokens', 'total_tokens'))
+             and usage['total_tokens'] == usage['prompt_tokens'] + usage['completion_tokens']
+             and usage['completion_tokens'] <= 1024)
+    EngageDecision.model_validate(result['decision'])
+    transition(state, payload)

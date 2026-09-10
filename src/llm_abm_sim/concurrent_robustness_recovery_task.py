@@ -394,6 +394,7 @@ def _task_status(context: _execution._ExecutionContext) -> dict[str, Any]:
     bundle = context.journal.root / "bundles" / context.journal.head / "bundle.json"
     return {**progress, "status": status, "authorization_current": current and not revoked,
             "kimi_output_amendment": state.output_amendment,
+            "kimi_official_migration": state.kimi_migration_approval,
             "amended_self_check": state.amended_self_check,
             "self_check_attempts": len(state.self_check_intents) + len(state.accepted_rechecks) + int(state.amended_self_check_intent is not None),
             "self_check_failures": {model: row["attempt"]["failure_category"] for model, row in state.self_checks.items()
@@ -613,5 +614,42 @@ def accept_recovery_task_gemini_restoration(plan_path: str | Path, *, approval_p
         _context(plan_path)
         path = context.journal.root / 'events' / f'{row["sequence"]:08d}.json'
         return {'schema_version': 'concurrent-recovery-gemini-restoration-acceptance-v1',
+                'receipt': {'path': str(path), 'sha256': _formal._sha256_file(path)},
+                'accepted_head_sha256': row['record_sha256'], 'provider_calls': 0, 'credential_reads': 0}
+
+
+def accept_recovery_task_kimi_official_migration(plan_path: str | Path, *, approval_path: Path,
+                                           approval_sha256: str) -> dict[str, Any]:
+    """Record a bound official Kimi migration authorization without dispatch.
+
+    Keeps the current completed model stage and every original budget/history.
+    Repeating the same receipt is idempotent. Activation requires the subsequent
+    execution preflight; admission itself does not restore or run a Provider.
+    """
+    from . import _concurrent_recovery_kimi_migration as restoration
+    from ._concurrent_recovery_campaign import recovery_scope
+    from ._concurrent_recovery_recheck import _checked
+
+    context = _context(plan_path)
+    reference = _formal.FormalArtifactReference(path=approval_path, sha256=approval_sha256).model_dump(mode='json')
+    with recovery_scope(context.origins.campaign):
+        context = _context(plan_path)
+        approval = _checked(reference)
+        existing = next((row for row in context.journal.records if row['kind'] == restoration.EVENT), None)
+        if existing is not None:
+            if existing['payload']['approval'] != reference:
+                raise RecoveryCampaignError('Task already accepted a different Kimi official migration')
+            row = existing
+        else:
+            if _read_revocation(context.plan) is not None:
+                raise RecoveryCampaignError('Revoked task cannot admit Kimi migration')
+            if not restoration.FIELDS <= set(approval):
+                raise RecoveryCampaignError('Kimi official migration approval lacks its bounded scope')
+            payload = {'approval': reference, **{key: approval[key] for key in restoration.FIELDS}}
+            restoration.validate_receipt(context.origins, context.state, payload, _formal._utc_now(), context.journal.head)
+            row = context.state.append(context.journal, restoration.EVENT, payload)
+        _context(plan_path)
+        path = context.journal.root / 'events' / f'{row["sequence"]:08d}.json'
+        return {'schema_version': 'concurrent-recovery-kimi-official-migration-acceptance-v1',
                 'receipt': {'path': str(path), 'sha256': _formal._sha256_file(path)},
                 'accepted_head_sha256': row['record_sha256'], 'provider_calls': 0, 'credential_reads': 0}

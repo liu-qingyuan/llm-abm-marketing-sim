@@ -69,6 +69,7 @@ class CampaignProgress:
         self.amended_self_check: dict[str, Any] | None = None
         self.suspended_models: dict[str, dict[str, Any]] = {}
         self.model_stage_complete = False
+        self.kimi_migration_approval: dict[str, Any] | None = None
 
     @property
     def has_inflight(self) -> bool:
@@ -255,6 +256,9 @@ class CampaignProgress:
 
     def transition(self, kind: str, payload: dict[str, Any]) -> Callable[[], None]:
         """Validate before durable append; apply its returned effect only afterwards."""
+        if kind == "kimi_official_migration_accepted":
+            from ._concurrent_recovery_kimi_migration import transition as migrate
+            return migrate(self, payload)
         if kind == "gemini_restoration_accepted":
             from ._concurrent_recovery_gemini_restoration import transition as restore
             return restore(self, payload)
