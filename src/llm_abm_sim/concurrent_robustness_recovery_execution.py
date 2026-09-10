@@ -203,6 +203,10 @@ def _legal_history(origins: _Origins, records: tuple[dict[str, Any], ...], targe
         if previous_time is not None and when < previous_time:
             raise RecoveryCampaignError("Recovery event clock moved backwards")
         payload = row["payload"]
+        if row["kind"] == "kimi_official_execution_activated":
+            from .concurrent_robustness_recovery_task import _current
+            if origins.task_plan is None or not _current(origins.task_plan, when):
+                raise RecoveryCampaignError("Official activation is outside the current task window")
         if row["kind"] == "kimi_official_migration_accepted":
             from ._concurrent_recovery_kimi_migration import validate_receipt as validate_kimi_migration
             validate_kimi_migration(origins, state, payload, when, head)
@@ -223,7 +227,7 @@ def _legal_history(origins: _Origins, records: tuple[dict[str, Any], ...], targe
             validate_parallel(origins, state, payload, when, head)
         if row["kind"] == "parallel_attempt_settled":
             from .concurrent_robustness_recovery_task import _validate_task_event
-            _validate_task_event(origins, state, "self_check_settled", {
+            _validate_task_event(origins, state, "official_attempt_settled" if state.kimi_migration_active else "self_check_settled", {
                 "requested_model": state.cells[payload["cell_index"]].requested_model,
                 "attempt": payload["attempt"], "decision": payload["decision"],
             }, when)
@@ -372,7 +376,10 @@ def _run_recovery_study(*, manifest: RecoveryExecutionManifest, adapters_by_cell
             raise RecoveryCampaignError("Recovery task has been revoked")
         cells = tuple(cell for cell in context.origins.source.manifest.prompt_model_cells
                       if cell.requested_model == context.state.current_model)
-        if context.state.effective_parallel_approval is not None:
+        if context.state.kimi_migration_active:
+            from ._concurrent_recovery_kimi_migration import preflight as preflight_migration
+            preflight_migration(context.state, context.origins.source.manifest, adapters_by_cell)
+        elif context.state.effective_parallel_approval is not None:
             from ._concurrent_recovery_parallel_runtime import preflight_pools
             preflight_pools(context.origins.source.manifest, cells, adapters_by_cell,
                             kimi_output_token_ceiling=1024 if context.state.output_amendment is not None else 256)
@@ -380,7 +387,8 @@ def _run_recovery_study(*, manifest: RecoveryExecutionManifest, adapters_by_cell
             _v2._preflight_cell_adapters(context.origins.source.manifest, cells, adapters_by_cell,
                                          kimi_output_token_ceiling=1024 if context.state.output_amendment is not None else 256)
     from ._concurrent_recovery_output_amendment import preflight as preflight_output
-    preflight_output(context.state, adapters_by_cell)
+    if not context.state.kimi_migration_active:
+        preflight_output(context.state, adapters_by_cell)
     journal = CampaignJournal.open(context.origins.campaign)
     if journal.head != context.journal.head:
         raise RecoveryCampaignError("Recovery head changed before epoch admission")

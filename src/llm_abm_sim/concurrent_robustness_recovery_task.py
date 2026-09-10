@@ -269,11 +269,16 @@ def _validate_task_event(origins: _execution._Origins, state: CampaignProgress,
     elif kind in {"self_check_intent", "amended_self_check_intent"}:
         if not _current(plan, when) or payload.get("contract_sha256") != _v2._json_sha256(_health_contract(origins, state.current_model or "", state if kind == "amended_self_check_intent" else None)):
             raise RecoveryCampaignError("Self-check is outside the approved task or frozen configuration")
-    elif kind in {"self_check_settled", "amended_self_check_settled"}:
+    elif kind in {"self_check_settled", "amended_self_check_settled", "official_attempt_settled"}:
         attempt = _v2._V2AttemptEvidence.model_validate(payload.get("attempt"))
         model = payload.get("requested_model")
         cell = next((cell for cell in state.cells if cell.requested_model == model), None)
         route = next((row.provider_route for row in origins.source.request.provider_routes if row.requested_model == model), None)
+        official = kind == "official_attempt_settled"
+        if official:
+            if not state.kimi_migration_active or model != "kimi-coding/k3-256k":
+                raise RecoveryCampaignError("Official attempt requires its activated migration")
+            route = "moonshot_official"
         if cell is None or attempt.provider_route != route:
             raise RecoveryCampaignError("Self-check response is crossed with its frozen route")
         if attempt.outcome == "succeeded":
@@ -281,7 +286,7 @@ def _validate_task_event(origins: _execution._Origins, state: CampaignProgress,
             if kind == "amended_self_check_settled" and (attempt.output_usage is None or attempt.output_usage > 1024):
                 raise RecoveryCampaignError("Amended self-check exceeds its total output ceiling")
             if (attempt.provider_response_count != 1 or attempt.usage_complete_response_count != 1
-                or attempt.observed_model_counts != {cell.required_observed_model: 1}
+                or attempt.observed_model_counts != {"kimi-k3" if official else cell.required_observed_model: 1}
                 or attempt.usage_missing_response_count or attempt.usage_malformed_response_count):
                 raise RecoveryCampaignError("Self-check success lacks complete strict identity and usage")
 
@@ -395,6 +400,7 @@ def _task_status(context: _execution._ExecutionContext) -> dict[str, Any]:
     return {**progress, "status": status, "authorization_current": current and not revoked,
             "kimi_output_amendment": state.output_amendment,
             "kimi_official_migration": state.kimi_migration_approval,
+            "kimi_official_execution_active": state.kimi_migration_active,
             "amended_self_check": state.amended_self_check,
             "self_check_attempts": len(state.self_check_intents) + len(state.accepted_rechecks) + int(state.amended_self_check_intent is not None),
             "self_check_failures": {model: row["attempt"]["failure_category"] for model, row in state.self_checks.items()

@@ -285,6 +285,8 @@ def run_concurrent_robustness_recovery_task(plan_path: str | Path) -> dict[str, 
 
     context = task._context(plan_path)
     status = task._task_status(context)
+    if status["status"] not in _TERMINAL and context.state.kimi_migration_active:
+        raise ConcurrentRobustnessOperatorError("Activated Kimi migration requires its official Operator")
     if status["status"] not in _TERMINAL and os.environ.get("LLM_ABM_RUN_LIVE_LLM") != "1":
         raise ConcurrentRobustnessOperatorError("Formal Operator requires the explicit live gate")
     try:
@@ -310,3 +312,52 @@ def run_concurrent_robustness_recovery_task(plan_path: str | Path) -> dict[str, 
         except Exception:
             result.update(report_status="report_pending", report_failure="evidence_or_report_unavailable_or_failed")
     return result
+
+
+def run_concurrent_robustness_kimi_official(plan_path: str | Path, *, api_key: str) -> dict[str, object]:
+    """Run only the admitted official migration, at most five independent requests.
+
+    Runtime credentials are neither saved nor sourced from an environment file.
+    Study retains the original source lock, successes, failure history, cash and
+    physical limits. A subsequent hard stop or completed model is read-only.
+    """
+    from . import concurrent_robustness_recovery_task as task
+    from ._concurrent_recovery_bundle import publish_recovery_bundle
+    from ._concurrent_recovery_campaign import CampaignJournal, recovery_scope
+    from ._concurrent_recovery_kimi_migration import MODEL, preflight
+    from ._concurrent_recovery_parallel_runtime import ParallelAdapterPool
+    from ._concurrent_recovery_task_runtime import _TERMINAL
+    from .providers.moonshot import MoonshotOfficialClient
+    from .providers.robustness import OfficialKimiDecisionAdapter
+
+    context = task._context(plan_path)
+    with recovery_scope(context.origins.campaign):
+        context = task._context(plan_path)
+        state = context.state
+        if state.kimi_migration_approval is None:
+            raise ConcurrentRobustnessOperatorError("Official Kimi requires its accepted migration receipt")
+        status = task._task_status(context)
+        if state.kimi_migration_active and status["status"] in _TERMINAL:
+            publish_recovery_bundle(context)
+            return task._task_status(context)
+        if not status["authorization_current"] or os.environ.get("LLM_ABM_RUN_LIVE_LLM") != "1":
+            raise ConcurrentRobustnessOperatorError("Official Kimi requires its current explicit live window")
+        manifest = context.origins.source.manifest
+        cells = tuple(c for c in manifest.prompt_model_cells if c.requested_model == MODEL)
+        with ExitStack() as resources:
+            clients = [resources.enter_context(MoonshotOfficialClient(api_key=api_key, live_enabled=True)) for _ in range(5)]
+            def fresh() -> dict[str, LLMDecisionAdapter]:
+                return {c.cell_id: ParallelAdapterPool(tuple(OfficialKimiDecisionAdapter(prompt_version=c.prompt_version, client=x)
+                        for x in clients)) for c in cells}
+            preflight(state, manifest, fresh())
+            if not state.kimi_migration_active:
+                journal = CampaignJournal.open(context.origins.campaign)
+                if journal.head != context.journal.head:
+                    raise ConcurrentRobustnessOperatorError("Official migration head changed before activation")
+                state.append(journal, "kimi_official_execution_activated", {"approval": state.kimi_migration_approval["approval"]})
+            @contextmanager
+            def model_resources(model: str) -> Iterator[Callable[[], dict[str, LLMDecisionAdapter]]]:
+                if model != MODEL:
+                    raise ConcurrentRobustnessOperatorError("Official Kimi resources exclude every other model")
+                yield fresh
+            return ConcurrentRobustnessStudy().run_task(plan_path, model_resources=model_resources)

@@ -70,6 +70,7 @@ class CampaignProgress:
         self.suspended_models: dict[str, dict[str, Any]] = {}
         self.model_stage_complete = False
         self.kimi_migration_approval: dict[str, Any] | None = None
+        self.kimi_migration_active = False
 
     @property
     def has_inflight(self) -> bool:
@@ -77,18 +78,26 @@ class CampaignProgress:
 
 
     def effective_self_check(self, model: str) -> dict[str, Any] | None:
+        if self.kimi_migration_active and model == "kimi-coding/k3-256k":
+            return {"qualification_kind": "accepted_official_migration",
+                    "migration": self.kimi_migration_approval, "attempt": {"outcome": "succeeded"}}
         if self.output_amendment is not None and model == self.output_amendment["requested_model"]:
             return self.amended_self_check
         return self.accepted_rechecks.get(model, self.self_checks.get(model))
 
     @property
     def effective_parallel_approval(self) -> dict[str, Any] | None:
+        if self.kimi_migration_active:
+            assert self.kimi_migration_approval is not None
+            return {**self.kimi_migration_approval, "requested_model": "kimi-coding/k3-256k", "stop_after_model": True}
         if self.gemini_restoration_approval is not None:
             return self.gemini_restoration_approval
         return self.model_lane_approval if self.model_lane_approval is not None else self.parallel_approval
 
     @property
     def current_model(self) -> str | None:
+        if self.kimi_migration_active:
+            return "kimi-coding/k3-256k"
         if self.gemini_restoration_approval is not None:
             return self.gemini_restoration_approval["requested_model"]
         if self.model_lane_approval is not None:
@@ -171,8 +180,11 @@ class CampaignProgress:
             if decision is not None and (attempt.provider_response_count != 1
                 or attempt.successful_decision_count != 1 or attempt.usage_complete_response_count != 1
                 or attempt.usage_missing_response_count or attempt.usage_malformed_response_count
-                or attempt.observed_model_counts != {self.cells[key[0]].required_observed_model: 1}):
+                or attempt.observed_model_counts != {"kimi-k3" if self.kimi_migration_active else self.cells[key[0]].required_observed_model: 1}):
                 raise RecoveryCampaignError("Parallel success lacks strict identity and complete usage")
+            if self.kimi_migration_active:
+                from ._concurrent_recovery_kimi_migration import validate_attempt
+                validate_attempt(self, key, attempt)
             def settle() -> None:
                 self.new_attempts.setdefault(key, []).append(attempt)
                 if decision is not None:
@@ -242,6 +254,9 @@ class CampaignProgress:
                 or len(self.parallel_inflight) >= self.effective_parallel_approval["maximum_inflight"]
                 or type(ordinal) is not int or ordinal != len(self.attempts(key)) + 1 or ordinal > 3):
                 raise RecoveryCampaignError("Parallel attempt is unreserved, duplicated, successful or exhausted")
+            if self.kimi_migration_active:
+                from ._concurrent_recovery_kimi_migration import validate_dispatch
+                validate_dispatch(self, key)
             model = self.cells[key[0]].requested_model
             cap = next(row["maximum_new_physical_attempts"] for row in self.proposal["model_budgets"] if row["requested_model"] == model)
             if self.physical_by_model[model] >= cap or self.physical_attempts >= self.proposal["maximum_new_physical_attempts"]:
@@ -256,6 +271,12 @@ class CampaignProgress:
 
     def transition(self, kind: str, payload: dict[str, Any]) -> Callable[[], None]:
         """Validate before durable append; apply its returned effect only afterwards."""
+        if kind == "kimi_official_cash_budget_stopped":
+            from ._concurrent_recovery_kimi_migration import cash_stop
+            return cash_stop(self, payload)
+        if kind == "kimi_official_execution_activated":
+            from ._concurrent_recovery_kimi_migration import activate
+            return activate(self, payload)
         if kind == "kimi_official_migration_accepted":
             from ._concurrent_recovery_kimi_migration import transition as migrate
             return migrate(self, payload)
@@ -450,7 +471,13 @@ class CampaignProgress:
             actual_quota = judgment.quota_retry_approval.model_dump(mode="json") if judgment.quota_retry_approval is not None else None
             from ._concurrent_recovery_output_amendment import judgment_reference as output_reference
             actual_output = judgment.output_amendment_approval.model_dump(mode="json") if judgment.output_amendment_approval is not None else None
-            if actual_output != output_reference(self, judgment.cell.requested_model):
+            from ._concurrent_recovery_kimi_migration import judgment_reference as migration_reference
+            expected_migration = migration_reference(self, key)
+            actual_migration = (judgment.official_migration_approval.model_dump(mode="json")
+                                if judgment.official_migration_approval is not None else None)
+            if actual_migration != expected_migration:
+                raise RecoveryCampaignError("Official Judgment differs from its admitted migration")
+            if actual_output != (None if expected_migration else output_reference(self, judgment.cell.requested_model)):
                 raise RecoveryCampaignError("Kimi Judgment differs from its accepted output amendment")
             if actual_quota != expected_quota:
                 raise RecoveryCampaignError("Quota Judgment differs from its accepted receipt")

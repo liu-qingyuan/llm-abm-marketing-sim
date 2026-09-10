@@ -13,6 +13,8 @@ from ._concurrent_recovery_progress import CampaignProgress
 from .concurrent_message_experiment import _PairExecutionPlan, _VariantDecisionContext
 from .decision import EngageDecision, LLMDecisionAdapter, ProviderDecisionError
 
+_OFFICIAL_DISPATCH_INTERVAL_SECONDS = 1.0
+
 
 class ParallelAdapterPool(LLMDecisionAdapter):
     """Resource carrier at the existing recovery map Seam, never a serial adapter."""
@@ -135,6 +137,12 @@ def run_frozen_batch(
     now = v2._V2_MONOTONIC()
     ready_at = {}
     cooldown_until = now
+    if state.kimi_migration_active:
+        from . import concurrent_robustness_formal_execution as formal
+        prior_intent = next((r for r in reversed(journal.records) if r["kind"] == "parallel_attempt_intent"), None)
+        if prior_intent is not None:
+            when = formal._parse_utc(prior_intent["recorded_at_utc"], "last dispatch")
+            cooldown_until += max(0.0, _OFFICIAL_DISPATCH_INTERVAL_SECONDS - (formal._utc_now() - when).total_seconds())
     for key in remaining:
         prior = state.attempts(key)
         delay = prior[-1].wait_seconds or 0.0 if prior and prior[-1].outcome == "retryable_failure" else 0.0
@@ -224,6 +232,14 @@ def run_frozen_batch(
                             and max(ready_at[key], cooldown_until) <= now), None)
                 if key is None:
                     break
+                if state.kimi_migration_active:
+                    from ._concurrent_recovery_kimi_migration import cash_budget
+                    budget = cash_budget(state)
+                    if not budget["can_reserve_one"]:
+                        if not pending:
+                            state.append(journal, "kimi_official_cash_budget_stopped", {"budget": budget})
+                            remaining.clear()
+                        break
                 try:
                     check_dispatch_window()
                 except Exception as error:
@@ -243,9 +259,15 @@ def run_frozen_batch(
                 )
                 future = workers.submit(_physical_request, adapter, item)
                 pending[future] = item, lane, ordinal, before, external_before
+                if state.kimi_migration_active:
+                    cooldown_until = v2._V2_MONOTONIC() + _OFFICIAL_DISPATCH_INTERVAL_SECONDS
             if pending:
                 timeout = None
-                if remaining and free and state.quota_retry_pending is None:
+                cash_available = True
+                if state.kimi_migration_active:
+                    from ._concurrent_recovery_kimi_migration import cash_budget
+                    cash_available = cash_budget(state)["can_reserve_one"]
+                if remaining and free and state.quota_retry_pending is None and cash_available:
                     timeout = max(
                         0.0, min(max(ready_at[key], cooldown_until) for key in remaining) - v2._V2_MONOTONIC()
                     )

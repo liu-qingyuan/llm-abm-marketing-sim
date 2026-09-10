@@ -209,3 +209,130 @@ def validate_receipt(origins: Any, state: CampaignProgress, payload: dict[str, A
              and usage['completion_tokens'] <= 1024)
     EngageDecision.model_validate(result['decision'])
     transition(state, payload)
+
+
+def activate(state: CampaignProgress, payload: dict[str, Any]) -> Callable[[], None]:
+    """Activate only the previously admitted, unchanged drained migration."""
+    state._exact(payload, {"approval"})
+    grant = state.kimi_migration_approval
+    _require(not state.kimi_migration_active and grant is not None)
+    assert grant is not None
+    _require(payload["approval"] == grant["approval"]
+             and v2._json_sha256(terms(state)) == v2._json_sha256(grant["terms"]))
+    def apply() -> None:
+        state.kimi_migration_active = True
+        state.parallel_active_batch = tuple(grant["terms"]["frozen_batch"])
+        state.model_stage_complete = False
+        state.status = "ready"
+    return apply
+
+
+def validate_dispatch(state: CampaignProgress, key: tuple[int, int]) -> None:
+    """No migration retry exists beyond the exact admitted old subscription failure."""
+    grant = state.kimi_migration_approval
+    _require(state.kimi_migration_active and grant is not None and state.cells[key[0]].requested_model == MODEL)
+    assert grant is not None
+    _require(cash_budget(state)["can_reserve_one"])
+    prior = state.attempts(key)
+    if prior:
+        _require(len(prior) == 1 and any(
+            row["cell_index"] == key[0] and row["pair_schedule_position"] == key[1]
+            and row["attempt_sha256"] == v2._json_sha256(prior[0].model_dump(mode="json"))
+            for row in grant["terms"]["failed_attempts"]))
+
+
+def validate_attempt(state: CampaignProgress, key: tuple[int, int], attempt: v2._V2AttemptEvidence) -> None:
+    _require(state.cells[key[0]].requested_model == MODEL
+             and attempt.provider_route == "moonshot_official"
+             and attempt.outcome not in {"retryable_failure", "attempts_exhausted"}
+             and (attempt.outcome != "succeeded" or (attempt.output_usage is not None and attempt.output_usage <= 1024)))
+
+
+def judgment_reference(state: CampaignProgress, key: tuple[int, int]) -> dict[str, Any] | None:
+    attempts = state.new_attempts.get(key, [])
+    if not attempts or attempts[-1].provider_route != "moonshot_official":
+        return None
+    _require(state.kimi_migration_active and state.kimi_migration_approval is not None)
+    assert state.kimi_migration_approval is not None
+    return state.kimi_migration_approval["approval"]
+
+
+# Frozen conservative pre-dispatch reservation, not an invoice or token estimate.
+# https://platform.kimi.com/docs/pricing/chat-k3.md (2026-09-11)
+_RESERVE_MICRO_CNY = 1048576 * 20 + 1024 * 100
+
+
+def cash_budget(state: CampaignProgress) -> dict[str, Any]:
+    """Bound only migrated Formal spend; retain every unknown at full reservation.
+
+    Pricing ignores all input-cache discounts. Historical/subscription fees are
+    intentionally untouched. An incomplete official usage record never frees a
+    reservation or becomes zero. The original maximum_spend_cny is not reset.
+    """
+    from decimal import Decimal
+
+    grant = state.kimi_migration_approval
+    _require(grant is not None)
+    assert grant is not None
+    spent = 0
+    unpriced = 0
+    for attempts in state.new_attempts.values():
+        for row in attempts:
+            if row.provider_route != "moonshot_official":
+                continue
+            if (row.usage_complete_response_count == 1 and row.input_usage is not None
+                    and row.output_usage is not None):
+                spent += row.input_usage * 20 + row.output_usage * 100
+            else:
+                spent += _RESERVE_MICRO_CNY
+                unpriced += 1
+    reserved = len(state.parallel_inflight) * _RESERVE_MICRO_CNY if state.kimi_migration_active else 0
+    cap = int(Decimal(str(grant["maximum_spend_cny"])) * 1000000)
+    return {"policy": "kimi-k3-full-context-reservation-v1", "currency": "CNY",
+            "maximum_micro_cny": cap, "settled_upper_micro_cny": spent,
+            "unpriced_settled_requests": unpriced, "reserved_micro_cny": reserved,
+            "per_request_reserve_micro_cny": _RESERVE_MICRO_CNY,
+            "can_reserve_one": spent + reserved + _RESERVE_MICRO_CNY <= cap,
+            "is_invoice": False, "scope": "official_migration_formal_only"}
+
+
+def cash_stop(state: CampaignProgress, payload: dict[str, Any]) -> Callable[[], None]:
+    state._exact(payload, {"budget"})
+    _require(state.kimi_migration_active and state.status == "running" and not state.has_inflight
+             and not cash_budget(state)["can_reserve_one"] and payload["budget"] == cash_budget(state))
+    return lambda: setattr(state, "status", "stopped")
+
+
+def preflight(state: CampaignProgress, manifest: v2.ConcurrentRobustnessManifestV2, adapters: Any) -> None:
+    """Exact official resources; never relax the original manifest's v2 contract."""
+    from ._concurrent_recovery_parallel_runtime import ParallelAdapterPool
+    from .providers.robustness import OfficialKimiDecisionAdapter
+
+    _require(state.kimi_migration_approval is not None and manifest.execution_profile == "formal")
+    cells = tuple(c for c in manifest.prompt_model_cells if c.requested_model == MODEL)
+    _require(len(cells) == 4 and set(adapters) == {c.cell_id for c in cells})
+    ids: set[int] = set()
+    clients: set[int] = set()
+    for i in range(5):
+        lane_clients: set[int] = set()
+        for cell in cells:
+            pool = adapters[cell.cell_id]
+            _require(type(pool) is ParallelAdapterPool and len(pool.lanes) == 5)
+            adapter = pool.lanes[i]
+            _require(type(adapter) is OfficialKimiDecisionAdapter and id(adapter) not in ids)
+            assert isinstance(adapter, OfficialKimiDecisionAdapter)
+            ids.add(id(adapter))
+            client = adapter.client
+            _require(getattr(client, "external_provider_client", False) is True
+                     and getattr(client, "provider_transport", None) == "moonshot_official"
+                     and getattr(client, "output_token_ceiling_enforcement", None) == "wire_only")
+            lane_clients.add(id(client))
+            expected = OfficialKimiDecisionAdapter(prompt_version=cell.prompt_version, client=client)
+            _require(adapter.request_evidence == expected.request_evidence
+                     and adapter.request_evidence["prompt_canonical_hash"] == cell.prompt_canonical_hash
+                     and adapter.request_invocations == 0
+                     and v2._adapter_external_request_invocations(adapter) == 0
+                     and not v2._adapter_live_api_triggered(adapter))
+            v2._v2_adapter_snapshot(adapter)
+        _require(len(lane_clients) == 1 and not clients & lane_clients)
+        clients.update(lane_clients)

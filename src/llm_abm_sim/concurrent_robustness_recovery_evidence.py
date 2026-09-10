@@ -271,7 +271,7 @@ def _final_judgment_row(
         cell = judgment.cell.model_dump(mode="json")
         pair = judgment.pair.model_dump(mode="json")
         decision = judgment.decision
-        observed_model = judgment.cell.required_observed_model
+        observed_model = judgment.observed_model
     else:
         cell = {field: getattr(judgment, field) for field in cell_fields}
         pair = {field: getattr(judgment, field) for field in pair_fields}

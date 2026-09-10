@@ -202,6 +202,11 @@ class RecoveryJudgmentV1(_v2._V2FrozenModel):
             result[f"{field}_known_subtotal"] = subtotal
         return result
 
+    @property
+    def observed_model(self) -> str:
+        """Identity of the validated successful response, not the original cell label."""
+        return next(iter(self.new_attempts[-1].observed_model_counts))
+
     def realized_projection(
         self,
         *,
@@ -234,7 +239,7 @@ class RecoveryJudgmentV1(_v2._V2FrozenModel):
             "prompt_version": self.cell.prompt_version,
             "prompt_canonical_hash": self.cell.prompt_canonical_hash,
             "requested_model": self.cell.requested_model,
-            "observed_model": self.cell.required_observed_model,
+            "observed_model": self.observed_model,
             "provider_engage": self.decision.engage,
             "provider_probability": self.decision.probability,
             "provider_action": self.decision.action,
