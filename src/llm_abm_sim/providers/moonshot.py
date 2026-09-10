@@ -5,11 +5,46 @@ as normalized decision/model/usage facts, never raw provider messages or reasoni
 """
 from __future__ import annotations
 
+import hashlib
+import json
+from dataclasses import dataclass
 from typing import Any
 
 from llm_abm_sim.decision import ProviderAttemptFailure, ProviderResponseProvenanceUnknown
 from llm_abm_sim.provider_accounting import ProviderResponseEnvelope, normalize_provider_response_envelope
 from llm_abm_sim.provider_request_contract import engage_decision_json_schema
+
+
+@dataclass(frozen=True)
+class MoonshotRequestEstimate:
+    """Hash-bound input estimate, never actual usage or a guaranteed price bound."""
+
+    request_sha256: str
+    estimated_input_tokens: int
+    output_token_ceiling: int = 1024
+    is_invoice: bool = False
+
+
+class MoonshotEstimateError(ValueError):
+    """Auxiliary request failed; no Formal attempt or decision was made."""
+
+
+def _request_body(
+    messages: list[dict[str, str]], model: str, reasoning_effort: str | None,
+    output_token_ceiling: int | None, thinking_mode: str | None,
+) -> dict[str, Any]:
+    if (model != "kimi-k3" or reasoning_effort != "low"
+        or type(output_token_ceiling) is not int or output_token_ceiling != 1024
+        or thinking_mode is not None):
+        raise ValueError("Official K3 requires its exact model, low reasoning and 1024 ceiling")
+    return {
+        "model": model, "messages": messages, "max_tokens": output_token_ceiling,
+        "reasoning_effort": reasoning_effort, "tool_choice": "required",
+        "tools": [{"type": "function", "function": {
+            "name": "engage_decision", "description": "Return one structured engagement decision.",
+            "parameters": engage_decision_json_schema()["schema"],
+        }}],
+    }
 
 
 class MoonshotOfficialClient:
@@ -57,23 +92,42 @@ class MoonshotOfficialClient:
             "output_token_ceiling_enforcement": self.output_token_ceiling_enforcement,
         }
 
+    def estimate_request(
+        self, messages: list[dict[str, str]], model: str, *,
+        reasoning_effort: str | None = None, output_token_ceiling: int | None = None,
+        thinking_mode: str | None = None,
+    ) -> MoonshotRequestEstimate:
+        """One auxiliary POST of the complete chat body; never dispatches a chat.
+
+        Caller owns durable intent/results and must stop on any estimate error.
+        The hash uses UTF-8 sorted compact JSON without a trailing newline. The
+        returned count is an estimate, not response usage or observed identity.
+        """
+        body = _request_body(messages, model, reasoning_effort, output_token_ceiling, thinking_mode)
+        canonical = json.dumps(body, sort_keys=True, ensure_ascii=False, separators=(",", ":")).encode()
+        try:
+            response = self._client.post("tokenizers/estimate-token-count", json=body)
+        except self._httpx.TransportError:
+            raise MoonshotEstimateError("Official Moonshot estimate transport failed") from None
+        if response.status_code != 200:
+            raise MoonshotEstimateError(f"Official Moonshot estimate HTTP {response.status_code}")
+        try:
+            payload = response.json()
+            tokens = payload["data"]["total_tokens"]
+            if ("error" in payload or type(tokens) is not int or tokens <= 0
+                or ("status" in payload and payload["status"] is not True)
+                or ("code" in payload and (type(payload["code"]) is not int or payload["code"] != 0))):
+                raise ValueError
+        except (ValueError, TypeError, KeyError):
+            raise MoonshotEstimateError("Official Moonshot estimate response is invalid") from None
+        return MoonshotRequestEstimate(hashlib.sha256(canonical).hexdigest(), tokens)
+
     def create_response(
         self, messages: list[dict[str, str]], model: str, *,
         reasoning_effort: str | None = None, output_token_ceiling: int | None = None,
         thinking_mode: str | None = None,
     ) -> ProviderResponseEnvelope:
-        if (model != "kimi-k3" or reasoning_effort != "low"
-            or type(output_token_ceiling) is not int or output_token_ceiling != 1024
-            or thinking_mode is not None):
-            raise ValueError("Official K3 requires its exact model, low reasoning and 1024 ceiling")
-        body = {
-            "model": model, "messages": messages, "max_tokens": output_token_ceiling,
-            "reasoning_effort": reasoning_effort, "tool_choice": "required",
-            "tools": [{"type": "function", "function": {
-                "name": "engage_decision", "description": "Return one structured engagement decision.",
-                "parameters": engage_decision_json_schema()["schema"],
-            }}],
-        }
+        body = _request_body(messages, model, reasoning_effort, output_token_ceiling, thinking_mode)
         try:
             response = self._client.post("chat/completions", json=body)
         except self._httpx.TransportError:
