@@ -606,6 +606,41 @@ class PiKimiDecisionAdapter(_FrozenRobustnessDecisionAdapter):
                          wire_output_token_ceiling=output_token_ceiling), prompt_version=prompt_version, client=client)
 
 
+class OfficialKimiDecisionAdapter(_FrozenRobustnessDecisionAdapter):
+    """Strict paid K3 condition for an explicitly admitted migration only.
+
+    This does not replace the frozen subscription disclosure or admit a campaign.
+    Provider-reported fees stay unknown when absent; token pricing is not a fee receipt.
+    """
+
+    def __init__(self, *, prompt_version: str, client: _RobustnessProviderClient) -> None:
+        if bool(getattr(client, "external_provider_client", False)) and (
+            getattr(client, "provider_transport", None) != "moonshot_official"
+            or getattr(client, "output_token_ceiling_enforcement", None) != "wire_only"
+        ):
+            raise ValueError("Official Kimi requires the official wire-ceiling transport")
+        condition = replace(
+            _KIMI, provider_route="moonshot_official", requested_model="kimi-k3",
+            wire_model="kimi-k3", required_observed_model="kimi-k3", wire_api="chat_completions",
+            output_token_ceiling=1024, wire_output_token_ceiling=1024,
+            billing_semantics="token_metered_cny", billing_currency="CNY",
+        )
+        super().__init__(condition=condition, prompt_version=prompt_version, client=client)
+
+    def decide(
+        self, post: PostContent, profile: UserProfile, peer_context: PeerContext,
+        platform_context: PlatformContext | None = None, time_step: int = 0,
+    ) -> EngageDecision:
+        try:
+            return super().decide(post, profile, peer_context, platform_context, time_step)
+        except ProviderDecisionError as exc:
+            # Migration grants no automatic retry, including malformed decisions.
+            failure = ProviderAttemptFailure(
+                category=exc.failure_category, retryable=False, status_code=exc.status_code,
+            )
+            raise ProviderDecisionError(failure) from failure
+
+
 class PiOpenAIDecisionAdapter(_FrozenRobustnessDecisionAdapter):
     def __init__(self, *, prompt_version: str, client: _RobustnessProviderClient) -> None:
         super().__init__(condition=_OPENAI, prompt_version=prompt_version, client=client)
