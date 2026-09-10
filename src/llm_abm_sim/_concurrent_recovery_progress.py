@@ -60,6 +60,8 @@ class CampaignProgress:
         self.parallel_active_batch: tuple[int, int] | None = None
         self.parallel_inflight: dict[tuple[int, int], int] = {}
         self.parallel_unknown: set[tuple[int, int]] = set()
+        self.quota_retry_approval: dict[str, Any] | None = None
+        self.quota_retry_pending: tuple[int, int] | None = None
 
     @property
     def has_inflight(self) -> bool:
@@ -156,6 +158,11 @@ class CampaignProgress:
                 if decision is not None:
                     self.success_decisions[key] = decision
                 del self.parallel_inflight[key]
+                if key == self.quota_retry_pending:
+                    if decision is not None:
+                        self.quota_retry_pending = None
+                    else:
+                        self.status = "stopped"
                 if attempt.outcome not in {"succeeded", "retryable_failure"} and self.status != "reconciliation_required":
                     self.status = "stopped"
             return settle
@@ -207,6 +214,9 @@ class CampaignProgress:
             key = self._parallel_key(payload)
             ordinal = payload["attempt_number"]
             batch_key = key[0], key[1] // (self.per_cell // 30)
+            if (self.quota_retry_pending is not None
+                and (key != self.quota_retry_pending or self.has_inflight)):
+                raise RecoveryCampaignError("Explicit quota retry permits one original failed pair before recovery")
             if (self.parallel_active_batch != batch_key or self.inflight is not None
                 or key in self.parallel_inflight or key in self.success_decisions or key in self.old_successes
                 or len(self.parallel_inflight) >= self.parallel_approval["maximum_inflight"]
@@ -226,6 +236,9 @@ class CampaignProgress:
 
     def transition(self, kind: str, payload: dict[str, Any]) -> Callable[[], None]:
         """Validate before durable append; apply its returned effect only afterwards."""
+        if kind == "quota_retry_accepted":
+            from ._concurrent_recovery_quota_retry import transition
+            return transition(self, payload)
         if kind.startswith("parallel_"):
             return self._parallel_transition(kind, payload)
         if self.parallel_approval is not None:
@@ -392,6 +405,11 @@ class CampaignProgress:
                 raise RecoveryCampaignError("Recovery Judgment requires a settled successful response")
             judgment = RecoveryJudgmentV1.model_validate(payload["judgment"])
             historical = self.historical_failure if key == self.failed_key else ()
+            from ._concurrent_recovery_quota_retry import judgment_reference
+            expected_quota = judgment_reference(self, key)
+            actual_quota = judgment.quota_retry_approval.model_dump(mode="json") if judgment.quota_retry_approval is not None else None
+            if actual_quota != expected_quota:
+                raise RecoveryCampaignError("Quota Judgment differs from its accepted receipt")
             if (
                 judgment.cell_index != key[0] or judgment.cell != self.cells[key[0]]
                 or judgment.pair.model_dump() != {k: v for k, v in self.reservation.items() if k != "cell_index"}

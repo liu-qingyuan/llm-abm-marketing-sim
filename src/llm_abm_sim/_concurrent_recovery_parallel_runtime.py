@@ -212,7 +212,9 @@ def run_frozen_batch(
                 if any(future.done() for future in pending):
                     break
                 now = v2._V2_MONOTONIC()
-                key = next((key for key in remaining if max(ready_at[key], cooldown_until) <= now), None)
+                key = next((key for key in remaining
+                            if (state.quota_retry_pending is None or key == state.quota_retry_pending)
+                            and max(ready_at[key], cooldown_until) <= now), None)
                 if key is None:
                     break
                 try:
@@ -236,7 +238,7 @@ def run_frozen_batch(
                 pending[future] = item, lane, ordinal, before, external_before
             if pending:
                 timeout = None
-                if remaining and free:
+                if remaining and free and state.quota_retry_pending is None:
                     timeout = max(
                         0.0, min(max(ready_at[key], cooldown_until) for key in remaining) - v2._V2_MONOTONIC()
                     )

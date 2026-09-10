@@ -7,7 +7,14 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import ConfigDict, Field, field_validator, model_validator
+from pydantic import (
+    ConfigDict,
+    Field,
+    SerializerFunctionWrapHandler,
+    field_validator,
+    model_serializer,
+    model_validator,
+)
 
 from . import concurrent_robustness_formal_execution as _formal
 from . import concurrent_robustness_v2 as _v2
@@ -44,7 +51,8 @@ class PairCoordinates(_v2._V2FrozenModel):
 class RecoveryJudgmentV1(_v2._V2FrozenModel):
     """A recovery-only Judgment that preserves the original attempt ordinals."""
 
-    schema_version: Literal["concurrent-recovery-provider-judgment-v1"]
+    schema_version: Literal["concurrent-recovery-provider-judgment-v1", "concurrent-recovery-provider-judgment-v2"]
+    quota_retry_approval: _formal.FormalArtifactReference | None = None
     judgment_id: str
     epoch_identity_sha256: str
     judgment_source_identity: str
@@ -54,6 +62,13 @@ class RecoveryJudgmentV1(_v2._V2FrozenModel):
     decision: EngageDecision
     historical_attempts: tuple[_v2._V2AttemptEvidence, ...]
     new_attempts: tuple[_v2._V2AttemptEvidence, ...]
+
+    @model_serializer(mode="wrap")
+    def _serialize_version(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
+        payload = handler(self)
+        if self.quota_retry_approval is None:
+            payload.pop("quota_retry_approval", None)
+        return payload
 
     @field_validator("judgment_id", "epoch_identity_sha256", "judgment_source_identity")
     @classmethod
@@ -80,8 +95,14 @@ class RecoveryJudgmentV1(_v2._V2FrozenModel):
             raise ValueError("historical attempts cannot contain a success")
         if self.new_attempts[-1].outcome != "succeeded":
             raise ValueError("new attempts must end in one success")
-        if any(row.outcome != "retryable_failure" for row in self.new_attempts[:-1]):
-            raise ValueError("new attempts before the success must be retryable failures")
+        preceding = [row for row in self.new_attempts[:-1] if row.outcome != "retryable_failure"]
+        if self.schema_version == RECOVERY_JUDGMENT_V1_SCHEMA:
+            if self.quota_retry_approval is not None or preceding:
+                raise ValueError("new attempts before the success must be retryable failures")
+        elif (self.quota_retry_approval is None or self.cell.requested_model != "gemini-3.1-pro"
+              or len(preceding) != 1 or preceding[0].outcome != "nonretryable_failure"
+              or preceding[0].failure_category != "quota_exhausted"):
+            raise ValueError("quota Judgment v2 requires one preserved quota failure and its approval reference")
 
         required_observed_model = self.cell.required_observed_model
         if required_observed_model is None:
@@ -214,6 +235,7 @@ def build_recovery_judgment(
     new_attempts: tuple[_v2._V2AttemptEvidence, ...],
     epoch_identity_sha256: str,
     judgment_source_identity: str,
+    quota_retry_approval: dict[str, Any] | None = None,
 ) -> RecoveryJudgmentV1:
     """Build and hash a recovery contract without rewriting old attempt ordinals."""
 
@@ -235,6 +257,9 @@ def build_recovery_judgment(
         "historical_attempts": [row.model_dump(mode="json") for row in historical_attempts],
         "new_attempts": [row.model_dump(mode="json") for row in new_attempts],
     }
+    if quota_retry_approval is not None:
+        payload["schema_version"] = "concurrent-recovery-provider-judgment-v2"
+        payload["quota_retry_approval"] = quota_retry_approval
     payload["judgment_id"] = _v2._json_sha256(payload)
     return RecoveryJudgmentV1.model_validate(payload)
 

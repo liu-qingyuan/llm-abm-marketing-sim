@@ -468,3 +468,37 @@ def accept_recovery_task_parallelism(plan_path: str | Path, *, approval_path: Pa
         return {'schema_version':'concurrent-recovery-parallel-acceptance-v1',
                 'receipt':{'path':str(path),'sha256':_formal._sha256_file(path)},
                 'accepted_head_sha256':row['record_sha256'],'provider_calls':0,'credential_reads':0}
+
+
+def accept_recovery_task_quota_retry(plan_path: str | Path, *, approval_path: Path,
+                                    approval_sha256: str) -> dict[str, Any]:
+    """Accept one explicit retry of this drained quota stop, without new probes.
+
+    The first original failed pair gets one Formal attempt. Only its success
+    permits the existing four lanes; any failure stops without automatic retry.
+    Repeating this immutable approval returns the original receipt, never a new
+    grant. Task, history, budgets, frozen inputs and other hard stops are retained.
+    """
+    from . import _concurrent_recovery_quota_retry as quota
+    from ._concurrent_recovery_campaign import recovery_scope
+    context = _context(plan_path)
+    reference = _formal.FormalArtifactReference(path=approval_path, sha256=approval_sha256).model_dump(mode='json')
+    with recovery_scope(context.origins.campaign):
+        context = _context(plan_path)
+        approval = quota._checked(reference)
+        existing = next((row for row in context.journal.records if row['kind'] == quota.EVENT), None)
+        if existing is not None:
+            if existing['payload']['approval'] != reference:
+                raise RecoveryCampaignError('Task already accepted a different quota retry')
+            row = existing
+        else:
+            if _read_revocation(context.plan) is not None:
+                raise RecoveryCampaignError('Revoked task cannot accept quota retry')
+            payload = {'approval': reference, 'failed_attempts': approval['failed_attempts']}
+            quota.validate_receipt(context.origins, context.state, payload, _formal._utc_now(), context.journal.head)
+            row = context.state.append(context.journal, quota.EVENT, payload)
+        _context(plan_path)
+        path = context.journal.root / 'events' / f'{row["sequence"]:08d}.json'
+        return {'schema_version': 'concurrent-recovery-quota-retry-acceptance-v1',
+                'receipt': {'path': str(path), 'sha256': _formal._sha256_file(path)},
+                'accepted_head_sha256': row['record_sha256'], 'provider_calls': 0, 'credential_reads': 0}
