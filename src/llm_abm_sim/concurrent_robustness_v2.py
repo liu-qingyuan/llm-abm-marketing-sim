@@ -521,6 +521,7 @@ _V2_ATTEMPT_BILLING_PROFILES: Mapping[
     tuple[str, Literal["CNY"] | None, float | None],
 ] = {
     "deepseek_official": ("provider_fee_cny", "CNY", None),
+    "moonshot_official": ("token_metered_cny", "CNY", None),
     "antigravity_openai_compatible_gateway": ("gateway_quota_usage", None, None),
     "pi_kimi_oauth_subscription": (
         "subscription_quota_with_nominal_usd_reference",
