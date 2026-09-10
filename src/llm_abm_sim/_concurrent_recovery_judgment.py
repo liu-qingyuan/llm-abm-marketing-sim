@@ -48,13 +48,28 @@ class PairCoordinates(_v2._V2FrozenModel):
         return value
 
 
+class UnknownAttemptReference(_v2._V2FrozenModel):
+    """A dispatched intent with no recovered response; not a failed response."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+    attempt_number: Literal[1]
+    intent_sha256: str
+
+    @field_validator("intent_sha256")
+    @classmethod
+    def _validate_intent(cls, value: str) -> str:
+        return _v2._require_sha256(value, "Unknown intent")
+
+
 class RecoveryJudgmentV1(_v2._V2FrozenModel):
     """A recovery-only Judgment that preserves the original attempt ordinals."""
 
-    schema_version: Literal["concurrent-recovery-provider-judgment-v1", "concurrent-recovery-provider-judgment-v2", "concurrent-recovery-provider-judgment-v3", "concurrent-recovery-provider-judgment-v4"]
+    schema_version: Literal["concurrent-recovery-provider-judgment-v1", "concurrent-recovery-provider-judgment-v2", "concurrent-recovery-provider-judgment-v3", "concurrent-recovery-provider-judgment-v4", "concurrent-recovery-provider-judgment-v5"]
     quota_retry_approval: _formal.FormalArtifactReference | None = None
     output_amendment_approval: _formal.FormalArtifactReference | None = None
     official_migration_approval: _formal.FormalArtifactReference | None = None
+    manual_retry_approval: _formal.FormalArtifactReference | None = None
+    unknown_attempts: tuple[UnknownAttemptReference, ...] = ()
     judgment_id: str
     epoch_identity_sha256: str
     judgment_source_identity: str
@@ -74,6 +89,10 @@ class RecoveryJudgmentV1(_v2._V2FrozenModel):
             payload.pop("output_amendment_approval", None)
         if self.official_migration_approval is None:
             payload.pop("official_migration_approval", None)
+        if self.manual_retry_approval is None:
+            payload.pop("manual_retry_approval", None)
+        if not self.unknown_attempts:
+            payload.pop("unknown_attempts", None)
         return payload
 
     @field_validator("judgment_id", "epoch_identity_sha256", "judgment_source_identity")
@@ -87,14 +106,22 @@ class RecoveryJudgmentV1(_v2._V2FrozenModel):
         new_count = len(self.new_attempts)
         if not new_count:
             raise ValueError("recovery Judgment requires at least one new attempt")
-        if historical_count + new_count > _v2._V2_MAXIMUM_ATTEMPTS:
+        unknown_count = len(self.unknown_attempts)
+        manual = self.schema_version == "concurrent-recovery-provider-judgment-v5"
+        if manual:
+            if (self.manual_retry_approval is None or unknown_count != 1
+                or historical_count or new_count != 1):
+                raise ValueError("Manual Kimi retry requires one unknown intent, one new response and its approval")
+        elif self.manual_retry_approval is not None or unknown_count:
+            raise ValueError("Unknown intent history requires Judgment v5")
+        if historical_count + new_count + unknown_count > _v2._V2_MAXIMUM_ATTEMPTS:
             raise ValueError("recovery Judgment exceeds the physical-attempt cap")
         if tuple(row.attempt_number for row in self.historical_attempts) != tuple(
             range(1, historical_count + 1)
         ):
             raise ValueError("historical attempt ordinals must remain 1..N")
         if tuple(row.attempt_number for row in self.new_attempts) != tuple(
-            range(historical_count + 1, historical_count + new_count + 1)
+            range(historical_count + unknown_count + 1, historical_count + unknown_count + new_count + 1)
         ):
             raise ValueError("new attempt ordinals must continue at N+1..N+M")
         if any(row.outcome == "succeeded" for row in self.historical_attempts):
@@ -102,9 +129,9 @@ class RecoveryJudgmentV1(_v2._V2FrozenModel):
         if self.new_attempts[-1].outcome != "succeeded":
             raise ValueError("new attempts must end in one success")
         preceding = [row for row in self.new_attempts[:-1] if row.outcome != "retryable_failure"]
-        official = self.schema_version == "concurrent-recovery-provider-judgment-v4"
+        official = manual or self.schema_version == "concurrent-recovery-provider-judgment-v4"
         if not official and self.official_migration_approval is not None:
-            raise ValueError("Official migration approval requires Judgment v4")
+            raise ValueError("Official migration approval requires Judgment v4 or v5")
         if official:
             if (self.official_migration_approval is None or self.output_amendment_approval is not None
                 or self.quota_retry_approval is not None or self.cell.requested_model != "kimi-coding/k3-256k"
@@ -203,6 +230,11 @@ class RecoveryJudgmentV1(_v2._V2FrozenModel):
         return result
 
     @property
+    def unknown_usage_present(self) -> bool:
+        """True means sequence-wide usage remains unknown despite a known subtotal."""
+        return bool(self.unknown_attempts)
+
+    @property
     def observed_model(self) -> str:
         """Identity of the validated successful response, not the original cell label."""
         return next(iter(self.new_attempts[-1].observed_model_counts))
@@ -247,7 +279,7 @@ class RecoveryJudgmentV1(_v2._V2FrozenModel):
             "provider_confidence": self.decision.confidence,
             "provider_decision_source": self.decision.decision_source,
             "environmental_consciousness_prompt_inclusion": "included",
-            "request_invocations": len(self.historical_attempts) + len(self.new_attempts),
+            "request_invocations": len(self.historical_attempts) + len(self.new_attempts) + len(self.unknown_attempts),
             "realization_key": realization.realization_key,
             "realization_rule_version": REALIZATION_RULE_VERSION,
             "realization_seed": REALIZATION_SEED,
@@ -273,6 +305,8 @@ def build_recovery_judgment(
     quota_retry_approval: dict[str, Any] | None = None,
     output_amendment_approval: dict[str, Any] | None = None,
     official_migration_approval: dict[str, Any] | None = None,
+    manual_retry_approval: dict[str, Any] | None = None,
+    unknown_attempts: tuple[UnknownAttemptReference, ...] = (),
 ) -> RecoveryJudgmentV1:
     """Build and hash a recovery contract without rewriting old attempt ordinals."""
 
@@ -303,6 +337,10 @@ def build_recovery_judgment(
     if official_migration_approval is not None:
         payload["schema_version"] = "concurrent-recovery-provider-judgment-v4"
         payload["official_migration_approval"] = official_migration_approval
+    if manual_retry_approval is not None or unknown_attempts:
+        payload["schema_version"] = "concurrent-recovery-provider-judgment-v5"
+        payload["manual_retry_approval"] = manual_retry_approval
+        payload["unknown_attempts"] = [row.model_dump(mode="json") for row in unknown_attempts]
     payload["judgment_id"] = _v2._json_sha256(payload)
     return RecoveryJudgmentV1.model_validate(payload)
 
