@@ -259,8 +259,11 @@ def receipt_references(payload: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def replays_prior_barrier(state: CampaignProgress, index: int, step: int, commit: dict[str, Any]) -> bool:
-    """A new Gemini epoch may re-record only an identical already closed barrier."""
-    if state.gemini_restoration_approval is None or state.current_model != MODEL:
+    """An approved restored epoch may repeat only an identical closed barrier."""
+    gemini = state.gemini_restoration_approval is not None and state.current_model == MODEL
+    kimi = (state.kimi_manual_retry_approval is not None and state.kimi_migration_active
+            and state.current_model == 'kimi-coding/k3-256k')
+    if not (gemini or kimi):
         return False
     prior = [
         row
