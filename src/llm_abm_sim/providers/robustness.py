@@ -3,7 +3,7 @@ from __future__ import annotations
 import math
 import re
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Literal, Protocol
 
 from pydantic import ValidationError
@@ -590,7 +590,10 @@ class AntigravityGeminiDecisionAdapter(_FrozenRobustnessDecisionAdapter):
 
 
 class PiKimiDecisionAdapter(_FrozenRobustnessDecisionAdapter):
-    def __init__(self, *, prompt_version: str, client: _RobustnessProviderClient) -> None:
+    def __init__(self, *, prompt_version: str, client: _RobustnessProviderClient,
+                 output_token_ceiling: int = 256) -> None:
+        if type(output_token_ceiling) is not int or output_token_ceiling not in {256, 1024}:
+            raise ValueError("Kimi output ceiling must be an explicitly supported condition")
         if bool(getattr(client, "external_provider_client", False)) and (
             getattr(client, "provider_transport", None) != PI_KIMI_SUBSCRIPTION_PROVIDER
             or getattr(client, "output_token_ceiling_enforcement", None)
@@ -599,7 +602,8 @@ class PiKimiDecisionAdapter(_FrozenRobustnessDecisionAdapter):
             raise ValueError(
                 "Kimi execution requires the declared wire and application output-ceiling transport"
             )
-        super().__init__(condition=_KIMI, prompt_version=prompt_version, client=client)
+        super().__init__(condition=replace(_KIMI, output_token_ceiling=output_token_ceiling,
+                         wire_output_token_ceiling=output_token_ceiling), prompt_version=prompt_version, client=client)
 
 
 class PiOpenAIDecisionAdapter(_FrozenRobustnessDecisionAdapter):

@@ -40,17 +40,21 @@ def _check_model(context: _execution._ExecutionContext, adapters: Mapping[str, L
     assert model is not None
     cells = tuple(cell for cell in context.origins.source.manifest.prompt_model_cells if cell.requested_model == model)
     from ._concurrent_recovery_parallel_runtime import ParallelAdapterPool, preflight_pools
+    ceiling = 1024 if context.state.output_amendment is not None else 256
     if any(isinstance(a, ParallelAdapterPool) for a in adapters.values()):
-        preflight_pools(context.origins.source.manifest, cells, adapters)
+        preflight_pools(context.origins.source.manifest, cells, adapters, kimi_output_token_ceiling=ceiling)
         adapters = {key: value.lanes[0] if isinstance(value, ParallelAdapterPool) else value for key, value in adapters.items()}
-    _v2._preflight_cell_adapters(context.origins.source.manifest, cells, adapters)
+    _v2._preflight_cell_adapters(context.origins.source.manifest, cells, adapters, kimi_output_token_ceiling=ceiling)
+    from ._concurrent_recovery_output_amendment import preflight
+    preflight(context.state, adapters)
     adapter = adapters[cells[0].cell_id]
     before = _v2._v2_adapter_snapshot(adapter)
     data = _task._self_check_input()
     if _task._task_status(context)["status"] in _TERMINAL:
         raise RecoveryCampaignError("Task ended before the self-check dispatch")
-    _append(context, "self_check_intent", {
-        "requested_model": model, "contract_sha256": _v2._json_sha256(_task._health_contract(context.origins, model)),
+    prefix = "amended_" if context.state.output_amendment is not None else ""
+    _append(context, prefix + "self_check_intent", {
+        "requested_model": model, "contract_sha256": _v2._json_sha256(_task._health_contract(context.origins, model, context.state)),
     })
     failure = None
     decision = None
@@ -63,7 +67,7 @@ def _check_model(context: _execution._ExecutionContext, adapters: Mapping[str, L
     attempt = _v2._v2_attempt_evidence(adapter=adapter, before=before, attempt_number=1,
         outcome="succeeded" if failure is None else "nonretryable_failure", error=failure,
         wait_seconds=None, wait_source=None)
-    _append(context, "self_check_settled", {"requested_model": model,
+    _append(context, prefix + "self_check_settled", {"requested_model": model,
         "attempt": attempt.model_dump(mode="json"),
         "decision": None if decision is None else decision.model_dump(mode="json", exclude={"provider_metadata"})})
 
@@ -92,7 +96,7 @@ def _run_task_study(study: ConcurrentRobustnessStudy, plan_path: str | Path,
             if context.state.effective_parallel_approval is not None and model != context.state.effective_parallel_approval["requested_model"]:
                 break
             with model_resources(model) as fresh_adapters:
-                if model not in context.state.self_checks:
+                if context.state.effective_self_check(model) is None:
                     _check_model(context, fresh_adapters())
                 _observe_revocation(context)
                 if _task._task_status(context)["status"] in _TERMINAL:

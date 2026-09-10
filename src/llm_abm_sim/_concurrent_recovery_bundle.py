@@ -50,7 +50,7 @@ def _bound_facts(origins: _execution._Origins, records: tuple[dict[str, Any], ..
         elif row["kind"] == "self_check_recheck_accepted":
             from ._concurrent_recovery_recheck import receipt_references
             paths.update(Path(ref["path"]) for ref in receipt_references(row["payload"]))
-        elif row["kind"] in {"quota_retry_accepted", "model_lane_accepted"}:
+        elif row["kind"] in {"quota_retry_accepted", "model_lane_accepted", "kimi_output_amendment_accepted"}:
             paths.add(Path(row["payload"]["approval"]["path"]))
         elif row["kind"] == "parallel_execution_accepted":
             from ._concurrent_recovery_parallel import receipt_references as parallel_references

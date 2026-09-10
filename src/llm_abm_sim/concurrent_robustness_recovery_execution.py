@@ -203,6 +203,9 @@ def _legal_history(origins: _Origins, records: tuple[dict[str, Any], ...], targe
         if previous_time is not None and when < previous_time:
             raise RecoveryCampaignError("Recovery event clock moved backwards")
         payload = row["payload"]
+        if row["kind"] == "kimi_output_amendment_accepted":
+            from ._concurrent_recovery_output_amendment import validate_receipt as validate_output
+            validate_output(origins, state, payload, when, head)
         if row["kind"] == "model_lane_accepted":
             from ._concurrent_recovery_model_lane import validate_receipt as validate_model_lane
             validate_model_lane(origins, state, payload, when, head)
@@ -221,7 +224,7 @@ def _legal_history(origins: _Origins, records: tuple[dict[str, Any], ...], targe
         if row["kind"] == "self_check_recheck_accepted":
             from ._concurrent_recovery_recheck import validate_receipt
             validate_receipt(origins, state, payload, when, head)
-        if row["kind"] in {"task_admitted", "task_revoked", "self_check_intent", "self_check_settled"}:
+        if row["kind"] in {"task_admitted", "task_revoked", "self_check_intent", "self_check_settled", "amended_self_check_intent", "amended_self_check_settled"}:
             from .concurrent_robustness_recovery_task import _validate_task_event
             _validate_task_event(origins, state, row["kind"], payload, when)
         elif origins.task_plan is not None and state.task_plan != origins.handoff.model_dump(mode="json"):
@@ -365,9 +368,13 @@ def _run_recovery_study(*, manifest: RecoveryExecutionManifest, adapters_by_cell
                       if cell.requested_model == context.state.current_model)
         if context.state.effective_parallel_approval is not None:
             from ._concurrent_recovery_parallel_runtime import preflight_pools
-            preflight_pools(context.origins.source.manifest, cells, adapters_by_cell)
+            preflight_pools(context.origins.source.manifest, cells, adapters_by_cell,
+                            kimi_output_token_ceiling=1024 if context.state.output_amendment is not None else 256)
         else:
-            _v2._preflight_cell_adapters(context.origins.source.manifest, cells, adapters_by_cell)
+            _v2._preflight_cell_adapters(context.origins.source.manifest, cells, adapters_by_cell,
+                                         kimi_output_token_ceiling=1024 if context.state.output_amendment is not None else 256)
+    from ._concurrent_recovery_output_amendment import preflight as preflight_output
+    preflight_output(context.state, adapters_by_cell)
     journal = CampaignJournal.open(context.origins.campaign)
     if journal.head != context.journal.head:
         raise RecoveryCampaignError("Recovery head changed before epoch admission")

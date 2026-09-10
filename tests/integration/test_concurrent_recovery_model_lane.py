@@ -1,5 +1,7 @@
 """Offline public task extension tests; never real Formal evidence."""
 
+from typing import Any
+
 import pytest
 
 from llm_abm_sim import concurrent_robustness_formal_execution as formal
@@ -58,7 +60,7 @@ def test_public_kimi_lane_completes_7200_and_120_barriers_with_shared_budget(tmp
         },
     )
     before = task.inspect_recovery_task(plan)
-    calls = [len(c.calls) for c in clients]
+    original_calls = [len(c.calls) for c in clients]
     receipt = task.accept_recovery_task_parallelism(
         plan, approval_path=approval, approval_sha256=formal._sha256_file(approval)
     )
@@ -72,8 +74,9 @@ def test_public_kimi_lane_completes_7200_and_120_barriers_with_shared_budget(tmp
         )
         == receipt
     )
-    assert [len(c.calls) for c in clients] == calls
-    assert task._context(plan).state.parallel_approval["maximum_inflight"] == 4
+    assert [len(c.calls) for c in clients] == original_calls
+    parallel = task._context(plan).state.parallel_approval
+    assert parallel is not None and parallel["maximum_inflight"] == 4
     changed = tmp_path / "crossed-approval.json"
     import json
 
@@ -109,7 +112,7 @@ def test_public_kimi_lane_completes_7200_and_120_barriers_with_shared_budget(tmp
             return super().create_response(*args, **kwargs)
 
     monkeypatch.setattr(operator, "_new_client", lambda model, timeout: QuotaTransport("gemini", {}))
-    stopped = operator.run_concurrent_robustness_recovery_task(plan)
+    stopped: dict[str, Any] = operator.run_concurrent_robustness_recovery_task(plan)
     assert stopped["status"] == "stopped" and initial_calls == 4
     assert stopped["successful_judgments"] == 7260
     context = task._context(plan)
@@ -138,6 +141,38 @@ def test_public_kimi_lane_completes_7200_and_120_barriers_with_shared_budget(tmp
     old_state = context.state
     receipt = accept()
     assert accept() == receipt and receipt["provider_calls"] == 0
+    # Preserve an actual adapter-level 256 failure before the explicit 1024 amendment.
+    failures = 0
+
+    class CeilingTransport(_Transport):
+        def create_response(self, *args, **kwargs):
+            nonlocal failures
+            failures += 1
+            assert kwargs['output_token_ceiling'] == 256
+            raise ProviderAttemptFailure(category='output_ceiling_exceeded', retryable=False)
+
+    monkeypatch.setattr(operator, '_new_client', lambda model, timeout: CeilingTransport('kimi', {}))
+    ceiling_stop = operator.run_concurrent_robustness_recovery_task(plan)
+    assert ceiling_stop['status'] == 'stopped' and failures == 1
+    assert ceiling_stop['physical_attempts'] == stopped['physical_attempts']
+    failed_context = task._context(plan)
+    original_check = failed_context.state.self_checks['kimi-coding/k3-256k']
+    output_approval = tmp_path / 'kimi-output1024.json'
+    _write(output_approval, {
+        'schema_version': 'concurrent-recovery-kimi-output-amendment-v1', 'status': 'approved',
+        'authorization_reference': 'fixture:user-approved-1024-and-one-additional-check',
+        'approved_at_utc': formal._utc_now().strftime('%Y-%m-%dT%H:%M:%SZ'),
+        'task_plan': {'path': str(plan), 'sha256': formal._sha256_file(plan)},
+        'stopped_head_sha256': ceiling_stop['campaign_head_sha256'],
+        'original_self_check_sha256': task._v2._json_sha256(original_check),
+        'previous_output_token_ceiling': 256, 'requested_model': 'kimi-coding/k3-256k',
+        'output_token_ceiling': 1024, 'additional_self_check_cap': 1,
+    })
+    def amend():
+        return task.accept_recovery_task_kimi_output_amendment(
+            plan, approval_path=output_approval, approval_sha256=formal._sha256_file(output_approval))
+    output_receipt = amend()
+    assert amend() == output_receipt and output_receipt['provider_calls'] == 0
     calls = active = peak = 0
     created = []
     ten = threading.Barrier(10)
@@ -145,6 +180,7 @@ def test_public_kimi_lane_completes_7200_and_120_barriers_with_shared_budget(tmp
     class KimiTransport(_Transport):
         def create_response(self, *args, **kwargs):
             nonlocal calls, active, peak
+            assert kwargs["output_token_ceiling"] == 1024
             with lock:
                 calls += 1
                 number = calls
@@ -167,12 +203,12 @@ def test_public_kimi_lane_completes_7200_and_120_barriers_with_shared_budget(tmp
         return value
 
     monkeypatch.setattr(operator, "_new_client", kimi_client)
-    finished = operator.run_concurrent_robustness_recovery_task(plan)
+    finished: dict[str, Any] = operator.run_concurrent_robustness_recovery_task(plan)
     assert finished["status"] == "model_complete", finished
     assert finished["current_model"] == "kimi-coding/k3-256k"
     assert finished["successful_judgments"] == stopped["successful_judgments"] + 7200
     assert finished["physical_attempts"] == stopped["physical_attempts"] + 7200
-    assert finished["self_check_attempts"] == stopped["self_check_attempts"] + 1
+    assert finished["self_check_attempts"] == stopped["self_check_attempts"] + 2
     assert finished["cell_prefixes"][12:16] == [1800] * 4
     assert finished["cell_prefixes"][:12] == stopped["cell_prefixes"][:12]
     assert finished["cell_prefixes"][16:] == [0] * 4
@@ -191,3 +227,12 @@ def test_public_kimi_lane_completes_7200_and_120_barriers_with_shared_budget(tmp
     assert len(kimi_commits) == 120
     assert operator.run_concurrent_robustness_recovery_task(plan) == finished and calls == 7201
     assert accept() == receipt and len(created) == 10
+    assert reread.state.self_checks['kimi-coding/k3-256k'] == original_check
+    assert reread.state.amended_self_check is not None
+    assert reread.state.amended_self_check['attempt']['outcome'] == 'succeeded'
+    judgments = [v for k, v in reread.state.judgments.items() if k[0] in range(12, 16)]
+    assert len(judgments) == 7200
+    assert all(v['schema_version'] == 'concurrent-recovery-provider-judgment-v3' for v in judgments)
+    assert all(v['output_amendment_approval']['sha256'] == formal._sha256_file(output_approval) for v in judgments)
+    assert str(output_approval) in {row['path'] for row in bundle['artifact_facts']}
+    assert amend() == output_receipt and calls == 7201

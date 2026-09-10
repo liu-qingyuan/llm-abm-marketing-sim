@@ -236,12 +236,15 @@ def _self_check_input() -> DecisionInput:
     )
 
 
-def _health_contract(origins: _execution._Origins, model: str) -> dict[str, Any]:
+def _health_contract(origins: _execution._Origins, model: str, state: CampaignProgress | None = None) -> dict[str, Any]:
     assert origins.task_plan is not None
     scope = origins.task_plan["authorization"]["request_identity"]
-    return {"task_plan_sha256": origins.handoff.sha256, "requested_model": model,
+    contract = {"task_plan_sha256": origins.handoff.sha256, "requested_model": model,
             "route": next(row for row in scope["provider_routes"] if row["requested_model"] == model),
             "prompt_sha256": scope["self_check_prompt_sha256"], "policy": scope["self_check_policy"]}
+    if state is not None and state.output_amendment is not None and model == state.output_amendment["requested_model"]:
+        contract["output_amendment"] = state.output_amendment
+    return contract
 
 
 def _validate_task_event(origins: _execution._Origins, state: CampaignProgress,
@@ -263,10 +266,10 @@ def _validate_task_event(origins: _execution._Origins, state: CampaignProgress,
         _initial._checked_reference(reference)
         if _formal._parse_utc(checked["requested_at_utc"], "revocation time") > when:
             raise RecoveryCampaignError("Task revocation was observed before it was requested")
-    elif kind == "self_check_intent":
-        if not _current(plan, when) or payload.get("contract_sha256") != _v2._json_sha256(_health_contract(origins, state.current_model or "")):
+    elif kind in {"self_check_intent", "amended_self_check_intent"}:
+        if not _current(plan, when) or payload.get("contract_sha256") != _v2._json_sha256(_health_contract(origins, state.current_model or "", state if kind == "amended_self_check_intent" else None)):
             raise RecoveryCampaignError("Self-check is outside the approved task or frozen configuration")
-    elif kind == "self_check_settled":
+    elif kind in {"self_check_settled", "amended_self_check_settled"}:
         attempt = _v2._V2AttemptEvidence.model_validate(payload.get("attempt"))
         model = payload.get("requested_model")
         cell = next((cell for cell in state.cells if cell.requested_model == model), None)
@@ -275,6 +278,8 @@ def _validate_task_event(origins: _execution._Origins, state: CampaignProgress,
             raise RecoveryCampaignError("Self-check response is crossed with its frozen route")
         if attempt.outcome == "succeeded":
             EngageDecision.model_validate(payload["decision"])
+            if kind == "amended_self_check_settled" and (attempt.output_usage is None or attempt.output_usage > 1024):
+                raise RecoveryCampaignError("Amended self-check exceeds its total output ceiling")
             if (attempt.provider_response_count != 1 or attempt.usage_complete_response_count != 1
                 or attempt.observed_model_counts != {cell.required_observed_model: 1}
                 or attempt.usage_missing_response_count or attempt.usage_malformed_response_count):
@@ -388,7 +393,9 @@ def _task_status(context: _execution._ExecutionContext) -> dict[str, Any]:
             status = "authorization_not_current"
     bundle = context.journal.root / "bundles" / context.journal.head / "bundle.json"
     return {**progress, "status": status, "authorization_current": current and not revoked,
-            "self_check_attempts": len(state.self_check_intents) + len(state.accepted_rechecks),
+            "kimi_output_amendment": state.output_amendment,
+            "amended_self_check": state.amended_self_check,
+            "self_check_attempts": len(state.self_check_intents) + len(state.accepted_rechecks) + int(state.amended_self_check_intent is not None),
             "self_check_failures": {model: row["attempt"]["failure_category"] for model, row in state.self_checks.items()
                                     if row["attempt"]["outcome"] != "succeeded"},
             "campaign_head_sha256": context.journal.head,
@@ -536,5 +543,38 @@ def accept_recovery_task_model_lane(plan_path: str | Path, *, approval_path: Pat
         _context(plan_path)
         path = context.journal.root / 'events' / f'{row["sequence"]:08d}.json'
         return {'schema_version': 'concurrent-recovery-model-lane-acceptance-v1',
+                'receipt': {'path': str(path), 'sha256': _formal._sha256_file(path)},
+                'accepted_head_sha256': row['record_sha256'], 'provider_calls': 0, 'credential_reads': 0}
+
+
+def accept_recovery_task_kimi_output_amendment(plan_path: str | Path, *, approval_path: Path,
+                                                approval_sha256: str) -> dict[str, Any]:
+    """Accept Kimi 1024 and exactly one extra self-check on its original stopped task.
+
+    The immutable approval binds the exact HEAD and original failed 256 check.
+    Old failures, source, model, Prompt, budgets and suspended Gemini remain.
+    A repeated identical receipt dispatches nothing; any new failure stops.
+    """
+    from . import _concurrent_recovery_output_amendment as amendment
+    from ._concurrent_recovery_campaign import recovery_scope
+    context = _context(plan_path)
+    reference = _formal.FormalArtifactReference(path=approval_path, sha256=approval_sha256).model_dump(mode='json')
+    with recovery_scope(context.origins.campaign):
+        context = _context(plan_path)
+        approval = amendment._checked(reference)
+        existing = next((row for row in context.journal.records if row['kind'] == amendment.EVENT), None)
+        if existing is not None:
+            if existing['payload']['approval'] != reference:
+                raise RecoveryCampaignError('Task already accepted a different output amendment')
+            row = existing
+        else:
+            if _read_revocation(context.plan) is not None:
+                raise RecoveryCampaignError('Revoked task cannot amend output conditions')
+            payload = {'approval': reference, **{key: approval[key] for key in amendment.FIELDS}}
+            amendment.validate_receipt(context.origins, context.state, payload, _formal._utc_now(), context.journal.head)
+            row = context.state.append(context.journal, amendment.EVENT, payload)
+        _context(plan_path)
+        path = context.journal.root / 'events' / f'{row["sequence"]:08d}.json'
+        return {'schema_version': 'concurrent-recovery-kimi-output-acceptance-v1',
                 'receipt': {'path': str(path), 'sha256': _formal._sha256_file(path)},
                 'accepted_head_sha256': row['record_sha256'], 'provider_calls': 0, 'credential_reads': 0}

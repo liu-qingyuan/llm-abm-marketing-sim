@@ -32,6 +32,7 @@ def preflight_pools(
     manifest: v2.ConcurrentRobustnessManifestV2,
     cells: tuple[v2._PromptModelCell, ...],
     adapters: Mapping[str, LLMDecisionAdapter],
+    *, kimi_output_token_ceiling: int = 256,
 ) -> None:
     if set(adapters) != {cell.cell_id for cell in cells} or not all(
         isinstance(a, ParallelAdapterPool) for a in adapters.values()
@@ -44,7 +45,7 @@ def preflight_pools(
         raise RecoveryCampaignError("Parallel cell resources have different capacities")
     for lane in range(next(iter(sizes))):
         mapping = {key: pool.lanes[lane] for key, pool in pools.items()}
-        v2._preflight_cell_adapters(manifest, cells, mapping)
+        v2._preflight_cell_adapters(manifest, cells, mapping, kimi_output_token_ceiling=kimi_output_token_ceiling)
         lane_clients = {id(getattr(adapter, "client", None)) for adapter in mapping.values()}
         if len(lane_clients) != 1 or clients & lane_clients:
             raise RecoveryCampaignError("Parallel lanes must have separate provider clients")

@@ -51,8 +51,9 @@ class PairCoordinates(_v2._V2FrozenModel):
 class RecoveryJudgmentV1(_v2._V2FrozenModel):
     """A recovery-only Judgment that preserves the original attempt ordinals."""
 
-    schema_version: Literal["concurrent-recovery-provider-judgment-v1", "concurrent-recovery-provider-judgment-v2"]
+    schema_version: Literal["concurrent-recovery-provider-judgment-v1", "concurrent-recovery-provider-judgment-v2", "concurrent-recovery-provider-judgment-v3"]
     quota_retry_approval: _formal.FormalArtifactReference | None = None
+    output_amendment_approval: _formal.FormalArtifactReference | None = None
     judgment_id: str
     epoch_identity_sha256: str
     judgment_source_identity: str
@@ -68,6 +69,8 @@ class RecoveryJudgmentV1(_v2._V2FrozenModel):
         payload = handler(self)
         if self.quota_retry_approval is None:
             payload.pop("quota_retry_approval", None)
+        if self.output_amendment_approval is None:
+            payload.pop("output_amendment_approval", None)
         return payload
 
     @field_validator("judgment_id", "epoch_identity_sha256", "judgment_source_identity")
@@ -96,7 +99,14 @@ class RecoveryJudgmentV1(_v2._V2FrozenModel):
         if self.new_attempts[-1].outcome != "succeeded":
             raise ValueError("new attempts must end in one success")
         preceding = [row for row in self.new_attempts[:-1] if row.outcome != "retryable_failure"]
-        if self.schema_version == RECOVERY_JUDGMENT_V1_SCHEMA:
+        if self.schema_version == "concurrent-recovery-provider-judgment-v3":
+            if (self.output_amendment_approval is None or self.quota_retry_approval is not None
+                or self.cell.requested_model != "kimi-coding/k3-256k" or preceding
+                or any(row.output_usage is not None and row.output_usage > 1024 for row in self.new_attempts)):
+                raise ValueError("Kimi Judgment v3 requires its explicit 1024 approval and bounded usage")
+        elif self.output_amendment_approval is not None:
+            raise ValueError("Output amendment requires Judgment v3")
+        elif self.schema_version == RECOVERY_JUDGMENT_V1_SCHEMA:
             if self.quota_retry_approval is not None or preceding:
                 raise ValueError("new attempts before the success must be retryable failures")
         elif (self.quota_retry_approval is None or self.cell.requested_model != "gemini-3.1-pro"
@@ -236,6 +246,7 @@ def build_recovery_judgment(
     epoch_identity_sha256: str,
     judgment_source_identity: str,
     quota_retry_approval: dict[str, Any] | None = None,
+    output_amendment_approval: dict[str, Any] | None = None,
 ) -> RecoveryJudgmentV1:
     """Build and hash a recovery contract without rewriting old attempt ordinals."""
 
@@ -260,6 +271,9 @@ def build_recovery_judgment(
     if quota_retry_approval is not None:
         payload["schema_version"] = "concurrent-recovery-provider-judgment-v2"
         payload["quota_retry_approval"] = quota_retry_approval
+    if output_amendment_approval is not None:
+        payload["schema_version"] = "concurrent-recovery-provider-judgment-v3"
+        payload["output_amendment_approval"] = output_amendment_approval
     payload["judgment_id"] = _v2._json_sha256(payload)
     return RecoveryJudgmentV1.model_validate(payload)
 

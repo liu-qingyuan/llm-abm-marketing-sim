@@ -63,6 +63,9 @@ class CampaignProgress:
         self.quota_retry_approval: dict[str, Any] | None = None
         self.quota_retry_pending: tuple[int, int] | None = None
         self.model_lane_approval: dict[str, Any] | None = None
+        self.output_amendment: dict[str, Any] | None = None
+        self.amended_self_check_intent: dict[str, Any] | None = None
+        self.amended_self_check: dict[str, Any] | None = None
         self.suspended_models: dict[str, dict[str, Any]] = {}
         self.model_stage_complete = False
 
@@ -72,6 +75,8 @@ class CampaignProgress:
 
 
     def effective_self_check(self, model: str) -> dict[str, Any] | None:
+        if self.output_amendment is not None and model == self.output_amendment["requested_model"]:
+            return self.amended_self_check
         return self.accepted_rechecks.get(model, self.self_checks.get(model))
 
     @property
@@ -245,6 +250,12 @@ class CampaignProgress:
 
     def transition(self, kind: str, payload: dict[str, Any]) -> Callable[[], None]:
         """Validate before durable append; apply its returned effect only afterwards."""
+        if kind == "kimi_output_amendment_accepted":
+            from ._concurrent_recovery_output_amendment import transition as amend
+            return amend(self, payload)
+        if kind in {"amended_self_check_intent", "amended_self_check_settled"}:
+            from ._concurrent_recovery_output_amendment import check_transition
+            return check_transition(self, kind, payload)
         if kind == "model_lane_source_drift":
             self._exact(payload, {"failure_category"})
             if self.model_lane_approval is None or self.status != "running" or payload["failure_category"] != "source_drift":
@@ -425,6 +436,10 @@ class CampaignProgress:
             from ._concurrent_recovery_quota_retry import judgment_reference
             expected_quota = judgment_reference(self, key)
             actual_quota = judgment.quota_retry_approval.model_dump(mode="json") if judgment.quota_retry_approval is not None else None
+            from ._concurrent_recovery_output_amendment import judgment_reference as output_reference
+            actual_output = judgment.output_amendment_approval.model_dump(mode="json") if judgment.output_amendment_approval is not None else None
+            if actual_output != output_reference(self, judgment.cell.requested_model):
+                raise RecoveryCampaignError("Kimi Judgment differs from its accepted output amendment")
             if actual_quota != expected_quota:
                 raise RecoveryCampaignError("Quota Judgment differs from its accepted receipt")
             if (

@@ -8,6 +8,7 @@ from typing import Any
 from . import concurrent_robustness_v2 as _v2
 from ._concurrent_recovery_campaign import CampaignJournal, RecoveryCampaignError, _require_scope
 from ._concurrent_recovery_judgment import RecoveryJudgmentV1, build_recovery_judgment
+from ._concurrent_recovery_output_amendment import judgment_reference as output_reference
 from ._concurrent_recovery_progress import CampaignProgress
 from .concurrent_message_experiment import _PairExecutionPlan
 from .decision import LLMDecisionAdapter
@@ -154,7 +155,8 @@ def run_recovery_model(
                         decision=state.success_decisions[key], historical_attempts=state.historical_failure if key == state.failed_key else (),
                         new_attempts=tuple(state.new_attempts[key]),
                         epoch_identity_sha256=state.attempt_epochs[key, state.new_attempts[key][-1].attempt_number],
-                        judgment_source_identity=source_id, quota_retry_approval=judgment_reference(state, key))
+                        judgment_source_identity=source_id, quota_retry_approval=judgment_reference(state, key),
+                        output_amendment_approval=output_reference(state, cell.requested_model))
                     state.append(journal, "judgment_persisted", {"judgment": judgment.model_dump(mode="json")})
                 judgment = RecoveryJudgmentV1.model_validate(state.pending_judgment)
                 terminal = judgment.realized_projection(realization_source_identity=manifest.realization_source.source_identity)

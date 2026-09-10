@@ -2110,6 +2110,7 @@ def _preflight_cell_adapters(
     manifest: ConcurrentRobustnessManifestV2,
     cells: tuple[_PromptModelCell, ...],
     adapters_by_cell: Mapping[str, LLMDecisionAdapter],
+    *, kimi_output_token_ceiling: int = 256,
 ) -> tuple[tuple[_PromptModelCell, LLMDecisionAdapter], ...]:
     if not cells or (cells != manifest.prompt_model_cells and cells != tuple(
         cell for cell in manifest.prompt_model_cells if cell.requested_model == cells[0].requested_model
@@ -2190,6 +2191,14 @@ def _preflight_cell_adapters(
             )
         if robustness_adapter:
             request_evidence = getattr(adapter, "request_evidence", None)
+            if cell.requested_model == "kimi-coding/k3-256k" and (
+                type(kimi_output_token_ceiling) is not int or kimi_output_token_ceiling not in {256, 1024}
+                or not isinstance(request_evidence, Mapping)
+                or any(request_evidence.get(k) != kimi_output_token_ceiling
+                       for k in ("output_token_ceiling", "wire_output_token_ceiling"))
+            ):
+                raise ConcurrentRobustnessError(ConcurrentRobustnessErrorCode.UNSUPPORTED_ADAPTERS,
+                                               "Kimi Adapter output ceiling differs from the admitted condition")
             expected_route = {
                 "deepseek-v4-flash": "deepseek_official",
                 "gemini-3.1-pro": "antigravity_openai_compatible_gateway",
