@@ -89,6 +89,7 @@ def _verified_recovery_realization(
     visited_terminals: set[tuple[int, int]] = set()
     encountered_reserved: set[tuple[int, int]] = set()
     encountered_commits: set[tuple[int, int, int]] = set()
+    encountered_parallel_batches: set[tuple[int, int]] = set()
     verified_terminals = 0
     verified_batches = 0
     recomputed_batches: list[dict[str, Any]] = []
@@ -145,7 +146,21 @@ def _verified_recovery_realization(
                     recomputed_batches.append(row)
                     verified_batches += 1
 
-                _v2._drive_primary_runtime(kernel, resolve_pair=resolve, pair_settled=settled, batch_committed=committed)
+                def batch_ready(plans: tuple[Any, ...], *, index: int = index, cell: Any = cell) -> None:
+                    from ._concurrent_recovery_parallel_runtime import freeze_work
+                    if not plans:
+                        return
+                    key = index, plans[0].time_step
+                    expected = state.parallel_batches.get(key)
+                    if expected is None:
+                        return
+                    work = freeze_work(index, cell, plans)
+                    actual = {"cell_index":index,"time_step":key[1],"pairs":[item.reservation() for item in work]}
+                    if actual != expected:
+                        raise RecoveryCampaignError("Parallel reservation differs from independently rebuilt frozen batch")
+                    encountered_parallel_batches.add(key)
+                _v2._drive_primary_runtime(kernel, resolve_pair=resolve, pair_settled=settled, batch_committed=committed,
+                                          batch_ready=batch_ready if state.parallel_approval is not None else None)
             except _MissingTerminal:
                 stopped = True
             finally:
@@ -154,6 +169,8 @@ def _verified_recovery_realization(
                 break
 
     _v2._assert_source_unchanged(closure)
+    if encountered_parallel_batches != set(state.parallel_batches):
+        raise RecoveryCampaignError("Replay did not encounter every frozen parallel batch")
     if visited_terminals != set(terminals) or set(reserved) != encountered_reserved:
         raise RecoveryCampaignError("replay did not encounter the complete terminal and reservation prefix")
     if set(recorded_commits) != {(key[1], key[2]) for key in encountered_commits} or set(state.batch_commits) != encountered_commits:

@@ -2808,10 +2808,13 @@ def _drive_primary_runtime(
     resolve_pair: Callable[[_PairExecutionPlan], _V2RealizedTerminal],
     pair_settled: Callable[[_PairExecutionPlan, _V2RealizedTerminal], None],
     batch_committed: Callable[[_ConcurrentRuntimeBatchCommit], None],
+    batch_ready: Callable[[tuple[_PairExecutionPlan, ...]], None] | None = None,
 ) -> None:
     while kernel.state.next_time_step < kernel.config.horizon:
         if kernel.active_batch is None:
             kernel.plan_batch()
+        if batch_ready is not None:
+            batch_ready(tuple(kernel.pending_plans()))
         for plan in kernel.pending_plans():
             realized_terminal = resolve_pair(plan)
             kernel.start_pair(plan)

@@ -18,3 +18,5 @@ ADR 0008 supersede ADR 0007 中 direct positive feedback与增量 Full-Pool主�
 新的 executable requirements 发布到 GitHub `Spec:` issue；当前行为和实现边界写入对应 Architecture Note。
 
 - [ADR 0009: 一次性接纳明确授权的复测](0009-accept-explicit-recovery-self-check.md)：同一恢复任务以追加凭据接纳已有成功复测，保留失败、累计预算和其他硬停。
+
+- [ADR 0010: 同一恢复任务中的有界并发](0010-gemini-parallel-recovery.md)：显式接纳四路物理请求，保留唯一预算、乱序持久化、硬停drain及完整batch反馈。

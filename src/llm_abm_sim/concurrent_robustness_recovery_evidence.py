@@ -225,6 +225,12 @@ def _event_origins(
                 if number in attempts.setdefault(active_key, {}):
                     raise RecoveryEvidenceError("Recovery attempt origin is duplicated")
                 attempts[active_key][number] = origin
+        elif row["kind"] == "parallel_attempt_settled" and isinstance(payload, Mapping):
+            key = (int(payload["cell_index"]), int(payload["pair_schedule_position"]))
+            number = int(payload["attempt"]["attempt_number"])
+            if number in attempts.setdefault(key, {}):
+                raise RecoveryEvidenceError("Parallel attempt origin is duplicated")
+            attempts[key][number] = origin
         elif row["kind"] == "judgment_persisted" and isinstance(payload, Mapping):
             judgment = RecoveryJudgmentV1.model_validate(payload["judgment"])
             key = (judgment.cell_index, judgment.pair.pair_schedule_position)

@@ -85,6 +85,8 @@ def _run_task_study(study: ConcurrentRobustnessStudy, plan_path: str | Path,
         while _task._task_status(context)["status"] not in _TERMINAL:
             model = context.state.current_model
             assert model is not None
+            if context.state.parallel_approval is not None and model != context.state.parallel_approval["requested_model"]:
+                break
             with model_resources(model) as fresh_adapters:
                 if model not in context.state.self_checks:
                     _check_model(context, fresh_adapters())

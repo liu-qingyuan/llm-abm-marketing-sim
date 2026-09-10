@@ -100,7 +100,7 @@ def _readiness(request: RecoveryExecutionRequest, origins: _Origins, state: Camp
         raise RecoveryCampaignError("Legacy execution approval cannot use task-policy origins")
     if request.initial_handoff != origins.handoff or request.expected_head_sha256 != head:
         raise RecoveryCampaignError("Recovery execution uses crossed origins or a stale head")
-    if state.inflight is not None or state.status in {"stopped", "reconciliation_required", "complete"} or state.current_model is None:
+    if state.has_inflight or state.status in {"stopped", "reconciliation_required", "complete"} or state.current_model is None:
         raise RecoveryCampaignError("Recovery cannot authorize unknown or terminal history")
     initial_request = _initial.RecoveryInitialEpochRequest(proposal=origins.proposal_reference, qualification_artifacts=request.qualification_artifacts)
     qualifications = _initial._qualified_artifacts(initial_request, origins.source, now=now)
@@ -203,6 +203,15 @@ def _legal_history(origins: _Origins, records: tuple[dict[str, Any], ...], targe
         if previous_time is not None and when < previous_time:
             raise RecoveryCampaignError("Recovery event clock moved backwards")
         payload = row["payload"]
+        if row["kind"] == "parallel_execution_accepted":
+            from ._concurrent_recovery_parallel import validate_receipt as validate_parallel
+            validate_parallel(origins, state, payload, when, head)
+        if row["kind"] == "parallel_attempt_settled":
+            from .concurrent_robustness_recovery_task import _validate_task_event
+            _validate_task_event(origins, state, "self_check_settled", {
+                "requested_model": state.cells[payload["cell_index"]].requested_model,
+                "attempt": payload["attempt"], "decision": payload["decision"],
+            }, when)
         if row["kind"] == "self_check_recheck_accepted":
             from ._concurrent_recovery_recheck import validate_receipt
             validate_receipt(origins, state, payload, when, head)
@@ -217,7 +226,7 @@ def _legal_history(origins: _Origins, records: tuple[dict[str, Any], ...], targe
             active = _verify_plan(_plan_document(reference.path), origins, state, head)
             if payload["epoch_identity_sha256"] != active["plan_identity_sha256"]:
                 raise RecoveryCampaignError("Recovery epoch is crossed with its approved plan")
-        if row["kind"] in {"epoch_admitted", "invocation_started", "attempt_intent"}:
+        if row["kind"] in {"epoch_admitted", "invocation_started", "attempt_intent", "parallel_attempt_intent"}:
             if active is None or not _window_current(active, when):
                 raise RecoveryCampaignError("Recovery dispatch or admission is outside its legal window")
         state.transition(row["kind"], payload)()
@@ -277,7 +286,7 @@ def read_recovery_execution_plan(plan_path: str | Path) -> dict[str, Any]:
 
 def _action(context: _ExecutionContext) -> str:
     plan, state, journal = context.plan, context.state, context.journal
-    if state.inflight is not None or state.status in {"complete", "stopped", "reconciliation_required"}:
+    if state.has_inflight or state.status in {"complete", "stopped", "reconciliation_required"}:
         return "return"
     used = [row for row in state.epochs if row["epoch_identity_sha256"] == plan["plan_identity_sha256"]]
     if used:
@@ -294,7 +303,8 @@ def _progress(origins: _Origins, state: CampaignProgress) -> dict[str, Any]:
     attempted = set(state.new_attempts)
     if state.inflight is not None:
         attempted.add(state.inflight[0])
-    return {"status": "reconciliation_required" if state.inflight is not None or state.self_check_inflight is not None else state.status,
+    attempted.update(state.parallel_inflight)
+    return {"status": "reconciliation_required" if state.has_inflight or state.self_check_inflight is not None else state.status,
             "successful_judgments": old["successful_judgments"] + state.new_valid_judgments,
             "attempted_logical_judgments": old["attempted_logical_judgments"] + len(attempted - {state.failed_key}),
             "physical_attempts": old["physical_attempts"] + state.physical_attempts,
@@ -347,7 +357,11 @@ def _run_recovery_study(*, manifest: RecoveryExecutionManifest, adapters_by_cell
             raise RecoveryCampaignError("Recovery task has been revoked")
         cells = tuple(cell for cell in context.origins.source.manifest.prompt_model_cells
                       if cell.requested_model == context.state.current_model)
-        _v2._preflight_cell_adapters(context.origins.source.manifest, cells, adapters_by_cell)
+        if context.state.parallel_approval is not None:
+            from ._concurrent_recovery_parallel_runtime import preflight_pools
+            preflight_pools(context.origins.source.manifest, cells, adapters_by_cell)
+        else:
+            _v2._preflight_cell_adapters(context.origins.source.manifest, cells, adapters_by_cell)
     journal = CampaignJournal.open(context.origins.campaign)
     if journal.head != context.journal.head:
         raise RecoveryCampaignError("Recovery head changed before epoch admission")
@@ -385,7 +399,7 @@ def _run_recovery_study(*, manifest: RecoveryExecutionManifest, adapters_by_cell
         journal = CampaignJournal.read(context.origins.campaign)
         state = _legal_history(context.origins, journal.records)
         if state.status == "running":
-            state.append(journal, "epoch_finished", {"status": "reconciliation_required" if state.inflight is not None else "paused"})
+            state.append(journal, "epoch_finished", {"status": "reconciliation_required" if state.has_inflight else "paused"})
         context = _ExecutionContext(context.plan, context.origins, journal, state)
     _v2._assert_source_unchanged(closure)
     bundle = publish_recovery_bundle(context)

@@ -73,7 +73,7 @@ def run_recovery_model(
 ) -> None:
     """Rebuild only through normal kernel interfaces; dispatch at most one model."""
     _require_scope(journal.identity)
-    if not state.epochs or state.status not in {"running", "paused"} or state.inflight is not None:
+    if not state.epochs or state.status not in {"running", "paused"} or state.has_inflight:
         raise RecoveryCampaignError("Recovery runtime lacks a safe admitted epoch")
     epoch = state.epochs[-1]
     invocation = state.append(journal, "invocation_started", {
@@ -86,7 +86,11 @@ def run_recovery_model(
     for index, cell in enumerate(manifest.prompt_model_cells):
         if cell.requested_model != epoch["requested_model"]:
             continue
-        adapter = _v2._V2LaneDecisionAdapter(adapters_by_cell[cell.cell_id], lane)
+        from ._concurrent_recovery_parallel_runtime import ParallelAdapterPool, freeze_work, run_frozen_batch
+        resource = adapters_by_cell[cell.cell_id]
+        if state.parallel_approval is not None and not isinstance(resource, ParallelAdapterPool):
+            raise RecoveryCampaignError("Approved parallel execution requires independent lane resources")
+        adapter = _v2._V2LaneDecisionAdapter(resource.lanes[0] if isinstance(resource, ParallelAdapterPool) else resource, lane)
         request_baseline = _v2._adapter_request_invocations(adapter)
         external_baseline = _v2._adapter_external_request_invocations(adapter)
         cell_root = root / f"cell-{index:02d}"
@@ -175,8 +179,15 @@ def run_recovery_model(
                     raise RecoveryCampaignError("Recovery rebuilt batch differs from the committed history")
             else:
                 state.append(journal, "batch_committed", {"cell_index": index, "time_step": commit.time_step, "commit": row})
+        def batch_ready(plans: tuple[_PairExecutionPlan, ...], *, index: int = index,
+                        cell: _v2._PromptModelCell = cell, resource: LLMDecisionAdapter = resource) -> None:
+            if isinstance(resource, ParallelAdapterPool):
+                run_frozen_batch(state=state, journal=journal, pool=resource,
+                    work=freeze_work(index, cell, plans), check_dispatch_window=check_dispatch_window,
+                    backoff_seconds=manifest.request_contract.retry_backoff_seconds)
         try:
-            _v2._drive_primary_runtime(kernel, resolve_pair=resolve, pair_settled=settled, batch_committed=committed)
+            _v2._drive_primary_runtime(kernel, resolve_pair=resolve, pair_settled=settled, batch_committed=committed,
+                                      batch_ready=batch_ready if state.parallel_approval is not None else None)
             replay = runtime_journal._replay_runtime()
             if kernel.validate_spool(replay) != manifest.ranking_contract.horizon or kernel.runtime_resident_row_count:
                 raise RecoveryCampaignError("Recovery runtime did not close every batch")

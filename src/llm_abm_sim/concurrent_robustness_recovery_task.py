@@ -286,7 +286,7 @@ def _epoch_body(origins: _execution._Origins, state: CampaignProgress, head: str
     model = state.current_model
     health = None if model is None else state.effective_self_check(model)
     if (plan is None or state.task_plan != origins.handoff.model_dump(mode="json") or state.task_revoked
-        or state.inflight is not None or state.self_check_inflight is not None
+        or state.has_inflight or state.self_check_inflight is not None
         or state.status in {"stopped", "reconciliation_required", "complete"}
         or model is None or health is None or health["attempt"]["outcome"] != "succeeded"):
         raise RecoveryCampaignError("Task epoch requires its admitted authority and successful model self-check")
@@ -434,3 +434,37 @@ def accept_recovery_task_recheck(plan_path: str | Path, *, approval_path: Path,
         return {"schema_version": "concurrent-recovery-recheck-acceptance-v1",
                 "receipt": {"path": str(path), "sha256": _formal._sha256_file(path)},
                 "accepted_head_sha256": row["record_sha256"], "provider_calls": 0, "credential_reads": 0}
+
+
+def accept_recovery_task_parallelism(plan_path: str | Path, *, approval_path: Path,
+                                     approval_sha256: str) -> dict[str, Any]:
+    """Bind explicit four-way Gemini dispatch to the same safely paused task.
+
+    Zero Provider calls; immutable approval and original cumulative budgets are
+    preserved. Repeating the same approval is idempotent even after publication
+    succeeded before an interruption. Other hard stops and unknowns stay terminal.
+    """
+    from . import _concurrent_recovery_parallel as parallel
+    from ._concurrent_recovery_campaign import recovery_scope
+
+    context = _context(plan_path)
+    reference = _formal.FormalArtifactReference(path=approval_path, sha256=approval_sha256).model_dump(mode='json')
+    with recovery_scope(context.origins.campaign):
+        context = _context(plan_path)
+        approval = parallel._checked(reference)
+        existing = next((row for row in context.journal.records if row['kind'] == parallel.EVENT), None)
+        if existing is not None:
+            if existing['payload']['approval'] != reference:
+                raise RecoveryCampaignError('Task already accepted a different parallel approval')
+            row = existing
+        else:
+            if _read_revocation(context.plan) is not None:
+                raise RecoveryCampaignError('Revoked task cannot accept parallel execution')
+            payload = {'approval': reference, **{key: approval[key] for key in parallel.FIELDS}}
+            parallel.validate_receipt(context.origins, context.state, payload, _formal._utc_now(), context.journal.head)
+            row = context.state.append(context.journal, parallel.EVENT, payload)
+        _context(plan_path)
+        path = context.journal.root / 'events' / f'{row["sequence"]:08d}.json'
+        return {'schema_version':'concurrent-recovery-parallel-acceptance-v1',
+                'receipt':{'path':str(path),'sha256':_formal._sha256_file(path)},
+                'accepted_head_sha256':row['record_sha256'],'provider_calls':0,'credential_reads':0}

@@ -303,6 +303,9 @@ def _recovery_task(args: argparse.Namespace) -> tuple[dict[str, object], int]:
     if args.command == "accept-recovery-task-recheck":
         return task.accept_recovery_task_recheck(args.plan, approval_path=args.approval,
             approval_sha256=args.approval_sha256), 0
+    if args.command == "accept-recovery-task-parallelism":
+        return task.accept_recovery_task_parallelism(args.plan, approval_path=args.approval,
+            approval_sha256=args.approval_sha256), 0
     if args.command == "revoke-recovery-task":
         return task.revoke_recovery_task(args.plan), 0
     if args.command == "run-recovery-task":
@@ -354,7 +357,7 @@ def _error_category(stage: str, exc: BaseException) -> str:
         return "recovery_report_invalid"
     if stage in {"run", "run-recovery", "run-recovery-task"}:
         return "operator_error"
-    if stage in {"prepare-recovery-task", "authorize-recovery-task", "status-recovery-task", "revoke-recovery-task", "accept-recovery-task-recheck"}:
+    if stage in {"prepare-recovery-task", "authorize-recovery-task", "status-recovery-task", "revoke-recovery-task", "accept-recovery-task-recheck", "accept-recovery-task-parallelism"}:
         return "recovery_task_invalid"
     if stage in {"prepare-recovery-execution", "authorize-recovery-execution", "status-recovery", "inspect-recovery-bundle"}:
         return "recovery_execution_invalid"
@@ -429,10 +432,11 @@ def _parser() -> argparse.ArgumentParser:
     bundle = subparsers.add_parser("inspect-recovery-bundle")
     bundle.add_argument("--bundle", type=Path, required=True)
 
-    recheck = subparsers.add_parser("accept-recovery-task-recheck")
-    recheck.add_argument("--plan", type=Path, required=True)
-    recheck.add_argument("--approval", type=Path, required=True)
-    recheck.add_argument("--approval-sha256", required=True)
+    for command in ("accept-recovery-task-recheck", "accept-recovery-task-parallelism"):
+        acceptance = subparsers.add_parser(command)
+        acceptance.add_argument("--plan", type=Path, required=True)
+        acceptance.add_argument("--approval", type=Path, required=True)
+        acceptance.add_argument("--approval-sha256", required=True)
 
     task_prepare = subparsers.add_parser("prepare-recovery-task")
     task_prepare.add_argument("--request", type=Path, required=True)
@@ -498,7 +502,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             exit_code = 0
         elif stage in {"prepare-recovery-execution", "authorize-recovery-execution", "status-recovery", "inspect-recovery-bundle", "run-recovery"}:
             result, exit_code = _recovery_execution(args)
-        elif stage in {"prepare-recovery-task", "authorize-recovery-task", "status-recovery-task", "run-recovery-task", "revoke-recovery-task", "accept-recovery-task-recheck"}:
+        elif stage in {"prepare-recovery-task", "authorize-recovery-task", "status-recovery-task", "run-recovery-task", "revoke-recovery-task", "accept-recovery-task-recheck", "accept-recovery-task-parallelism"}:
             result, exit_code = _recovery_task(args)
         elif stage in {"close-recovery-evidence", "inspect-recovery-evidence", "export-recovery-report", "inspect-recovery-report"}:
             result, exit_code = _recovery_report(args)

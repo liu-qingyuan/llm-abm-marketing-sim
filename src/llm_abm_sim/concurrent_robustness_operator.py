@@ -111,14 +111,28 @@ def _adapter_for_cell(cell: _PromptModelCell, client: _Transport) -> LLMDecision
 
 @contextmanager
 def _task_model_resources(manifest: ConcurrentRobustnessManifestV2, timeout: float,
-                          model: str) -> Iterator[Callable[[], dict[str, LLMDecisionAdapter]]]:
+                          model: str, *, maximum_inflight: int = 1) -> Iterator[Callable[[], dict[str, LLMDecisionAdapter]]]:
     cells = tuple(cell for cell in manifest.prompt_model_cells if cell.requested_model == model)
     if not cells:
         raise ConcurrentRobustnessOperatorError("Task requested an unknown model")
+    if type(maximum_inflight) is not int or maximum_inflight not in {1, 4} or (maximum_inflight == 4 and model != "gemini-3.1-pro"):
+        raise ConcurrentRobustnessOperatorError("Parallel resources require the approved Gemini-only scope")
     with ExitStack() as resources:
-        client = _new_client(model, timeout)
-        resources.callback(client.close)
-        yield lambda: {cell.cell_id: _adapter_for_cell(cell, client) for cell in cells}
+        clients = []
+        for _ in range(maximum_inflight):
+            client = _new_client(model, timeout)
+            resources.callback(client.close)
+            clients.append(client)
+        def fresh() -> dict[str, LLMDecisionAdapter]:
+            if maximum_inflight == 1:
+                return {cell.cell_id: _adapter_for_cell(cell, clients[0]) for cell in cells}
+            from ._concurrent_recovery_parallel_runtime import ParallelAdapterPool, preflight_pools
+            pools: dict[str, LLMDecisionAdapter] = {cell.cell_id: ParallelAdapterPool(tuple(
+                _adapter_for_cell(cell, client) for client in clients)) for cell in cells}
+            preflight_pools(manifest, cells, pools)
+            return pools
+        yield fresh
+
 
 
 def _build_adapters(
@@ -275,7 +289,8 @@ def run_concurrent_robustness_recovery_task(plan_path: str | Path) -> dict[str, 
         with recovery_scope(context.origins.campaign):
             result = ConcurrentRobustnessStudy().run_task(plan_path, model_resources=lambda model:
                 _task_model_resources(context.origins.source.manifest,
-                    context.origins.source.request.run_parameters.request_timeout_seconds, model))
+                    context.origins.source.request.run_parameters.request_timeout_seconds, model,
+                    maximum_inflight=4 if context.state.parallel_approval is not None else 1))
     except Exception:
         raise ConcurrentRobustnessOperatorError("Recovery task setup or execution failed closed") from None
     if result["status"] == "execution_complete":

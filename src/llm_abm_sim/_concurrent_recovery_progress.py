@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from collections import Counter
 from collections.abc import Callable, Mapping
+from copy import deepcopy
 from typing import Any
 
 from . import concurrent_robustness_v2 as _v2
@@ -54,6 +55,16 @@ class CampaignProgress:
         self.self_checks: dict[str, dict[str, Any]] = {}
         self.self_check_inflight: str | None = None
         self.accepted_rechecks: dict[str, dict[str, Any]] = {}
+        self.parallel_approval: dict[str, Any] | None = None
+        self.parallel_batches: dict[tuple[int, int], dict[str, Any]] = {}
+        self.parallel_active_batch: tuple[int, int] | None = None
+        self.parallel_inflight: dict[tuple[int, int], int] = {}
+        self.parallel_unknown: set[tuple[int, int]] = set()
+
+    @property
+    def has_inflight(self) -> bool:
+        return self.inflight is not None or bool(self.parallel_inflight)
+
 
     def effective_self_check(self, model: str) -> dict[str, Any] | None:
         return self.accepted_rechecks.get(model, self.self_checks.get(model))
@@ -97,8 +108,131 @@ class CampaignProgress:
                 raise RecoveryCampaignError("Recovery failed-pair identity differs from its origin")
         return key
 
+    def _parallel_key(self, payload: Mapping[str, Any]) -> tuple[int, int]:
+        index, position = payload["cell_index"], payload["pair_schedule_position"]
+        if (type(index) is not int or not 0 <= index < len(self.cells)
+            or type(position) is not int or not 0 <= position < self.per_cell):
+            raise RecoveryCampaignError("Parallel pair coordinates are invalid")
+        return index, position
+
+    def _parallel_transition(self, kind: str, payload: dict[str, Any]) -> Callable[[], None]:
+        if kind == "parallel_execution_accepted":
+            self._exact(payload, {"approval", "requested_model", "maximum_inflight", "stop_after_model"})
+            self._exact(payload["approval"], {"path", "sha256"})
+            _v2._require_sha256(payload["approval"]["sha256"], "parallel approval")
+            check = self.effective_self_check(self.current_model or "")
+            if (self.parallel_approval is not None or self.task_plan is None or self.task_revoked
+                or self.status != "paused" or not self.epochs or self.has_inflight
+                or self.self_check_inflight is not None or self.reservation is not None
+                or self.pending_judgment is not None or self.pending_realized is not None
+                or self.current_model != "gemini-3.1-pro" or payload["requested_model"] != self.current_model
+                or type(payload["maximum_inflight"]) is not int or payload["maximum_inflight"] != 4
+                or payload["stop_after_model"] is not True or check is None or check["attempt"]["outcome"] != "succeeded"
+                or not isinstance(payload["approval"]["path"], str) or not payload["approval"]["path"].startswith("/")
+                or any(n % (self.per_cell // 30) for n in self.prefix)):
+                raise RecoveryCampaignError("Parallel acceptance requires a settled paused Gemini batch boundary")
+            return lambda: setattr(self, "parallel_approval", deepcopy(payload))
+        if self.parallel_approval is None or not self.epochs:
+            raise RecoveryCampaignError("Parallel event lacks its approved task extension")
+        if kind == "parallel_attempt_settled":
+            # A stop/revocation prevents dispatch, not recording earlier responses.
+            self._exact(payload, {"cell_index", "pair_schedule_position", "attempt", "decision"})
+            key = self._parallel_key(payload)
+            attempt = _v2._V2AttemptEvidence.model_validate(payload["attempt"])
+            if key not in self.parallel_inflight or key in self.parallel_unknown or attempt.attempt_number != self.parallel_inflight[key]:
+                raise RecoveryCampaignError("Parallel response lacks its unique matching intent")
+            if attempt.request_invocations != 1 or attempt.provider_response_count not in {0, 1}:
+                raise RecoveryCampaignError("Parallel worker must account for exactly one physical request")
+            decision = EngageDecision.model_validate(payload["decision"]) if attempt.outcome == "succeeded" else None
+            if decision is None and payload["decision"] is not None:
+                raise RecoveryCampaignError("Failed parallel response cannot manufacture a Decision")
+            if decision is not None and (attempt.provider_response_count != 1
+                or attempt.successful_decision_count != 1 or attempt.usage_complete_response_count != 1
+                or attempt.usage_missing_response_count or attempt.usage_malformed_response_count
+                or attempt.observed_model_counts != {self.cells[key[0]].required_observed_model: 1}):
+                raise RecoveryCampaignError("Parallel success lacks strict identity and complete usage")
+            def settle() -> None:
+                self.new_attempts.setdefault(key, []).append(attempt)
+                if decision is not None:
+                    self.success_decisions[key] = decision
+                del self.parallel_inflight[key]
+                if attempt.outcome not in {"succeeded", "retryable_failure"} and self.status != "reconciliation_required":
+                    self.status = "stopped"
+            return settle
+        if kind == "parallel_dispatch_unknown":
+            self._exact(payload, {"cell_index", "pair_schedule_position", "attempt_number"})
+            key = self._parallel_key(payload)
+            if (type(payload["attempt_number"]) is not int or key in self.parallel_unknown
+                or self.parallel_inflight.get(key) != payload["attempt_number"]):
+                raise RecoveryCampaignError("Parallel unknown lacks a unique matching intent")
+            def mark_unknown() -> None:
+                self.parallel_unknown.add(key)
+                self.status = "reconciliation_required"
+            return mark_unknown
+        if self.status != "running" or self.task_revoked:
+            raise RecoveryCampaignError("Parallel dispatch requires a running nonterminal task")
+        if self.current_model != self.parallel_approval["requested_model"]:
+            raise RecoveryCampaignError("Parallel scope excludes other models")
+        if kind == "parallel_batch_reserved":
+            self._exact(payload, {"cell_index", "time_step", "pairs"})
+            index, step = payload["cell_index"], payload["time_step"]
+            size = self.per_cell // 30
+            if (type(index) is not int or type(step) is not int or not 0 <= step < 30
+                or self.current_key != (index, step * size) or self.parallel_active_batch is not None
+                or self.has_inflight or self.reservation is not None
+                or not isinstance(payload["pairs"], list) or len(payload["pairs"]) != size
+                or (index, step) in self.parallel_batches):
+                raise RecoveryCampaignError("Parallel reservation requires exactly the next complete frozen batch")
+            ids = set()
+            for offset, row in enumerate(payload["pairs"]):
+                self._exact(row, {"coordinates", "context_sha256"})
+                coords = row["coordinates"]
+                self._exact(coords, {"cell_index", "pair_schedule_position", "pair_id", "time_step", "message_id", "user_id"})
+                key = self._parallel_key(coords)
+                if (key != (index, step * size + offset) or type(coords["time_step"]) is not int
+                    or coords["time_step"] != step or key in self.old_successes
+                    or any(not isinstance(coords[k], str) or not coords[k] for k in ("pair_id", "message_id", "user_id"))
+                    or coords["pair_id"] in ids):
+                    raise RecoveryCampaignError("Parallel batch coordinates are crossed or duplicated")
+                if key == self.failed_key and any(coords[k] != self.proposal["failed_pair"][k] for k in coords):
+                    raise RecoveryCampaignError("Parallel failed pair differs from its immutable history")
+                ids.add(coords["pair_id"])
+                _v2._require_sha256(row["context_sha256"], "parallel context")
+            def reserve() -> None:
+                self.parallel_batches[index, step] = deepcopy(payload)
+                self.parallel_active_batch = index, step
+            return reserve
+        if kind == "parallel_attempt_intent":
+            self._exact(payload, {"cell_index", "pair_schedule_position", "attempt_number"})
+            key = self._parallel_key(payload)
+            ordinal = payload["attempt_number"]
+            batch_key = key[0], key[1] // (self.per_cell // 30)
+            if (self.parallel_active_batch != batch_key or self.inflight is not None
+                or key in self.parallel_inflight or key in self.success_decisions or key in self.old_successes
+                or len(self.parallel_inflight) >= self.parallel_approval["maximum_inflight"]
+                or type(ordinal) is not int or ordinal != len(self.attempts(key)) + 1 or ordinal > 3):
+                raise RecoveryCampaignError("Parallel attempt is unreserved, duplicated, successful or exhausted")
+            model = self.cells[key[0]].requested_model
+            cap = next(row["maximum_new_physical_attempts"] for row in self.proposal["model_budgets"] if row["requested_model"] == model)
+            if self.physical_by_model[model] >= cap or self.physical_attempts >= self.proposal["maximum_new_physical_attempts"]:
+                raise RecoveryCampaignError("Parallel cumulative physical cap is exhausted")
+            def dispatch() -> None:
+                self.parallel_inflight[key] = ordinal
+                self.attempt_epochs[key, ordinal] = self.epochs[-1]["epoch_identity_sha256"]
+                self.physical_attempts += 1
+                self.physical_by_model[model] += 1
+            return dispatch
+        raise RecoveryCampaignError("Unknown parallel recovery event")
+
     def transition(self, kind: str, payload: dict[str, Any]) -> Callable[[], None]:
         """Validate before durable append; apply its returned effect only afterwards."""
+        if kind.startswith("parallel_"):
+            return self._parallel_transition(kind, payload)
+        if self.parallel_approval is not None:
+            if kind == "attempt_intent":
+                raise RecoveryCampaignError("Parallel task cannot bypass keyed intent accounting")
+            if kind in {"self_check_intent", "epoch_admitted"} and payload.get("requested_model") != self.parallel_approval["requested_model"]:
+                raise RecoveryCampaignError("Parallel stage cannot advance to another model")
         if kind == "task_admitted":
             self._exact(payload, {"task_plan"})
             if self.task_plan is not None or self.epochs or self.status != "ready":
@@ -115,7 +249,7 @@ class CampaignProgress:
             old = self.self_checks.get(model)
             if (self.task_plan is None or self.task_revoked or self.status != "stopped"
                 or self.accepted_rechecks or self.epochs or self.invocations or self.physical_attempts
-                or self.inflight is not None or self.self_check_inflight is not None
+                or self.has_inflight or self.self_check_inflight is not None
                 or self.reservation is not None or self.pending_judgment is not None
                 or self.pending_realized is not None or model != self.current_model
                 or len(self.self_check_intents) != 1 or len(self.self_checks) != 1 or old is None):
@@ -140,7 +274,7 @@ class CampaignProgress:
             self._exact(payload, {"requested_model", "contract_sha256"})
             model = payload["requested_model"]
             if (self.task_plan is None or model != self.current_model or model in self.self_check_intents
-                or self.inflight is not None or self.self_check_inflight is not None
+                or self.has_inflight or self.self_check_inflight is not None
                 or self.status not in {"ready", "checkpoint"}):
                 raise RecoveryCampaignError("Recovery self-check is duplicated, concurrent or out of order")
             _v2._require_sha256(payload["contract_sha256"], "self-check contract")
@@ -168,7 +302,7 @@ class CampaignProgress:
             if self.self_check_inflight is not None or (self.task_plan is not None and self.current_model not in self.self_checks):
                 raise RecoveryCampaignError("Recovery task epoch requires a settled successful self-check")
             self._exact(payload, {"ordinal", "requested_model", "epoch_identity_sha256", "plan_path", "plan_sha256"})
-            if self.status not in {"ready", "checkpoint", "paused", "running"} or self.inflight is not None:
+            if self.status not in {"ready", "checkpoint", "paused", "running"} or self.has_inflight:
                 raise RecoveryCampaignError("Recovery epoch requires a safe committed checkpoint")
             if type(payload["ordinal"]) is not int or payload["ordinal"] != len(self.epochs) + 1:
                 raise RecoveryCampaignError("Recovery epoch ordinal is stale or duplicated")
@@ -186,7 +320,7 @@ class CampaignProgress:
             raise RecoveryCampaignError("Recovery requires an admitted active epoch")
         if kind == "invocation_started":
             self._exact(payload, {"epoch_identity_sha256", "ordinal"})
-            if self.inflight is not None or payload["epoch_identity_sha256"] != self.epochs[-1]["epoch_identity_sha256"]:
+            if self.has_inflight or payload["epoch_identity_sha256"] != self.epochs[-1]["epoch_identity_sha256"]:
                 raise RecoveryCampaignError("Recovery invocation has unknown dispatch or a crossed epoch")
             if type(payload["ordinal"]) is not int or payload["ordinal"] != len(self.invocations) + 1:
                 raise RecoveryCampaignError("Recovery invocation ordinal is not monotonic")
@@ -196,17 +330,24 @@ class CampaignProgress:
             return begin_invocation
         if kind == "pair_reserved":
             self._pair(payload)
-            if self.reservation is not None or self.inflight is not None:
+            if self.reservation is not None or self.has_inflight:
                 raise RecoveryCampaignError("Recovery permits only one reserved pair")
             key = payload["cell_index"], payload["pair_schedule_position"]
             if self.cells[key[0]].requested_model != self.epochs[-1]["requested_model"]:
                 raise RecoveryCampaignError("One recovery invocation cannot enter another model")
-            if len(self.attempts(key)) >= 3:
+            if len(self.attempts(key)) >= 3 and key not in self.success_decisions:
                 raise RecoveryCampaignError("Recovery logical pair exhausted its cumulative slots")
+            if self.parallel_approval is not None:
+                batch_key = key[0], key[1] // (self.per_cell // 30)
+                if self.parallel_active_batch != batch_key or key not in self.success_decisions:
+                    raise RecoveryCampaignError("Parallel projection requires its settled frozen response")
+                expected = self.parallel_batches[batch_key]["pairs"][key[1] % (self.per_cell // 30)]["coordinates"]
+                if payload != expected:
+                    raise RecoveryCampaignError("Parallel projection differs from its frozen reservation")
             return lambda: setattr(self, "reservation", dict(payload))
         if kind == "attempt_intent":
             self._exact(payload, {"attempt_number"})
-            if self.reservation is None or self.inflight is not None or self.pending_judgment is not None:
+            if self.reservation is None or self.has_inflight or self.pending_judgment is not None:
                 raise RecoveryCampaignError("Recovery dispatch requires a unique pending reservation")
             key = self.reservation["cell_index"], self.reservation["pair_schedule_position"]
             ordinal = payload["attempt_number"]
@@ -243,7 +384,7 @@ class CampaignProgress:
             return settle_attempt
         if kind == "judgment_persisted":
             self._exact(payload, {"judgment"})
-            if self.reservation is None or self.inflight is not None or self.pending_judgment is not None:
+            if self.reservation is None or self.has_inflight or self.pending_judgment is not None:
                 raise RecoveryCampaignError("Recovery Judgment has an unresolved or duplicated predecessor")
             key = self.reservation["cell_index"], self.reservation["pair_schedule_position"]
             attempts = self.new_attempts.get(key, [])
@@ -271,7 +412,7 @@ class CampaignProgress:
             return lambda: setattr(self, "pending_realized", terminal.model_dump(mode="json"))
         if kind == "pair_settled":
             self._exact(payload, {"judgment_id", "realized_terminal_id"})
-            if self.pending_judgment is None or self.pending_realized is None or self.reservation is None or self.inflight is not None:
+            if self.pending_judgment is None or self.pending_realized is None or self.reservation is None or self.has_inflight:
                 raise RecoveryCampaignError("Recovery pair requires a persisted successful Judgment")
             if payload["judgment_id"] != self.pending_judgment["judgment_id"]:
                 raise RecoveryCampaignError("Recovery settled pair is crossed with its Judgment")
@@ -298,11 +439,18 @@ class CampaignProgress:
                 raise RecoveryCampaignError("Recovery batch is duplicated or ahead of settled pairs")
             if self.cells[index].requested_model != self.epochs[-1]["requested_model"]:
                 raise RecoveryCampaignError("Recovery batch is crossed with the admitted model")
-            return lambda: self.batch_commits.__setitem__(key, dict(payload["commit"]))
+            parallel_key = index, step
+            if parallel_key in self.parallel_batches and (self.parallel_active_batch != parallel_key or self.has_inflight):
+                raise RecoveryCampaignError("Parallel barrier has unresolved or crossed work")
+            def commit_batch() -> None:
+                self.batch_commits[key] = dict(payload["commit"])
+                if self.parallel_active_batch == parallel_key:
+                    self.parallel_active_batch = None
+            return commit_batch
         if kind == "epoch_finished":
             self._exact(payload, {"status"})
             status = payload["status"]
-            if self.inflight is not None:
+            if self.has_inflight:
                 if status != "reconciliation_required":
                     raise RecoveryCampaignError("Unknown dispatch cannot be released or paused safely")
             elif status == "checkpoint":
