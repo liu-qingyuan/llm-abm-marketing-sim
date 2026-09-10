@@ -16,3 +16,5 @@
 ADR 0008 supersede ADR 0007 中 direct positive feedback与增量 Full-Pool主呈现的相关决策；ADR 0007 的全池分母、capacity、barrier和历史 sensitivity决策继续有效。ADR 0004 的 ranking与去重结构保留，其 two-stage feedback consequence由 ADR 0008解释。旧 ADR 正文不改写。
 
 新的 executable requirements 发布到 GitHub `Spec:` issue；当前行为和实现边界写入对应 Architecture Note。
+
+- [ADR 0009: 一次性接纳明确授权的复测](0009-accept-explicit-recovery-self-check.md)：同一恢复任务以追加凭据接纳已有成功复测，保留失败、累计预算和其他硬停。

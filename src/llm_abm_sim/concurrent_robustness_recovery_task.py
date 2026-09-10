@@ -284,16 +284,17 @@ def _validate_task_event(origins: _execution._Origins, state: CampaignProgress,
 def _epoch_body(origins: _execution._Origins, state: CampaignProgress, head: str) -> dict[str, Any]:
     plan = origins.task_plan
     model = state.current_model
+    health = None if model is None else state.effective_self_check(model)
     if (plan is None or state.task_plan != origins.handoff.model_dump(mode="json") or state.task_revoked
         or state.inflight is not None or state.self_check_inflight is not None
         or state.status in {"stopped", "reconciliation_required", "complete"}
-        or model not in state.self_checks or state.self_checks[model]["attempt"]["outcome"] != "succeeded"):
+        or model is None or health is None or health["attempt"]["outcome"] != "succeeded"):
         raise RecoveryCampaignError("Task epoch requires its admitted authority and successful model self-check")
     path = Path(origins.campaign["control_root"]) / "plans" / f"{head}.json"
     derivation = {"policy": TASK_POLICY, "epoch_ordinal": len(state.epochs) + 1, "requested_model": model,
                   "remaining_valid_judgments": origins.proposal["remaining_valid_judgments"] - state.new_valid_judgments,
                   "maximum_remaining_physical_attempts": origins.proposal["maximum_new_physical_attempts"] - state.physical_attempts,
-                  "self_check_sha256": _v2._json_sha256(state.self_checks[model])}
+                  "self_check_sha256": _v2._json_sha256(state.effective_self_check(model))}
     return {"schema_version": TASK_EPOCH_SCHEMA, "plan_path": str(path),
             "task_plan": origins.handoff.model_dump(mode="json"), "request": {"expected_head_sha256": head},
             "derivation": derivation,
@@ -387,10 +388,49 @@ def _task_status(context: _execution._ExecutionContext) -> dict[str, Any]:
             status = "authorization_not_current"
     bundle = context.journal.root / "bundles" / context.journal.head / "bundle.json"
     return {**progress, "status": status, "authorization_current": current and not revoked,
-            "self_check_attempts": len(state.self_check_intents),
+            "self_check_attempts": len(state.self_check_intents) + len(state.accepted_rechecks),
             "self_check_failures": {model: row["attempt"]["failure_category"] for model, row in state.self_checks.items()
                                     if row["attempt"]["outcome"] != "succeeded"},
             "campaign_head_sha256": context.journal.head,
             "execution_bundle": str(bundle) if bundle.is_file() else None,
             "report_status": "report_pending" if status == "execution_complete" else "not_ready",
             "report_path": None}
+
+
+def accept_recovery_task_recheck(plan_path: str | Path, *, approval_path: Path,
+                                  approval_sha256: str) -> dict[str, Any]:
+    """Accept one explicit bound recheck without Provider calls or a new task.
+
+    Only a settled connection/zero-response self-check before any task epoch is
+    eligible. Original failures and budgets remain intact. The immutable receipt
+    is a new journal event; same-approval repetition returns that receipt. Source
+    drift, unknowns, other hard stops, revocation and crossed evidence fail closed.
+    """
+    from . import _concurrent_recovery_recheck as recheck
+    from ._concurrent_recovery_campaign import recovery_scope
+
+    context = _context(plan_path)
+    reference = _formal.FormalArtifactReference(path=approval_path, sha256=approval_sha256).model_dump(mode="json")
+    with recovery_scope(context.origins.campaign):
+        context = _context(plan_path)
+        approval = recheck._checked(reference)
+        existing = next((row for row in context.journal.records if row["kind"] == recheck.EVENT), None)
+        if existing is not None:
+            if existing["payload"]["approval"] != reference:
+                raise RecoveryCampaignError("Task already consumed a different recheck approval")
+            row = existing
+        else:
+            if _read_revocation(context.plan) is not None:
+                raise RecoveryCampaignError("Revoked task cannot accept recheck")
+            result = recheck._checked(approval["probe_result"])
+            payload = {"approval": reference, "requested_model": context.state.current_model,
+                       "attempt": result["attempt"], "decision": result["decision"]}
+            recheck.validate_receipt(context.origins, context.state, payload, _formal._utc_now(), context.journal.head)
+            row = context.state.append(context.journal, recheck.EVENT, payload)
+        # Independent persistent reread also validates an append completed before
+        # interruption; no second event or probe is needed for receipt delivery.
+        _context(plan_path)
+        path = context.journal.root / "events" / f'{row["sequence"]:08d}.json'
+        return {"schema_version": "concurrent-recovery-recheck-acceptance-v1",
+                "receipt": {"path": str(path), "sha256": _formal._sha256_file(path)},
+                "accepted_head_sha256": row["record_sha256"], "provider_calls": 0, "credential_reads": 0}

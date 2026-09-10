@@ -47,6 +47,9 @@ def _bound_facts(origins: _execution._Origins, records: tuple[dict[str, Any], ..
             if origins.task_plan is None:
                 paths.add(Path(plan["authorization_artifact"]["path"]))
                 paths.update(Path(ref["path"]) for ref in plan["request"]["qualification_artifacts"])
+        elif row["kind"] == "self_check_recheck_accepted":
+            from ._concurrent_recovery_recheck import receipt_references
+            paths.update(Path(ref["path"]) for ref in receipt_references(row["payload"]))
         elif row["kind"] == "task_revoked":
             paths.add(Path(row["payload"]["revocation"]["path"]))
     return [_proposals._file_fact(path) for path in sorted(paths)]

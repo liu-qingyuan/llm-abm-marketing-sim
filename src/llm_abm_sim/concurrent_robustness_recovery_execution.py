@@ -203,6 +203,9 @@ def _legal_history(origins: _Origins, records: tuple[dict[str, Any], ...], targe
         if previous_time is not None and when < previous_time:
             raise RecoveryCampaignError("Recovery event clock moved backwards")
         payload = row["payload"]
+        if row["kind"] == "self_check_recheck_accepted":
+            from ._concurrent_recovery_recheck import validate_receipt
+            validate_receipt(origins, state, payload, when, head)
         if row["kind"] in {"task_admitted", "task_revoked", "self_check_intent", "self_check_settled"}:
             from .concurrent_robustness_recovery_task import _validate_task_event
             _validate_task_event(origins, state, row["kind"], payload, when)

@@ -235,6 +235,15 @@ def _event_origins(
             active_key = None
         elif row["kind"] == "self_check_intent" and isinstance(payload, Mapping):
             checks[str(payload["requested_model"])] = {"intent_origin": origin}
+        elif row["kind"] == "self_check_recheck_accepted":
+            from ._concurrent_recovery_recheck import _checked
+            approval = _checked(payload["approval"])
+            checks[str(payload["requested_model"]) + "::explicit-recheck"] = {
+                "intent_origin": {"kind": "explicit_recheck_v1", **approval["probe_intent"]},
+                "result_origin": {"kind": "explicit_recheck_v1", **approval["probe_result"]},
+                "acceptance_origin": origin,
+                "acceptance_approval": payload["approval"],
+            }
         elif row["kind"] == "self_check_settled" and isinstance(payload, Mapping):
             model = str(payload["requested_model"])
             checks.setdefault(model, {})["result_origin"] = origin
@@ -456,6 +465,13 @@ def _derive(
             "requested_model": model, "attempt": _serialized_attempt(attempt),
             "decision": payload["decision"], **origins,
         })
+    for model, payload in state.accepted_rechecks.items():
+        origins = event_check_origins.get(model + "::explicit-recheck")
+        if origins is None:
+            raise RecoveryEvidenceError("Explicit recheck origins are incomplete")
+        self_checks.append({"requested_model": model,
+            "attempt": _serialized_attempt(_v2._V2AttemptEvidence.model_validate(payload["attempt"])),
+            "decision": payload["decision"], **origins})
     self_check_attempts = len(self_checks)
     all_usage = summarize_recovery_attempt_usage(all_attempt_models)
     successful_usage = summarize_recovery_attempt_usage(successful_sequence)

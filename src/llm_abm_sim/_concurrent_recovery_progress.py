@@ -53,6 +53,10 @@ class CampaignProgress:
         self.self_check_intents: dict[str, dict[str, Any]] = {}
         self.self_checks: dict[str, dict[str, Any]] = {}
         self.self_check_inflight: str | None = None
+        self.accepted_rechecks: dict[str, dict[str, Any]] = {}
+
+    def effective_self_check(self, model: str) -> dict[str, Any] | None:
+        return self.accepted_rechecks.get(model, self.self_checks.get(model))
 
     @property
     def current_model(self) -> str | None:
@@ -105,6 +109,31 @@ class CampaignProgress:
             if self.task_plan is None or self.task_revoked:
                 raise RecoveryCampaignError("Recovery revocation is unbound or duplicated")
             return lambda: setattr(self, "task_revoked", True)
+        if kind == "self_check_recheck_accepted":
+            self._exact(payload, {"approval", "requested_model", "attempt", "decision"})
+            model = payload["requested_model"]
+            old = self.self_checks.get(model)
+            if (self.task_plan is None or self.task_revoked or self.status != "stopped"
+                or self.accepted_rechecks or self.epochs or self.invocations or self.physical_attempts
+                or self.inflight is not None or self.self_check_inflight is not None
+                or self.reservation is not None or self.pending_judgment is not None
+                or self.pending_realized is not None or model != self.current_model
+                or len(self.self_check_intents) != 1 or len(self.self_checks) != 1 or old is None):
+                raise RecoveryCampaignError("Recheck requires one settled pre-Formal connection stop")
+            failed = _v2._V2AttemptEvidence.model_validate(old["attempt"])
+            accepted = _v2._V2AttemptEvidence.model_validate(payload["attempt"])
+            if (failed.failure_category != "connection" or failed.outcome != "nonretryable_failure"
+                or failed.request_invocations != 1 or failed.provider_response_count != 0
+                or failed.successful_decision_count != 0 or failed.observed_model_counts
+                or failed.status_code is not None or failed.wait_seconds is not None or failed.lane_cooldown
+                or accepted.outcome != "succeeded" or accepted.request_invocations != 1
+                or accepted.provider_response_count != 1 or accepted.usage_complete_response_count != 1
+                or accepted.successful_decision_count != 1 or payload["decision"] is None):
+                raise RecoveryCampaignError("Recheck cannot release another hard stop or unknown")
+            def accept_check() -> None:
+                self.accepted_rechecks[model] = dict(payload)
+                self.status = "ready"
+            return accept_check
         if self.status in {"stopped", "reconciliation_required", "complete"} or self.task_revoked:
             raise RecoveryCampaignError("Recovery terminal campaign cannot admit more work")
         if kind == "self_check_intent":
