@@ -107,7 +107,7 @@ def judgment_reference(state: CampaignProgress, model: str) -> dict[str, Any] | 
 
 def preflight(state: CampaignProgress, adapters: Mapping[str, LLMDecisionAdapter]) -> None:
     """Compare transport-facing evidence with the ledger-owned amended condition."""
-    if state.output_amendment is None:
+    if state.output_amendment is None or state.current_model != MODEL:
         return
     from ._concurrent_recovery_parallel_runtime import ParallelAdapterPool
     for adapter in adapters.values():

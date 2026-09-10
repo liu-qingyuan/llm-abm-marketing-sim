@@ -96,13 +96,13 @@ def validate_receipt(origins: _Origins, state: CampaignProgress, payload: dict[s
 
 def judgment_reference(state: CampaignProgress, key: tuple[int, int]) -> dict[str, Any] | None:
     """Only approved exact failed-attempt sequences use the new Judgment schema."""
-    receipt = state.quota_retry_approval
-    if receipt is None:
-        return None
-    for row in receipt['failed_attempts']:
-        if (row['cell_index'], row['pair_schedule_position']) == key:
-            if not any(v2._json_sha256(a.model_dump(mode='json')) == row['attempt_sha256']
-                       for a in state.new_attempts.get(key, ())):
-                raise RecoveryCampaignError('Quota Judgment lost its approved original failure')
-            return receipt['approval']
+    for receipt in (state.quota_retry_approval, state.gemini_restoration_approval):
+        if receipt is None:
+            continue
+        for row in receipt['failed_attempts']:
+            if (row['cell_index'], row['pair_schedule_position']) == key:
+                if not any(v2._json_sha256(a.model_dump(mode='json')) == row['attempt_sha256']
+                           for a in state.new_attempts.get(key, ())):
+                    raise RecoveryCampaignError('Quota Judgment lost its approved original failure')
+                return receipt['approval']
     return None

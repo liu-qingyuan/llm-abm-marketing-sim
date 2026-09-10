@@ -578,3 +578,40 @@ def accept_recovery_task_kimi_output_amendment(plan_path: str | Path, *, approva
         return {'schema_version': 'concurrent-recovery-kimi-output-acceptance-v1',
                 'receipt': {'path': str(path), 'sha256': _formal._sha256_file(path)},
                 'accepted_head_sha256': row['record_sha256'], 'provider_calls': 0, 'credential_reads': 0}
+
+
+def accept_recovery_task_gemini_restoration(plan_path: str | Path, *, approval_path: Path,
+                                           approval_sha256: str) -> dict[str, Any]:
+    """Restore Gemini once from its suspended quota stop using an existing probe.
+
+    Preserves the stopped Kimi lane and every cumulative budget and failure.
+    One failed-pair Formal trial must succeed before the original four lanes
+    continue; any failure stops. Same approval is idempotent, not a renewal.
+    This admission performs no Provider calls and authorizes no extra probes.
+    """
+    from . import _concurrent_recovery_gemini_restoration as restoration
+    from ._concurrent_recovery_campaign import recovery_scope
+
+    context = _context(plan_path)
+    reference = _formal.FormalArtifactReference(path=approval_path, sha256=approval_sha256).model_dump(mode='json')
+    with recovery_scope(context.origins.campaign):
+        context = _context(plan_path)
+        approval = restoration._checked(reference)
+        existing = next((row for row in context.journal.records if row['kind'] == restoration.EVENT), None)
+        if existing is not None:
+            if existing['payload']['approval'] != reference:
+                raise RecoveryCampaignError('Task already accepted a different Gemini restoration')
+            row = existing
+        else:
+            if _read_revocation(context.plan) is not None:
+                raise RecoveryCampaignError('Revoked task cannot restore Gemini')
+            if not restoration.FIELDS <= set(approval):
+                raise RecoveryCampaignError('Gemini restoration approval lacks its bounded scope')
+            payload = {'approval': reference, **{key: approval[key] for key in restoration.FIELDS}}
+            restoration.validate_receipt(context.origins, context.state, payload, _formal._utc_now(), context.journal.head)
+            row = context.state.append(context.journal, restoration.EVENT, payload)
+        _context(plan_path)
+        path = context.journal.root / 'events' / f'{row["sequence"]:08d}.json'
+        return {'schema_version': 'concurrent-recovery-gemini-restoration-acceptance-v1',
+                'receipt': {'path': str(path), 'sha256': _formal._sha256_file(path)},
+                'accepted_head_sha256': row['record_sha256'], 'provider_calls': 0, 'credential_reads': 0}

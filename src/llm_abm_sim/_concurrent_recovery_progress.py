@@ -62,6 +62,7 @@ class CampaignProgress:
         self.parallel_unknown: set[tuple[int, int]] = set()
         self.quota_retry_approval: dict[str, Any] | None = None
         self.quota_retry_pending: tuple[int, int] | None = None
+        self.gemini_restoration_approval: dict[str, Any] | None = None
         self.model_lane_approval: dict[str, Any] | None = None
         self.output_amendment: dict[str, Any] | None = None
         self.amended_self_check_intent: dict[str, Any] | None = None
@@ -81,10 +82,14 @@ class CampaignProgress:
 
     @property
     def effective_parallel_approval(self) -> dict[str, Any] | None:
+        if self.gemini_restoration_approval is not None:
+            return self.gemini_restoration_approval
         return self.model_lane_approval if self.model_lane_approval is not None else self.parallel_approval
 
     @property
     def current_model(self) -> str | None:
+        if self.gemini_restoration_approval is not None:
+            return self.gemini_restoration_approval["requested_model"]
         if self.model_lane_approval is not None:
             return self.model_lane_approval["requested_model"]
         return self.model_order[self.model_index] if self.model_index < len(self.model_order) else None
@@ -250,6 +255,9 @@ class CampaignProgress:
 
     def transition(self, kind: str, payload: dict[str, Any]) -> Callable[[], None]:
         """Validate before durable append; apply its returned effect only afterwards."""
+        if kind == "gemini_restoration_accepted":
+            from ._concurrent_recovery_gemini_restoration import transition as restore
+            return restore(self, payload)
         if kind == "kimi_output_amendment_accepted":
             from ._concurrent_recovery_output_amendment import transition as amend
             return amend(self, payload)
@@ -490,8 +498,11 @@ class CampaignProgress:
             if self.cells[index].requested_model != self.epochs[-1]["requested_model"]:
                 raise RecoveryCampaignError("Recovery batch is crossed with the admitted model")
             parallel_key = index, step
-            if parallel_key in self.parallel_batches and (self.parallel_active_batch != parallel_key or self.has_inflight):
-                raise RecoveryCampaignError("Parallel barrier has unresolved or crossed work")
+            if parallel_key in self.parallel_batches:
+                from ._concurrent_recovery_gemini_restoration import replays_prior_barrier
+                if self.has_inflight or (self.parallel_active_batch != parallel_key
+                    and not replays_prior_barrier(self, index, step, payload["commit"])):
+                    raise RecoveryCampaignError("Parallel barrier has unresolved or crossed work")
             def commit_batch() -> None:
                 self.batch_commits[key] = dict(payload["commit"])
                 if self.parallel_active_batch == parallel_key:
