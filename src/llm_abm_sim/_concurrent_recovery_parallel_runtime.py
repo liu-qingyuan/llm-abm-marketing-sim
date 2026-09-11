@@ -137,6 +137,7 @@ def run_frozen_batch(
     if state.kimi_migration_active:
         from ._concurrent_recovery_request_quote import prepare_batch
         prepare_batch(state, journal, work, getattr(pool.lanes[0], "client", None), check_dispatch_window)
+    interval = state.kimi_retry_policy["minimum_dispatch_interval_seconds"] if state.kimi_retry_policy else _OFFICIAL_DISPATCH_INTERVAL_SECONDS
     now = v2._V2_MONOTONIC()
     ready_at = {}
     cooldown_until = now
@@ -145,7 +146,7 @@ def run_frozen_batch(
         prior_intent = next((r for r in reversed(journal.records) if r["kind"] == "parallel_attempt_intent"), None)
         if prior_intent is not None:
             when = formal._parse_utc(prior_intent["recorded_at_utc"], "last dispatch")
-            cooldown_until += max(0.0, _OFFICIAL_DISPATCH_INTERVAL_SECONDS - (formal._utc_now() - when).total_seconds())
+            cooldown_until += max(0.0, interval - (formal._utc_now() - when).total_seconds())
     for key in remaining:
         prior = state.attempts(key)
         delay = prior[-1].wait_seconds or 0.0 if prior and prior[-1].outcome == "retryable_failure" else 0.0
@@ -153,7 +154,7 @@ def run_frozen_batch(
         if prior and prior[-1].lane_cooldown:
             cooldown_until = max(cooldown_until, now + delay)
     pending: dict[Future[Any], tuple[FrozenWork, int, int, Any, int]] = {}
-    free = list(range(capacity))
+    free = list(range(state.kimi_retry_policy["maximum_active_lanes"] if state.kimi_retry_policy else capacity))
     pause: Exception | None = None
     with ThreadPoolExecutor(max_workers=capacity, thread_name_prefix="recovery-physical") as workers:
         while remaining or pending:
@@ -172,7 +173,9 @@ def run_frozen_batch(
                     )
                     free.append(lane)
                     continue
-                retry = error is not None and error.retryable and ordinal < 3
+                retryable = error is not None and error.retryable and (not state.kimi_migration_active or (
+                    state.kimi_retry_policy is not None and error.failure_category in {"temporary_rate_limit", "temporary_overload"}))
+                retry = retryable and ordinal < 3
                 delay = None
                 source = None
                 if retry and error is not None:
@@ -181,6 +184,8 @@ def run_frozen_batch(
                         if error.wait_seconds is not None
                         else min(backoff_seconds * 2 ** (ordinal - 1), v2._V2_BACKOFF_CEILING_SECONDS)
                     )
+                    if state.kimi_retry_policy is not None:
+                        delay = max(delay, state.kimi_retry_policy["backoff_base_seconds"] * 2 ** (ordinal - 1))
                     source = (
                         error.wait_source or "provider_wait"
                         if error.wait_seconds is not None
@@ -192,7 +197,7 @@ def run_frozen_batch(
                     else "retryable_failure"
                     if retry
                     else "attempts_exhausted"
-                    if error.retryable
+                    if retryable
                     else "nonretryable_failure"
                 )
                 try:
@@ -272,7 +277,7 @@ def run_frozen_batch(
                 future = workers.submit(_physical_request, adapter, item)
                 pending[future] = item, lane, ordinal, before, external_before
                 if state.kimi_migration_active:
-                    cooldown_until = v2._V2_MONOTONIC() + _OFFICIAL_DISPATCH_INTERVAL_SECONDS
+                    cooldown_until = v2._V2_MONOTONIC() + interval
             if pending:
                 timeout = None
                 cash_available = True

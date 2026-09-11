@@ -154,7 +154,8 @@ def run_recovery_model(
                     from ._concurrent_recovery_manual_retry import judgment_fields
                     from ._concurrent_recovery_quota_retry import judgment_reference
                     migration = migration_reference(state, key)
-                    judgment = build_recovery_judgment(cell_index=index, cell=cell, plan=plan,
+                    from ._concurrent_recovery_kimi_retry import judgment_reference as retry_reference
+                    judgment = build_recovery_judgment(official_retry_policy=retry_reference(state, key), cell_index=index, cell=cell, plan=plan,
                         decision=state.success_decisions[key], historical_attempts=state.historical_failure if key == state.failed_key else (),
                         new_attempts=tuple(state.new_attempts[key]),
                         epoch_identity_sha256=state.attempt_epochs[key, state.new_attempts[key][-1].attempt_number],

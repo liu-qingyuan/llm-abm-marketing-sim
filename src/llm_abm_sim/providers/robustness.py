@@ -634,10 +634,10 @@ class OfficialKimiDecisionAdapter(_FrozenRobustnessDecisionAdapter):
         try:
             return super().decide(post, profile, peer_context, platform_context, time_step)
         except ProviderDecisionError as exc:
-            # Migration grants no automatic retry, including malformed decisions.
+            # Classification is not authorization; Study admits and budgets retries.
             failure = ProviderAttemptFailure(
-                category=exc.failure_category, retryable=False, status_code=exc.status_code,
-                lane_cooldown=exc.lane_cooldown,
+                category=exc.failure_category, retryable=exc.retryable and exc.failure_category in {"temporary_overload", "temporary_rate_limit"}, status_code=exc.status_code,
+                wait_seconds=exc.wait_seconds, wait_source=exc.wait_source, lane_cooldown=exc.lane_cooldown,
             )
             raise ProviderDecisionError(failure) from failure
 

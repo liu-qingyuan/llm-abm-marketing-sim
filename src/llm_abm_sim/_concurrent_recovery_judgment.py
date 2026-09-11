@@ -64,11 +64,12 @@ class UnknownAttemptReference(_v2._V2FrozenModel):
 class RecoveryJudgmentV1(_v2._V2FrozenModel):
     """A recovery-only Judgment that preserves the original attempt ordinals."""
 
-    schema_version: Literal["concurrent-recovery-provider-judgment-v1", "concurrent-recovery-provider-judgment-v2", "concurrent-recovery-provider-judgment-v3", "concurrent-recovery-provider-judgment-v4", "concurrent-recovery-provider-judgment-v5"]
+    schema_version: Literal["concurrent-recovery-provider-judgment-v1", "concurrent-recovery-provider-judgment-v2", "concurrent-recovery-provider-judgment-v3", "concurrent-recovery-provider-judgment-v4", "concurrent-recovery-provider-judgment-v5", "concurrent-recovery-provider-judgment-v6"]
     quota_retry_approval: _formal.FormalArtifactReference | None = None
     output_amendment_approval: _formal.FormalArtifactReference | None = None
     official_migration_approval: _formal.FormalArtifactReference | None = None
     manual_retry_approval: _formal.FormalArtifactReference | None = None
+    official_retry_policy: _formal.FormalArtifactReference | None = None
     unknown_attempts: tuple[UnknownAttemptReference, ...] = ()
     judgment_id: str
     epoch_identity_sha256: str
@@ -91,6 +92,8 @@ class RecoveryJudgmentV1(_v2._V2FrozenModel):
             payload.pop("official_migration_approval", None)
         if self.manual_retry_approval is None:
             payload.pop("manual_retry_approval", None)
+        if self.official_retry_policy is None:
+            payload.pop("official_retry_policy", None)
         if not self.unknown_attempts:
             payload.pop("unknown_attempts", None)
         return payload
@@ -107,6 +110,9 @@ class RecoveryJudgmentV1(_v2._V2FrozenModel):
         if not new_count:
             raise ValueError("recovery Judgment requires at least one new attempt")
         unknown_count = len(self.unknown_attempts)
+        bounded = self.schema_version == "concurrent-recovery-provider-judgment-v6"
+        if bounded != (self.official_retry_policy is not None):
+            raise ValueError("Bounded Kimi retries require Judgment v6 and its policy reference")
         manual = self.schema_version == "concurrent-recovery-provider-judgment-v5"
         if manual:
             if (self.manual_retry_approval is None or unknown_count != 1
@@ -129,17 +135,23 @@ class RecoveryJudgmentV1(_v2._V2FrozenModel):
         if self.new_attempts[-1].outcome != "succeeded":
             raise ValueError("new attempts must end in one success")
         preceding = [row for row in self.new_attempts[:-1] if row.outcome != "retryable_failure"]
-        official = manual or self.schema_version == "concurrent-recovery-provider-judgment-v4"
+        official = bounded or manual or self.schema_version == "concurrent-recovery-provider-judgment-v4"
         if not official and self.official_migration_approval is not None:
             raise ValueError("Official migration approval requires Judgment v4 or v5")
         if official:
             if (self.official_migration_approval is None or self.output_amendment_approval is not None
                 or self.quota_retry_approval is not None or self.cell.requested_model != "kimi-coding/k3-256k"
-                or historical_count or new_count not in {1, 2}
+                or historical_count or new_count not in ({2, 3} if bounded else {1, 2})
                 or self.new_attempts[-1].provider_route != "moonshot_official"
                 or self.new_attempts[-1].output_usage is None or self.new_attempts[-1].output_usage > 1024):
                 raise ValueError("Official Kimi Judgment requires its migration reference and bounded new response")
-            if new_count == 2:
+            if bounded:
+                for n, old in enumerate(self.new_attempts[:-1]):
+                    temporary = (old.outcome == "retryable_failure" and old.failure_category in {"temporary_rate_limit", "temporary_overload"} and old.status_code in {429, 503})
+                    legacy = (n == 0 and old.attempt_number == 1 and old.outcome == "nonretryable_failure" and old.failure_category == "rate_limited" and old.status_code == 429)
+                    if old.provider_route != "moonshot_official" or old.provider_response_count != 0 or not (temporary or legacy):
+                        raise ValueError("Bounded retry history contains an unauthorized prior failure")
+            elif new_count == 2:
                 old = self.new_attempts[0]
                 if (old.provider_route != "pi_kimi_oauth_subscription" or old.outcome != "nonretryable_failure"
                     or old.failure_category != "entitlement" or old.status_code != 403 or old.provider_response_count != 0):
@@ -164,7 +176,7 @@ class RecoveryJudgmentV1(_v2._V2FrozenModel):
             raise ValueError("recovery cell must declare its required observed model")
         route = next(row["provider_route"] for row in _formal._expected_routes() if row["requested_model"] == self.cell.requested_model)
         for attempt in self.new_attempts:
-            attempt_route = "moonshot_official" if official and attempt is self.new_attempts[-1] else route
+            attempt_route = "moonshot_official" if bounded or (official and attempt is self.new_attempts[-1]) else route
             observed = "kimi-k3" if attempt_route == "moonshot_official" else required_observed_model
             if attempt.provider_route != attempt_route:
                 raise ValueError("recovery attempt route differs from the frozen model route")
@@ -307,6 +319,7 @@ def build_recovery_judgment(
     official_migration_approval: dict[str, Any] | None = None,
     manual_retry_approval: dict[str, Any] | None = None,
     unknown_attempts: tuple[UnknownAttemptReference, ...] = (),
+    official_retry_policy: dict[str, Any] | None = None,
 ) -> RecoveryJudgmentV1:
     """Build and hash a recovery contract without rewriting old attempt ordinals."""
 
@@ -341,6 +354,9 @@ def build_recovery_judgment(
         payload["schema_version"] = "concurrent-recovery-provider-judgment-v5"
         payload["manual_retry_approval"] = manual_retry_approval
         payload["unknown_attempts"] = [row.model_dump(mode="json") for row in unknown_attempts]
+    if official_retry_policy is not None:
+        payload["schema_version"] = "concurrent-recovery-provider-judgment-v6"
+        payload["official_retry_policy"] = official_retry_policy
     payload["judgment_id"] = _v2._json_sha256(payload)
     return RecoveryJudgmentV1.model_validate(payload)
 

@@ -240,6 +240,9 @@ def validate_dispatch(state: CampaignProgress, key: tuple[int, int]) -> None:
         _require(state.kimi_manual_retry_approval is not None and not prior
                  and state.next_attempt_number(key) == 2)
         return
+    from ._concurrent_recovery_kimi_retry import permitted_prior
+    if permitted_prior(state, key):
+        return
     if prior:
         _require(len(prior) == 1 and any(
             row["cell_index"] == key[0] and row["pair_schedule_position"] == key[1]
@@ -250,7 +253,9 @@ def validate_dispatch(state: CampaignProgress, key: tuple[int, int]) -> None:
 def validate_attempt(state: CampaignProgress, key: tuple[int, int], attempt: v2._V2AttemptEvidence) -> None:
     _require(state.cells[key[0]].requested_model == MODEL
              and attempt.provider_route == "moonshot_official"
-             and attempt.outcome not in {"retryable_failure", "attempts_exhausted"}
+             and (attempt.outcome not in {"retryable_failure", "attempts_exhausted"}
+                  or (state.kimi_retry_policy is not None and attempt.failure_category in {"temporary_rate_limit", "temporary_overload"}
+                      and attempt.status_code in {429, 503} and attempt.provider_response_count == 0))
              and (attempt.outcome != "succeeded" or (attempt.output_usage is not None and attempt.output_usage <= 1024)))
 
 

@@ -626,7 +626,7 @@ class _V2AttemptEvidence(_V2FrozenModel):
         ):
             raise ValueError("attempt observed-model counts are malformed")
         if self.outcome == "retryable_failure":
-            if self.wait_seconds is None or self.failure_category not in {
+            if self.wait_seconds is None or not (self.failure_category in {
                 "connection",
                 "timeout",
                 "http_status",
@@ -634,7 +634,8 @@ class _V2AttemptEvidence(_V2FrozenModel):
                 "rate_limited",
                 "upstream_unavailable",
                 "transport",
-            }:
+            } or (self.provider_route == "moonshot_official" and self.status_code in {429, 503}
+                  and self.failure_category in {"temporary_rate_limit", "temporary_overload"})):
                 raise ValueError("retryable attempt is outside the frozen failure allowlist")
         elif self.wait_seconds is not None:
             raise ValueError("terminal attempt failure cannot carry another retry delay")

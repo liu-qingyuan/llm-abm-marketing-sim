@@ -72,6 +72,7 @@ class CampaignProgress:
         self.kimi_migration_approval: dict[str, Any] | None = None
         self.kimi_migration_active = False
         self.kimi_manual_retry_approval: dict[str, Any] | None = None
+        self.kimi_retry_policy: dict[str, Any] | None = None
         self.kimi_request_quotes: dict[tuple[int, int], dict[str, Any]] = {}
         self.kimi_estimate_inflight: dict[str, Any] | None = None
         self.kimi_archived_unknown: dict[tuple[int, int], dict[str, Any]] = {}
@@ -264,7 +265,7 @@ class CampaignProgress:
                 raise RecoveryCampaignError("Explicit quota retry permits one original failed pair before recovery")
             if (self.parallel_active_batch != batch_key or self.inflight is not None
                 or key in self.parallel_inflight or key in self.success_decisions or key in self.old_successes
-                or len(self.parallel_inflight) >= self.effective_parallel_approval["maximum_inflight"]
+                or len(self.parallel_inflight) >= (self.kimi_retry_policy["maximum_active_lanes"] if self.kimi_retry_policy else self.effective_parallel_approval["maximum_inflight"])
                 or type(ordinal) is not int or ordinal != self.next_attempt_number(key) or ordinal > 3):
                 raise RecoveryCampaignError("Parallel attempt is unreserved, duplicated, successful or exhausted")
             if self.kimi_migration_active:
@@ -284,6 +285,9 @@ class CampaignProgress:
 
     def transition(self, kind: str, payload: dict[str, Any]) -> Callable[[], None]:
         """Validate before durable append; apply its returned effect only afterwards."""
+        if kind == "kimi_retry_policy_accepted":
+            from ._concurrent_recovery_kimi_retry import transition as kimi_retry
+            return kimi_retry(self, payload)
         if kind in {"kimi_estimate_intent", "kimi_estimate_settled", "kimi_estimate_failed"}:
             from ._concurrent_recovery_request_quote import transition as request_quote
             return request_quote(self, kind, payload)
@@ -500,6 +504,10 @@ class CampaignProgress:
                              if judgment.manual_retry_approval is not None else None)
             if actual_manual != fields["manual_retry_approval"] or judgment.unknown_attempts != fields["unknown_attempts"]:
                 raise RecoveryCampaignError("Manual retry Judgment differs from its original archived intent")
+            from ._concurrent_recovery_kimi_retry import judgment_reference as retry_reference
+            actual_retry = judgment.official_retry_policy.model_dump(mode="json") if judgment.official_retry_policy else None
+            if actual_retry != retry_reference(self, key):
+                raise RecoveryCampaignError("Kimi retry Judgment differs from admitted policy")
             if actual_migration != expected_migration:
                 raise RecoveryCampaignError("Official Judgment differs from its admitted migration")
             if actual_output != (None if expected_migration else output_reference(self, judgment.cell.requested_model)):

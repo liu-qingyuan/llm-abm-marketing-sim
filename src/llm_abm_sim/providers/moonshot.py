@@ -47,6 +47,52 @@ def _request_body(
     }
 
 
+def _http_failure(response: Any) -> ProviderAttemptFailure:
+    """Allowlist facts only; no provider text survives this normalization."""
+    import math
+    import re
+    from datetime import datetime, timezone
+    from email.utils import parsedate_to_datetime
+
+    status = response.status_code
+    category = {400: "request_invalid", 401: "authentication", 402: "quota_exhausted",
+                403: "entitlement", 429: "rate_limited"}.get(status, "provider_stop")
+    retryable = False
+    try:
+        error = response.json()["error"]
+        kind = error.get("type")
+        message = error.get("message", "")
+        if status == 429 and kind == "exceeded_current_quota_error":
+            category = "quota_exhausted"
+        elif status in {429, 503} and kind == "engine_overloaded_error":
+            category, retryable = "temporary_overload", True
+        elif status == 429 and kind == "rate_limit_reached_error" and isinstance(message, str):
+            if re.search(r"\bTPD\b|daily|per.day|每天|每日", message, re.I):
+                category = "quota_exhausted"
+            elif re.search(r"\b(?:RPM|TPM)\b|concurren|并发", message, re.I):
+                category, retryable = "temporary_rate_limit", True
+    except (ValueError, TypeError, KeyError, AttributeError):
+        pass
+    wait = None
+    header = response.headers.get("Retry-After")
+    if retryable and header is not None:
+        try:
+            try:
+                wait = float(header)
+            except ValueError:
+                when = parsedate_to_datetime(header)
+                if when.tzinfo is None:
+                    raise ValueError from None
+                wait = max(0.0, (when - datetime.now(timezone.utc)).total_seconds())
+            if not math.isfinite(wait) or not 0 <= wait <= 86400:
+                raise ValueError
+        except (ValueError, TypeError, OverflowError):
+            retryable, wait = False, None
+    return ProviderAttemptFailure(category=category, retryable=retryable, status_code=status,
+        wait_seconds=wait, wait_source="retry_after" if wait is not None else None,
+        lane_cooldown=status in {429, 503})
+
+
 class MoonshotOfficialClient:
     """Official K3 client, explicitly gated, with no retries or redirects.
 
@@ -144,15 +190,7 @@ class MoonshotOfficialClient:
         except self._httpx.TransportError:
             raise ProviderResponseProvenanceUnknown("Official Moonshot response is unsettled") from None
         if response.status_code != 200:
-            category = {
-                400: "request_invalid", 401: "authentication", 402: "quota_exhausted",
-                403: "entitlement", 429: "rate_limited",
-            }.get(response.status_code, "provider_stop")
-            # Status alone does not prove the provider's detailed reason; no body is retained.
-            raise ProviderAttemptFailure(
-                category=category, retryable=False, status_code=response.status_code,
-                lane_cooldown=response.status_code in {429, 503},
-            )
+            raise _http_failure(response)
         try:
             payload = response.json()
             if not isinstance(payload, dict):
