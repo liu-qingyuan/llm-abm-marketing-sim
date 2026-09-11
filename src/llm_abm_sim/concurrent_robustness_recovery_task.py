@@ -755,3 +755,38 @@ def accept_recovery_task_kimi_cash_cap(plan_path: str | Path, *, approval_path: 
         return {'schema_version': 'kimi-cash-cap-acceptance-v1',
                 'receipt': {'path': str(path), 'sha256': _formal._sha256_file(path)},
                 'accepted_head_sha256': row['record_sha256'], 'provider_calls': 0, 'credential_reads': 0}
+
+
+def accept_recovery_task_final_model(plan_path: str | Path, *, approval_path: Path,
+                                    approval_sha256: str) -> dict[str, Any]:
+    """Continue only GPT-5.6 after all three prior models complete.
+
+    The immutable receipt excludes untouched Flash and binds the exact completed
+    HEAD. This preserves original scope evidence and cumulative physical budgets.
+    Uses the original serial adapter, self-check and retry policy. Repeating the
+    same receipt performs no dispatch or append; any conflicting receipt fails.
+    """
+    from . import _concurrent_recovery_final_model as lane
+    from ._concurrent_recovery_campaign import recovery_scope
+    context = _context(plan_path)
+    reference = _formal.FormalArtifactReference(path=approval_path, sha256=approval_sha256).model_dump(mode='json')
+    with recovery_scope(context.origins.campaign):
+        context = _context(plan_path)
+        approval = lane._checked(reference)
+        existing = next((row for row in context.journal.records if row['kind'] == lane.EVENT), None)
+        if existing is not None:
+            if existing['payload']['approval'] != reference:
+                raise RecoveryCampaignError('Task already accepted a different model lane')
+            row = existing
+        else:
+            if _read_revocation(context.plan) is not None:
+                raise RecoveryCampaignError('Revoked task cannot admit a model lane')
+            payload = {'approval': reference, **{key: approval[key] for key in lane.FIELDS}}
+            lane.validate_receipt(context.origins, context.state, payload, _formal._utc_now(), context.journal.head)
+            row = context.state.append(context.journal, lane.EVENT, payload)
+        _context(plan_path)
+        path = context.journal.root / 'events' / f'{row["sequence"]:08d}.json'
+        return {'schema_version': 'concurrent-recovery-final-model-acceptance-v1',
+                'receipt': {'path': str(path), 'sha256': _formal._sha256_file(path)},
+                'accepted_head_sha256': row['record_sha256'], 'provider_calls': 0, 'credential_reads': 0}
+

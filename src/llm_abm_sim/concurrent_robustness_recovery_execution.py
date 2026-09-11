@@ -203,6 +203,9 @@ def _legal_history(origins: _Origins, records: tuple[dict[str, Any], ...], targe
         if previous_time is not None and when < previous_time:
             raise RecoveryCampaignError("Recovery event clock moved backwards")
         payload = row["payload"]
+        if row["kind"] == "final_model_continuation_accepted":
+            from ._concurrent_recovery_final_model import validate_receipt as validate_final_model
+            validate_final_model(origins, state, payload, when, head)
         if row["kind"] == "kimi_cash_cap_amendment_accepted":
             from ._concurrent_recovery_kimi_migration import validate_cash_cap_receipt
             if number < 2:
@@ -341,6 +344,9 @@ def _progress(origins: _Origins, state: CampaignProgress) -> dict[str, Any]:
             "new_physical_attempts": state.physical_attempts, "cell_prefixes": list(state.prefix),
             "current_model": state.current_model, "historical_all_attempts_total_tokens": None,
             "formal_evidence_closed": False, "production_deploy_eligible": False}
+    if state.final_model_continuation is not None:
+        result["final_model_continuation"] = state.final_model_continuation
+        result["revised_scope_target_judgments"] = 28800
     if state.kimi_cash_cap_amendment is not None:
         from ._concurrent_recovery_kimi_migration import cash_budget
         result["kimi_cash_cap_amendment"] = state.kimi_cash_cap_amendment

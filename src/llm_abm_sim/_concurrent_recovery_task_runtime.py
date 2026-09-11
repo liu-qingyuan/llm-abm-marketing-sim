@@ -40,7 +40,8 @@ def _check_model(context: _execution._ExecutionContext, adapters: Mapping[str, L
     assert model is not None
     cells = tuple(cell for cell in context.origins.source.manifest.prompt_model_cells if cell.requested_model == model)
     from ._concurrent_recovery_parallel_runtime import ParallelAdapterPool, preflight_pools
-    ceiling = 1024 if context.state.output_amendment is not None else 256
+    amended = context.state.output_amendment is not None and context.state.output_amendment["requested_model"] == model
+    ceiling = 1024 if amended else 256
     if any(isinstance(a, ParallelAdapterPool) for a in adapters.values()):
         preflight_pools(context.origins.source.manifest, cells, adapters, kimi_output_token_ceiling=ceiling)
         adapters = {key: value.lanes[0] if isinstance(value, ParallelAdapterPool) else value for key, value in adapters.items()}
@@ -52,7 +53,7 @@ def _check_model(context: _execution._ExecutionContext, adapters: Mapping[str, L
     data = _task._self_check_input()
     if _task._task_status(context)["status"] in _TERMINAL:
         raise RecoveryCampaignError("Task ended before the self-check dispatch")
-    prefix = "amended_" if context.state.output_amendment is not None else ""
+    prefix = "amended_" if amended else ""
     _append(context, prefix + "self_check_intent", {
         "requested_model": model, "contract_sha256": _v2._json_sha256(_task._health_contract(context.origins, model, context.state)),
     })
