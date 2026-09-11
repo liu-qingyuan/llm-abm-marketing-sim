@@ -203,6 +203,11 @@ def _legal_history(origins: _Origins, records: tuple[dict[str, Any], ...], targe
         if previous_time is not None and when < previous_time:
             raise RecoveryCampaignError("Recovery event clock moved backwards")
         payload = row["payload"]
+        if row["kind"] == "kimi_cash_cap_amendment_accepted":
+            from ._concurrent_recovery_kimi_migration import validate_cash_cap_receipt
+            if number < 2:
+                raise RecoveryCampaignError("Cash cap amendment lacks a prior stop")
+            validate_cash_cap_receipt(origins, state, payload, when, records[number - 2])
         if row["kind"] == "kimi_retry_policy_accepted":
             from ._concurrent_recovery_kimi_retry import validate_receipt as validate_kimi_retry
             validate_kimi_retry(origins, state, payload, when, head)
@@ -329,13 +334,18 @@ def _progress(origins: _Origins, state: CampaignProgress) -> dict[str, Any]:
     if state.inflight is not None:
         attempted.add(state.inflight[0])
     attempted.update(state.parallel_inflight)
-    return {"status": "reconciliation_required" if state.has_inflight or state.self_check_inflight is not None else state.status,
+    result = {"status": "reconciliation_required" if state.has_inflight or state.self_check_inflight is not None else state.status,
             "successful_judgments": old["successful_judgments"] + state.new_valid_judgments,
             "attempted_logical_judgments": old["attempted_logical_judgments"] + len(attempted - {state.failed_key}),
             "physical_attempts": old["physical_attempts"] + state.physical_attempts,
             "new_physical_attempts": state.physical_attempts, "cell_prefixes": list(state.prefix),
             "current_model": state.current_model, "historical_all_attempts_total_tokens": None,
             "formal_evidence_closed": False, "production_deploy_eligible": False}
+    if state.kimi_cash_cap_amendment is not None:
+        from ._concurrent_recovery_kimi_migration import cash_budget
+        result["kimi_cash_cap_amendment"] = state.kimi_cash_cap_amendment
+        result["kimi_official_cash_budget"] = cash_budget(state)
+    return result
 
 
 def inspect_recovery_execution(plan_path: str | Path) -> dict[str, Any]:

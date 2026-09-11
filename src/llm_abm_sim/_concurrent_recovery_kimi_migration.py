@@ -308,7 +308,8 @@ def cash_budget(state: CampaignProgress, key: tuple[int, int] | None = None) -> 
     next_reserve = reservation(key) if key is not None else min(
         (reservation(k) for k in state.kimi_request_quotes if k not in state.success_decisions
          and k not in state.parallel_inflight), default=_RESERVE_MICRO_CNY)
-    cap = int(Decimal(str(grant["maximum_spend_cny"])) * 1000000)
+    effective_cap = state.kimi_cash_cap_amendment or grant
+    cap = int(Decimal(str(effective_cap["maximum_spend_cny"])) * 1000000)
     return {"policy": ("kimi-k3-buffered-request-estimate-v2" if state.kimi_request_quotes else "kimi-k3-full-context-reservation-v1"), "currency": "CNY",
             "maximum_micro_cny": cap, "settled_upper_micro_cny": spent,
             "unpriced_settled_requests": unpriced, "reserved_micro_cny": reserved,
@@ -361,3 +362,48 @@ def preflight(state: CampaignProgress, manifest: v2.ConcurrentRobustnessManifest
             v2._v2_adapter_snapshot(adapter)
         _require(len(lane_clients) == 1 and not clients & lane_clients)
         clients.update(lane_clients)
+
+
+def cash_cap_transition(state: CampaignProgress, payload: dict[str, Any]) -> Callable[[], None]:
+    """Raise only the explicitly approved cumulative cap; never reset spend."""
+    from pathlib import Path
+    state._exact(payload, {'approval', 'previous_maximum_spend_cny', 'maximum_spend_cny'})
+    state._exact(payload['approval'], {'path', 'sha256'})
+    v2._require_sha256(payload['approval']['sha256'], 'cash cap approval')
+    _require(isinstance(payload['approval']['path'], str) and Path(payload['approval']['path']).is_absolute()
+             and type(payload['previous_maximum_spend_cny']) is int and payload['previous_maximum_spend_cny'] == 100
+             and type(payload['maximum_spend_cny']) is int and payload['maximum_spend_cny'] == 350
+             and state.kimi_cash_cap_amendment is None and state.kimi_migration_active
+             and state.current_model == MODEL and not state.task_revoked and state.status == 'stopped'
+             and not state.has_inflight and state.self_check_inflight is None
+             and state.reservation is None and state.pending_judgment is None and state.pending_realized is None)
+    budget = cash_budget(state)
+    _require(budget['maximum_micro_cny'] == 100000000 and not budget['can_reserve_one'])
+    _require(not any(a and a[-1].provider_route == 'moonshot_official' and a[-1].outcome != 'succeeded'
+                     for a in state.new_attempts.values()))
+    def apply() -> None:
+        state.kimi_cash_cap_amendment = deepcopy(payload)
+        state.status = 'paused'
+    return apply
+
+
+def validate_cash_cap_receipt(origins: Any, state: CampaignProgress, payload: dict[str, Any],
+                              when: Any, previous: dict[str, Any]) -> None:
+    from . import concurrent_robustness_formal_execution as formal
+    from . import concurrent_robustness_recovery_task as task
+    a = _evidence(payload['approval'])
+    state._exact(a, {'schema_version', 'status', 'user_confirmation', 'confirmation_context', 'recorded_at_utc',
+                     'plan', 'expected_head_sha256', 'previous_maximum_spend_cny', 'maximum_spend_cny',
+                     'other_models_enabled', 'production_deploy_eligible'})
+    _require(previous['kind'] == 'kimi_official_cash_budget_stopped'
+             and a['expected_head_sha256'] == previous['record_sha256']
+             and a['schema_version'] == 'kimi-cash-cap-consent-v1' and a['status'] == 'approved'
+             and isinstance(a['user_confirmation'], str) and bool(a['user_confirmation'].strip())
+             and isinstance(a['confirmation_context'], str) and bool(a['confirmation_context'].strip())
+             and a['other_models_enabled'] is False and a['production_deploy_eligible'] is False
+             and a['plan'] == origins.handoff.model_dump(mode='json')
+             and origins.task_plan is not None and task._current(origins.task_plan, when)
+             and all(type(a[k]) is int and a[k] == payload[k] for k in ('previous_maximum_spend_cny', 'maximum_spend_cny'))
+             and formal._parse_utc(origins.task_plan['authorization']['approved_at_utc'], 'task approval')
+             <= formal._parse_utc(a['recorded_at_utc'], 'cash cap approval') <= when)
+    cash_cap_transition(state, payload)

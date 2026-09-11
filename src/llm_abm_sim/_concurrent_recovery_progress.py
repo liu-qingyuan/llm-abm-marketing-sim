@@ -73,6 +73,7 @@ class CampaignProgress:
         self.kimi_migration_active = False
         self.kimi_manual_retry_approval: dict[str, Any] | None = None
         self.kimi_retry_policy: dict[str, Any] | None = None
+        self.kimi_cash_cap_amendment: dict[str, Any] | None = None
         self.kimi_request_quotes: dict[tuple[int, int], dict[str, Any]] = {}
         self.kimi_estimate_inflight: dict[str, Any] | None = None
         self.kimi_archived_unknown: dict[tuple[int, int], dict[str, Any]] = {}
@@ -285,6 +286,9 @@ class CampaignProgress:
 
     def transition(self, kind: str, payload: dict[str, Any]) -> Callable[[], None]:
         """Validate before durable append; apply its returned effect only afterwards."""
+        if kind == "kimi_cash_cap_amendment_accepted":
+            from ._concurrent_recovery_kimi_migration import cash_cap_transition
+            return cash_cap_transition(self, payload)
         if kind == "kimi_retry_policy_accepted":
             from ._concurrent_recovery_kimi_retry import transition as kimi_retry
             return kimi_retry(self, payload)
