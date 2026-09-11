@@ -92,6 +92,17 @@ class MoonshotOfficialClient:
             "output_token_ceiling_enforcement": self.output_token_ceiling_enforcement,
         }
 
+    @staticmethod
+    def request_sha256(
+        messages: list[dict[str, str]], model: str, *,
+        reasoning_effort: str | None = None, output_token_ceiling: int | None = None,
+        thinking_mode: str | None = None,
+    ) -> str:
+        """Pre-dispatch identity of the full body; does not contact a provider."""
+        body = _request_body(messages, model, reasoning_effort, output_token_ceiling, thinking_mode)
+        canonical = json.dumps(body, sort_keys=True, ensure_ascii=False, separators=(",", ":")).encode()
+        return hashlib.sha256(canonical).hexdigest()
+
     def estimate_request(
         self, messages: list[dict[str, str]], model: str, *,
         reasoning_effort: str | None = None, output_token_ceiling: int | None = None,

@@ -167,7 +167,7 @@ def test_official_batch_parallel_drain_and_duplicate_zero_resend(tmp_path, monke
     from tests.unit.test_robustness_provider_adapters import _context
 
     mutex = threading.Lock()
-    barrier = threading.Barrier(4)
+    barrier = threading.Barrier(5)
     counters = {'active': 0, 'peak': 0, 'calls': 0}
     class Transport(Client):
         def create_response(self, *args, **kwargs):
@@ -177,7 +177,7 @@ def test_official_batch_parallel_drain_and_duplicate_zero_resend(tmp_path, monke
                 number = counters['calls']
                 counters['peak'] = max(counters['peak'], counters['active'])
             try:
-                if number <= 4:
+                if number <= 5:
                     barrier.wait(timeout=5)
                 time.sleep(.002)
                 return super().create_response(*args, **kwargs)
@@ -204,7 +204,7 @@ def test_official_batch_parallel_drain_and_duplicate_zero_resend(tmp_path, monke
         before = state.physical_attempts
         runtime.run_frozen_batch(state=state, journal=journal, pool=pool, work=work,
                                  check_dispatch_window=lambda: None, backoff_seconds=0)
-        assert counters['calls'] == 60 and counters['peak'] == 4
+        assert counters['calls'] == 60 and counters['peak'] == 5
         assert state.physical_attempts == before + 60
         assert len([k for k in state.success_decisions if k[0] == 12]) == 60
         runtime.run_frozen_batch(state=state, journal=journal, pool=pool, work=work,
@@ -224,7 +224,7 @@ def test_official_new_hard_stop_drains_and_never_retries(tmp_path, monkeypatch, 
     from tests.unit.test_moonshot_official_adapter import Client
     from tests.unit.test_robustness_provider_adapters import _context
 
-    barrier = threading.Barrier(4)
+    barrier = threading.Barrier(5)
     entered = []
     class Transport(Client):
         def create_response(self, *args, **kwargs):
@@ -266,14 +266,14 @@ def test_official_new_hard_stop_drains_and_never_retries(tmp_path, monkeypatch, 
         with pytest.raises((RecoveryCampaignError, runtime.v2._V2CellStopped)):
             runtime.run_frozen_batch(state=state, journal=journal, pool=pool, work=work,
                                      check_dispatch_window=lambda: None, backoff_seconds=0)
-        assert len(entered) == 4
+        assert len(entered) == 5
         assert state.status == ('stopped' if failure == 'quota' else 'reconciliation_required')
         assert state.has_inflight == (failure != 'quota')
-        assert len([k for k in state.success_decisions if k[0] == 12]) == 3
+        assert len([k for k in state.success_decisions if k[0] == 12]) == 4
         with pytest.raises((RecoveryCampaignError, runtime.v2._V2CellStopped)):
             runtime.run_frozen_batch(state=state, journal=journal, pool=pool, work=work,
                                      check_dispatch_window=lambda: None, backoff_seconds=0)
-        assert len(entered) == 4
+        assert len(entered) == 5
 
 
 def test_public_operator_activates_after_preflight_and_terminal_rerun_opens_no_client(tmp_path, monkeypatch):

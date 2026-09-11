@@ -17,6 +17,10 @@ class Client:
         values.update(changes)
         self.response = ProviderResponseEnvelope.model_validate(values)
 
+    def estimate_request(self, messages, model, **settings):
+        from llm_abm_sim.providers.moonshot import MoonshotOfficialClient, MoonshotRequestEstimate
+        return MoonshotRequestEstimate(MoonshotOfficialClient.request_sha256(messages, model, **settings), 659)
+
     def create_response(self, messages, model, **settings):
         self.calls.append((messages, model, settings))
         return self.response

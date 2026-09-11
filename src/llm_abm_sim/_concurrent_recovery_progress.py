@@ -72,11 +72,13 @@ class CampaignProgress:
         self.kimi_migration_approval: dict[str, Any] | None = None
         self.kimi_migration_active = False
         self.kimi_manual_retry_approval: dict[str, Any] | None = None
+        self.kimi_request_quotes: dict[tuple[int, int], dict[str, Any]] = {}
+        self.kimi_estimate_inflight: dict[str, Any] | None = None
         self.kimi_archived_unknown: dict[tuple[int, int], dict[str, Any]] = {}
 
     @property
     def has_inflight(self) -> bool:
-        return self.inflight is not None or bool(self.parallel_inflight)
+        return self.inflight is not None or bool(self.parallel_inflight) or self.kimi_estimate_inflight is not None
 
 
     def effective_self_check(self, model: str) -> dict[str, Any] | None:
@@ -195,6 +197,12 @@ class CampaignProgress:
                 if decision is not None:
                     self.success_decisions[key] = decision
                 del self.parallel_inflight[key]
+                quote = self.kimi_request_quotes.get(key)
+                if quote is not None and attempt.input_usage is not None and attempt.output_usage is not None:
+                    from ._concurrent_recovery_request_quote import reserve
+                    if attempt.input_usage * 20 + attempt.output_usage * 100 > reserve(quote):
+                        self.status = "stopped"
+
                 if key == self.quota_retry_pending:
                     if decision is not None:
                         self.quota_retry_pending = None
@@ -276,6 +284,9 @@ class CampaignProgress:
 
     def transition(self, kind: str, payload: dict[str, Any]) -> Callable[[], None]:
         """Validate before durable append; apply its returned effect only afterwards."""
+        if kind in {"kimi_estimate_intent", "kimi_estimate_settled", "kimi_estimate_failed"}:
+            from ._concurrent_recovery_request_quote import transition as request_quote
+            return request_quote(self, kind, payload)
         if kind == "kimi_manual_retry_accepted":
             from ._concurrent_recovery_manual_retry import transition as manual_retry
             return manual_retry(self, payload)

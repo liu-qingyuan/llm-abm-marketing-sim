@@ -134,6 +134,9 @@ def run_frozen_batch(
         state.append(journal, "parallel_batch_reserved", document)
     elif state.parallel_active_batch != batch_key:
         raise RecoveryCampaignError("Parallel work belongs to a completed earlier batch")
+    if state.kimi_migration_active:
+        from ._concurrent_recovery_request_quote import prepare_batch
+        prepare_batch(state, journal, work, getattr(pool.lanes[0], "client", None), check_dispatch_window)
     now = v2._V2_MONOTONIC()
     ready_at = {}
     cooldown_until = now
@@ -243,10 +246,10 @@ def run_frozen_batch(
                     break
                 if state.kimi_migration_active:
                     from ._concurrent_recovery_kimi_migration import cash_budget
-                    budget = cash_budget(state)
+                    budget = cash_budget(state, key)
                     if not budget["can_reserve_one"]:
                         if not pending:
-                            state.append(journal, "kimi_official_cash_budget_stopped", {"budget": budget})
+                            state.append(journal, "kimi_official_cash_budget_stopped", {"budget": budget, "key": list(key)})
                             remaining.clear()
                         break
                 try:

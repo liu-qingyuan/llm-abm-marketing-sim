@@ -232,7 +232,9 @@ def validate_dispatch(state: CampaignProgress, key: tuple[int, int]) -> None:
     grant = state.kimi_migration_approval
     _require(state.kimi_migration_active and grant is not None and state.cells[key[0]].requested_model == MODEL)
     assert grant is not None
-    _require(cash_budget(state)["can_reserve_one"])
+    _require(cash_budget(state, key)["can_reserve_one"])
+    _require(state.kimi_estimate_inflight is None
+             and (not state.kimi_request_quotes or key in state.kimi_request_quotes))
     prior = state.attempts(key)
     if key in state.kimi_archived_unknown:
         _require(state.kimi_manual_retry_approval is not None and not prior
@@ -266,12 +268,13 @@ def judgment_reference(state: CampaignProgress, key: tuple[int, int]) -> dict[st
 _RESERVE_MICRO_CNY = 1048576 * 20 + 1024 * 100
 
 
-def cash_budget(state: CampaignProgress) -> dict[str, Any]:
-    """Bound only migrated Formal spend; retain every unknown at full reservation.
+def cash_budget(state: CampaignProgress, key: tuple[int, int] | None = None) -> dict[str, Any]:
+    """Account migrated Formal spend plus per-request estimated reservations.
 
     Pricing ignores all input-cache discounts. Historical/subscription fees are
-    intentionally untouched. An incomplete official usage record never frees a
-    reservation or becomes zero. The original maximum_spend_cny is not reset.
+    intentionally untouched. An incomplete official usage record retains a nonzero
+    reservation and never becomes fabricated usage. Buffered estimates are not
+    guaranteed price bounds. Legacy histories retain full-context reservations. The original maximum_spend_cny is not reset.
     """
     from decimal import Decimal
 
@@ -280,7 +283,11 @@ def cash_budget(state: CampaignProgress) -> dict[str, Any]:
     assert grant is not None
     spent = 0
     unpriced = 0
-    for attempts in state.new_attempts.values():
+    from ._concurrent_recovery_request_quote import reserve
+    def reservation(k: tuple[int, int]) -> int:
+        quote = state.kimi_request_quotes.get(k)
+        return reserve(quote) if quote is not None else _RESERVE_MICRO_CNY
+    for attempt_key, attempts in state.new_attempts.items():
         for row in attempts:
             if row.provider_route != "moonshot_official":
                 continue
@@ -288,24 +295,31 @@ def cash_budget(state: CampaignProgress) -> dict[str, Any]:
                     and row.output_usage is not None):
                 spent += row.input_usage * 20 + row.output_usage * 100
             else:
-                spent += _RESERVE_MICRO_CNY
+                spent += reservation(attempt_key)
                 unpriced += 1
-    spent += len(state.kimi_archived_unknown) * _RESERVE_MICRO_CNY
+    spent += sum(reservation(k) for k in state.kimi_archived_unknown)
     unpriced += len(state.kimi_archived_unknown)
-    reserved = len(state.parallel_inflight) * _RESERVE_MICRO_CNY if state.kimi_migration_active else 0
+    reserved = sum(reservation(k) for k in state.parallel_inflight) if state.kimi_migration_active else 0
+    next_reserve = reservation(key) if key is not None else min(
+        (reservation(k) for k in state.kimi_request_quotes if k not in state.success_decisions
+         and k not in state.parallel_inflight), default=_RESERVE_MICRO_CNY)
     cap = int(Decimal(str(grant["maximum_spend_cny"])) * 1000000)
-    return {"policy": "kimi-k3-full-context-reservation-v1", "currency": "CNY",
+    return {"policy": ("kimi-k3-buffered-request-estimate-v2" if state.kimi_request_quotes else "kimi-k3-full-context-reservation-v1"), "currency": "CNY",
             "maximum_micro_cny": cap, "settled_upper_micro_cny": spent,
             "unpriced_settled_requests": unpriced, "reserved_micro_cny": reserved,
-            "per_request_reserve_micro_cny": _RESERVE_MICRO_CNY,
-            "can_reserve_one": spent + reserved + _RESERVE_MICRO_CNY <= cap,
+            "per_request_reserve_micro_cny": next_reserve,
+            "can_reserve_one": spent + reserved + next_reserve <= cap,
             "is_invoice": False, "scope": "official_migration_formal_only"}
 
 
 def cash_stop(state: CampaignProgress, payload: dict[str, Any]) -> Callable[[], None]:
-    state._exact(payload, {"budget"})
+    state._exact(payload, {"budget", "key"} if "key" in payload else {"budget"})
+    key = None
+    if "key" in payload:
+        _require(isinstance(payload['key'], list) and len(payload['key']) == 2)
+        key = state._parallel_key(dict(zip(('cell_index', 'pair_schedule_position'), payload['key'], strict=True)))
     _require(state.kimi_migration_active and state.status == "running" and not state.has_inflight
-             and not cash_budget(state)["can_reserve_one"] and payload["budget"] == cash_budget(state))
+             and not cash_budget(state, key)["can_reserve_one"] and payload["budget"] == cash_budget(state, key))
     return lambda: setattr(state, "status", "stopped")
 
 
