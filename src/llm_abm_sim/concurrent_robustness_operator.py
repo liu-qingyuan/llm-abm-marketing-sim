@@ -117,7 +117,8 @@ def _task_model_resources(manifest: ConcurrentRobustnessManifestV2, timeout: flo
         raise ConcurrentRobustnessOperatorError("Task requested an unknown model")
     if (type(maximum_inflight) is not int or not 1 <= maximum_inflight <= 10
         or (model != "kimi-coding/k3-256k" and maximum_inflight != 1
-            and not (model == "gemini-3.1-pro" and maximum_inflight == 4))):
+            and not (model == "gemini-3.1-pro" and maximum_inflight == 4)
+            and not (model == "openai-codex/gpt-5.6-sol" and maximum_inflight == 5))):
         raise ConcurrentRobustnessOperatorError("Parallel resources require the approved model capacity")
     with ExitStack() as resources:
         clients = []

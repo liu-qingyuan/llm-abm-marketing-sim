@@ -790,3 +790,31 @@ def accept_recovery_task_final_model(plan_path: str | Path, *, approval_path: Pa
                 'receipt': {'path': str(path), 'sha256': _formal._sha256_file(path)},
                 'accepted_head_sha256': row['record_sha256'], 'provider_calls': 0, 'credential_reads': 0}
 
+
+def accept_recovery_task_final_model_parallel(plan_path: str | Path, *, approval_path: Path,
+                                    approval_sha256: str) -> dict[str, Any]:
+    """Admit five GPT lanes on the same drained paused task; repeat is read-only."""
+    from . import _concurrent_recovery_final_model as lane
+    from ._concurrent_recovery_campaign import recovery_scope
+    context = _context(plan_path)
+    reference = _formal.FormalArtifactReference(path=approval_path, sha256=approval_sha256).model_dump(mode='json')
+    with recovery_scope(context.origins.campaign):
+        context = _context(plan_path)
+        approval = lane._checked(reference)
+        existing = next((row for row in context.journal.records if row['kind'] == lane.PARALLEL_EVENT), None)
+        if existing is not None:
+            if existing['payload']['approval'] != reference:
+                raise RecoveryCampaignError('Task already accepted a different model lane')
+            row = existing
+        else:
+            if _read_revocation(context.plan) is not None:
+                raise RecoveryCampaignError('Revoked task cannot admit a model lane')
+            payload = {'approval': reference, **{key: approval[key] for key in lane.PARALLEL_FIELDS}}
+            lane.validate_parallel_receipt(context.origins, context.state, payload, _formal._utc_now(), context.journal.head)
+            row = context.state.append(context.journal, lane.PARALLEL_EVENT, payload)
+        _context(plan_path)
+        path = context.journal.root / 'events' / f'{row["sequence"]:08d}.json'
+        return {'schema_version': 'concurrent-recovery-final-model-parallel-acceptance-v1',
+                'receipt': {'path': str(path), 'sha256': _formal._sha256_file(path)},
+                'accepted_head_sha256': row['record_sha256'], 'provider_calls': 0, 'credential_reads': 0}
+

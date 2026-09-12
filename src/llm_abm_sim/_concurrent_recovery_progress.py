@@ -70,6 +70,7 @@ class CampaignProgress:
         self.suspended_models: dict[str, dict[str, Any]] = {}
         self.model_stage_complete = False
         self.final_model_continuation: dict[str, Any] | None = None
+        self.final_model_parallel: dict[str, Any] | None = None
         self.kimi_migration_approval: dict[str, Any] | None = None
         self.kimi_migration_active = False
         self.kimi_manual_retry_approval: dict[str, Any] | None = None
@@ -93,9 +94,13 @@ class CampaignProgress:
         return self.accepted_rechecks.get(model, self.self_checks.get(model))
 
     @property
+    def effective_retry_policy(self) -> dict[str, Any] | None:
+        return self.kimi_retry_policy if self.kimi_migration_active else None
+
+    @property
     def effective_parallel_approval(self) -> dict[str, Any] | None:
         if self.final_model_continuation is not None:
-            return None
+            return self.final_model_parallel
         if self.kimi_migration_active:
             assert self.kimi_migration_approval is not None
             return {**self.kimi_migration_approval, "requested_model": "kimi-coding/k3-256k", "stop_after_model": True}
@@ -271,7 +276,7 @@ class CampaignProgress:
                 raise RecoveryCampaignError("Explicit quota retry permits one original failed pair before recovery")
             if (self.parallel_active_batch != batch_key or self.inflight is not None
                 or key in self.parallel_inflight or key in self.success_decisions or key in self.old_successes
-                or len(self.parallel_inflight) >= (self.kimi_retry_policy["maximum_active_lanes"] if self.kimi_retry_policy else self.effective_parallel_approval["maximum_inflight"])
+                or len(self.parallel_inflight) >= (self.effective_retry_policy["maximum_active_lanes"] if self.effective_retry_policy else self.effective_parallel_approval["maximum_inflight"])
                 or type(ordinal) is not int or ordinal != self.next_attempt_number(key) or ordinal > 3):
                 raise RecoveryCampaignError("Parallel attempt is unreserved, duplicated, successful or exhausted")
             if self.kimi_migration_active:
@@ -291,6 +296,9 @@ class CampaignProgress:
 
     def transition(self, kind: str, payload: dict[str, Any]) -> Callable[[], None]:
         """Validate before durable append; apply its returned effect only afterwards."""
+        if kind == "final_model_parallel_accepted":
+            from ._concurrent_recovery_final_model import parallel_transition
+            return parallel_transition(self, payload)
         if kind == "final_model_continuation_accepted":
             from ._concurrent_recovery_final_model import transition
             return transition(self, payload)

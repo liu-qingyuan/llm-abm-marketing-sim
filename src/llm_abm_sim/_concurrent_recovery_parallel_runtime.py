@@ -137,7 +137,7 @@ def run_frozen_batch(
     if state.kimi_migration_active:
         from ._concurrent_recovery_request_quote import prepare_batch
         prepare_batch(state, journal, work, getattr(pool.lanes[0], "client", None), check_dispatch_window)
-    interval = state.kimi_retry_policy["minimum_dispatch_interval_seconds"] if state.kimi_retry_policy else _OFFICIAL_DISPATCH_INTERVAL_SECONDS
+    interval = state.effective_retry_policy["minimum_dispatch_interval_seconds"] if state.effective_retry_policy else _OFFICIAL_DISPATCH_INTERVAL_SECONDS
     now = v2._V2_MONOTONIC()
     ready_at = {}
     cooldown_until = now
@@ -154,7 +154,7 @@ def run_frozen_batch(
         if prior and prior[-1].lane_cooldown:
             cooldown_until = max(cooldown_until, now + delay)
     pending: dict[Future[Any], tuple[FrozenWork, int, int, Any, int]] = {}
-    free = list(range(state.kimi_retry_policy["maximum_active_lanes"] if state.kimi_retry_policy else capacity))
+    free = list(range(state.effective_retry_policy["maximum_active_lanes"] if state.effective_retry_policy else capacity))
     pause: Exception | None = None
     with ThreadPoolExecutor(max_workers=capacity, thread_name_prefix="recovery-physical") as workers:
         while remaining or pending:
@@ -174,7 +174,7 @@ def run_frozen_batch(
                     free.append(lane)
                     continue
                 retryable = error is not None and error.retryable and (not state.kimi_migration_active or (
-                    state.kimi_retry_policy is not None and error.failure_category in {"temporary_rate_limit", "temporary_overload"}))
+                    state.effective_retry_policy is not None and error.failure_category in {"temporary_rate_limit", "temporary_overload"}))
                 retry = retryable and ordinal < 3
                 delay = None
                 source = None
@@ -184,8 +184,8 @@ def run_frozen_batch(
                         if error.wait_seconds is not None
                         else min(backoff_seconds * 2 ** (ordinal - 1), v2._V2_BACKOFF_CEILING_SECONDS)
                     )
-                    if state.kimi_retry_policy is not None:
-                        delay = max(delay, state.kimi_retry_policy["backoff_base_seconds"] * 2 ** (ordinal - 1))
+                    if state.effective_retry_policy is not None:
+                        delay = max(delay, state.effective_retry_policy["backoff_base_seconds"] * 2 ** (ordinal - 1))
                     source = (
                         error.wait_source or "provider_wait"
                         if error.wait_seconds is not None

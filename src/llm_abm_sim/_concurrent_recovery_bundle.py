@@ -47,7 +47,7 @@ def _bound_facts(origins: _execution._Origins, records: tuple[dict[str, Any], ..
             if origins.task_plan is None:
                 paths.add(Path(plan["authorization_artifact"]["path"]))
                 paths.update(Path(ref["path"]) for ref in plan["request"]["qualification_artifacts"])
-        elif row["kind"] in {"kimi_manual_retry_accepted", "kimi_retry_policy_accepted", "kimi_cash_cap_amendment_accepted", "final_model_continuation_accepted"}:
+        elif row["kind"] in {"kimi_manual_retry_accepted", "kimi_retry_policy_accepted", "kimi_cash_cap_amendment_accepted", "final_model_continuation_accepted", "final_model_parallel_accepted"}:
             paths.add(Path(row["payload"]["approval"]["path"]))
         elif row["kind"] == "kimi_official_migration_accepted":
             from ._concurrent_recovery_kimi_migration import receipt_references as migration_references
