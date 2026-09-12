@@ -78,6 +78,10 @@ def test_report_preserves_history_and_downloads_share_analysis():
     e = replace(e, document={**e.document, 'identity_strata': [dict(model='deepseek-v4-flash', prompt='P0', observed_model='deepseek-v4-flash', route='official', judgments=1800)]})
     a = analyze_revised_evidence(e)
     old = b'<meta name="abm-release-id" content="old"><meta name="abm-release-contract" content="abm-report-release-contract-v13"><main>PROTECTED MAIN</main><section class="robustness-section" data-testid="prompt-model-robustness-section" aria-labelledby="prompt-model-title">PROTECTED HISTORY</section>'
+    from llm_abm_sim.full_pool_presentation import _realized_catalog
+    catalog = _realized_catalog(production=True)
+    context = (catalog['zh-CN']['history.copy'] * 2 + catalog['en-US']['history.copy']).encode()
+    old = context + old
     candidate = render_revised_research(old, e, a)
     released = render_revised_research(old, e, a, release_id='release-v15')
     assert b'data-release-state="candidate"' in candidate
@@ -85,6 +89,8 @@ def test_report_preserves_history_and_downloads_share_analysis():
     assert released.endswith(old[old.index(b'<section'):])
     assert b'<main>PROTECTED MAIN</main>' in released
     assert b'abm-report-release-contract-v15' in released
+    assert b'historical GPT factorial evidence retain their direct-action mechanism' in released
+    assert b'four-model recovery study independently uses Judgment to Realization' in released
     assert b'28,800' in released and b'7167' in released and b'unknown/null' in released
     downloads = revised_downloads(e, a)
     assert len(downloads) == 13
@@ -92,7 +98,7 @@ def test_report_preserves_history_and_downloads_share_analysis():
     assert len(a['planned_contrasts']) == 6
     assert len(a['prompt_model_interactions']) == 9
     assert all(r['rate_delta'] == 0 for r in a['prompt_model_interactions'])
-    with pytest.raises(ValueError, match='anchor'):
+    with pytest.raises(ValueError, match='context|anchor'):
         render_revised_research(released, e, a)
 
 

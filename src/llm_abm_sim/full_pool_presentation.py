@@ -3339,3 +3339,18 @@ _REVISED_RELEASE_RESPONSIVE_CSS = """
 .full-pool-presentation .full-pool-hero > * { min-width: 0; overflow-wrap: anywhere; }
 .full-pool-presentation .full-pool-hero h1 { word-break: normal; }
 """
+
+
+def _revised_history_context(base: str) -> str:
+    """Keep old evidence intact while separating the composite history mechanisms."""
+    old = _realized_catalog(production=True)
+    replacements = {
+        "zh-CN": "以下研究沿用原始 1,000-user sample，与 36,400-user 主实验分开。Primary-Shadow、排序权重与旧 GPT 析因保留历史 direct-action 机制；新增跨厂商四模型恢复研究独立使用 Judgment → Realization 两阶段机制，不合并不同 run 或分母。",
+        "en-US": "The studies below use the original 1,000-user sample, separately from the 36,400-user main experiment. Primary-Shadow, ranking-weight and historical GPT factorial evidence retain their direct-action mechanism. The added cross-provider four-model recovery study independently uses Judgment to Realization; different runs and denominators are not pooled.",
+    }
+    for language, count in (("zh-CN", 2), ("en-US", 1)):
+        previous = old[language]["history.copy"]
+        if base.count(previous) != count:
+            raise ValueError("Protected history context or bilingual catalog is crossed")
+        base = base.replace(previous, replacements[language])
+    return base

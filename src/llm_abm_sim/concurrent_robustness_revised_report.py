@@ -8,7 +8,7 @@ import re
 from typing import Any
 
 from .concurrent_robustness_revised import MESSAGES, MODELS, PROMPTS, ClosedRevisedEvidence, json_bytes
-from .full_pool_presentation import _REVISED_RELEASE_RESPONSIVE_CSS
+from .full_pool_presentation import _REVISED_RELEASE_RESPONSIVE_CSS, _revised_history_context
 
 _NAMES = dict(zip(MODELS, ("DeepSeek V4 Flash", "Gemini 3.1 Pro", "Kimi（双路由 / mixed routes）", "GPT-5.6 Sol"), strict=True))
 _COLORS = ("#0e657d", "#bd5200", "#4b7c08", "#853ff2")
@@ -74,7 +74,7 @@ def _table(rows: list[dict[str, Any]], columns: list[tuple[str, str]]) -> str:
 
 def render_revised_research(base_html: bytes, evidence: ClosedRevisedEvidence, analysis: dict[str, Any], *, release_id: str | None = None) -> bytes:
     """Preserve historical/main HTML and add the separately labelled research section."""
-    base = base_html.decode()
+    base = _revised_history_context(base_html.decode())
     anchor = '<section class="robustness-section" data-testid="prompt-model-robustness-section" aria-labelledby="prompt-model-title">'
     if base.count(anchor) != 1 or 'data-testid="revised-robustness-section"' in base:
         raise ValueError("Protected research report insertion anchor is crossed")
