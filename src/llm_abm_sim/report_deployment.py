@@ -62,7 +62,7 @@ class DeploymentAuthorizationRequired(DeploymentAuthorizationError):
         message = (
             "v13 operational deployment authorization is required"
             if release_contract_schema == V13_RELEASE_CONTRACT_SCHEMA
-            else "v14 operational deployment authorization is required"
+            else f"{readiness['release_contract_schema'].rsplit('-', 1)[-1]} operational deployment authorization is required"
         )
         super().__init__(message)
         self.readiness = readiness
@@ -468,6 +468,8 @@ def _release_facts(
     target: DeploymentTarget,
 ) -> dict[str, object]:
     schema = deployment_facts.get("release_contract_schema_version")
+    if schema == "abm-report-release-contract-v15":
+        return _v15_release_facts(deployment_facts, target)
     if schema == V14_RELEASE_CONTRACT_SCHEMA:
         return _v14_release_facts(deployment_facts, target)
     if schema == V13_RELEASE_CONTRACT_SCHEMA:
@@ -478,6 +480,8 @@ def _release_facts(
 
 
 def _deployment_schemas(release_contract_schema: object) -> tuple[str, str]:
+    if release_contract_schema == "abm-report-release-contract-v15":
+        return "abm-report-v15-deployment-readiness-v1", "abm-report-v15-deployment-authorization-v1"
     if release_contract_schema == V14_RELEASE_CONTRACT_SCHEMA:
         return DEPLOYMENT_READINESS_SCHEMA_V14, DEPLOYMENT_AUTHORIZATION_SCHEMA_V14
     if release_contract_schema == V13_RELEASE_CONTRACT_SCHEMA:
@@ -1155,3 +1159,62 @@ def write_v14_deployment_operation_facts(
         raise DeploymentAuthorizationError(
             "deployment operation output could not be created exclusively"
         ) from exc
+
+
+def _v15_release_facts(deployment_facts, target):
+    """Consume only Release's v15 readiness; no study logic belongs here."""
+    readiness = _mapping(deployment_facts.get("release_readiness"), "v15 readiness")
+    hashes = _mapping(deployment_facts.get("artifact_sha256"), "v15 hashes")
+    if (deployment_facts.get("schema_version") != "abm-report-deployment-facts-v1"
+            or readiness.get("schema_version") != "revised-four-model-v15-release-readiness-v1"
+            or readiness.get("release_contract_schema") != "abm-report-release-contract-v15"
+            or readiness.get("release_id") != deployment_facts.get("release_id")
+            or readiness.get("realized_source_identity") != deployment_facts.get("realized_source_identity")
+            or readiness.get("canonical_endpoint") != target.canonical_endpoint
+            or deployment_facts.get("canonical_endpoint") != target.canonical_endpoint
+            or readiness.get("provider_calls") != 0
+            or readiness.get("operational_authorization_required") is not True
+            or readiness.get("deployment_authorized") is not False
+            or readiness.get("public_acceptance_recorded") is not False
+            or not hashes
+            or hashes.get("report.html") != deployment_facts.get("report_sha256")
+            or hashes.get("artifact_manifest.json") != deployment_facts.get("manifest_sha256")):
+        raise DeploymentAuthorizationError("v15 release readiness identity is crossed")
+    fields = {key: _sha256(deployment_facts.get(key), key) for key in
+              ("contract_sha256", "release_identity_sha256", "realized_source_identity", "report_sha256", "manifest_sha256")}
+    for digest in hashes.values():
+        _sha256(digest, "artifact hash")
+    release_id = _string(deployment_facts.get("release_id"), "release id")
+    if not _RELEASE_ID.fullmatch(release_id):
+        raise DeploymentAuthorizationError("v15 release id invalid")
+    return {**fields, "release_contract_schema": "abm-report-release-contract-v15",
+            "release_id": release_id, "canonical_endpoint": target.canonical_endpoint,
+            "artifact_count": len(hashes), "release_readiness": dict(readiness)}
+
+
+def _write_v15_deployment_operation_facts(*, plan_path: Path, public_summary_path: Path, deployed_at_utc: str, output_path: Path) -> None:
+    """Production-shell closure, called only after locked readback and browser gates."""
+    plan, plan_bytes = _load_canonical_json_object(plan_path, "v15 plan")
+    if plan.get("release_contract_schema") != "abm-report-release-contract-v15" or plan.get("schema_version") != DEPLOYMENT_PLAN_SCHEMA_V1 or plan.get("authorization_required") is not True:
+        raise DeploymentAuthorizationError("v15 operation requires its authorized plan")
+    target = _target_from_document(plan["deployment_target"])
+    _rollback_identity(plan.get("rollback_identity"), target=target)
+    for key in ("authorization_sha256", "contract_sha256", "release_identity_sha256", "report_sha256", "manifest_sha256", "realized_source_identity"):
+        _sha256(plan.get(key), key)
+    payload = public_summary_path.read_bytes()
+    summary = json.loads(payload)
+    if (summary.get("schema_version") != "abm-public-artifact-body-acceptance-v1"
+            or summary.get("artifact_count") != plan["artifact_count"]
+            or summary.get("full_body_count", 0) + summary.get("manifest_bound_count", 0) != plan["artifact_count"]):
+        raise DeploymentAuthorizationError("v15 public body inventory is incomplete")
+    document = {"schema_version": "abm-report-v15-deployment-operation-v1", "deployed_at_utc": deployed_at_utc,
+        "plan_sha256": hashlib.sha256(plan_bytes).hexdigest(), "plan": plan,
+        "public_body_summary_sha256": hashlib.sha256(payload).hexdigest(), "public_body_summary": summary,
+        "candidate_inventory_validated": True, "candidate_health_validated": True,
+        "atomic_current_switched": True, "post_switch_health_validated": True,
+        "final_current_identity_revalidated": True, "playwright_acceptance_passed": True,
+        "provider_calls": 0, "rollback_required": False}
+    if output_path.is_symlink():
+        raise DeploymentAuthorizationError("operation output must be regular")
+    with output_path.open("xb") as stream:
+        stream.write(_canonical_json_bytes(document))

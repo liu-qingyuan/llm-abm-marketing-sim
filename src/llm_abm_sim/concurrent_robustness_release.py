@@ -6923,6 +6923,12 @@ def validate_concurrent_robustness_production_release(
 ) -> dict[str, object]:
     """Fail-closed validator used by the production deployment gate."""
     schema_version = contract_document.get("schema_version")
+    if schema_version == "abm-report-release-contract-v15":
+        from .revised_robustness_release import validate_revised_research_release
+        return validate_revised_research_release(
+            repo_root=repo_root, contract_document=dict(contract_document),
+            source_dir=source_dir, snapshot_dir=snapshot_dir,
+        )
     if schema_version == ROBUSTNESS_RELEASE_CONTRACT_SCHEMA_V14:
         return _validate_full_pool_v14_production_release(
             repo_root=repo_root,
@@ -7658,3 +7664,9 @@ def _new_repo_path(root: Path, path: Path, label: str) -> Path:
 
 def _paths_overlap(left: Path, right: Path) -> bool:
     return left == right or left.is_relative_to(right) or right.is_relative_to(left)
+
+
+def promote_revised_research_release(**kwargs):
+    """Publish the independent revised-four-model immutable release (no deployment)."""
+    from .revised_robustness_release import promote_revised_research_release as promote
+    return promote(**kwargs)

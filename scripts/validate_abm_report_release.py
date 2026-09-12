@@ -1850,6 +1850,12 @@ def _load_and_validate_release(
             source_dir=source_dir,
             snapshot_dir=snapshot_dir,
         )
+    elif schema_version == "abm-report-release-contract-v15":
+        _safe_contract_file(repo_root, contract_path)
+        result = validate_concurrent_robustness_production_release(
+            repo_root=repo_root, contract_document=contract,
+            source_dir=source_dir, snapshot_dir=snapshot_dir,
+        )
     elif schema_version == ROBUSTNESS_RELEASE_CONTRACT_SCHEMA_V14:
         _safe_contract_file(repo_root, contract_path)
         result = _validate_v14(
@@ -1901,6 +1907,7 @@ _DEPLOYMENT_REPORT_KINDS = {
     "abm-report-release-contract-v12": "full-pool",
     ROBUSTNESS_RELEASE_CONTRACT_SCHEMA_V13: "full-pool",
     ROBUSTNESS_RELEASE_CONTRACT_SCHEMA_V14: "full-pool",
+    "abm-report-release-contract-v15": "full-pool",
 }
 _DEPLOYMENT_RELEASE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,159}$")
 _DEPLOYMENT_DOMAIN = re.compile(r"^[A-Za-z0-9.-]+$")
@@ -2020,6 +2027,9 @@ def _build_deployment_facts(
         "approved_downloads": sorted(approved_downloads),
         "public_acceptance_artifacts": sorted(artifact_hashes),
     }
+    if schema_version == "abm-report-release-contract-v15":
+        from llm_abm_sim.revised_robustness_release import require_revised_deployment_profile
+        facts.update(require_revised_deployment_profile(result))
     if schema_version == ROBUSTNESS_RELEASE_CONTRACT_SCHEMA_V14:
         try:
             profile = require_full_pool_v14_deployment_profile(result)
@@ -2089,6 +2099,10 @@ def _build_deployment_facts(
 
 def _require_formal_production(result: dict[str, object]) -> None:
     schema_version = result.get("schema_version")
+    if schema_version == "abm-report-release-contract-v15":
+        from llm_abm_sim.revised_robustness_release import require_revised_deployment_profile
+        require_revised_deployment_profile(result)
+        return
     if schema_version == ROBUSTNESS_RELEASE_CONTRACT_SCHEMA_V14:
         try:
             require_full_pool_v14_deployment_profile(result)

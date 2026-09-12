@@ -279,6 +279,7 @@ async function expectFullPoolReport(page: Page): Promise<void> {
   const isTwoStage = [
     'abm-report-release-contract-v13',
     'abm-report-release-contract-v14',
+    'abm-report-release-contract-v15',
   ].includes(releaseContractSchema ?? '');
   await expect(page).toHaveTitle(isTwoStage ? 'Full-Pool 两阶段互动实现' : 'Full-Pool 主实验');
   await expect(page.locator('html')).toHaveAttribute('lang', 'zh-CN');
@@ -410,6 +411,32 @@ async function expectFullPoolReport(page: Page): Promise<void> {
     await expect(robustness).toHaveAttribute('data-v2-language', 'zh-CN');
     await expect(page.locator('a[download][href$=".mmd"]').first()).toBeVisible();
     await expect(page.locator('a[download][href$=".xlsx"]').first()).toBeVisible();
+  }
+
+  if (releaseContractSchema === 'abm-report-release-contract-v15') {
+    await page.getByTestId('run-evidence-mode-button').click();
+    const revised = page.getByTestId('revised-robustness-section');
+    await expect(revised).toBeVisible();
+    await expect(revised).toHaveAttribute('data-release-state', 'production');
+    await expect(revised).toContainText('28,800');
+    await expect(revised).toContainText('7167');
+    await expect(revised.locator('[data-r15-plot]:visible')).toHaveCount(4);
+    for (const model of ['deepseek-v4-flash', 'gemini-3.1-pro', 'kimi-coding/k3-256k', 'openai-codex/gpt-5.6-sol']) {
+      await page.getByTestId('revised-model').selectOption(model);
+      for (const message of ['message_1', 'message_2', 'message_3']) {
+        await page.getByTestId('revised-message').selectOption(message);
+        for (const metric of ['realized', 'judgment', 'audience', 'growth']) {
+          await page.getByTestId('revised-metric').selectOption(metric);
+          const plot = revised.locator('[data-r15-plot]:visible');
+          await expect(plot).toHaveCount(1);
+          await expect(plot).toHaveAttribute('data-r15-plot', `${model}|${message}|${metric}`);
+          await expect(plot.locator('svg g[data-prompt]')).toHaveCount(4);
+        }
+      }
+    }
+    await expect(revised.getByTestId('revised-downloads').locator('a[download]')).toHaveCount(13);
+    await expect(page.getByTestId('prompt-model-robustness-section')).toBeVisible();
+    await expectNoHorizontalOverflow(page);
   }
 
   await page.locator('[data-full-pool-language="en-US"]').click();
