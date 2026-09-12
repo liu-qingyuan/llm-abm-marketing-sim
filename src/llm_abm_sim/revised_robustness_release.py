@@ -185,7 +185,10 @@ def validate_revised_research_release(*, repo_root: str | Path, contract_documen
             raise ValueError("v15 physical inventory differs from source-rebuilt files")
     return {**c, "report_sha256": hashes["report.html"], "manifest_sha256": hashes["artifact_manifest.json"],
             "realized_source_identity": evidence.document["identity_sha256"],
-            "revised_counts": evidence.document["counts"], "formal_research_evidence": True}
+            "revised_counts": evidence.document["counts"], "formal_research_evidence": True,
+            "sampling_method": "historical_1000_user_seed_first_sample",
+            "sampling_status": "complete_revised_four_model_scope",
+            "decision_execution_mode": "formal_provider_evidence_offline_replay"}
 
 
 def require_revised_deployment_profile(result: dict[str, Any]) -> dict[str, Any]:

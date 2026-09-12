@@ -1852,10 +1852,13 @@ def _load_and_validate_release(
         )
     elif schema_version == "abm-report-release-contract-v15":
         _safe_contract_file(repo_root, contract_path)
-        result = validate_concurrent_robustness_production_release(
-            repo_root=repo_root, contract_document=contract,
-            source_dir=source_dir, snapshot_dir=snapshot_dir,
-        )
+        try:
+            result = validate_concurrent_robustness_production_release(
+                repo_root=repo_root, contract_document=contract,
+                source_dir=source_dir, snapshot_dir=snapshot_dir,
+            )
+        except ValueError as exc:
+            raise ReleaseValidationError(str(exc)) from exc
     elif schema_version == ROBUSTNESS_RELEASE_CONTRACT_SCHEMA_V14:
         _safe_contract_file(repo_root, contract_path)
         result = _validate_v14(
