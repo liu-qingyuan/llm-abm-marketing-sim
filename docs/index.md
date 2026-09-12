@@ -10,7 +10,7 @@
 
 受保护 v13 主实验证据在 36,400 位 Full-Pool users、3 条 message、30 个 full-batch commits 与 109,200 次 `user × message` exposures 上，把 Provider Judgment 与 ABM Realization 分层；nested-v1 realization 得到 63,614 次 realized engagements（58.254579%）。页面发布新 Full-Pool 两阶段机制总图，并保持 Historical 1,000-user 六图及其 evidence bytes 隔离不变。默认 toy/realistic fixture、offline/mock validation 和 rule-based run 都不能替代 persisted Formal evidence 或 canonical release。
 
-当前 composite v15 已接入独立四模型恢复分析（28,800 judgments /16 cells/480 barriers）；后续中英文总说明澄清候选因远端空间不足待授权清理。[发布、验收与候选状态](references/revised-four-model-v15-canonical-release-20260912.md)。
+当前 composite v15 已接入独立四模型恢复分析（28,800 judgments /16 cells/480 barriers）；中英文历史总说明澄清版本已发布并通过公网验收。[发布与验收记录](references/revised-four-model-v15-canonical-release-20260912.md)。
 
 ## 运行与演示
 
@@ -45,7 +45,7 @@ Architecture 描述当前 Module、数据边界和稳定运行语义；ADR 记�
 
 - [References 总览](references/README.md)
 - [current dataset：锦江 final dataset 审计](references/jinjiang-final-dataset-audit-20260624.md)
-- [current composite release：四模型恢复稳健性 v15 发布与候选状态](references/revised-four-model-v15-canonical-release-20260912.md)
+- [current composite release：四模型恢复稳健性 v15 canonical 发布记录](references/revised-four-model-v15-canonical-release-20260912.md)
 - [protected main evidence：Full-Pool 两阶段 v13 canonical 发布记录](references/full-pool-two-stage-v13-canonical-release-20260827.md)
 - [current Retention：Retention final evidence](references/retention-cleanup-final-evidence-20260730.md)
 
