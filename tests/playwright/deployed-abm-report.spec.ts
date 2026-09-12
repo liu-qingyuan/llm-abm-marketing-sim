@@ -414,6 +414,7 @@ async function expectFullPoolReport(page: Page): Promise<void> {
   }
 
   if (releaseContractSchema === 'abm-report-release-contract-v15') {
+    await expect(page.locator('[data-full-pool-i18n="history.copy"]')).toContainText('新增跨厂商四模型恢复研究独立使用');
     await page.getByTestId('run-evidence-mode-button').click();
     const revised = page.getByTestId('revised-robustness-section');
     await expect(revised).toBeVisible();
@@ -461,6 +462,9 @@ async function expectFullPoolReport(page: Page): Promise<void> {
   await fallbackSummary.click();
   await expect(fallback).not.toHaveAttribute('open', '');
   await expect(page.getByTestId('full-pool-trace-page-status')).toContainText('Page 1 of');
+  if (releaseContractSchema === 'abm-report-release-contract-v15') {
+    await expect(page.locator('[data-full-pool-i18n="history.copy"]')).toContainText('four-model recovery study independently uses Judgment to Realization');
+  }
 }
 
 async function expectRobustnessWeightFamily(page: Page, familyId: string): Promise<void> {
