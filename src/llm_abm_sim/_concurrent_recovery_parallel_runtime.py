@@ -175,7 +175,7 @@ def run_frozen_batch(
                     continue
                 retryable = error is not None and error.retryable and (not state.kimi_migration_active or (
                     state.effective_retry_policy is not None and error.failure_category in {"temporary_rate_limit", "temporary_overload"}))
-                retry = retryable and ordinal < 3
+                retry = retryable and ordinal < 3 and item.key not in state.gpt_archived_unknown
                 delay = None
                 source = None
                 if retry and error is not None:
@@ -197,7 +197,7 @@ def run_frozen_batch(
                     else "retryable_failure"
                     if retry
                     else "attempts_exhausted"
-                    if retryable
+                    if retryable and ordinal == 3
                     else "nonretryable_failure"
                 )
                 try:

@@ -74,6 +74,8 @@ class CampaignProgress:
         self.kimi_migration_approval: dict[str, Any] | None = None
         self.kimi_migration_active = False
         self.kimi_manual_retry_approval: dict[str, Any] | None = None
+        self.gpt_manual_retry_approval: dict[str, Any] | None = None
+        self.gpt_archived_unknown: dict[tuple[int, int], dict[str, Any]] = {}
         self.kimi_retry_policy: dict[str, Any] | None = None
         self.kimi_cash_cap_amendment: dict[str, Any] | None = None
         self.kimi_request_quotes: dict[tuple[int, int], dict[str, Any]] = {}
@@ -132,7 +134,7 @@ class CampaignProgress:
         return sum(self.prefix) - len(self.old_successes)
 
     def next_attempt_number(self, key: tuple[int, int]) -> int:
-        return len(self.attempts(key)) + int(key in self.kimi_archived_unknown) + 1
+        return len(self.attempts(key)) + int(key in self.kimi_archived_unknown or key in self.gpt_archived_unknown) + 1
 
     def attempts(self, key: tuple[int, int]) -> tuple[_v2._V2AttemptEvidence, ...]:
         old = self.historical_failure if key == self.failed_key else ()
@@ -277,7 +279,7 @@ class CampaignProgress:
             if (self.parallel_active_batch != batch_key or self.inflight is not None
                 or key in self.parallel_inflight or key in self.success_decisions or key in self.old_successes
                 or len(self.parallel_inflight) >= (self.effective_retry_policy["maximum_active_lanes"] if self.effective_retry_policy else self.effective_parallel_approval["maximum_inflight"])
-                or type(ordinal) is not int or ordinal != self.next_attempt_number(key) or ordinal > 3):
+                or type(ordinal) is not int or ordinal != self.next_attempt_number(key) or ordinal > (2 if key in self.gpt_archived_unknown else 3)):
                 raise RecoveryCampaignError("Parallel attempt is unreserved, duplicated, successful or exhausted")
             if self.kimi_migration_active:
                 from ._concurrent_recovery_kimi_migration import validate_dispatch
@@ -311,6 +313,9 @@ class CampaignProgress:
         if kind in {"kimi_estimate_intent", "kimi_estimate_settled", "kimi_estimate_failed"}:
             from ._concurrent_recovery_request_quote import transition as request_quote
             return request_quote(self, kind, payload)
+        if kind == "gpt_manual_retry_accepted":
+            from ._concurrent_recovery_manual_retry import gpt_transition
+            return gpt_transition(self, payload)
         if kind == "kimi_manual_retry_accepted":
             from ._concurrent_recovery_manual_retry import transition as manual_retry
             return manual_retry(self, payload)

@@ -217,6 +217,9 @@ def _legal_history(origins: _Origins, records: tuple[dict[str, Any], ...], targe
         if row["kind"] == "kimi_retry_policy_accepted":
             from ._concurrent_recovery_kimi_retry import validate_receipt as validate_kimi_retry
             validate_kimi_retry(origins, state, payload, when, head)
+        if row["kind"] == "gpt_manual_retry_accepted":
+            from ._concurrent_recovery_manual_retry import validate_gpt_receipt
+            validate_gpt_receipt(origins, state, payload, when, head)
         if row["kind"] == "kimi_manual_retry_accepted":
             from ._concurrent_recovery_manual_retry import validate_receipt as validate_manual
             validate_manual(origins, state, payload, when, head)
@@ -347,6 +350,9 @@ def _progress(origins: _Origins, state: CampaignProgress) -> dict[str, Any]:
             "new_physical_attempts": state.physical_attempts, "cell_prefixes": list(state.prefix),
             "current_model": state.current_model, "historical_all_attempts_total_tokens": None,
             "formal_evidence_closed": False, "production_deploy_eligible": False}
+    if state.gpt_manual_retry_approval is not None:
+        result["gpt_manual_retry_approval"] = state.gpt_manual_retry_approval
+        result["gpt_archived_unknown_intents"] = len(state.gpt_archived_unknown)
     if state.final_model_parallel is not None:
         result["final_model_parallel"] = state.final_model_parallel
     if state.final_model_continuation is not None:

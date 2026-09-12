@@ -64,7 +64,7 @@ class UnknownAttemptReference(_v2._V2FrozenModel):
 class RecoveryJudgmentV1(_v2._V2FrozenModel):
     """A recovery-only Judgment that preserves the original attempt ordinals."""
 
-    schema_version: Literal["concurrent-recovery-provider-judgment-v1", "concurrent-recovery-provider-judgment-v2", "concurrent-recovery-provider-judgment-v3", "concurrent-recovery-provider-judgment-v4", "concurrent-recovery-provider-judgment-v5", "concurrent-recovery-provider-judgment-v6"]
+    schema_version: Literal["concurrent-recovery-provider-judgment-v1", "concurrent-recovery-provider-judgment-v2", "concurrent-recovery-provider-judgment-v3", "concurrent-recovery-provider-judgment-v4", "concurrent-recovery-provider-judgment-v5", "concurrent-recovery-provider-judgment-v6", "concurrent-recovery-provider-judgment-v7"]
     quota_retry_approval: _formal.FormalArtifactReference | None = None
     output_amendment_approval: _formal.FormalArtifactReference | None = None
     official_migration_approval: _formal.FormalArtifactReference | None = None
@@ -113,7 +113,8 @@ class RecoveryJudgmentV1(_v2._V2FrozenModel):
         bounded = self.schema_version == "concurrent-recovery-provider-judgment-v6"
         if bounded != (self.official_retry_policy is not None):
             raise ValueError("Bounded Kimi retries require Judgment v6 and its policy reference")
-        manual = self.schema_version == "concurrent-recovery-provider-judgment-v5"
+        gpt_manual = self.schema_version == "concurrent-recovery-provider-judgment-v7"
+        manual = self.schema_version == "concurrent-recovery-provider-judgment-v5" or gpt_manual
         if manual:
             if (self.manual_retry_approval is None or unknown_count != 1
                 or historical_count or new_count != 1):
@@ -135,7 +136,12 @@ class RecoveryJudgmentV1(_v2._V2FrozenModel):
         if self.new_attempts[-1].outcome != "succeeded":
             raise ValueError("new attempts must end in one success")
         preceding = [row for row in self.new_attempts[:-1] if row.outcome != "retryable_failure"]
-        official = bounded or manual or self.schema_version == "concurrent-recovery-provider-judgment-v4"
+        official = bounded or (manual and not gpt_manual) or self.schema_version == "concurrent-recovery-provider-judgment-v4"
+        if gpt_manual and (self.cell.requested_model != "openai-codex/gpt-5.6-sol"
+                           or self.official_migration_approval is not None
+                           or self.quota_retry_approval is not None or self.output_amendment_approval is not None
+                           or self.new_attempts[-1].output_usage is None or self.new_attempts[-1].output_usage > 256):
+            raise ValueError("GPT manual retry requires its original identity and 256 contract")
         if not official and self.official_migration_approval is not None:
             raise ValueError("Official migration approval requires Judgment v4 or v5")
         if official:
@@ -163,7 +169,7 @@ class RecoveryJudgmentV1(_v2._V2FrozenModel):
                 raise ValueError("Kimi Judgment v3 requires its explicit 1024 approval and bounded usage")
         elif self.output_amendment_approval is not None:
             raise ValueError("Output amendment requires Judgment v3")
-        elif self.schema_version == RECOVERY_JUDGMENT_V1_SCHEMA:
+        elif self.schema_version == RECOVERY_JUDGMENT_V1_SCHEMA or gpt_manual:
             if self.quota_retry_approval is not None or preceding:
                 raise ValueError("new attempts before the success must be retryable failures")
         elif (self.quota_retry_approval is None or self.cell.requested_model != "gemini-3.1-pro"
@@ -351,7 +357,9 @@ def build_recovery_judgment(
         payload["schema_version"] = "concurrent-recovery-provider-judgment-v4"
         payload["official_migration_approval"] = official_migration_approval
     if manual_retry_approval is not None or unknown_attempts:
-        payload["schema_version"] = "concurrent-recovery-provider-judgment-v5"
+        payload["schema_version"] = ("concurrent-recovery-provider-judgment-v7"
+                                     if cell.requested_model == "openai-codex/gpt-5.6-sol"
+                                     else "concurrent-recovery-provider-judgment-v5")
         payload["manual_retry_approval"] = manual_retry_approval
         payload["unknown_attempts"] = [row.model_dump(mode="json") for row in unknown_attempts]
     if official_retry_policy is not None:

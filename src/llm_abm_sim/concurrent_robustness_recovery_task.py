@@ -818,3 +818,38 @@ def accept_recovery_task_final_model_parallel(plan_path: str | Path, *, approval
                 'receipt': {'path': str(path), 'sha256': _formal._sha256_file(path)},
                 'accepted_head_sha256': row['record_sha256'], 'provider_calls': 0, 'credential_reads': 0}
 
+
+def accept_recovery_task_gpt_manual_retry(plan_path: str | Path, *, approval_path: Path,
+                                          approval_sha256: str) -> dict[str, Any]:
+    """Archive one explicitly approved GPT unknown intent and permit one manual retry each.
+
+    Reuses the original Study lock, history and budgets. Does not dispatch or
+    increase the cash cap. Repeating the same immutable receipt is read-only.
+    """
+    from . import _concurrent_recovery_manual_retry as manual
+    from ._concurrent_recovery_campaign import recovery_scope
+    from ._concurrent_recovery_kimi_migration import _evidence
+
+    context = _context(plan_path)
+    reference = _formal.FormalArtifactReference(path=approval_path, sha256=approval_sha256).model_dump(mode='json')
+    with recovery_scope(context.origins.campaign):
+        context = _context(plan_path)
+        approval = _evidence(reference)
+        existing = next((row for row in context.journal.records if row['kind'] == manual.GPT_EVENT), None)
+        if existing is not None:
+            if existing['payload']['approval'] != reference:
+                raise RecoveryCampaignError('Task already accepted a different manual retry receipt')
+            row = existing
+        else:
+            if _read_revocation(context.plan) is not None:
+                raise RecoveryCampaignError('Revoked task cannot admit manual retries')
+            payload = {'approval': reference, 'unknown_intents': [
+                {key: item[key] for key in ('cell_index', 'pair_schedule_position', 'attempt_number', 'intent_sha256', 'intent_sequence')}
+                for item in approval['unknown_intents']]}
+            manual.validate_gpt_receipt(context.origins, context.state, payload, _formal._utc_now(), context.journal.head)
+            row = context.state.append(context.journal, manual.GPT_EVENT, payload)
+        _context(plan_path)
+        path = context.journal.root / 'events' / f'{row["sequence"]:08d}.json'
+        return {'schema_version': 'concurrent-recovery-gpt-manual-retry-acceptance-v1',
+                'receipt': {'path': str(path), 'sha256': _formal._sha256_file(path)},
+                'accepted_head_sha256': row['record_sha256'], 'provider_calls': 0, 'credential_reads': 0}
