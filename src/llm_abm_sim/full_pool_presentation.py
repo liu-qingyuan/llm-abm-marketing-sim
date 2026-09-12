@@ -3332,3 +3332,10 @@ _FULL_POOL_RUNTIME = r"""
 
 
 __all__: list[str] = []
+
+# Compatibility correction for composite releases that validate the Chinese
+# historical/run view on narrow screens. The protected v13 bytes stay unchanged.
+_REVISED_RELEASE_RESPONSIVE_CSS = """
+.full-pool-presentation .full-pool-hero > * { min-width: 0; overflow-wrap: anywhere; }
+.full-pool-presentation .full-pool-hero h1 { word-break: normal; }
+"""

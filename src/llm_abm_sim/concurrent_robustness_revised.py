@@ -278,6 +278,7 @@ def analyze_revised_evidence(evidence: ClosedRevisedEvidence) -> dict[str, Any]:
                         entry[field + "_lower_95"] = historical._quantile(replicates, 0.025)
                         entry[field + "_upper_95"] = historical._quantile(replicates, 0.975)
                     entry["direct_rate_label"] = historical._threshold_classification(entry["engage_delta"], 0.05)
+                    entry["direct_probability_label"] = historical._threshold_classification(entry["probability_delta"], 0.05)
                     result["direct"].append(entry)
                 delta = summarize(rows)["realized_rate"] - summarize(by_cell[reference])["realized_rate"]
                 result["realized_contrasts"].append({**dims, "comparison": comparison, "reference_cell": f"{reference[1]}::{reference[0]}", "rate_delta": delta, "threshold": v2._RATE_THRESHOLD, "label": v2._difference_label(delta), "scope": "descriptive_adaptive_path"})

@@ -48,6 +48,7 @@ def test_analysis_keeps_seed_panel_separate_and_growth_deduplicated():
     assert p1['pairs'] == 60 and p1['user_blocks'] == 20
     assert p1['engage_delta'] == 0.5
     assert p1['engage_disagreements'] == 30
+    assert p1['direct_probability_label'] == 'small_observed_difference'
     assert a['growth'][0]['cumulative_positive_users'] == 10
     assert a['cells'][0]['exposures'] == 1800
     assert a['cells'][0]['campaign_positive_users'] == 300
