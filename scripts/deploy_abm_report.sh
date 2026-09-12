@@ -1036,8 +1036,8 @@ if [[ "${RELEASE_CONTRACT_SCHEMA}" == "abm-report-release-contract-v14" || "${RE
   ssh "${DEPLOY_HOST}" bash -s -- \
     "${REMOTE_ROOT}" \
     "${REMOTE_RELEASE}" \
-    "${REPORT_SHA}" \
-    "${MANIFEST_SHA}" \
+    "${LOCAL_REPORT_SHA}" \
+    "${LOCAL_MANIFEST_SHA}" \
     "${CONTAINER_NAME}" <<'FINAL_CURRENT_READBACK'
 set -euo pipefail
 remote_root="$1"

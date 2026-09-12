@@ -1102,3 +1102,15 @@ def test_v15_authorization_is_separate_and_hash_bound(tmp_path: Path) -> None:
     changed['release_readiness']['realized_source_identity'] = 'f'*64
     with pytest.raises(DeploymentAuthorizationError, match='crossed'):
         authorize_deployment(deployment_facts=changed, target=_target(), authorization_path=auth, plan_output=tmp_path/'crossed.json')
+
+
+def test_final_readback_uses_validated_local_hashes_under_nounset() -> None:
+    script = (REPO_ROOT / 'scripts/deploy_abm_report.sh').read_text()
+    start = script.index('  ssh "${DEPLOY_HOST}" bash -s --', script.index('npx playwright test tests/playwright/deployed-abm-report.spec.ts'))
+    end = script.index("<<'FINAL_CURRENT_READBACK'", start)
+    invocation = script[start:end].rstrip() + " </dev/null"
+    result = subprocess.run(['bash', '-u', '-c', 'ssh() { printf "%s\\n" "$@"; }; '+invocation], env={
+        'DEPLOY_HOST':'fixture', 'REMOTE_ROOT':'/fixture', 'REMOTE_RELEASE':'/fixture/releases/new',
+        'LOCAL_REPORT_SHA':'a'*64, 'LOCAL_MANIFEST_SHA':'b'*64, 'CONTAINER_NAME':'fixture'}, text=True, capture_output=True)
+    assert result.returncode == 0, result.stderr
+    assert 'a'*64 in result.stdout and 'b'*64 in result.stdout
