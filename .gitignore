@@ -45,3 +45,8 @@ archive/**
 !archive/*/
 !archive/*/README.md
 !archive/*/archive_manifest.json
+
+# Local research outputs and recovery runtime state (retain locally)
+/outputs/
+/.recovery-campaign-*.json
+/.recovery-campaign-*.json.lock
