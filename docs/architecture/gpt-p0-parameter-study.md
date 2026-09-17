@@ -115,3 +115,9 @@ Evidence --> Report
 `Study.report_parameter_study(bank_dir, output_dir)` 先核对2100路径清单及bank身份，再独立于Kernel排序/选择/提交helper逐批重算eligible排名、曝光、draw、实现和反馈，之后生成路径CSV、参数CSV、对比CSV、曲线CSV/静态SVG与HTML。统计以100个seed路径为单位，Student-t df99数值积分求临界值，普通与123均值校正区间同时保留；2pp实际意义界值与0.5pp普通区间半宽目标分开报告。所有表图同源闭合Evidence；Report只呈现，不运行Provider。
 
 Kernel演化不必改变历史客户端输入：准备Module对renderer/transport完整文件仍用原hash检查；对包含新Kernel入口的文件，另从审计绑定历史commit取回原bytes核验hash，并逐个比较输入拥有者定义AST（message class、profile构造、sample准备）相等，随后仍核对全部1800旧输入hash和3000×30新输入不变性。旧审计不变，新runtime不伪称整文件与历史相同。
+
+### 有界并发补采
+
+Study 的同一个 `collect_parameter_judgments` 入口接受一个 client 或独立 client 的 tuple/list。默认串行；提高至最多5路需要与 preparation hash 绑定的独立 `collection/concurrency-authorization.json`，不修改原 preparation 或历史事件。主线程先原子预留总预算并 fsync intent，再将请求交给对应独立传输；主线程统一写入乱序到达的 settlement。硬失败停止新派发并结算全部在途请求；未知结果保持 fail-closed，不自动重发。
+
+后续 intent 绑定授权 hash；Evidence 独立重算每个 intent/settlement 的在途数，未绑定授权的历史段仍受并发1约束，授权段最多5。总体成功、物理请求、资格与重试预算不随并发扩大。恢复只跳过已成功 pair，不借并发重新采集完整库。

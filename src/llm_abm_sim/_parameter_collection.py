@@ -6,7 +6,8 @@ import json
 import os
 import tempfile
 import time
-from collections import Counter
+from collections import Counter, deque
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -63,34 +64,40 @@ def _append(path: Path, events: list[dict[str, Any]], identity: str, kind: str, 
 def _state(events: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], dict[str, dict[str, Any]], bool]:
     intents = []
     accepted = {}
-    pending = None
+    pending: dict[int, dict[str, Any]] = {}
     qualified = False
+    stopped = False
     for event in events:
         payload = event['payload']
         if event['kind'] == 'intent':
-            if pending is not None:
-                raise ValueError('unreconciled collection intent')
-            pending = payload
+            if (payload['intent_sequence'] != event['sequence'] or payload['intent_sequence'] in pending
+                    or payload['pair_key'] in accepted
+                    or any(p['pair_key'] == payload['pair_key'] for p in pending.values())
+                    or stopped):
+                raise ValueError('duplicate or stopped collection intent')
+            pending[payload['intent_sequence']] = payload
             intents.append(payload)
         elif event['kind'] == 'settled':
-            if pending is None or payload['intent_sequence'] != pending['intent_sequence']:
+            current = pending.pop(payload['intent_sequence'], None)
+            if current is None:
                 raise ValueError('crossed collection settlement')
             if payload['outcome'] == 'succeeded':
-                if pending['purpose'] == 'qualification':
+                if current['purpose'] == 'qualification':
                     qualified = True
                 else:
-                    key = pending['pair_key']
+                    key = current['pair_key']
                     if key in accepted:
                         raise ValueError('duplicate collection success')
                     accepted[key] = {**payload['bank_entry'], 'collection_event_sha256': event['sha256'],
                                      'collected_at_utc': event['recorded_at_utc']}
             elif payload['outcome'] != 'retryable_failure':
-                raise ValueError('collection stopped; unknown or nonretryable attempt')
-            pending = None
+                stopped = True
         else:
             raise ValueError('unknown collection ledger event')
-    if pending is not None:
+    if pending:
         raise ValueError('unreconciled collection intent; no automatic resend')
+    if stopped:
+        raise ValueError('collection stopped; unknown or nonretryable attempt')
     return intents, accepted, qualified
 
 
@@ -98,6 +105,36 @@ def collect(root: Path, client: Any) -> dict[str, Any]:
     """Use the supplied bounded transport; never construct credentials or resources."""
     root = root.absolute()
     prep = _load(root)
+    clients = tuple(client) if isinstance(client, (tuple, list)) else (client,)
+    if not 1 <= len(clients) <= 5 or len({id(c) for c in clients}) != len(clients):
+        raise ValueError('collection requires 1..5 independent clients')
+    for transport in clients:
+        _validate_transport(prep, transport)
+    scope = root / 'collection'
+    for target in (root / 'closed-bank.jsonl', scope / 'closure.json', scope / 'attempts.jsonl'):
+        if target.is_symlink() or (target.exists() and not target.is_file()):
+            raise ValueError('collection output must be a regular non-symlink file')
+    scope.mkdir(exist_ok=True)
+    if scope.is_symlink():
+        raise ValueError('collection scope must not be a symlink')
+    lock_path = scope / 'writer.lock'
+    if lock_path.is_symlink():
+        raise ValueError('collection lock must not be a symlink')
+    with lock_path.open('a') as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        authorization = scope / 'concurrency-authorization.json'
+        if len(clients) > 1 or authorization.exists() or authorization.is_symlink():
+            expected_authorization = {
+                'schema_version': 'gpt-p0-concurrency-authorization-v1',
+                'preparation_sha256': bank.file_hash(root / 'preparation.json'),
+                'maximum_concurrency': 5, 'reason': 'explicit_user_request_20260917',
+            }
+            if bank.read_json(authorization) != expected_authorization:
+                raise ValueError('concurrency authorization mismatch')
+        return _collect_locked(root, scope, prep, clients)
+
+
+def _validate_transport(prep: dict[str, Any], client: Any) -> None:
     if getattr(client, 'external_provider_client', False) and os.environ.get('LLM_ABM_RUN_LIVE_LLM') != '1':
         raise ValueError('explicit live gate required')
     if getattr(client, 'external_provider_client', False):
@@ -118,22 +155,8 @@ def collect(root: Path, client: Any) -> dict[str, Any]:
         worker = next(r for r in audit['lineage']['implementation_files']
                       if r['relative_path'] == 'scripts/pi_subscription_provider_worker.mjs')
         bank.bound(client._worker_path, worker['sha256'], 'Pi worker implementation')
-    scope = root / 'collection'
-    for target in (root / 'closed-bank.jsonl', scope / 'closure.json', scope / 'attempts.jsonl'):
-        if target.is_symlink() or (target.exists() and not target.is_file()):
-            raise ValueError('collection output must be a regular non-symlink file')
-    scope.mkdir(exist_ok=True)
-    if scope.is_symlink():
-        raise ValueError('collection scope must not be a symlink')
-    lock_path = scope / 'writer.lock'
-    if lock_path.is_symlink():
-        raise ValueError('collection lock must not be a symlink')
-    with lock_path.open('a') as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        return _collect_locked(root, scope, prep, client)
 
-
-def _collect_locked(root: Path, scope: Path, prep: dict[str, Any], client: Any) -> dict[str, Any]:
+def _collect_locked(root: Path, scope: Path, prep: dict[str, Any], clients: tuple[Any, ...]) -> dict[str, Any]:
     identity = bank.file_hash(root / 'preparation.json')
     ledger = scope / 'attempts.jsonl'
     events = _events(ledger, identity)
@@ -157,7 +180,7 @@ def _collect_locked(root: Path, scope: Path, prep: dict[str, Any], client: Any) 
     attempts_by_pair = Counter(i['pair_key'] for i in intents if i['purpose'] == 'judgment')
     retries = sum(max(n - 1, 0) for n in attempts_by_pair.values())
 
-    def invoke(data: DecisionInput, row: dict[str, Any], purpose: str) -> bool:
+    def reserve(data: DecisionInput, row: dict[str, Any], purpose: str, client: Any) -> tuple[Any, ...]:
         nonlocal retries
         key = bank.fingerprint([row.get('user_id', 'qualification'), row.get('message_id', 'qualification')])
         if len(intents) >= caps['physical']:
@@ -173,8 +196,16 @@ def _collect_locked(root: Path, scope: Path, prep: dict[str, Any], client: Any) 
             attempts_by_pair[key] += 1
         adapter = PiOpenAIDecisionAdapter(prompt_version=condition['prompt_version'], client=client)
         before = {'purpose': purpose, 'pair_key': key, 'client_condition_sha256': row['client_condition_sha256'], 'intent_sequence': len(events)}
+        authorization = scope / 'concurrency-authorization.json'
+        if authorization.exists():
+            before['concurrency_authorization_sha256'] = bank.file_hash(bank.regular(authorization))
         _append(ledger, events, identity, 'intent', before)
         intents.append(before)
+        return adapter, data, row, before
+
+    def execute(job: tuple[Any, ...]) -> dict[str, Any]:
+        adapter, data, row, before = job
+        purpose = before['purpose']
         result: dict[str, Any] = {'intent_sequence': before['intent_sequence']}
         retryable = False
         try:
@@ -192,14 +223,18 @@ def _collect_locked(root: Path, scope: Path, prep: dict[str, Any], client: Any) 
         result['accounting'] = adapter.provider_accounting.model_dump(mode='json')
         result['subscription_nominal_cost_usd'] = adapter.last_subscription_nominal_cost_usd
         result['actual_incremental_fee'] = None
+        return result
+
+    def settle(job: tuple[Any, ...], result: dict[str, Any]) -> bool:
+        before = job[3]
+        key = before['pair_key']
         _append(ledger, events, identity, 'settled', result)
         if result['outcome'] == 'succeeded':
-            if purpose == 'judgment':
+            if before['purpose'] == 'judgment':
                 accepted[key] = {**result['bank_entry'], 'collection_event_sha256': events[-1]['sha256'],
                                  'collected_at_utc': events[-1]['recorded_at_utc']}
             return True
-        if retryable:
-            time.sleep(0.5 * 2 ** max(attempts_by_pair[key] - 1, 0))
+        if result['outcome'] == 'retryable_failure':
             return False
         raise ValueError('collection stopped: ' + result['failure_category'])
 
@@ -207,19 +242,50 @@ def _collect_locked(root: Path, scope: Path, prep: dict[str, Any], client: Any) 
         if not qualified:
             data = _self_check_input()
             msg_hash, key = bank.client_identity(data, condition)
-            invoke(data, {'client_messages_sha256': msg_hash, 'client_condition_sha256': key}, 'qualification')
-        for row in missing:
-            key = bank.fingerprint([row.get('user_id', 'qualification'), row.get('message_id', 'qualification')])
-            if key in accepted:
-                continue
-            data = DecisionInput(post=by_message[row['message_id']].as_post(),
-                profile=_primary_variant_profile(prepared.cohort.users_by_id[row['user_id']]),
-                peer_context=PeerContext(), platform_context=PlatformContext(), time_step=0,
-                prompt_version=condition['prompt_version'])
-            if bank.client_identity(data, condition) != (row['client_messages_sha256'], row['client_condition_sha256']):
-                raise ValueError('collection client input drift')
-            while not invoke(data, row, 'judgment'):
-                pass
+            job = reserve(data, {'client_messages_sha256': msg_hash, 'client_condition_sha256': key},
+                          'qualification', clients[0])
+            settle(job, execute(job))
+        queue = deque(row for row in missing
+                      if bank.fingerprint([row['user_id'], row['message_id']]) not in accepted)
+        available = deque(clients)
+        active = {}
+        failure = None
+        with ThreadPoolExecutor(max_workers=len(clients)) as executor:
+            while queue or active:
+                while queue and available and failure is None:
+                    row = queue.popleft()
+                    transport = available.popleft()
+                    try:
+                        data = DecisionInput(post=by_message[row['message_id']].as_post(),
+                            profile=_primary_variant_profile(prepared.cohort.users_by_id[row['user_id']]),
+                            peer_context=PeerContext(), platform_context=PlatformContext(), time_step=0,
+                            prompt_version=condition['prompt_version'])
+                        if bank.client_identity(data, condition) != (row['client_messages_sha256'], row['client_condition_sha256']):
+                            raise ValueError('collection client input drift')
+                        job = reserve(data, row, 'judgment', transport)
+                        active[executor.submit(execute, job)] = (job, transport)
+                    except BaseException as exc:
+                        failure = exc
+                if not active:
+                    break
+                done, _ = wait(active, return_when=FIRST_COMPLETED)
+                retry_rows = []
+                # Settle every observed completion before reserving any new work.
+                for future in sorted(done, key=lambda f: active[f][0][3]['intent_sequence']):
+                    job, transport = active.pop(future)
+                    available.append(transport)
+                    try:
+                        if not settle(job, future.result()):
+                            retry_rows.append(job[2])
+                    except BaseException as exc:
+                        failure = failure or exc
+                if failure is None:
+                    for row in retry_rows:
+                        key = bank.fingerprint([row['user_id'], row['message_id']])
+                        time.sleep(0.5 * 2 ** max(attempts_by_pair[key] - 1, 0))
+                        queue.appendleft(row)
+            if failure is not None:
+                raise failure
         if len(accepted) != 1200:
             raise ValueError('incomplete collection')
         merged = sorted([*old, *accepted.values()], key=lambda r: (r['user_id'], r['message_id']))
@@ -238,6 +304,9 @@ def _collect_locked(root: Path, scope: Path, prep: dict[str, Any], client: Any) 
                    'nominal_cost_unknown_attempts': sum(e['payload']['subscription_nominal_cost_usd'] is None
                        for e in events if e['kind'] == 'settled'),
                    'actual_incremental_fee': None, 'production_deploy_eligible': False}
+        authorization = scope / 'concurrency-authorization.json'
+        if authorization.exists():
+            summary['concurrency_authorization_sha256'] = bank.file_hash(bank.regular(authorization))
         _publish(scope / 'closure.json', summary, rows=False)
         return summary
     finally:

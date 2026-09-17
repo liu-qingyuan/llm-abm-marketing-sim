@@ -68,6 +68,34 @@ def validate_collection(root: Path) -> dict[str, Any]:
     if any(event['sequence'] != i for i, event in enumerate(events)):
         raise ValueError('collection event ordinals crossed')
     intents, accepted, qualified = _state(events)
+    authorization_path = root / 'collection/concurrency-authorization.json'
+    authorization_hash = None
+    authorized_concurrency = 1
+    if authorization_path.exists():
+        authorization = bank.read_json(authorization_path)
+        if authorization != {
+                'schema_version': 'gpt-p0-concurrency-authorization-v1',
+                'preparation_sha256': bank.file_hash(root / 'preparation.json'),
+                'maximum_concurrency': 5,
+                'reason': 'explicit_user_request_20260917'}:
+            raise ValueError('concurrency authorization does not match the frozen preparation')
+        authorization_hash = bank.file_hash(authorization_path)
+        authorized_concurrency = 5
+    pending_sequences: set[int] = set()
+    peak = 0
+    for event in events:
+        payload = event['payload']
+        if event['kind'] == 'intent':
+            bound_authorization = payload.get('concurrency_authorization_sha256')
+            if bound_authorization is not None and bound_authorization != authorization_hash:
+                raise ValueError('intent concurrency authorization differs')
+            limit = authorized_concurrency if bound_authorization is not None else 1
+            pending_sequences.add(payload['intent_sequence'])
+            if len(pending_sequences) > limit:
+                raise ValueError('ledger exceeds its authorized in-flight request cap')
+            peak = max(peak, len(pending_sequences))
+        else:
+            pending_sequences.remove(payload['intent_sequence'])
     settled = [e['payload'] for e in events if e['kind'] == 'settled']
     attempts = Counter(i['pair_key'] for i in intents if i['purpose'] == 'judgment')
     qualifications = sum(i['purpose'] == 'qualification' for i in intents)
@@ -107,11 +135,14 @@ def validate_collection(root: Path) -> dict[str, Any]:
                                     if row['subscription_nominal_cost_usd'] is not None),
         'nominal_cost_unknown_attempts': sum(row['subscription_nominal_cost_usd'] is None for row in settled),
         'actual_incremental_fee': None, 'production_deploy_eligible': False}
+    if authorization_hash is not None:
+        rebuilt['concurrency_authorization_sha256'] = authorization_hash
     if claimed != rebuilt:
         raise ValueError('collection closure differs from independently recomputed ledger')
     usage = {name: sum(row['accounting'][name] or 0 for row in settled)
              for name in ('input_tokens', 'output_tokens', 'total_tokens', 'cached_input_tokens')}
     return {**rebuilt, 'known_response_usage': usage,
+            'authorized_maximum_concurrency': authorized_concurrency, 'maximum_observed_in_flight': peak,
             'response_usage_missing_attempts': sum(row['accounting']['provider_response_count'] != 1
                                                   or row['accounting']['usage_complete_response_count'] != 1
                                                   for row in settled),
