@@ -4302,6 +4302,16 @@ class ConcurrentRobustnessStudy:
     and a separate non-deployable report candidate behind this same Interface.
     """
 
+    def prepare_parameter_study(self, audit_path: str | Path, output_dir: str | Path) -> dict[str, Any]:
+        """Prepare the approved GPT-P0 bank without Provider calls.
+
+        Require the pinned historical audit and an absent output directory. Verify
+        all client-visible inputs and origins before atomically publishing an
+        explicitly incomplete bank; old Formal artifacts are never modified.
+        """
+        from ._parameter_judgment_bank import prepare
+        return prepare(Path(audit_path), Path(output_dir))
+
     def run_task(self, plan_path: str | Path, *, model_resources: ModelResources) -> dict[str, Any]:
         """Advance a single approved task under the Operator's live source lock.
 
