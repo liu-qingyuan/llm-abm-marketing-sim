@@ -182,6 +182,7 @@ def close(bank_dir: Path, root: Path) -> dict[str,Any]:
         raise ValueError('path inventory crossed')
     run_rows=[]
     path_curves={}
+    path_diagnostics=[]
     message_ids=[m.message_id for m in config.messages]
     for configuration,weights,threshold in paths.CONFIGURATIONS:
         for seed in paths.SEEDS:
@@ -252,6 +253,11 @@ def close(bank_dir: Path, root: Path) -> dict[str,Any]:
                 **{m:counts[m]/600 for m in message_ids},'campaign_distinct_positive_users':len(campaign),
                 **{f'{m}_historical_exposures':old_counts[m] for m in message_ids}})
             path_curves[(configuration,seed)]=curves
+            path_diagnostics.append({'configuration':configuration,'seed':seed,
+                'exposure_order_sha256':bank.fingerprint([(r['time_step'],r['message_id'],r['user_id']) for r in terminal]),
+                'batch_assignment_sha256':bank.fingerprint(sorted((r['user_id'],r['message_id'],r['time_step']) for r in terminal)),
+                'final_exposure_set_sha256':bank.fingerprint(sorted((r['user_id'],r['message_id']) for r in terminal)),
+                'historical_exposures':sum(old_counts.values()),'topup_exposures':1800-sum(old_counts.values())})
     ordinary=t_quantile(.975)
     corrected=t_quantile(1-.05/(2*123))
     by_key={(r['configuration'],r['seed']):r for r in run_rows}
@@ -300,6 +306,30 @@ def close(bank_dir: Path, root: Path) -> dict[str,Any]:
         row['mean_cumulative_count']=row['mean_cumulative_rate']*row['cumulative_exposures']
         row['seed_count_q025']=row['seed_q025']*row['cumulative_exposures']
         row['seed_count_q975']=row['seed_q975']*row['cumulative_exposures']
+    diagnostic_by_key={(r['configuration'],r['seed']):r for r in path_diagnostics}
+    paired_diagnostics=[r for r in path_diagnostics if r['configuration']!='w0-h3']
+    for row in path_diagnostics:
+        reference=diagnostic_by_key[('w0-h3',row['seed'])]
+        row['same_final_exposure_set_as_baseline']=row['final_exposure_set_sha256']==reference['final_exposure_set_sha256']
+        row['changed_exposure_order_from_baseline']=row['exposure_order_sha256']!=reference['exposure_order_sha256']
+        row['changed_batch_assignments_from_baseline']=row['batch_assignment_sha256']!=reference['batch_assignment_sha256']
+        row['identical_endpoint_rates_to_baseline']=all(by_key[(row['configuration'],row['seed'])][m]==by_key[('w0-h3',row['seed'])][m] for m in message_ids)
+    order_counts=[len({diagnostic_by_key[(c,s)]['exposure_order_sha256'] for c,_,_ in paths.CONFIGURATIONS}) for s in paths.SEEDS]
+    diagnostics_summary={'paired_paths':len(paired_diagnostics),
+        **{name:sum(row[name] for row in paired_diagnostics) for name in (
+            'same_final_exposure_set_as_baseline','changed_exposure_order_from_baseline',
+            'changed_batch_assignments_from_baseline','identical_endpoint_rates_to_baseline')},
+        'historical_exposures':sum(r['historical_exposures'] for r in path_diagnostics),
+        'topup_exposures':sum(r['topup_exposures'] for r in path_diagnostics),
+        'unique_final_exposure_sets':len({r['final_exposure_set_sha256'] for r in path_diagnostics}),
+        'unique_order_counts_per_seed_min':min(order_counts),'unique_order_counts_per_seed_max':max(order_counts)}
+    reference_curve={(r['message'],r['batch']):r['mean_cumulative_rate'] for r in trajectory if r['configuration']=='w0-h3'}
+    curve_maxima=[]
+    for message in sorted({r['message'] for r in trajectory}):
+        rows=[r for r in trajectory if r['message']==message and r['configuration']!='w0-h3']
+        largest=max(rows,key=lambda r:abs(r['mean_cumulative_rate']-reference_curve[(message,r['batch'])]))
+        curve_maxima.append({'message':message,'configuration':largest['configuration'],'batch':largest['batch'],
+            'delta_mean_cumulative_rate':largest['mean_cumulative_rate']-reference_curve[(message,largest['batch'])]})
     bank.v2._assert_source_unchanged(source)
     report=root/'report'
     if report.exists():
@@ -309,6 +339,7 @@ def close(bank_dir: Path, root: Path) -> dict[str,Any]:
     _csv(report/'parameter-rates.csv',rates)
     _csv(report/'message-contrasts.csv',comparisons)
     _csv(report/'trajectories.csv',trajectory)
+    _csv(report/'path-diagnostics.csv',path_diagnostics)
     result={'schema_version':'gpt-p0-parameter-evidence-v1','status':'complete','paths':2100,
         'barriers':63000,'exposures':3780000,'independent_selection_and_feedback_reconstruction':True,
         'study_manifest_sha256':manifest['manifest_sha256'],'bank_sha256':collection['bank_sha256'],
@@ -318,6 +349,7 @@ def close(bank_dir: Path, root: Path) -> dict[str,Any]:
         'ordinary_t_critical':ordinary,'simultaneous_t_critical':corrected,'df':99,'family_size':123,
         'provider_calls_offline':0,'collection':collection,
         'comparisons':comparisons,'rates':rates,
+        'path_diagnostics_summary':diagnostics_summary,'trajectory_baseline_maxima':curve_maxima,
         'uncertainty_scope':'realization seeds only; fixed bank/sample/graph; adaptive users are not IID pairs',
         'production_deploy_eligible':False}
     _publish(report/'evidence.json',result,rows=False)
