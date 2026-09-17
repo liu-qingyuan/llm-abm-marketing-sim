@@ -137,3 +137,126 @@ def test_prepare_rejects_visible_input_drift_before_publication(tmp_path: Path, 
     with pytest.raises(ValueError,match='LLM-visible input changes'):
         ConcurrentRobustnessStudy().prepare_parameter_study(audit,output)
     assert not output.exists()
+
+
+def test_collection_closes_once_without_resending_successes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import json
+
+    from llm_abm_sim.provider_accounting import ProviderResponseEnvelope
+
+    audit = _synthetic_audit(tmp_path, monkeypatch)
+    root=tmp_path/'prepared'
+    study=ConcurrentRobustnessStudy()
+    study.prepare_parameter_study(audit,root)
+    class Client:
+        external_provider_client = False
+        calls = 0
+        last_subscription_nominal_cost_usd = 0.01
+        def create_response(self, messages, model, **kwargs):
+            self.calls += 1
+            assert model == 'gpt-5.6-sol'
+            assert kwargs == {'reasoning_effort': 'low', 'output_token_ceiling': 256}
+            return ProviderResponseEnvelope(decision_text=json.dumps({'engage': True, 'probability': 0.5,
+                'action':'like','reason':'fixture','confidence':0.8}), observed_model='gpt-5.6-sol',
+                observed_model_status='reported',usage_status='complete',input_tokens=10,output_tokens=5,
+                total_tokens=15,cached_input_tokens=0)
+    client=Client()
+    result=study.collect_parameter_judgments(root,client=client)
+    assert result['unique_pairs']==3000 and result['new_successes']==1200
+    assert result['physical_requests']==1201 and client.calls==1201
+    original=(root/'closed-bank.jsonl').read_bytes()
+    assert study.collect_parameter_judgments(root,client=client)==result
+    assert client.calls==1201 and (root/'closed-bank.jsonl').read_bytes()==original
+
+
+@pytest.mark.parametrize('fault', ['unknown', 'wrong_model', 'missing_usage', 'retry_exhausted'])
+def test_collection_stops_durably_and_never_resends_unknown(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fault: str) -> None:
+    import json
+
+    from llm_abm_sim import _parameter_collection as collection
+    from llm_abm_sim.decision import ProviderAttemptFailure, ProviderResponseProvenanceUnknown
+    from llm_abm_sim.provider_accounting import ProviderResponseEnvelope
+
+    monkeypatch.setattr(collection.time, 'sleep', lambda seconds: None)
+    audit=_synthetic_audit(tmp_path,monkeypatch)
+    root=tmp_path/'prepared'
+    study=ConcurrentRobustnessStudy()
+    study.prepare_parameter_study(audit,root)
+    class Client:
+        external_provider_client=False
+        calls=0
+        last_subscription_nominal_cost_usd=0.01
+        def create_response(self,messages,model,**kwargs):
+            self.calls+=1
+            if self.calls>1:
+                if fault=='unknown':
+                    raise ProviderResponseProvenanceUnknown('sentinel never persisted')
+                if fault=='retry_exhausted':
+                    raise ProviderAttemptFailure(category='upstream_unavailable',retryable=True)
+            kwargs={'decision_text':json.dumps({'engage':False,'probability':0.2,'confidence':0.8,'action':'ignore','reason':'fixture'}),
+                'observed_model':'foreign' if self.calls>1 and fault=='wrong_model' else 'gpt-5.6-sol',
+                'observed_model_status':'reported','usage_status':'complete','input_tokens':10,'output_tokens':5,'total_tokens':15,
+                'cached_input_tokens':0}
+            if self.calls>1 and fault=='missing_usage':
+                kwargs.update(usage_status='missing',input_tokens=None,output_tokens=None,total_tokens=None,cached_input_tokens=None)
+            return ProviderResponseEnvelope(**kwargs)
+    client=Client()
+    with pytest.raises(ValueError):
+        study.collect_parameter_judgments(root,client=client)
+    assert client.calls==(4 if fault=='retry_exhausted' else 2)
+    calls=client.calls
+    with pytest.raises(ValueError):
+        study.collect_parameter_judgments(root,client=client)
+    assert client.calls==calls
+    assert not (root/'closed-bank.jsonl').exists()
+    assert 'sentinel' not in (root/'collection/attempts.jsonl').read_text()
+
+
+def test_collection_rejects_external_wrong_transport_before_any_request(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    audit=_synthetic_audit(tmp_path,monkeypatch)
+    root=tmp_path/'prepared'
+    study=ConcurrentRobustnessStudy()
+    study.prepare_parameter_study(audit,root)
+    monkeypatch.setenv('LLM_ABM_RUN_LIVE_LLM','1')
+    class WrongTransport:
+        external_provider_client=True
+        def create_response(self,*args,**kwargs):
+            pytest.fail('wrong transport must never dispatch')
+    with pytest.raises(ValueError,match='exact approved Pi'):
+        study.collect_parameter_judgments(root,client=WrongTransport())
+    assert not (root/'collection').exists()
+
+
+def test_collection_rejects_actual_pi_default_timeout_before_any_request(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from llm_abm_sim.providers.pi_subscription import PiSubscriptionProviderClient
+
+    audit=_synthetic_audit(tmp_path,monkeypatch)
+    root=tmp_path/'prepared'
+    study=ConcurrentRobustnessStudy()
+    study.prepare_parameter_study(audit,root)
+    monkeypatch.setenv('LLM_ABM_RUN_LIVE_LLM','1')
+    client=object.__new__(PiSubscriptionProviderClient)
+    client.response_timeout_seconds=90.0
+    with pytest.raises(ValueError,match='timeout/readiness'):
+        study.collect_parameter_judgments(root,client=client)
+    assert not (root/'collection').exists()
+
+
+@pytest.mark.parametrize('name',['closed-bank.jsonl','collection/closure.json','collection/attempts.jsonl'])
+def test_collection_rejects_symlink_outputs_without_altering_target(tmp_path: Path, monkeypatch: pytest.MonkeyPatch,name: str) -> None:
+    audit=_synthetic_audit(tmp_path,monkeypatch)
+    root=tmp_path/'prepared'
+    study=ConcurrentRobustnessStudy()
+    study.prepare_parameter_study(audit,root)
+    outside=tmp_path/'source-evidence'
+    outside.write_text('immutable')
+    link=root/name
+    link.parent.mkdir(exist_ok=True)
+    link.symlink_to(outside)
+    class NeverClient:
+        external_provider_client=False
+        def create_response(self,*args,**kwargs):
+            pytest.fail('must reject before dispatch')
+    with pytest.raises(ValueError,match='non-symlink'):
+        study.collect_parameter_judgments(root,client=NeverClient())
+    assert outside.read_text()=='immutable'

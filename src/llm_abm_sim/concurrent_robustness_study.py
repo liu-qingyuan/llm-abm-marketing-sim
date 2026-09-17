@@ -4312,6 +4312,16 @@ class ConcurrentRobustnessStudy:
         from ._parameter_judgment_bank import prepare
         return prepare(Path(audit_path), Path(output_dir))
 
+    def collect_parameter_judgments(self, prepared_dir: str | Path, *, client: Any) -> dict[str, Any]:
+        """Collect only the approved missing GPT-P0 pairs under persisted caps.
+
+        The caller owns the transport lifetime. Unknown requests stop permanently;
+        successful pairs are never resent on resume. This independently versioned
+        bank cannot be consumed as a legacy fresh/no-cache Formal artifact.
+        """
+        from ._parameter_collection import collect
+        return collect(Path(prepared_dir), client)
+
     def run_task(self, plan_path: str | Path, *, model_resources: ModelResources) -> dict[str, Any]:
         """Advance a single approved task under the Operator's live source lock.
 
