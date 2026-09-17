@@ -609,16 +609,22 @@ def _rank_message_candidates(
     base_network_by_user: Mapping[str, float],
     neighbors_by_user: Mapping[str, set[str]],
     campaign_engaged_user_ids: set[str],
+    weights: tuple[float, float, float] = (0.50, 0.30, 0.20),
+    neighbor_saturation: float = 3.0,
+    message_fit_by_user: Mapping[str, tuple[float, float]] | None = None,
 ) -> list[_MessageScore]:
     scores: list[_MessageScore] = []
     for user_id in eligible_user_ids:
         user = users_by_id[user_id]
-        raw_fit, normalized_fit = _message_user_fit_components(message, user)
+        raw_fit, normalized_fit = (
+            _message_user_fit_components(message, user)
+            if message_fit_by_user is None else message_fit_by_user[user_id]
+        )
         engaged_neighbor_count = len(neighbors_by_user.get(user_id, set()) & campaign_engaged_user_ids)
-        engaged_neighbor_signal = min(1.0, engaged_neighbor_count / 3.0)
+        engaged_neighbor_signal = min(1.0, engaged_neighbor_count / neighbor_saturation)
         base_network_relevance = base_network_by_user.get(user_id, 0.0)
         personalized_delivery_score = (
-            0.50 * base_network_relevance + 0.30 * engaged_neighbor_signal + 0.20 * normalized_fit
+            weights[0] * base_network_relevance + weights[1] * engaged_neighbor_signal + weights[2] * normalized_fit
         )
         scores.append(
             _MessageScore(
@@ -1505,6 +1511,71 @@ class _ConcurrentRuntimeKernel:
             recover_prepared=not journal.read_only,
             base_time_step=spool_base_time_step,
         )
+
+    @staticmethod
+    def fixed_judgment_path(
+        *, config: ConcurrentMessageExperimentConfig,
+        prepared: _PreparedConcurrentRuntimeInputs,
+        weights: tuple[float, float, float], neighbor_saturation: float,
+        message_fits: Mapping[str, Mapping[str, tuple[float, float]]],
+        resolve: Callable[[ResearchUser, ExperimentalMessageDefinition, int], Mapping[str, Any]],
+    ) -> dict[str, Any]:
+        """Compact fixed-bank execution using the kernel's ranking/exposure rules.
+
+        Resolve owns client-identity checking and realization only. The kernel owns
+        independent exposure sets, same-batch feedback freezing and full barriers.
+        Persist selected terminals/barriers rather than all non-selected candidate
+        rows; the owning Study/Evidence validates and atomically publishes paths.
+        """
+        if (len(weights) != 3 or any(not math.isfinite(w) or w < 0 for w in weights)
+                or not math.isclose(sum(weights), 1.0, abs_tol=1e-12)
+                or not math.isfinite(neighbor_saturation) or neighbor_saturation <= 0):
+            raise ValueError("invalid parameter ranking weights or feedback threshold")
+        cohort = prepared.cohort
+        exposed = {message.message_id: set() for message in config.messages}
+        positives: set[str] = set()
+        terminals: list[dict[str, Any]] = []
+        barriers: list[dict[str, Any]] = []
+        for step in range(config.horizon):
+            frozen = set(positives)
+            committed: set[str] = set()
+            start = len(terminals)
+            for message in config.messages:
+                ranked = _rank_message_candidates(
+                    message=message, users_by_id=cohort.users_by_id,
+                    eligible_user_ids=[u for u in cohort.sample_user_ids if u not in exposed[message.message_id]],
+                    base_network_by_user=prepared.base_network_by_user,
+                    neighbors_by_user=prepared.neighbors_by_user,
+                    campaign_engaged_user_ids=frozen, weights=weights,
+                    neighbor_saturation=neighbor_saturation,
+                    message_fit_by_user=message_fits[message.message_id],
+                )
+                selected, reasons = _select_batch_candidates(
+                    time_step=step, ranked_scores=ranked, seed_user_ids=cohort.seed_user_ids,
+                    delivery_capacity=config.delivery_capacity,
+                )
+                if len(selected) != config.delivery_capacity:
+                    raise ValueError("parameter path did not fill exposure capacity")
+                for score in selected:
+                    user_id = score.user_id
+                    result = dict(resolve(cohort.users_by_id[user_id], message, step))
+                    if result['realized_action'] not in ('ignore', 'like', 'comment', 'share'):
+                        raise ValueError("invalid realized action")
+                    if result['realized_engage'] != (result['realized_action'] != 'ignore'):
+                        raise ValueError("realized engagement/action mismatch")
+                    exposed[message.message_id].add(user_id)
+                    if result['realized_engage']:
+                        committed.add(user_id)
+                    terminals.append({**result, 'time_step': step, 'user_id': user_id,
+                        'message_id': message.message_id, 'selection_reason': reasons[user_id],
+                        'ranking_score': score.personalized_delivery_score,
+                        'engaged_neighbor_count': score.engaged_neighbor_count})
+            positives.update(committed)
+            barriers.append({'time_step': step, 'exposure_count': len(terminals) - start,
+                'frozen_positive_user_ids': sorted(frozen),
+                'committed_positive_user_ids': sorted(committed),
+                'campaign_positive_user_count': len(positives)})
+        return {'terminals': terminals, 'barriers': barriers}
 
     @classmethod
     def paired(

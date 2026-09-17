@@ -4322,6 +4322,23 @@ class ConcurrentRobustnessStudy:
         from ._parameter_collection import collect
         return collect(Path(prepared_dir), client)
 
+    def run_parameter_study(
+        self, bank_dir: str | Path, output_dir: str | Path, *, maximum_paths: int | None = None,
+    ) -> dict[str, Any]:
+        """Run/resume the approved offline matrix from a complete GPT-P0 bank.
+
+        An optional invocation path budget supports bounded smoke runs and resume;
+        it never changes the fixed matrix, seeds, denominators or final closure.
+        No Provider is constructed, and a missing or crossed bank fails closed.
+        """
+        from ._parameter_study import run
+        return run(Path(bank_dir), Path(output_dir), maximum_paths)
+
+    def report_parameter_study(self, bank_dir: str | Path, output_dir: str | Path) -> dict[str, Any]:
+        """Independently reconstruct all paths before publishing the research report."""
+        from ._parameter_evidence import close
+        return close(Path(bank_dir), Path(output_dir))
+
     def run_task(self, plan_path: str | Path, *, model_resources: ModelResources) -> dict[str, Any]:
         """Advance a single approved task under the Operator's live source lock.
 

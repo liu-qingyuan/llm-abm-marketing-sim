@@ -107,9 +107,11 @@ def collect(root: Path, client: Any) -> dict[str, Any]:
         if client.response_timeout_seconds != 30.0 or not client.ready:
             raise ValueError('collection transport timeout/readiness differs from frozen contract')
         metadata = client.safe_metadata
+        aliases = metadata['requested_model_aliases']
         if (metadata['provider_transport'] != 'openai-codex'
                 or metadata['authentication'] != 'local_oauth_subscription'
-                or metadata['requested_model_aliases'].get('gpt-5.6-sol') != 'gpt-5.6-sol'
+                or not isinstance(aliases, dict)
+                or aliases.get('gpt-5.6-sol') != 'gpt-5.6-sol'
                 or metadata['output_token_ceiling_enforcement'] != 'application_fail_closed'):
             raise ValueError('collection transport identity differs from frozen contract')
         audit = bank.read_json(bank.bound(Path(prep['audit']['path']), prep['audit']['sha256'], 'audit'))

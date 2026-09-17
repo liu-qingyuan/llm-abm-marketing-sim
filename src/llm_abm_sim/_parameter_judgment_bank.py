@@ -5,9 +5,11 @@ this module adds the explicitly approved client-reconstruction acceptance policy
 """
 from __future__ import annotations
 
+import ast
 import hashlib
 import json
 import os
+import subprocess
 import tempfile
 from pathlib import Path
 from typing import Any
@@ -78,7 +80,8 @@ def _inputs(audit: dict[str, Any]) -> tuple[Any, Any, Any]:
         read_json(Path(audit['lineage']['source_manifest']['path']))
     )
     closure = v2._close_source(manifest.source.source_dir)
-    v2._validate_source_against_manifest(manifest, closure, manifest.source.source_dir)
+    # V2 deliberately reuses the V1 structural source validator (same as V2 load).
+    v2._validate_source_against_manifest(manifest, closure, manifest.source.source_dir)  # type: ignore[arg-type]
     config = v2._dynamic_runtime_config(closure)
     prepared = v2._prepare_concurrent_runtime_inputs(config)
     sample_hash = hashlib.sha256(json.dumps(
@@ -121,7 +124,25 @@ def prepare(audit_path: Path, output_dir: Path) -> dict[str, Any]:
     # quietly rebuild historical input under a different implementation.
     root = Path(__file__).resolve().parents[2]
     for ref in audit['lineage']['implementation_files']:
-        bound(root / ref['relative_path'], ref['sha256'], ref['relative_path'])
+        path = root / ref['relative_path']
+        if (ref['relative_path'] == 'src/llm_abm_sim/concurrent_message_experiment.py'
+                and file_hash(regular(path)) != ref['sha256']):
+            historical = subprocess.run(
+                ['git', 'show', f"{audit['lineage']['implementation_commit']}:{ref['relative_path']}"],
+                cwd=root, check=True, capture_output=True,
+            ).stdout
+            if hashlib.sha256(historical).hexdigest() != ref['sha256']:
+                raise ValueError('historical input-owner implementation mismatch')
+            names = {'ExperimentalMessageDefinition', '_shared_variant_profile_payload', '_primary_variant_profile',
+                     '_prepare_concurrent_runtime_inputs', '_runtime_inputs_from_cohort'}
+            def owners(source: str, names: set[str] = names) -> dict[str, str]:
+                return {node.name: ast.dump(node, include_attributes=False) for node in ast.parse(source).body
+                        if isinstance(node, (ast.FunctionDef, ast.ClassDef)) and node.name in names}
+            old_owners, new_owners = owners(historical.decode()), owners(path.read_text())
+            if set(old_owners) != names or old_owners != new_owners:
+                raise ValueError('client-input owner changed with runtime implementation')
+        else:
+            bound(path, ref['sha256'], ref['relative_path'])
     protected = [audit_path.parent, *(Path(audit['lineage'][k]['path']).parent
                   for k in ('evidence', 'plan', 'source_bundle', 'ledger_prefix', 'source_manifest'))]
     manifest_source = read_json(Path(audit['lineage']['source_manifest']['path'])).get('source', {})
