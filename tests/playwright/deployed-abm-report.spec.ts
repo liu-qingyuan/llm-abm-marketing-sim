@@ -432,7 +432,8 @@ async function expectFullPoolReport(page: Page): Promise<void> {
       await expect(details).toHaveAttribute('open', '');
       const frame = page.frameLocator(`iframe[title="${title}"]`);
       await expect(frame.locator('h1')).toBeVisible();
-      const links = await frame.locator('a[download]').evaluateAll(nodes => nodes.map(node => (node as HTMLAnchorElement).href));
+      const links = await frame.locator('a[href]').evaluateAll(nodes => nodes.map(node => (node as HTMLAnchorElement).href).filter(url => /\.(csv|svg|json)$/.test(url)));
+      expect(links).toHaveLength(id === 'parameter-study' ? 5 : 8);
       for (const url of links) {
         const response = await page.request.get(url);
         expect(response.ok(), url).toBeTruthy();

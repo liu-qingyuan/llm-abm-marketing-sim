@@ -4,16 +4,16 @@
 
 ## Current Research：统一研究入口
 
-[Canonical Final Research](https://abm.q1ngyuan.top/) 保留 Whole sample、Prompt–Model 修订研究及历史结果/下载。2026-09-20 公网重新读取 **HTTP 200**，HTML SHA-256 为 `085a572c55bc88f5a8956f87ac731802e6866a9e3c81456266757402147de44e`，与已发布 composite v15 一致。此次只核实页面 body 身份，不代表全部交互/下载重新验收。
+[Canonical Final Research](https://abm.q1ngyuan.top/) 已发布 **composite v16**，保留 Whole sample、Prompt–Model 修订研究及历史结果/下载，追加 Parameter 与 Activity / Local Influence 两项独立研究。2026-09-20 11:44 UTC 完成原子发布与公网验收；HTML SHA-256 为 `e7c9cc0bffb8a148376fed4b49b58d8574784540a6b2dbaf0f8845a2d0cff659`。[发布及验证记录](references/sensitivity-v16-canonical-release-20260920.md)。
 
 ### 研究地图
 
 | 研究 / 问题 | 改变与固定设定 | 样本、seed 与统计单位 | 最终证据 / 发布状态 |
 |---|---|---|---|
-| **Whole sample**：三条营销消息在全样本中的两阶段互动结果 | GPT-5.6 Sol / P0；Judgment → Realization；固定消息、网络与行为 seed | 36,400 用户 × M1–M3；109,200 次曝光；单次固定行为 seed，互动次数为整数 | [v13 主实验证据](references/full-pool-two-stage-v13-canonical-release-20260827.md)；已包含于 canonical v15 |
+| **Whole sample**：三条营销消息在全样本中的两阶段互动结果 | GPT-5.6 Sol / P0；Judgment → Realization；固定消息、网络与行为 seed | 36,400 用户 × M1–M3；109,200 次曝光；单次固定行为 seed，互动次数为整数 | [v13 主实验证据](references/full-pool-two-stage-v13-canonical-release-20260827.md)；已保留于 canonical v16 |
 | **Prompt–Model 修订研究**：判断模板与模型变化对应什么结果 | 4 模型 × P0–P3；16 cells；新两阶段机制，与早期 direct-action 分开 | 1,000 用户样本；28,800 次曝光；直接配对限共同 Batch 0，后续自适应路径仅描述 | [v15 最终证据与下载](references/revised-four-model-v15-canonical-release-20260912.md)；已发布；**原五模型计划并非全部完成** |
-| **Parameter**：推荐权重和邻居饱和阈值改变终点或时间路径吗 | GPT-5.6 Sol / P0；固定判断库、原样本/消息/图；7 权重点 × 阈值 1/3/6 | 1,000 用户；21 组 × 100 行为 seed = 2,100 路径；每路径 1,800 曝光；跨 seed 均值/区间 | [最终结果](references/gpt-p0-dynamic-parameter-results-20260917.md) · [本地报告](../runs/gpt-p0-dynamic-parameters-20260917-formal-01/report/report.html)；研究完成，尚未追加 canonical |
-| **Activity / Local Influence**：指标变体及其抽样联动如何改变传播 | GPT-5.6 Sol / P0；推荐权重固定 0.50/0.30/0.20、阈值 3；改变指标权重或 p99 归一化 | 每臂 1,000 用户；7 组 × 100 行为 seed = 700 路径；每路径 1,800 曝光；同 seed 配对均值/区间 | [最终报告](../runs/gpt-p0-index-sensitivity-20260920-formal-01/REPORT.md) · [本地网页](../runs/gpt-p0-index-sensitivity-20260920-formal-01/report.html) · [完成审计](../runs/gpt-p0-index-sensitivity-20260920-formal-01/completion-audit.json)；研究完成，尚未追加 canonical |
+| **Parameter**：推荐权重和邻居饱和阈值改变终点或时间路径吗 | GPT-5.6 Sol / P0；固定判断库、原样本/消息/图；7 权重点 × 阈值 1/3/6 | 1,000 用户；21 组 × 100 行为 seed = 2,100 路径；每路径 1,800 曝光；跨 seed 均值/区间 | [最终结果](references/gpt-p0-dynamic-parameter-results-20260917.md) · [本地报告](../runs/gpt-p0-dynamic-parameters-20260917-formal-01/report/report.html)；[已发布在线报告](https://abm.q1ngyuan.top/parameter/report.html) |
+| **Activity / Local Influence**：指标变体及其抽样联动如何改变传播 | GPT-5.6 Sol / P0；推荐权重固定 0.50/0.30/0.20、阈值 3；改变指标权重或 p99 归一化 | 每臂 1,000 用户；7 组 × 100 行为 seed = 700 路径；每路径 1,800 曝光；同 seed 配对均值/区间 | [最终报告](../runs/gpt-p0-index-sensitivity-20260920-formal-01/REPORT.md) · [本地网页](../runs/gpt-p0-index-sensitivity-20260920-formal-01/report.html) · [完成审计](../runs/gpt-p0-index-sensitivity-20260920-formal-01/completion-audit.json)；[已发布在线报告](https://abm.q1ngyuan.top/index-sensitivity/report.html) |
 | **历史研究**：direct-action 与指标排序审计 | 保留原机制、来源及原下载，不改写成新两阶段结果 | 原 1,000 用户研究与全样本分开；历史指标排序分析**不是传播仿真实验** | canonical 既有 Historical / Primary–Shadow / Ranking Weight / 旧 GPT 析因；不得与新研究合并分母 |
 
 ### 先读口径，再读结果
@@ -35,7 +35,7 @@
 
 Report Module 拥有研究呈现及表图同源知识；Release Module 拥有证据接纳、旧文件保留和 immutable inventory；Deployment Module 只消费验证后的发布事实。这个 Seam 保持 Locality，避免把研究判断规则复制到 shell 或网页拼接器而形成 Information Leakage；不为导航增加透传 Module 或通用框架，Depth 来自既有 Interface 对证据与产物的完整验证。
 
-**待发布合同缺口：** v15 只接纳四模型闭合 projection。指标研究的 [evidence](../runs/gpt-p0-index-sensitivity-20260920-formal-01/evidence.json) 与 [曝光判断闭合](../runs/gpt-p0-index-sensitivity-20260920-formal-01/exposure-bank-closure.json) 明确 `production_deploy_eligible=false`：17,316 个 eligible inputs 中 17,315 个有判断，另 1 个 unknown 保留且已证明不会曝光，700 条路径所需曝光完整。这不等同完整判断库，也不自动满足 canonical 发布合同。用户已批准最小独立合同扩展，正在通过 v16 接纳验证；不翻转旧字段、不改 run 或账本、不直接修改远端 HTML。新发布完成前，以以上已核验 v15 状态为准。进度与验收记录见 [Operational #263](https://github.com/liu-qingyuan/llm-abm-marketing-sim/issues/263)。
+**发布合同：** v15 仍只接纳四模型闭合 projection；v16 以独立接纳合同追加这两项已完成研究。指标研究的 [evidence](../runs/gpt-p0-index-sensitivity-20260920-formal-01/evidence.json) 与 [曝光判断闭合](../runs/gpt-p0-index-sensitivity-20260920-formal-01/exposure-bank-closure.json) 明确 `production_deploy_eligible=false`：17,316 个 eligible inputs 中 17,315 个有判断，另 1 个 unknown 保留且已证明不会曝光，700 条路径所需曝光完整。这不等同完整判断库。经用户批准，v16 对明确绑定的最终证据与发布产物完成接纳验证；原字段、run 与账本不变。发布沿既有 Release / Deployment 事务完成，原 v15 保留为回退版本。验收记录见 [Operational #263](https://github.com/liu-qingyuan/llm-abm-marketing-sim/issues/263)。
 
 ## 运行与演示
 
@@ -70,7 +70,8 @@ Architecture 描述当前 Module、数据边界和稳定运行语义；ADR 记�
 
 - [References 总览](references/README.md)
 - [current dataset：锦江 final dataset 审计](references/jinjiang-final-dataset-audit-20260624.md)
-- [current composite release：四模型恢复稳健性 v15 canonical 发布记录](references/revised-four-model-v15-canonical-release-20260912.md)
+- [current composite release：两项敏感性研究追加 v16 发布记录](references/sensitivity-v16-canonical-release-20260920.md)
+- [protected v15：四模型恢复研究及回退记录](references/revised-four-model-v15-canonical-release-20260912.md)
 - [protected main evidence：Full-Pool 两阶段 v13 canonical 发布记录](references/full-pool-two-stage-v13-canonical-release-20260827.md)
 - [current Retention：Retention final evidence](references/retention-cleanup-final-evidence-20260730.md)
 

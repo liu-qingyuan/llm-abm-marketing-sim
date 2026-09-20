@@ -9,6 +9,7 @@
 - [Full-Pool Segmented Continuation Runtime](full-pool-segmented-continuation.md)：只读 v1 prefix、十 lane continuation、显式/自动 recovery、strict fresh replay，以及 source-v2/v3/v4 到 Report/Evidence/Release v9/v10/v11 的版本化 persisted contracts。
 - [Full-Pool Two-Stage Engagement Realization](full-pool-two-stage-realization.md)：从显式 Source-v4 Provider Judgments重建 realized action、full-batch feedback、validation source/evidence/projection，并保持 legacy direct-action合同不变。
 - [Prompt–Model Realized Table-First Report](prompt-model-realized-report.md)：四条 closed lineage、单一 validated projection、六-sheet deterministic XLSX、双语 HTML、Prompt/Provider 披露与 nondeployable candidate 边界。
+- [Revised / Sensitivity 追加发布](revised-four-model-release.md)：v15 四模型合同及 v16 固定敏感性证据接纳；Report 复用原报告，Release 保留旧下载，Deployment 不拥有研究统计规则。
 - [Report Deployment Authorization and Rollback](report-deployment.md)：Release Interface消费、v13独立operational authorization、fresh rollback readback、candidate/atomic switch、公网验收与失败恢复。
 - [Full-Pool Segmented Continuation Operator](full-pool-segmented-continuation-operator.md)：显式 prepare/status/dry-run/cutover/run、人工单 PID stop、frozen-prefix reconciliation、十 lane first-wave qualification；终点为 source-v2，不含 Report/Release v9 或部署。
 - [锦江用户数据结构](jinjiang-user-profile-data-structure.md)：Observed Profile Attributes、latent attributes、`interest_tags` 当前边界、`PostContent` runtime contract 和 message snapshot ownership。
