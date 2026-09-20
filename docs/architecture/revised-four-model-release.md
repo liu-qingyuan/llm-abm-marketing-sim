@@ -31,3 +31,15 @@ contract_path = promote_revised_research_release(
 ## 必须保留的研究边界
 
 同一个 1,000-user source 与 36,400-user Full-Pool 分离；新两阶段 realization 与旧 direct-action GPT run 不按名称合并。Kimi 33 条订阅 k3-256k + 7,167 条官方 kimi-k3；Gemini gateway observed identity 和不可观测 effective context 单独披露。108 已知失败、5 archived unknown、全历史 token null 均保留。取消 Gemini 3.8 Flash High 为零调用；四模型范围完成不等于原五模型 36,000/20/600 完成。重算、报告、发布全部新增 Provider calls=0。
+
+## 两项敏感性研究追加发布（v16）
+
+v15 合同保持不变。`sensitivity_release` 只接纳本次已完成 Parameter 与 Activity / Local Influence 的明确最终 manifest/audit hash，并保护现有 v15 的完整 inventory；它不是任意报告的通用 promotion 入口。原独立证据 `production_deploy_eligible=false` 与生成时未部署记录保留，新 v16 合同表达经独立接纳的复合发布资格。
+
+- **Report Module**：`render_sensitivity_research` 添加研究导航与两个独立阅读章节；通过同源 iframe 复用完整原报告，可直接打开。结果、曲线和相对下载保持原 bytes，不另造统计 renderer。
+- **Release Module**：`promote_sensitivity_release` 接受显式 protected v15 contract、Parameter manifest、指标 completion audit、destination、release ID 和 implementation commit。核验全部受保护文件、两项研究产物、路径矩阵、整数动作、100-seed 均值与基线复现；生成只读 release 和 sibling v16 contract。`validate_sensitivity_release` 独立重建发布产物并比较完整 inventory，可验证 deployment snapshot。
+- **Deployment Module**：消费 v16 readiness，复用同一 authorization、fresh rollback、candidate health、原子 current、公网 body/hash 与 browser gate；不接收研究参数或重算统计。
+
+这个 Seam 集中呈现与接纳知识，增加 Depth 而不增加透传层；独立报告仍拥有自己的数值、表格与图形，避免 Information Leakage。v16 是对固定已审计证据的 accession，不重跑路径，也不把 hash 校验表述为重新执行完整算法审计。指标 unknown 的原不曝光证明及实际曝光覆盖事实保留；不声称完整 eligible 判断库或纯指标因果效应。
+
+本轮实施与验收记录见 [Operational #263](https://github.com/liu-qingyuan/llm-abm-marketing-sim/issues/263)；实际上线状态由 [统一研究入口](../index.md) 维护。

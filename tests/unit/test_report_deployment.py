@@ -783,7 +783,7 @@ def test_v13_v14_authorization_and_fresh_readback_gates_precede_remote_writes() 
 
     authorization_gate = script.index("validate_abm_report_deployment.py")
     operation_output_gate = script.index(
-        "v14/v15 requires --operation-facts-output"
+        "v14/v15/v16 requires --operation-facts-output"
     )
     first_ssh = script.index('if ssh "${DEPLOY_HOST}"')
     readback_gate = script.index("verify-readback")
@@ -1078,26 +1078,30 @@ def test_v14_local_adapter_reports_rollback_failure_separately(
     assert adapter.events[-1] == "atomic_restore"
 
 
-def test_v15_authorization_is_separate_and_hash_bound(tmp_path: Path) -> None:
+@pytest.mark.parametrize("version,readiness_schema", [
+    ("v15", "revised-four-model-v15-release-readiness-v1"),
+    ("v16", "sensitivity-v16-release-readiness-v1"),
+])
+def test_composite_authorization_is_separate_and_hash_bound(tmp_path: Path, version: str, readiness_schema: str) -> None:
     facts = _v13_facts()
-    facts['release_contract_schema_version'] = 'abm-report-release-contract-v15'
+    facts['release_contract_schema_version'] = f'abm-report-release-contract-{version}'
     facts['release_readiness'] = {
-        'schema_version': 'revised-four-model-v15-release-readiness-v1',
-        'release_contract_schema': 'abm-report-release-contract-v15',
+        'schema_version': readiness_schema,
+        'release_contract_schema': f'abm-report-release-contract-{version}',
         'release_id': facts['release_id'], 'realized_source_identity': facts['realized_source_identity'],
         'canonical_endpoint': facts['canonical_endpoint'], 'provider_calls': 0,
         'operational_authorization_required': True, 'deployment_authorized': False, 'public_acceptance_recorded': False,
     }
     with pytest.raises(DeploymentAuthorizationRequired) as error:
         authorize_deployment(deployment_facts=facts, target=_target(), authorization_path=None, plan_output=tmp_path/'plan.json')
-    assert error.value.readiness['authorization_schema_version'] == 'abm-report-v15-deployment-authorization-v1'
+    assert error.value.readiness['authorization_schema_version'] == f'abm-report-{version}-deployment-authorization-v1'
     approval = _authorization_document()
-    approval['schema_version'] = 'abm-report-v15-deployment-authorization-v1'
-    approval['release_contract_schema'] = 'abm-report-release-contract-v15'
+    approval['schema_version'] = f'abm-report-{version}-deployment-authorization-v1'
+    approval['release_contract_schema'] = f'abm-report-release-contract-{version}'
     auth = tmp_path/'authorization.json'
     auth.write_text(json.dumps(approval, sort_keys=True, separators=(',', ':'))+'\n')
     plan = authorize_deployment(deployment_facts=facts, target=_target(), authorization_path=auth, plan_output=tmp_path/'plan.json')
-    assert plan['release_contract_schema'] == 'abm-report-release-contract-v15'
+    assert plan['release_contract_schema'] == f'abm-report-release-contract-{version}'
     changed = deepcopy(facts)
     changed['release_readiness']['realized_source_identity'] = 'f'*64
     with pytest.raises(DeploymentAuthorizationError, match='crossed'):

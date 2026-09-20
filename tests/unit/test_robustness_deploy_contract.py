@@ -1254,8 +1254,8 @@ def test_deploy_accepts_v13_and_v14_through_authorized_atomic_contract() -> None
         encoding="utf-8"
     )
 
-    assert "^abm-report-release-contract-v([2-9]|10|11|12|13|14)$" in script
-    assert "^abm-report-release-contract-v([2-9]|10|11|12|13|14)$" in remote
+    assert "^abm-report-release-contract-v([2-9]|10|11|12|13|14|15|16)$" in script
+    assert "^abm-report-release-contract-v([2-9]|10|11|12|13|14|15|16)$" in remote
     assert script.index("--require-formal-production") < script.index(
         'printf \'Uploading %s to %s:%s\\n\''
     )
@@ -1289,7 +1289,7 @@ def test_deploy_consumes_validated_facts_and_checks_the_snapshot_before_ssh() ->
     assert "--deployment-release-id" in script
     assert "--deployment-domain" in script
     assert "PUBLIC_ACCEPTANCE_ARTIFACTS_JSON" in script
-    assert "^abm-report-release-contract-v([2-9]|10|11|12|13|14)$" in script
+    assert "^abm-report-release-contract-v([2-9]|10|11|12|13|14|15|16)$" in script
     assert "ARTIFACT_CHECKSUMS_B64" in script
     assert "Path(sys.argv[1]).read_text" not in script
 

@@ -1236,6 +1236,11 @@ def _validate_v2_realized_production_stage_facts(
 class _ReportPresentationInterface:
     """Package-internal seam for deterministic report composition and presentation stages."""
 
+    def render_sensitivity_research(self, base_html: bytes, *, release_id: str) -> bytes:
+        """Append the independently verified sensitivity reports, preserving v15."""
+        from .sensitivity_report import render_sensitivity_research
+        return render_sensitivity_research(base_html, release_id=release_id)
+
     def render_revised_research(self, base_html, evidence, analysis, *, release_id=None):
         """Render the separately closed revised recovery study into the protected report."""
         from .concurrent_robustness_revised_report import render_revised_research

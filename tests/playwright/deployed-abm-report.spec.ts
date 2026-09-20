@@ -280,6 +280,7 @@ async function expectFullPoolReport(page: Page): Promise<void> {
     'abm-report-release-contract-v13',
     'abm-report-release-contract-v14',
     'abm-report-release-contract-v15',
+    'abm-report-release-contract-v16',
   ].includes(releaseContractSchema ?? '');
   await expect(page).toHaveTitle(isTwoStage ? 'Full-Pool 两阶段互动实现' : 'Full-Pool 主实验');
   await expect(page.locator('html')).toHaveAttribute('lang', 'zh-CN');
@@ -413,7 +414,36 @@ async function expectFullPoolReport(page: Page): Promise<void> {
     await expect(page.locator('a[download][href$=".xlsx"]').first()).toBeVisible();
   }
 
-  if (releaseContractSchema === 'abm-report-release-contract-v15') {
+  if (releaseContractSchema === 'abm-report-release-contract-v16') {
+    const navigation = page.getByRole('navigation', { name: '研究导航 / Research navigation' });
+    await expect(navigation).toContainText('109,200');
+    await expect(navigation).toContainText('原五模型计划并非全部完成');
+    for (const [label, id, title, path] of [
+      ['Parameter', 'parameter-study', 'Parameter study report', 'parameter/report.html'],
+      ['Activity / Local Influence', 'index-sensitivity-study', 'Activity and Local Influence study report', 'index-sensitivity/report.html'],
+    ]) {
+      await navigation.getByRole('link', { name: label, exact: true }).click();
+      const section = page.locator(`#${id}`);
+      await expect(section).toBeVisible();
+      const details = section.locator('details');
+      await details.locator('summary').click();
+      await expect(details).not.toHaveAttribute('open');
+      await details.locator('summary').click();
+      await expect(details).toHaveAttribute('open', '');
+      const frame = page.frameLocator(`iframe[title="${title}"]`);
+      await expect(frame.locator('h1')).toBeVisible();
+      const links = await frame.locator('a[download]').evaluateAll(nodes => nodes.map(node => (node as HTMLAnchorElement).href));
+      for (const url of links) {
+        const response = await page.request.get(url);
+        expect(response.ok(), url).toBeTruthy();
+        expect((await response.body()).length).toBeGreaterThan(0);
+        await response.dispose();
+      }
+      await expect(section.getByRole('link', { name: '打开完整报告 / Open full report' })).toHaveAttribute('href', path);
+    }
+    await expect(page.locator('#index-sensitivity-study')).toContainText('108/1000');
+  }
+  if (['abm-report-release-contract-v15', 'abm-report-release-contract-v16'].includes(releaseContractSchema ?? '')) {
     await expect(page.locator('[data-full-pool-i18n="history.copy"]')).toContainText('新增跨厂商四模型恢复研究独立使用');
     await page.getByTestId('run-evidence-mode-button').click();
     const revised = page.getByTestId('revised-robustness-section');
@@ -462,7 +492,7 @@ async function expectFullPoolReport(page: Page): Promise<void> {
   await fallbackSummary.click();
   await expect(fallback).not.toHaveAttribute('open', '');
   await expect(page.getByTestId('full-pool-trace-page-status')).toContainText('Page 1 of');
-  if (releaseContractSchema === 'abm-report-release-contract-v15') {
+  if (['abm-report-release-contract-v15', 'abm-report-release-contract-v16'].includes(releaseContractSchema ?? '')) {
     await expect(page.locator('[data-full-pool-i18n="history.copy"]')).toContainText('four-model recovery study independently uses Judgment to Realization');
   }
 }
