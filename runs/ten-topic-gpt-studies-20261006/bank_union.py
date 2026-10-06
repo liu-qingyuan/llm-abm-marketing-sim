@@ -79,52 +79,81 @@ def stage_facts(root, allow_unknown):
 
 
 def validate(root=ROOT):
-    first = root / "formal-bank"
-    second = root / "unattempted-stage-01"
+    stages = [root / "formal-bank", root / "unattempted-stage-01", root / "unattempted-stage-02"]
+    facts = [stage_facts(p, index < len(stages) - 1) for index, p in enumerate(stages)]
+    prep = facts[0][0]
+    baseline = live_study.frozen.read_rows(stages[0] / "accepted-bank.jsonl")
+    records = list(baseline)
+    unknowns = []
+    intents = []
+    settlements = []
+    peaks = []
+    dispatched = set()
+    for index, (stage, fact) in enumerate(zip(stages, facts, strict=True)):
+        local, accepted, unknown, requests, responses, peak = fact
+        if index:
+            assert local["stage_lineage"]["parent_preparation_sha256"] == bank.file_hash(
+                stages[index - 1] / "preparation.json"
+            )
+            assert local["stage_lineage"]["parent_ledger_sha256"] == bank.file_hash(
+                stages[index - 1] / "collection/attempts.jsonl"
+            )
+        assert live_study.frozen.read_rows(stage / "accepted-bank.jsonl") == records
+        keys = {v["pair_key"] for v in requests if v["purpose"] == "judgment"}
+        assert not keys & dispatched
+        dispatched.update(keys)
+        records += list(accepted.values())
+        unknowns += unknown
+        intents += requests
+        settlements += responses
+        peaks.append(peak)
+    assert len(unknowns) == 3 and len(records) == 17517
     resolution = root / "explicit-unknown-reissue"
-    prep, a, unknown, i, s, peak = stage_facts(first, True)
-    nextprep, b, nextunknown, j, t, nextpeak = stage_facts(second, False)
-    assert len(unknown) == 1 and not nextunknown
-    assert nextprep["stage_lineage"]["parent_preparation_sha256"] == bank.file_hash(first / "preparation.json")
-    assert nextprep["stage_lineage"]["parent_ledger_sha256"] == bank.file_hash(first / "collection/attempts.jsonl")
-    baseline = live_study.frozen.read_rows(first / "accepted-bank.jsonl")
-    assert live_study.frozen.read_rows(second / "accepted-bank.jsonl") == baseline + list(a.values())
-    dispatched = {v["pair_key"] for v in i if v["purpose"] == "judgment"}
-    assert not dispatched & {v["pair_key"] for v in j if v["purpose"] == "judgment"}
-    # Original unknown is accepted only via a separately approved, actually settled new attempt.
     auth = bank.read_json(resolution / "authorization.json")
-    assert auth["original_unknown"] == unknown[0] and auth["human_confirmation_reference"]
-    newevents = _events(resolution / "attempts.jsonl", bank.file_hash(resolution / "authorization.json"))
-    assert len(newevents) == 2 and newevents[0]["kind"] == "intent" and newevents[1]["kind"] == "settled"
-    intent = newevents[0]["payload"]
-    settlement = newevents[1]["payload"]
-    assert intent["pair_key"] == unknown[0]["key"] and intent["purpose"] == "explicitly_authorized_unknown_reissue"
-    assert settlement["intent_sequence"] == 0 and settlement["outcome"] == "succeeded"
-    record = settlement["bank_entry"]
-    row = next(
-        r for r in live_study.frozen.read_rows(first / "missing-pairs.jsonl") if live_study.key(r) == intent["pair_key"]
-    )
-    assert all(record[k] == value for k, value in row.items())
-    EngageDecision.model_validate(record["decision"])
-    account = ProviderAccounting.model_validate(settlement["accounting"])
-    assert (
-        account.observed_model_counts == {"gpt-5.6-sol": 1}
-        and account.provider_response_count
-        == account.successful_decision_count
-        == account.usage_complete_response_count
-        == 1
-        and account.output_tokens <= 256
-    )
-    record = {
-        **record,
-        "collection_event_sha256": newevents[1]["sha256"],
-        "collected_at_utc": newevents[1]["recorded_at_utc"],
-        "explicit_unknown_reissue_authorization_sha256": bank.file_hash(resolution / "authorization.json"),
+    assert auth["original_unknowns"] == unknowns and auth["human_confirmation_reference"]
+    events = _events(resolution / "attempts.jsonl", bank.file_hash(resolution / "authorization.json"))
+    expected_unknown = {r["key"]: r for r in unknowns}
+    pending = {}
+    resolved = {}
+    reissue_intents = []
+    expected_inputs = {
+        live_study.key(r): r for stage in stages for r in live_study.frozen.read_rows(stage / "missing-pairs.jsonl")
     }
-    records = [*baseline, *a.values(), *b.values(), record]
-    assert len(records) == 17520 and len({live_study.key(r) for r in records}) == 17520
+    for ordinal, event in enumerate(events):
+        assert event["sequence"] == ordinal
+        v = event["payload"]
+        if event["kind"] == "intent":
+            assert v["purpose"] == "explicitly_authorized_unknown_reissue" and v["pair_key"] in expected_unknown
+            assert v["pair_key"] not in resolved and not any(i["pair_key"] == v["pair_key"] for i in pending.values())
+            assert v["intent_sequence"] == ordinal
+            pending[ordinal] = v
+            reissue_intents.append(v)
+        else:
+            assert event["kind"] == "settled"
+            intent = pending.pop(v["intent_sequence"])
+            assert v["outcome"] == "succeeded"
+            record = v["bank_entry"]
+            key = live_study.key(record)
+            assert key == intent["pair_key"] and all(record[k] == value for k, value in expected_inputs[key].items())
+            EngageDecision.model_validate(record["decision"])
+            a = ProviderAccounting.model_validate(v["accounting"])
+            assert (
+                a.observed_model_counts == {"gpt-5.6-sol": 1}
+                and a.provider_response_count == a.successful_decision_count == a.usage_complete_response_count == 1
+                and a.output_tokens <= 256
+            )
+            resolved[key] = {
+                **record,
+                "collection_event_sha256": event["sha256"],
+                "collected_at_utc": event["recorded_at_utc"],
+                "explicit_unknown_reissue_authorization_sha256": bank.file_hash(resolution / "authorization.json"),
+            }
+            settlements.append(v)
+    assert not pending and set(resolved) == set(expected_unknown) and len(reissue_intents) == 3
+    intents += reissue_intents
+    records += list(resolved.values())
     universe = {live_study.key(r): r for r in live_study.frozen.read_rows(root / "preflight-final/inputs.jsonl")}
-    assert {live_study.key(r) for r in records} == set(universe)
+    assert len(records) == 17520 and {live_study.key(r) for r in records} == set(universe)
     for record in records:
         expected = universe[live_study.key(record)]
         assert all(
@@ -132,22 +161,24 @@ def validate(root=ROOT):
             for k in ["user_id", "message_id", "client_messages_sha256", "client_condition_sha256"]
         )
     records = sorted(records, key=lambda r: (r["user_id"], r["message_id"], r["client_condition_sha256"]))
-    settlements = [*s, *t, settlement]
-    intents = [*i, *j, intent]
+    ledgers = [p / "collection/attempts.jsonl" for p in stages] + [resolution / "attempts.jsonl"]
+    stamps = [
+        _events(p, bank.file_hash(stage / "preparation.json")) for p, stage in zip(ledgers[:-1], stages, strict=True)
+    ]
     result = {
         "schema_version": "ten-topic-gpt-recovered-bank-closure-v1",
         "status": "complete",
         "unique_pairs": 17520,
-        "new_successes": len(a) + len(b) + 1,
+        "new_successes": len(records) - len(baseline),
         "physical_requests": len(intents),
         "qualification_requests": sum(v["purpose"] == "qualification" for v in intents),
         "retry_requests": sum(
-            sum(n - 1 for n in Counter(v["pair_key"] for v in group if v["purpose"] == "judgment").values())
-            for group in [i, j]
+            sum(n - 1 for n in Counter(v["pair_key"] for v in f[3] if v["purpose"] == "judgment").values())
+            for f in facts
         ),
-        "explicit_unknown_reissue_requests": 1,
-        "retained_unknown_requests": unknown,
-        "maximum_observed_in_flight": max(peak, nextpeak, 1),
+        "explicit_unknown_reissue_requests": 3,
+        "retained_unknown_requests": unknowns,
+        "maximum_observed_in_flight": max(peaks),
         "known_nominal_cost_usd": sum(
             v["subscription_nominal_cost_usd"] for v in settlements if v["subscription_nominal_cost_usd"] is not None
         ),
@@ -157,28 +188,11 @@ def validate(root=ROOT):
         "verified": True,
         "input_tokens_known_subtotal": sum(v["accounting"]["input_tokens"] or 0 for v in settlements),
         "output_tokens_known_subtotal": sum(v["accounting"]["output_tokens"] or 0 for v in settlements),
-        "first_request_utc": bank.read_json(first / "preparation.json").get(
-            "first_request_utc",
-            _events(first / "collection/attempts.jsonl", bank.file_hash(first / "preparation.json"))[0][
-                "recorded_at_utc"
-            ],
-        ),
-        "last_response_utc": max(
-            newevents[-1]["recorded_at_utc"],
-            _events(second / "collection/attempts.jsonl", bank.file_hash(second / "preparation.json"))[-1][
-                "recorded_at_utc"
-            ],
-        ),
+        "first_request_utc": stamps[0][0]["recorded_at_utc"],
+        "last_response_utc": max([e[-1]["recorded_at_utc"] for e in stamps] + [events[-1]["recorded_at_utc"]]),
         "total_physical_request_ceiling": None,
         "total_cost_ceiling": None,
-        "source_ledgers": [
-            {"path": str(p), "sha256": bank.file_hash(p)}
-            for p in [
-                first / "collection/attempts.jsonl",
-                second / "collection/attempts.jsonl",
-                resolution / "attempts.jsonl",
-            ]
-        ],
+        "source_ledgers": [{"path": str(p), "sha256": bank.file_hash(p)} for p in ledgers],
     }
     for path, digest in bank.read_json(root / "preflight-final/protected-source-hashes.json").items():
         bank.bound(Path(path), digest, "protected historical source")
