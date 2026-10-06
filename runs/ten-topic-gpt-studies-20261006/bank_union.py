@@ -79,7 +79,12 @@ def stage_facts(root, allow_unknown):
 
 
 def validate(root=ROOT):
-    stages = [root / "formal-bank", root / "unattempted-stage-01", root / "unattempted-stage-02"]
+    stages = [
+        root / "formal-bank",
+        root / "unattempted-stage-01",
+        root / "unattempted-stage-02",
+        root / "unattempted-stage-03",
+    ]
     facts = [stage_facts(p, index < len(stages) - 1) for index, p in enumerate(stages)]
     prep = facts[0][0]
     baseline = live_study.frozen.read_rows(stages[0] / "accepted-bank.jsonl")
