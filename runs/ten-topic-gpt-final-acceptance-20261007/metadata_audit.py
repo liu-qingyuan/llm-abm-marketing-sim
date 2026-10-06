@@ -49,6 +49,7 @@ manifest = read(R / "formal-paths/manifest.json")
 origin = read(R / "ready-formal-paths/partial-manifest.json")
 reused = 0
 for relative, digest in manifest["paths"].items():
+    assert hashfile(R / "formal-paths" / relative) == digest
     doc = read(R / "formal-paths" / relative)
     if "reused_execution_source" in doc:
         ref = doc["reused_execution_source"]
