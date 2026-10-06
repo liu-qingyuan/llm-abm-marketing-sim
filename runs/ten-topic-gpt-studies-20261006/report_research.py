@@ -67,14 +67,21 @@ def run():
     expected |= {f"index/{arm}-s{seed}.json" for arm in live_study.ARMS for seed in SEEDS}
     if set(manifest["paths"]) != expected or manifest["status"] != "complete_verified":
         raise ValueError("path matrix incomplete")
-    closure = verify_collection.validate(ROOT / "formal-bank")
-    prep = bank.read_json(ROOT / "formal-bank/preparation.json")
+    if (ROOT / "explicit-unknown-reissue" / "attempts.jsonl").exists():
+        import bank_union
+
+        closure = bank_union.validate(ROOT)
+        bank_root = ROOT / "final-bank"
+    else:
+        closure = verify_collection.validate(ROOT / "formal-bank")
+        bank_root = ROOT / "formal-bank"
+    prep = bank.read_json(bank_root / "preparation.json")
     if closure["bank_sha256"] != manifest["bank_sha256"] or prep["draw_anchor"] != manifest["draw_anchor"]:
         raise ValueError("bank/draw identity differs")
     cfg, legacy, source = bank._inputs(bank.read_json(Path(prep["audit"]["path"])))
     cfg = cfg.model_copy(update={"network_scope": "final_collected_topics"})
     base = _prepare_concurrent_runtime_inputs(cfg)
-    records = live_study.frozen.read_rows(ROOT / "formal-bank/closed-bank.jsonl")
+    records = live_study.frozen.read_rows(bank_root / "closed-bank.jsonl")
     campaigns = {}
     data = {}
     old_data = {}
@@ -367,11 +374,11 @@ Local weights固定/重建100个seed路径完全一致（实际逐字段验证�
 
 ## 调用、来源和费用
 
-合并17520判断，复用10308、新成功{closure["new_successes"]}。物理请求{closure["physical_requests"]}，资格{closure["qualification_requests"]}，重试{closure["retry_requests"]}，峰值并发{closure["maximum_observed_in_flight"]}。请求/响应账本为formal-bank/collection/attempts.jsonl，先fsync intent再dispatch，settlement与bank来源均逐条复验。observed model全部成功响应为gpt-5.6-sol；P0、low、256 total completion及原条件保持。
+合并17520判断，复用10308、新成功{closure["new_successes"]}。物理请求{closure["physical_requests"]}，资格{closure["qualification_requests"]}，重试{closure["retry_requests"]}，峰值并发{closure["maximum_observed_in_flight"]}。请求/响应原始账本由closure.source_ledgers逐段列出（单阶段时为formal-bank/collection/attempts.jsonl），先fsync intent再dispatch，settlement与bank来源均逐条复验。observed model全部成功响应为gpt-5.6-sol；P0、low、256 total completion及原条件保持。
 
 用户2026-10-06明确授权直接执行且无总额度上限；总调用/费用ceiling=null，不沿用此前未确认的US$100提案。未切付费API。可核验名义参考消耗小计{closure["known_nominal_cost_usd"]:.6f} USD；费用未知请求{closure["nominal_cost_unknown_attempts"]}仍未按零处理。actual incremental cash fee=null（通道未提供现金账单），不把名义价格当发票。费用/调用核验见collection-verified.json及cost-ledger.json。
 
-保留原draw anchor {prep["draw_anchor"]}；新bank、臂名、输出目录和访问顺序不改随机数。输入相同的判断复用旧记录；新输入判断独立记录真实请求、模型与服务时间。先前activity_p99 unknown输入不在本轮重选七臂universe内，未沿用旧“不曝光”证明、未重发未知请求、未填充假判断。
+保留原draw anchor {prep["draw_anchor"]}；新bank、臂名、输出目录和访问顺序不改随机数。输入相同的判断复用旧记录；新输入判断独立记录真实请求、模型与服务时间。先前activity_p99 unknown输入不在本轮重选七臂universe内，未沿用旧“不曝光”证明。本轮若出现新的unknown，原请求保留；只有获得独立明确授权且实际新响应成功后，才接纳显式补采结果，并在closure.source_ledgers中独立追踪，绝不填充假判断或声称原unknown成功。
 
 ## 验收和限制
 

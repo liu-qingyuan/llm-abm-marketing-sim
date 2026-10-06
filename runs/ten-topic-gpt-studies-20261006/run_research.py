@@ -17,10 +17,17 @@ ROOT = Path(__file__).resolve().parent
 
 
 def run():
-    closed = verify_collection.validate(ROOT / "formal-bank")
+    if (ROOT / "explicit-unknown-reissue" / "attempts.jsonl").exists():
+        import bank_union
+
+        closed = bank_union.validate(ROOT)
+        bank_root = ROOT / "final-bank"
+    else:
+        closed = verify_collection.validate(ROOT / "formal-bank")
+        bank_root = ROOT / "formal-bank"
     _publish(ROOT / "collection-verified.json", closed, rows=False)
-    prep = bank.read_json(ROOT / "formal-bank/preparation.json")
-    records = live_study.frozen.read_rows(ROOT / "formal-bank/closed-bank.jsonl")
+    prep = bank.read_json(bank_root / "preparation.json")
+    records = live_study.frozen.read_rows(bank_root / "closed-bank.jsonl")
     cfg, legacy, source = bank._inputs(bank.read_json(Path(prep["audit"]["path"])))
     cfg = cfg.model_copy(update={"network_scope": "final_collected_topics"})
     base = _prepare_concurrent_runtime_inputs(cfg)
@@ -32,7 +39,7 @@ def run():
         "provider_calls": 0,
         "production_deploy_eligible": False,
         "bank_sha256": closed["bank_sha256"],
-        "preparation_sha256": bank.file_hash(ROOT / "formal-bank/preparation.json"),
+        "preparation_sha256": bank.file_hash(bank_root / "preparation.json"),
         "draw_anchor": prep["draw_anchor"],
         "network_scope": "final_collected_topics",
         "network_source_manifest_sha256": prep["network_source_manifest_sha256"],
