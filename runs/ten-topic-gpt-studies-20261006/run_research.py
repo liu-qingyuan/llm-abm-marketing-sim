@@ -88,10 +88,50 @@ def run():
                         ] != bank.fingerprint(document["path"]):
                             raise ValueError("persisted path identity/hash differs")
                     else:
-                        result = campaign.execute(prep["draw_anchor"], seed, tuple(weights), threshold)
+                        prior_path = ROOT / "ready-formal-paths" / study / name
+                        reuse = None
+                        if prior_path.exists():
+                            scope_manifest = bank.read_json(ROOT / "ready-formal-paths/partial-manifest.json")
+                            bank.bound(
+                                prior_path,
+                                scope_manifest["completed_verified_paths"][f"{study}/{name}"],
+                                "prior fully covered scope execution",
+                            )
+                            previous = bank.read_json(prior_path)
+                            entries = sorted(
+                                campaign.entries.values(),
+                                key=lambda r: (r["user_id"], r["message_id"], r["client_condition_sha256"]),
+                            )
+                            scope_identity = {
+                                "study": study,
+                                "configuration": label,
+                                "seed": seed,
+                                "weights": weights,
+                                "neighbor_saturation": threshold,
+                                "arm": arm,
+                                "scope_bank_sha256": bank.fingerprint(entries),
+                                "draw_anchor": prep["draw_anchor"],
+                                "network_source_manifest_sha256": prep["network_source_manifest_sha256"],
+                            }
+                            if previous["identity"] != json.loads(json.dumps(scope_identity)) or previous[
+                                "path_sha256"
+                            ] != bank.fingerprint(previous["path"]):
+                                raise ValueError("prior complete scope source differs from final bank")
+                            result = previous["path"]
+                            reuse = {
+                                "root": str(prior_path),
+                                "sha256": bank.file_hash(prior_path),
+                                "scope_bank_sha256": scope_identity["scope_bank_sha256"],
+                                "method": "verified_exact_input_scope_path_reuse",
+                            }
+                        else:
+                            result = campaign.execute(prep["draw_anchor"], seed, tuple(weights), threshold)
                         if len(result["terminals"]) != 1800 or len(result["barriers"]) != 30:
                             raise ValueError("formal path topology incomplete")
+                        campaign.verify(result, prep["draw_anchor"], seed, tuple(weights), threshold)
                         document = {"identity": identity, "path": result, "path_sha256": bank.fingerprint(result)}
+                        if reuse is not None:
+                            document["reused_execution_source"] = reuse
                         _publish(target, document, rows=False)
                     campaign.verify(document["path"], prep["draw_anchor"], seed, tuple(weights), threshold)
                     manifest["paths"][f"{study}/{name}"] = bank.file_hash(target)
