@@ -53,6 +53,7 @@ from .schemas import (
 
 TARGET_VIDEO_ID = "7328592728139353363"
 TARGET_NETWORK_SCOPE = "锦江酒店"
+HistoricalNetworkScope = Literal["final_collected_topics", "legacy_target_topic"]
 PROFILE_INDEX_METHOD = "log1p_p95_reference_weighted_v2"
 NETWORK_AUGMENTED_SAMPLE_AUDIT_VERSION = "network-augmented-sample-audit-v1"
 SEED_FIRST_SAMPLE_AUDIT_VERSION = "seed-first-sample-audit-v1"
@@ -297,6 +298,7 @@ class FinalResearchConfig(BaseModel):
     random_seed: int = 20260713
     network_weight: float = Field(default=0.70, ge=0.0, le=1.0)
     tag_affinity_weight: float = Field(default=0.30, ge=0.0, le=1.0)
+    network_scope: HistoricalNetworkScope = "final_collected_topics"
     neighbor_boost: float = Field(default=0.20, ge=0.0, le=1.0)
     provider: ProviderLLMConfig = Field(default_factory=ProviderLLMConfig)
     report: ReportConfig = Field(default_factory=ReportConfig)
@@ -357,6 +359,7 @@ class FinalResearchConfig(BaseModel):
     def snapshot(self) -> dict[str, object]:
         return {
             "dataset_dir": str(self.dataset_dir),
+            **({"network_scope": self.network_scope} if self.network_scope != "legacy_target_topic" else {}),
             "target_video_id": self.target_video_id,
             "research_model": self.research_model.value,
             "sample_size": self.sample_size,
@@ -1022,12 +1025,16 @@ class _ResearchCohortPreparer:
         random_seed: int,
         model_policy: _ResearchModelPolicy,
         holdout_video_ids: Sequence[str] = (),
+        network_scope: HistoricalNetworkScope = "final_collected_topics",
     ) -> None:
         self.dataset_dir = dataset_dir
         self.sample_size = sample_size
         self.random_seed = random_seed
         self.model_policy = model_policy
         self.holdout_video_ids = frozenset(holdout_video_ids)
+        if network_scope not in {"final_collected_topics", "legacy_target_topic"}:
+            raise ValueError("unsupported historical network scope")
+        self.network_scope = network_scope
 
     def prepare(self) -> _PreparedResearchCohort:
         return self._prepare(full_pool_seed_top_k_per_proxy=None)
@@ -1049,7 +1056,8 @@ class _ResearchCohortPreparer:
         comment_graph_video_ids = {
             video_id
             for video_id, video in historical_videos.items()
-            if video.source_challenge_name == TARGET_NETWORK_SCOPE
+            if self.network_scope == "final_collected_topics"
+            or video.source_challenge_name == TARGET_NETWORK_SCOPE
         }
         comment_graph_comments = [comment for comment in historical_comments if comment.video_id in comment_graph_video_ids]
         comment_graph_degree, comment_graph_neighbors, comment_graph_edge_weights = _weighted_graph_details(
@@ -1130,6 +1138,9 @@ class _ResearchCohortPreparer:
             sample_user_ids = list(base_sample_user_ids)
             sample_scope_by_user = dict(base_scope_by_user)
             sample_audit = {}
+        if self.network_scope == "final_collected_topics":
+            sample_audit = {**sample_audit, "network_scope": self.network_scope,
+                            "network_source_topics": sorted({v.source_challenge_name for v in historical_videos.values()})}
         seed_set = set(seed_user_ids)
         network_cohort_set = set(network_cohort_user_ids)
         for user_id in sample_user_ids:
@@ -1293,6 +1304,7 @@ class _ResearchInputBuilder:
             random_seed=config.random_seed,
             model_policy=model_policy,
             holdout_video_ids=(config.target_video_id,),
+            network_scope=config.network_scope,
         )
         self._legacy_target_assembler = _LegacyTargetAssembler(config)
 
@@ -1602,7 +1614,7 @@ class FinalResearchRunner:
                     "final_source_scope_sample_counts": prepared.final_source_scope_sample_counts,
                     "base_network_relevance": {
                         "formula": "min(1, log1p(weighted_degree) / log1p(P95_weighted_degree))",
-                        "target_source_scope": TARGET_NETWORK_SCOPE,
+                        "target_source_scope": ("final_collected_topics" if self.config.network_scope == "final_collected_topics" else TARGET_NETWORK_SCOPE),
                         "p95_weighted_degree": prepared.target_scope_p95_weighted_degree,
                         "reference_user_count": len(prepared.users_by_id),
                         "holdout_safe": True,
@@ -2843,7 +2855,7 @@ def _network_augmented_sample_audit(
             "count": len(prepared.network_cohort_user_ids),
             "already_in_base_user_ids": sorted(cohort_set & base_sample_set),
             "added_user_ids": prepared.network_cohort_added_user_ids,
-            "target_source_scope": TARGET_NETWORK_SCOPE,
+            "target_source_scope": ("final_collected_topics" if config.network_scope == "final_collected_topics" else TARGET_NETWORK_SCOPE),
             "historical_set_only": True,
             "direct_neighbors_only": True,
         },

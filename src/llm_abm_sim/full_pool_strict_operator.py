@@ -703,7 +703,7 @@ def _request_payload(request: StrictFreshReplayRequest) -> dict[str, object]:
     if getattr(request, "operator_execution", None) is not None:
         raise ValueError("strict fresh manifest must bind a request before operator execution")
     return {
-        "configuration": request.config.model_dump(mode="json"),
+        "configuration": request.config.model_dump(mode="json", exclude={"network_scope"} if request.config.network_scope == "legacy_target_topic" else set()),
         "runtime_workspace": str(request.workspace),
         "replay_id": request.replay_id,
         "seed_top_k_per_proxy": request.seed_top_k_per_proxy,
@@ -911,7 +911,7 @@ def _request_from_payload(
     if outputs.get("manifest_path") != str(manifest_path):
         raise ValueError("strict fresh manifest path is crossed")
     config = ConcurrentMessageExperimentConfig.model_validate(
-        _mapping(frozen.get("configuration"), "manifest configuration")
+        {"network_scope": "legacy_target_topic", **_mapping(frozen.get("configuration"), "manifest configuration")}
     )
     replay = StrictFreshReplayRequest(
         config=config,

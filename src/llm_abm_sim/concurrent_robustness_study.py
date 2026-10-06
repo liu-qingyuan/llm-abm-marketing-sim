@@ -3287,6 +3287,7 @@ def _dynamic_runtime_config(closure: ConcurrentMessageArtifactClosure) -> Concur
     config = closure.source_evidence.config_snapshot
     try:
         return ConcurrentMessageExperimentConfig(
+            network_scope=cast(Literal["final_collected_topics", "legacy_target_topic"], config.get("network_scope", "legacy_target_topic")),
             dataset_dir=Path(str(config["dataset_dir"])),
             sample_size=int(config["sample_size"]),
             horizon=int(config["horizon"]),

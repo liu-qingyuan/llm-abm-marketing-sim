@@ -1004,7 +1004,10 @@ def test_offline_final_research_builds_seed_first_sample_from_full_pool(tmp_path
     assert float(score_rows["u12"]["base_network_relevance"]) == pytest.approx(
         min(1.0, math.log1p(1) / math.log1p(p95_degree)), abs=1e-6
     )
-    assert float(score_rows["u1"]["base_network_relevance"]) == 0.0
+    assert int(score_rows["u1"]["target_scope_weighted_degree"]) == 1
+    assert float(score_rows["u1"]["base_network_relevance"]) == pytest.approx(
+        min(1.0, math.log1p(1) / math.log1p(p95_degree)), abs=1e-6
+    )
     assert float(score_rows["u12"]["recommendation_score"]) == pytest.approx(
         0.50 * float(score_rows["u12"]["base_network_relevance"])
         + 0.20 * float(score_rows["u12"]["historical_tag_affinity"]),
@@ -1067,7 +1070,7 @@ def test_offline_final_research_handles_zero_target_scope_network_without_holdou
 
     adapter = FailingIfCalledAdapter()
     output_dir = FinalResearchRunner(
-        FinalResearchConfig(dataset_dir=dataset_dir, sample_size=4),
+        FinalResearchConfig(dataset_dir=dataset_dir, sample_size=4, network_scope="legacy_target_topic"),
         adapter,
     ).run_and_write(tmp_path / "zero-network-run")
 
@@ -1086,6 +1089,7 @@ def test_target_delivery_ranking_runtime_reranks_global_top20_after_seed_engagem
     config = FinalResearchConfig(
         dataset_dir=dataset_dir,
         sample_size=70,
+        network_scope="legacy_target_topic",
         random_seed=20260713,
         provider=provider_config,
     )

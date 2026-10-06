@@ -44,6 +44,7 @@ from .final_research import (
     SEED_FIRST_SAMPLING_METHOD,
     TARGET_VIDEO_ID,
     VALIDATION_RUN_STATUS,
+    HistoricalNetworkScope,
     ResearchUser,
     _adapter_safe_metadata,
     _attempt_runtime_decision,
@@ -397,6 +398,7 @@ class ConcurrentMessageExperimentConfig(BaseModel):
     sample_size: int = Field(default=CONCURRENT_MESSAGE_PRODUCTION_SAMPLE_SIZE, ge=1)
     horizon: int = Field(default=CONCURRENT_MESSAGE_PRODUCTION_HORIZON, ge=1)
     delivery_capacity: int = Field(default=CONCURRENT_MESSAGE_PRODUCTION_DELIVERY_CAPACITY, ge=1)
+    network_scope: HistoricalNetworkScope = "final_collected_topics"
     random_seed: int = 20260713
     configuration_profile: Literal["production", "validation"] = "production"
     sample_holdout_video_id: str = CONCURRENT_MESSAGE_HOLDOUT_VIDEO_ID
@@ -475,6 +477,7 @@ class ConcurrentMessageExperimentConfig(BaseModel):
         production_deploy_eligible: bool = False,
     ) -> dict[str, object]:
         return {
+            **({"network_scope": self.network_scope} if self.network_scope != "legacy_target_topic" else {}),
             "dataset_dir": str(self.dataset_dir),
             "sample_size": self.sample_size,
             "horizon": self.horizon,
@@ -1268,6 +1271,7 @@ def _prepare_concurrent_runtime_inputs(
         random_seed=config.random_seed,
         model_policy=_TARGET_DELIVERY_RANKING_POLICY,
         holdout_video_ids=(config.sample_holdout_video_id,),
+        network_scope=config.network_scope,
     ).prepare()
     return _runtime_inputs_from_cohort(config, cohort)
 
@@ -1283,6 +1287,7 @@ def _prepare_full_pool_concurrent_runtime_inputs(
         random_seed=config.random_seed,
         model_policy=_TARGET_DELIVERY_RANKING_POLICY,
         holdout_video_ids=(config.sample_holdout_video_id,),
+        network_scope=config.network_scope,
     ).prepare_full_pool(seed_top_k_per_proxy=seed_top_k_per_proxy)
     return _runtime_inputs_from_cohort(config, cohort)
 

@@ -2037,6 +2037,7 @@ def _prepare_runtime_inputs(
     if _sha256_json(sorted(expected_user_ids)) != contract.eligible_user_ids_sha256:
         raise ValueError("eligible user-set identity is crossed with users.csv")
     config = ConcurrentMessageExperimentConfig(
+        network_scope="legacy_target_topic",  # Existing Full-Pool contract freezes the historical graph.
         dataset_dir=dataset_dir,
         sample_size=contract.eligible_user_count,
         horizon=contract.horizon,

@@ -840,6 +840,7 @@ def _prepare_replay_runtime(
     if profile not in {"production", "validation"}:
         raise ValueError("Source-v4 configuration profile is unsupported")
     config = ConcurrentMessageExperimentConfig(
+        network_scope=cast(Literal["final_collected_topics", "legacy_target_topic"], configuration.get("network_scope", "legacy_target_topic")),
         dataset_dir=dataset,
         sample_size=_positive_int(configuration.get("sample_size"), "Source-v4 sample size"),
         horizon=_positive_int(configuration.get("horizon"), "Source-v4 horizon"),

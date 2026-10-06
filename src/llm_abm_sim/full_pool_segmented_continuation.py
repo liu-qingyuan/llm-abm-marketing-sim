@@ -1399,6 +1399,7 @@ def _prepare_segmented_runtime(
         for value in _mapping_sequence(prefix.run_identity.get("messages"), "v1 messages")
     )
     config = ConcurrentMessageExperimentConfig(
+        network_scope=cast(Literal["final_collected_topics", "legacy_target_topic"], configuration.get("network_scope", "legacy_target_topic")),
         dataset_dir=dataset,
         sample_size=_strict_non_negative_int(configuration.get("sample_size"), "sample_size"),
         horizon=_strict_non_negative_int(configuration.get("horizon"), "horizon"),

@@ -29,6 +29,7 @@
 本页唯一拥有跨研究导航、统计口径对照与当前发布状态，不另建平行研究目录。单项结论及数值由各自最终 evidence/report 拥有；Module 的稳定 Interface 由架构文档说明：
 
 - [Whole sample / 两阶段机制](architecture/full-pool-two-stage-realization.md)
+- [十采集话题合并网络与独立离线重放合同](architecture/ten-topic-full-pool-replay.md)（新方法；既有 canonical 及历史结果不变）
 - [Prompt–Model / v15 Report、Release 合同](architecture/revised-four-model-release.md)
 - [Parameter / Study、Evidence、Report](architecture/gpt-p0-parameter-study.md)
 - [Deployment / 原子发布与回退](architecture/report-deployment.md)
