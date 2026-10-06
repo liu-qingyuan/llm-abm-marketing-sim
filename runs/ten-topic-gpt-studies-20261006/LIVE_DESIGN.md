@@ -16,7 +16,9 @@ flowchart LR
   Approval[Human GPT-only no total ceiling approval] --> Study
   Study --> Pi[Existing Pi GPT P0 Adapter]
   Pi --> Ledger[Intent settlement ledger]
-  Ledger --> Bank[Closed merged bank]
+  Ledger --> Recovery[Read only successful prefix and never attempted stage]
+  Explicit[Separate human unknown reissue approval and actual success] --> Recovery
+  Recovery --> Bank[Closed merged bank]
   Bank --> Kernel[Existing Kernel]
   Kernel --> Evidence[Independent rank draw barrier Evidence]
 ```
@@ -44,6 +46,11 @@ sequenceDiagram
     P-->>S: observed response and accounting
     S->>S: fsync settlement, stop unknown
   end
+  S->>S: retain unknown, collect only never-attempted inputs
+  opt separate explicit human reissue approval
+    S->>P: one independently labeled new request
+    P-->>S: verified new response; old unknown remains
+  end
   S->>B: publish only complete exact bank
   loop 2800 paths
     S->>K: original seeds and explicit old draw anchor
@@ -69,7 +76,10 @@ stateDiagram-v2
   BankClosed --> Paths
   Paths --> Verified
   Verified --> Delivered
-  Partial --> [*]
+  Partial --> UnattemptedCollecting: new separate stage, no old key redispatch
+  UnattemptedCollecting --> AwaitExplicitResolution
+  AwaitExplicitResolution --> BankClosed: human approved new response and exact union
+  AwaitExplicitResolution --> [*]: missing resolution retains partial
 ```
 ## Class current
 ```mermaid
@@ -88,10 +98,13 @@ classDiagram
   class PiAdapter
   class JudgmentBank
   class Kernel
+  class RecoveryUnion
   class IndependentEvidence
   MergedStudy --> ImmutableApproval
   MergedStudy --> PiAdapter
-  MergedStudy --> JudgmentBank
+  MergedStudy --> RecoveryUnion
+  RecoveryUnion --> ImmutableApproval
+  RecoveryUnion --> JudgmentBank
   JudgmentBank --> Kernel
   Kernel --> IndependentEvidence
 ```
