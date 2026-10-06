@@ -71,7 +71,7 @@ def run():
     prep = bank.read_json(ROOT / "formal-bank/preparation.json")
     if closure["bank_sha256"] != manifest["bank_sha256"] or prep["draw_anchor"] != manifest["draw_anchor"]:
         raise ValueError("bank/draw identity differs")
-    cfg, _, source = bank._inputs(bank.read_json(Path(prep["audit"]["path"])))
+    cfg, legacy, source = bank._inputs(bank.read_json(Path(prep["audit"]["path"])))
     cfg = cfg.model_copy(update={"network_scope": "final_collected_topics"})
     base = _prepare_concurrent_runtime_inputs(cfg)
     records = live_study.frozen.read_rows(ROOT / "formal-bank/closed-bank.jsonl")
@@ -178,6 +178,53 @@ def run():
                 print({"reopened_verified": study, "configuration": label}, flush=True)
     csv_write(dest / "old-new-path-metrics.csv", path_rows)
     csv_write(dest / "old-new-exposure-order.csv", exposure_rows)
+    # Descriptive composition only; no additional fixed-old-sample experiment.
+    old_cohorts = {
+        r["arm"]: r for r in bank.read_json(OLD / "gpt-p0-index-sensitivity-20260920-formal-01/prepared/cohorts.json")
+    }
+    new_samples = {r["arm"]: r for r in bank.read_json(ROOT / "preflight-final/samples.json")}
+    composition = []
+    latent = []
+    for arm in live_study.ARMS:
+        new_prepared, _ = live_study.arm_inputs(cfg, base, arm)
+        old_users = live_study.frozen.changed_users(legacy.cohort, arm)
+        original = old_cohorts[arm]
+        new_sample = new_samples[arm]
+        for epoch, ids, users, seeds in [
+            ("old", original["sample_user_ids"], old_users, set(original["seed_user_ids"])),
+            ("new", new_sample["sample_user_ids"], new_prepared.cohort.users_by_id, set(new_sample["seed_user_ids"])),
+        ]:
+            row = {
+                "arm": arm,
+                "epoch": epoch,
+                "sample_size": len(ids),
+                "seed_count": len(seeds),
+                "seed_overlap_old": len(seeds & set(original["seed_user_ids"])),
+                "seed_overlap_new_baseline": len(seeds & set(new_samples["baseline"]["seed_user_ids"])),
+            }
+            for metric in ["activity_score", "local_influence_score", "global_influence_score", "follower_count"]:
+                values = [getattr(users[u], metric) for u in ids]
+                row[metric + "_mean"] = statistics.mean(values)
+                row[metric + "_median"] = statistics.median(values)
+            composition.append(row)
+            categories = defaultdict(Counter)
+            for u in ids:
+                for name, value in users[u].latent_attributes.items():
+                    categories[name][str(value)] += 1
+            for name, counts in categories.items():
+                for value, count in sorted(counts.items()):
+                    latent.append(
+                        {
+                            "arm": arm,
+                            "epoch": epoch,
+                            "synthetic_attribute": name,
+                            "value": value,
+                            "users": count,
+                            "fraction": count / len(ids),
+                        }
+                    )
+    csv_write(dest / "sample-composition.csv", composition)
+    csv_write(dest / "synthetic-label-composition.csv", latent)
     ordinary = t_quantile(0.975)
     param_critical = t_quantile(1 - 0.05 / (2 * 123))
     index_critical = t_quantile(1 - 0.05 / (2 * 120))
@@ -306,7 +353,7 @@ def run():
 
 {chr(10).join(sample_lines)}
 
-Local weights固定/重建100个seed路径完全一致（实际逐字段验证）；参数w0-h3与指标baseline100路径完全一致。这些不是额外独立重复证据。新旧基准仅646重合；Local p99 rebuilt与新基准仅23重合，差异含样本构成影响。
+Local weights固定/重建100个seed路径完全一致（实际逐字段验证）；参数w0-h3与指标baseline100路径完全一致。这些不是额外独立重复证据。新旧基准仅646重合；Local p99 rebuilt与新基准仅23重合，差异含样本构成影响。指标均值/中位数、种子交集及合成标签比例见sample-composition.csv和synthetic-label-composition.csv；合成标签不是实际心理画像。
 
 ## 行为结果与新旧对照
 
