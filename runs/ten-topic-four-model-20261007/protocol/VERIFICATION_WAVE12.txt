@@ -1,0 +1,41 @@
+branch=codex/ten-topic-full-pool-replay
+changed_field=financial report keeps its own immutable content-addressed audit source at mode0600, source path/hash included; live audit snapshot can update without invalidating fixed accounting source
+MODIFIED_FILE=/Users/liuqingyuan/.codex/worktrees/ten-topic-offline-replay/llm-abm-marketing-sim/runs/ten-topic-four-model-20261007/protocol/summarize_call_ledger.py
+DIFF_FILE=/Users/liuqingyuan/.codex/worktrees/ten-topic-offline-replay/llm-abm-marketing-sim/runs/ten-topic-four-model-20261007/protocol/DIFF_WAVE12.txt
+VERIFICATION=/Users/liuqingyuan/.codex/worktrees/ten-topic-offline-replay/llm-abm-marketing-sim/runs/ten-topic-four-model-20261007/protocol/VERIFICATION_WAVE12.txt
+ROLLBACK=/Users/liuqingyuan/.codex/worktrees/ten-topic-offline-replay/llm-abm-marketing-sim/runs/ten-topic-four-model-20261007/protocol/ROLLBACK_WAVE12.sh
+[
+  {
+    "kind": "BASELINE",
+    "command": [
+      "/Users/liuqingyuan/.codex/worktrees/ten-topic-offline-replay/llm-abm-marketing-sim/.venv/bin/python",
+      "/Users/liuqingyuan/.codex/worktrees/ten-topic-offline-replay/llm-abm-marketing-sim/runs/ten-topic-four-model-20261007/protocol/check_snapshot_hook.py",
+      "/Users/liuqingyuan/.codex/worktrees/ten-topic-offline-replay/llm-abm-marketing-sim/runs/ten-topic-four-model-20261007/protocol/call-summary-snapshot-baseline.py"
+    ],
+    "input": "metadata-only content-addressed source snapshot creation/reopening; no real judgments or requests",
+    "literal_output": "private_content_addressed_snapshot=false",
+    "exit_status": 1
+  },
+  {
+    "kind": "MODIFIED",
+    "command": [
+      "/Users/liuqingyuan/.codex/worktrees/ten-topic-offline-replay/llm-abm-marketing-sim/.venv/bin/python",
+      "/Users/liuqingyuan/.codex/worktrees/ten-topic-offline-replay/llm-abm-marketing-sim/runs/ten-topic-four-model-20261007/protocol/check_snapshot_hook.py",
+      "/Users/liuqingyuan/.codex/worktrees/ten-topic-offline-replay/llm-abm-marketing-sim/runs/ten-topic-four-model-20261007/protocol/summarize_call_ledger.py"
+    ],
+    "input": "metadata-only content-addressed source snapshot creation/reopening; no real judgments or requests",
+    "literal_output": "private_content_addressed_snapshot=true;mode=0600;idempotent=true",
+    "exit_status": 0
+  },
+  {
+    "kind": "ROLLBACK",
+    "command": [
+      "/Users/liuqingyuan/.codex/worktrees/ten-topic-offline-replay/llm-abm-marketing-sim/runs/ten-topic-four-model-20261007/protocol/ROLLBACK_WAVE12.sh",
+      "/Users/liuqingyuan/.codex/worktrees/ten-topic-offline-replay/llm-abm-marketing-sim/runs/ten-topic-four-model-20261007/protocol/.snapshot-rollback.py"
+    ],
+    "input": "modified scratch copy only",
+    "literal_output": "byte_equal_baseline=true\nprivate_content_addressed_snapshot=false\nrestored_behavior_exit_status=1",
+    "exit_status": 0
+  }
+]
+84 relevant offline tests passed in2.73s; Ruff F and py_compile passed; zero Provider calls by tests/accounting. Scratch baseline restored; modified formatter remains changed. Original journal is read-only here; raw snapshot is private/local and not staged.

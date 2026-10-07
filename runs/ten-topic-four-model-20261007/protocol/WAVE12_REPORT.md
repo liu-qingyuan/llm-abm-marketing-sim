@@ -1,0 +1,9 @@
+# 第十二阶段：三模型完成、Gemini原通道继续及不可变费用来源
+
+GPT-5.6 Sol、Kimi和DeepSeek V4.1 Flash各四模板全部完成；Gemini/P0已完成。十三条件独立复验23,400曝光与390屏障通过。当前只剩Gemini/P1–P3。最近冷却期到期后，实查三个原PID仍存活，并已收到新真实响应；没有因等待超时重启或切换通道。
+
+本轮goal turn属于实际进展和已验证等待：完成两条Kimi路径、独立验收/统计复算、分模型模板调用费用表；随后继续等待真实Gemini进程。物理请求最近已审计snapshot为17,225/29,143，16条原请求unknown保留，3条在途未当作unknown。费用实际现金仍未知，名义参考不作现金、无费用不按零。
+
+原ledger audit snapshot是滚动验证的暂存文件。费用formatter现保存自己独立的content-addressed原字节副本，mode0600并链接path/SHA，重复运行只读复验而不覆盖同hash来源；避免下一次audit更新后失去费用表的原始来源。旧阶段HASH文件是当时观察记录，其中progress-report/call-ledger-progress是滚动预览路径，不宣称这些预览永久immutable；旧正式研究目录与结果不变。最终费用表必须在16条件及无inflight后生成，保存自己的来源snapshot。raw副本仅本机保留、不提交Git。
+
+84项相关离线测试通过，Ruff F及py_compile通过，metadata-only快照/未知费用测试不使用合成正式判断，accounting/test Provider调用0。完整16条件验收及最后对照报告仍待完成；论文/canonical未改动或部署，goal保持active。全仓库慢扫描和pyright缺失未重复，适用覆盖不扩大为全仓库通过。精确baseline/modified/rollback见VERIFICATION_WAVE12.txt，scratch恢复旧无独立snapshot行为，正式formatter保持新行为。

@@ -1,0 +1,47 @@
+[
+  {
+    "path": "/Users/liuqingyuan/.codex/worktrees/ten-topic-offline-replay/llm-abm-marketing-sim/runs/ten-topic-four-model-20261007/protocol/summarize_call_ledger.py",
+    "sha256": "d9573e4c535f00a521321461eda0b0a84d30fcfc0893a9ab785ce92fda72972d",
+    "bytes": 6803
+  },
+  {
+    "path": "/Users/liuqingyuan/.codex/worktrees/ten-topic-offline-replay/llm-abm-marketing-sim/runs/ten-topic-four-model-20261007/protocol/test_call_ledger_summary.py",
+    "sha256": "dfea182db82bacf28484821e3204a0ec88bff670b12adaf52aaeb8f0468ad2c6",
+    "bytes": 1932
+  },
+  {
+    "path": "/Users/liuqingyuan/.codex/worktrees/ten-topic-offline-replay/llm-abm-marketing-sim/runs/ten-topic-four-model-20261007/protocol/check_snapshot_hook.py",
+    "sha256": "b1763745b1adc3356bd6205815afcdbc2cea63dc122892c4b07e48688fc34818",
+    "bytes": 750
+  },
+  {
+    "path": "/Users/liuqingyuan/.codex/worktrees/ten-topic-offline-replay/llm-abm-marketing-sim/runs/ten-topic-four-model-20261007/protocol/call-summary-snapshot-baseline.py",
+    "sha256": "1a20a262dff7f10a5e25a21317b88af45bda19b167f61c15feed5419498143e5",
+    "bytes": 6346
+  },
+  {
+    "path": "/Users/liuqingyuan/.codex/worktrees/ten-topic-offline-replay/llm-abm-marketing-sim/runs/ten-topic-four-model-20261007/protocol/WAVE12_REPORT.md",
+    "sha256": "cdfa113181a3588bfc0da0f11639b4f810f59ab4bd3b106b35745f50bbce1472",
+    "bytes": 1858
+  },
+  {
+    "path": "/Users/liuqingyuan/.codex/worktrees/ten-topic-offline-replay/llm-abm-marketing-sim/runs/ten-topic-four-model-20261007/protocol/WAVE12_PROGRESS.json",
+    "sha256": "40a871a9b4fd2aa06b3bc50a002297c210f866f856a0b5aedcd57973a3c46cf8",
+    "bytes": 934
+  },
+  {
+    "path": "/Users/liuqingyuan/.codex/worktrees/ten-topic-offline-replay/llm-abm-marketing-sim/runs/ten-topic-four-model-20261007/protocol/VERIFICATION_WAVE12.txt",
+    "sha256": "5c0205f4c2b3ce757132021cb3408ce3f418e659fb939fefa26857664dc19c7b",
+    "bytes": 3105
+  },
+  {
+    "path": "/Users/liuqingyuan/.codex/worktrees/ten-topic-offline-replay/llm-abm-marketing-sim/runs/ten-topic-four-model-20261007/protocol/DIFF_WAVE12.txt",
+    "sha256": "020653bca835ce8bff3bd1f6a58bb1c7422ca13187e757911e1ed9632acdc2ba",
+    "bytes": 4606
+  },
+  {
+    "path": "/Users/liuqingyuan/.codex/worktrees/ten-topic-offline-replay/llm-abm-marketing-sim/runs/ten-topic-four-model-20261007/protocol/ROLLBACK_WAVE12.sh",
+    "sha256": "c93bbeacf2785ab011e7be481f7f19203100c0f345d678c7acb99293fc25c344",
+    "bytes": 394
+  }
+]

@@ -13,3 +13,17 @@ def test_identity_requires_user_message_and_conditions_not_run_seed():
  a={'model':'model','template':'P0','user_id':'u','message_id':'m','full_client_messages':[],'request_condition':{'frozen':True}}
  assert input_signature(a)==input_signature(dict(a,output_directory='new',behavior_seed=20260824,time_step=29))
  for key,value in [('user_id','u2'),('message_id','m2'),('model','other'),('template','P1'),('request_condition',{'frozen':False})]:assert input_signature(a)!=input_signature(dict(a,**{key:value}))
+
+def test_source_snapshot_content_addressed_private_and_idempotent(tmp_path):
+ import hashlib
+ from summarize_call_ledger import save_snapshot
+ raw=b'{"metadata_only":true}\n';sha=hashlib.sha256(raw).hexdigest();p=save_snapshot(tmp_path,sha,raw);stat=p.stat()
+ assert p.read_bytes()==raw and stat.st_mode & 0o777==0o600
+ assert save_snapshot(tmp_path,sha,raw)==p and p.stat().st_mtime_ns==stat.st_mtime_ns
+ p.write_bytes(b'tampered')
+ with pytest.raises(AssertionError):save_snapshot(tmp_path,sha,raw)
+
+def test_snapshot_mismatched_content_hash_is_rejected(tmp_path):
+ from summarize_call_ledger import save_snapshot
+ with pytest.raises(AssertionError):save_snapshot(tmp_path,'0'*64,b'{"metadata_only":true}\n')
+ assert not list(tmp_path.iterdir())

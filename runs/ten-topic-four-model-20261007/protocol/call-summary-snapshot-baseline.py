@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Aggregate only independently audited physical intents; no Provider or pricing lookup."""
-import argparse,json,csv,hashlib,collections,datetime,os
+import argparse,json,csv,hashlib,collections,datetime
 from decimal import Decimal
 from pathlib import Path
 ROOT=Path(__file__).resolve().parents[1]
@@ -14,15 +14,6 @@ def amount(records,field):
  values=[Decimal(str(r[field])) for r in records if r.get(field) is not None]
  assert all(v.is_finite() and v>=0 for v in values)
  return str(sum(values,Decimal('0'))) if values else None,len(values)
-
-def save_snapshot(folder,sha,raw):
- assert hashlib.sha256(raw).hexdigest()==sha
- snapshot=folder/('source-request-ledger-'+sha+'.jsonl')
- if snapshot.exists():assert hashlib.sha256(snapshot.read_bytes()).hexdigest()==sha
- else:
-  fd=os.open(snapshot,os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o600)
-  with os.fdopen(fd,'wb') as f:f.write(raw)
- return snapshot
 
 def main(partial):
  audit=json.loads((ROOT/'ledger-audit/LEDGER_AUDIT.json').read_text());raw=Path(audit['snapshot_path']).read_bytes();assert hashlib.sha256(raw).hexdigest()==audit['snapshot_sha256']
@@ -46,9 +37,8 @@ def main(partial):
    rows.append({'model':display,'model_id':model,'template':template,'physical_requests':len(ids),'unique_full_input_condition_signatures':len({input_signature(intents[i]) for i in ids}),'new_successful_judgments_collected':sum(i in success for i in ids),'known_failures_retained':sum(i in failed and i not in unknown for i in ids),'unknown_requests_retained':sum(i in unknown for i in ids),'inflight':sum(i not in success and i not in failed for i in ids),'complete_cell_exposures':1800 if c else 0,'old_four_model_judgments_used_complete_cell':c.get('reused_four_model',0),'prior_gpt_bank_judgments_used_complete_cell':c.get('reused_accepted_gpt_bank',0),'new_judgments_used_complete_cell':c.get('new_formal_exposure',0),'known_nominal_usd_reference_subtotal':nominal,'nominal_known_settlements':nknown,'nominal_unknown_settlements':len(settled)-nknown,'known_provider_fee_cny_field_subtotal':fee,'provider_fee_known_settlements':fknown,'provider_fee_unknown_settlements':len(settled)-fknown,'actual_cash_fee':None})
  assert sum(x['physical_requests'] for x in rows)+len(qual)==audit['physical_requests']
  out=ROOT/('call-ledger-progress' if partial else 'formal-call-ledger');out.mkdir(exist_ok=True)
- snapshot=save_snapshot(out,audit['snapshot_sha256'],raw)
  with (out/'model-template-calls-costs.csv').open('w') as f:w=csv.DictWriter(f,fieldnames=list(rows[0]));w.writeheader();w.writerows(rows)
- summary={'status':'partial_audited_snapshot' if partial else 'all16_call_ledger_closed','at_utc':datetime.datetime.now(datetime.timezone.utc).isoformat(),'source_ledger_snapshot_sha256':audit['snapshot_sha256'],'source_ledger_snapshot_path':str(snapshot),'source_acceptance_sha256':hashlib.sha256((ROOT/'independent-acceptance/ACCEPTANCE_PROGRESS.json').read_bytes()).hexdigest(),'conditions_verified':acceptance['verified_conditions'],'physical_requests_including_qualification':audit['physical_requests'],'qualification_physical_requests':len(qual),'qualification_successes':sum(i in success for i in qual),'qualification_failures':sum(i in failed for i in qual),'qualification_models':dict(collections.Counter(intents[i]['model'] for i in qual)),'successful_judgments_including_qualification':audit['successful_judgments_including_qualifications'],'unknown_requests_retained':len(unknown),'known_nominal_usd_reference_subtotal':audit['known_nominal_usd_subtotal'],'known_provider_fee_cny_field_subtotal':audit['known_fee_cny_subtotal'],'actual_cash_fee':None,'actual_cash_fee_not_zero_assumption':True,'cash_ceiling':'user_authorized_unlimited','physical_cap':29143,'nominal_reference_is_not_cash':'Frozen subscription nominal pricing fields only; no inferred cash payment or USD/CNY conversion. Prior reused-bank costs are not recharged as this task calls.','candidate_universe':48000,'candidate_universe_is_not_call_budget':True,'partial_count_definition':'complete_cell_exposures excludes live partial journals; collected successes may exceed complete-cell uses until all16 close','legacy_and_current_contract':'legacy request metadata max3 unchanged; user-amended Gemini admission allows separately identified max3 collection batches on same input; all count toward global cap','upstream_gateway_physical_requests':'gateway hidden upstream invocations not observable; count is client-side physical intent/dispatch','unknown_charge_is_unknown':True,'provider_calls_during_accounting':0}
+ summary={'status':'partial_audited_snapshot' if partial else 'all16_call_ledger_closed','at_utc':datetime.datetime.now(datetime.timezone.utc).isoformat(),'source_ledger_snapshot_sha256':audit['snapshot_sha256'],'source_acceptance_sha256':hashlib.sha256((ROOT/'independent-acceptance/ACCEPTANCE_PROGRESS.json').read_bytes()).hexdigest(),'conditions_verified':acceptance['verified_conditions'],'physical_requests_including_qualification':audit['physical_requests'],'qualification_physical_requests':len(qual),'qualification_successes':sum(i in success for i in qual),'qualification_failures':sum(i in failed for i in qual),'qualification_models':dict(collections.Counter(intents[i]['model'] for i in qual)),'successful_judgments_including_qualification':audit['successful_judgments_including_qualifications'],'unknown_requests_retained':len(unknown),'known_nominal_usd_reference_subtotal':audit['known_nominal_usd_subtotal'],'known_provider_fee_cny_field_subtotal':audit['known_fee_cny_subtotal'],'actual_cash_fee':None,'actual_cash_fee_not_zero_assumption':True,'cash_ceiling':'user_authorized_unlimited','physical_cap':29143,'nominal_reference_is_not_cash':'Frozen subscription nominal pricing fields only; no inferred cash payment or USD/CNY conversion. Prior reused-bank costs are not recharged as this task calls.','candidate_universe':48000,'candidate_universe_is_not_call_budget':True,'partial_count_definition':'complete_cell_exposures excludes live partial journals; collected successes may exceed complete-cell uses until all16 close','legacy_and_current_contract':'legacy request metadata max3 unchanged; user-amended Gemini admission allows separately identified max3 collection batches on same input; all count toward global cap','upstream_gateway_physical_requests':'gateway hidden upstream invocations not observable; count is client-side physical intent/dispatch','unknown_charge_is_unknown':True,'provider_calls_during_accounting':0}
  (out/'COST_LEDGER.json').write_text(json.dumps(summary,ensure_ascii=False,indent=2));print('CALL_LEDGER conditions='+str(summary['conditions_verified'])+' physical='+str(summary['physical_requests_including_qualification'])+' qualification='+str(len(qual))+' cash=unknown provider_calls=0')
 if __name__=='__main__':
  p=argparse.ArgumentParser();p.add_argument('--partial',action='store_true');main(p.parse_args().partial)

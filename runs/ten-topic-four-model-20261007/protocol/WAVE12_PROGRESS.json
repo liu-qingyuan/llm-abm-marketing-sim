@@ -1,0 +1,20 @@
+{
+  "at_utc": "2026-10-07T08:04:01.040739+00:00",
+  "status": "thirteen_conditions_complete_gemini_resumed_after_observed_cooldown",
+  "goal_status": "active",
+  "verified_conditions": 13,
+  "required_conditions": 16,
+  "verified_exposures": 23400,
+  "verified_barriers": 390,
+  "physical_requests_snapshot": 17225,
+  "physical_cap": 29143,
+  "retained_unknowns": 16,
+  "inflight_model_requests": 3,
+  "cash_fee": null,
+  "cash_not_assumed_zero": true,
+  "accounting_source_immutable_snapshot_path": "/Users/liuqingyuan/.codex/worktrees/ten-topic-offline-replay/llm-abm-marketing-sim/runs/ten-topic-four-model-20261007/call-ledger-progress/source-request-ledger-080768b5ffa72a4405676f4c9f691ad66a23d35166bddee1dbaaa4c40e8a6783.jsonl",
+  "accounting_source_sha256": "080768b5ffa72a4405676f4c9f691ad66a23d35166bddee1dbaaa4c40e8a6783",
+  "provider_calls_by_accounting": 0,
+  "regression_tests": "84 passed in2.73s",
+  "not_final": true
+}
