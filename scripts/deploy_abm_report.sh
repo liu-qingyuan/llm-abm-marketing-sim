@@ -11,6 +11,8 @@ REMOTE_ROOT="${ABM_DEPLOY_REMOTE_ROOT:-/opt/llm-abm-marketing-sim-report}"
 PORT="${ABM_DEPLOY_PORT:-18083}"
 CONTAINER_NAME="${ABM_DEPLOY_CONTAINER_NAME:-abm-research-report}"
 IMAGE="${ABM_DEPLOY_IMAGE:-nginx:1.27-alpine}"
+PUBLIC_TRANSPORT="${ABM_DEPLOY_PUBLIC_TRANSPORT:-direct}"
+[[ "${PUBLIC_TRANSPORT}" == direct || "${PUBLIC_TRANSPORT}" == environment-proxy ]] || { printf 'invalid public transport\n' >&2; exit 1; }
 PYTHON="${ABM_DEPLOY_PYTHON:-python3}"
 SOURCE_DIR=""
 RELEASE_ID=""
@@ -933,6 +935,11 @@ trap rollback_on_failure EXIT
 
 PUBLIC_CURL_RETRY=(--noproxy '*' --http1.1 --retry 4 --retry-all-errors --retry-delay 2 --retry-max-time 120)
 PUBLIC_REPORT_CURL_RETRY=(--noproxy '*' --http1.1 --retry 4 --retry-all-errors --retry-delay 2 --retry-max-time 1800)
+if [[ "${PUBLIC_TRANSPORT}" == environment-proxy ]]; then
+  PUBLIC_CURL_RETRY=(--http1.1 --retry 4 --retry-all-errors --retry-delay 2 --retry-max-time 120)
+  PUBLIC_REPORT_CURL_RETRY=(--http1.1 --retry 4 --retry-all-errors --retry-delay 2 --retry-max-time 1800)
+fi
+printf 'Public client transport: %s; TLS and complete-body hash checks unchanged\n' "${PUBLIC_TRANSPORT}"
 for _attempt in 1 2 3 4 5 6 7 8; do
   if curl "${PUBLIC_CURL_RETRY[@]}" -fsS --max-time 20 "https://${DOMAIN}/healthz" >/dev/null; then
     break

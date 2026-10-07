@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import re
 import subprocess
 import sys
@@ -33,6 +34,16 @@ _SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 
 class PublicArtifactAcceptanceError(RuntimeError):
     pass
+
+
+def _public_transport_args() -> list[str]:
+    transport = os.environ.get("ABM_DEPLOY_PUBLIC_TRANSPORT", "direct")
+    if transport not in {"direct", "environment-proxy"}:
+        raise PublicArtifactAcceptanceError("unsupported public transport")
+    return [
+        *(["--noproxy", "*"] if transport == "direct" else []),
+        "--http1.1",
+    ]
 
 
 @dataclass(frozen=True)
@@ -182,9 +193,7 @@ def _verify_body(
         completed = subprocess.run(
             [
                 "curl",
-                "--noproxy",
-                "*",
-                "--http1.1",
+                *_public_transport_args(),
                 "--retry",
                 "4",
                 "--retry-all-errors",

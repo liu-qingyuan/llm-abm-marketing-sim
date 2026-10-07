@@ -28,6 +28,9 @@ from pathlib import Path
 from urllib.parse import unquote, urlsplit
 
 args = sys.argv[1:]
+assert '--insecure' not in args and '-k' not in args
+assert '--http1.1' in args and '--retry-all-errors' in args
+assert ('--noproxy' in args) == (os.environ.get('ABM_DEPLOY_PUBLIC_TRANSPORT', 'direct') == 'direct')
 output = Path(args[args.index('-o') + 1])
 url = next(value for value in reversed(args) if value.startswith('https://'))
 relative = unquote(urlsplit(url).path).lstrip('/')
@@ -85,8 +88,10 @@ def _fixture(tmp_path: Path, *, small_count: int = 10) -> tuple[Path, Path, Path
     return facts, snapshot, public, downloads
 
 
+@pytest.mark.parametrize('transport', ['direct', 'environment-proxy'])
 def test_public_body_verifier_processes_fixed_batches_and_manifest_binds_large_files(
     tmp_path: Path,
+    transport: str,
 ) -> None:
     facts, snapshot, public, downloads = _fixture(tmp_path)
     summary = tmp_path / "summary.json"
@@ -95,6 +100,7 @@ def test_public_body_verifier_processes_fixed_batches_and_manifest_binds_large_f
         {
             "PATH": f"{tmp_path / 'bin'}:{env['PATH']}",
             "FAKE_PUBLIC_ROOT": str(public),
+            "ABM_DEPLOY_PUBLIC_TRANSPORT": transport,
         }
     )
 
