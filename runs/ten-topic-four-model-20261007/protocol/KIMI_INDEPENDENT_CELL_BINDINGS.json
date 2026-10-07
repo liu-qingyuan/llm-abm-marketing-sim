@@ -1,0 +1,56 @@
+{
+  "at_utc": "2026-10-07T02:54:37.562162+00:00",
+  "bindings": [
+    {
+      "template": "P2",
+      "model": "kimi-k3",
+      "pid": 7161,
+      "command": [
+        "/Users/liuqingyuan/.codex/worktrees/ten-topic-offline-replay/llm-abm-marketing-sim/.venv/bin/python",
+        "/Users/liuqingyuan/.codex/worktrees/ten-topic-offline-replay/llm-abm-marketing-sim/runs/ten-topic-four-model-20261007/protocol/run_adaptive_other_persistent.py",
+        "--template",
+        "P2",
+        "--model",
+        "kimi-k3"
+      ],
+      "log": "/Users/liuqingyuan/.codex/worktrees/ten-topic-offline-replay/llm-abm-marketing-sim/runs/ten-topic-four-model-20261007/protocol/authorized-kimi-independent-P2.log",
+      "strategy": "disjoint condition processes; serial ordered exposures within each condition; no shared neighbor feedback"
+    },
+    {
+      "template": "P3",
+      "model": "kimi-k3",
+      "pid": 7162,
+      "command": [
+        "/Users/liuqingyuan/.codex/worktrees/ten-topic-offline-replay/llm-abm-marketing-sim/.venv/bin/python",
+        "/Users/liuqingyuan/.codex/worktrees/ten-topic-offline-replay/llm-abm-marketing-sim/runs/ten-topic-four-model-20261007/protocol/run_adaptive_other_persistent.py",
+        "--template",
+        "P3",
+        "--model",
+        "kimi-k3"
+      ],
+      "log": "/Users/liuqingyuan/.codex/worktrees/ten-topic-offline-replay/llm-abm-marketing-sim/runs/ten-topic-four-model-20261007/protocol/authorized-kimi-independent-P3.log",
+      "strategy": "disjoint condition processes; serial ordered exposures within each condition; no shared neighbor feedback"
+    }
+  ],
+  "same_sample_network_seed_input_route": true,
+  "no_completed_cell_restarted": true,
+  "initial_bindings_status": "launcher exited and child handles missing; no journals or model intents created; not scientific execution",
+  "active_bindings": [
+    {
+      "pid": 7243,
+      "template": "P2",
+      "model": "kimi-k3",
+      "tool_session_id": 80186,
+      "verified_identity": "Wed Oct  7 10:54:59 2026     /opt/homebrew/Cellar/python@3.12/3.12.13_4/Frameworks/Python.framework/Versions/3.12/Resources/Python.app/Contents/MacOS/Python -u runs/ten-topic-four-model-20261007/protocol/run_adaptive_other_persistent.py --template P2 --model kimi-k3",
+      "verified_at_utc": "2026-10-07T03:01:30.188055+00:00"
+    },
+    {
+      "pid": 7255,
+      "template": "P3",
+      "model": "kimi-k3",
+      "tool_session_id": 42139,
+      "verified_identity": "Wed Oct  7 10:55:00 2026     /opt/homebrew/Cellar/python@3.12/3.12.13_4/Frameworks/Python.framework/Versions/3.12/Resources/Python.app/Contents/MacOS/Python -u runs/ten-topic-four-model-20261007/protocol/run_adaptive_other_persistent.py --template P3 --model kimi-k3",
+      "verified_at_utc": "2026-10-07T03:01:30.191389+00:00"
+    }
+  ]
+}

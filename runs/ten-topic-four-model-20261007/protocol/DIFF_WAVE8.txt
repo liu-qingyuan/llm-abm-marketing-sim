@@ -1,0 +1,45 @@
+diff --git a/runs/ten-topic-four-model-20261007/protocol/accept_completed_cells.py b/runs/ten-topic-four-model-20261007/protocol/accept_completed_cells.py
+index 04a26eb..08ec94b 100644
+--- a/runs/ten-topic-four-model-20261007/protocol/accept_completed_cells.py
++++ b/runs/ten-topic-four-model-20261007/protocol/accept_completed_cells.py
+@@ -11,0 +12,4 @@ ROOT=Path(__file__).resolve().parents[1];ORIGINAL=Path('/Users/liuqingyuan/work/
++def assert_request_condition(actual,qualified,prompt):
++ expected=dict(qualified,prompt_version=prompt.prompt_version,prompt_canonical_hash=prompt.canonical_hash)
++ assert actual==expected, 'request condition differs from independently recorded successful qualification'
++
+@@ -13 +17 @@ def main():
+- prep=bank.read_json(ORIGINAL/'runs/gpt-p0-bank-topup-20260917-authorized-01/preparation.json');config,_,_=bank._inputs(bank.read_json(Path(prep['audit']['path'])));config=config.model_copy(update={'network_scope':'final_collected_topics'});p=_prepare_concurrent_runtime_inputs(config)
++ prep=bank.read_json(ORIGINAL/'runs/gpt-p0-bank-topup-20260917-authorized-01/preparation.json');config,legacy,_=bank._inputs(bank.read_json(Path(prep['audit']['path'])));config=config.model_copy(update={'network_scope':'final_collected_topics'});p=_prepare_concurrent_runtime_inputs(config)
+@@ -23 +27 @@ def main():
+- accepted=next(r for r in bank.read_json(ROOT.parent/'ten-topic-gpt-studies-20261006/preflight-final/samples.json') if r['arm']=='baseline');assert set(accepted['sample_user_ids'])==set(p.cohort.sample_user_ids)
++ accepted=next(r for r in bank.read_json(ROOT.parent/'ten-topic-gpt-studies-20261006/preflight-final/samples.json') if r['arm']=='baseline');assert set(accepted['sample_user_ids'])==set(p.cohort.sample_user_ids);assert set(accepted['seed_user_ids'])==set(p.cohort.seed_user_ids)
+@@ -25,3 +29,5 @@ def main():
+- old={r['judgment_id']:r for r in [json.loads(x) for x in (OLD/'judgments.jsonl').read_text().splitlines()]};eligible_old={json.loads(x)['judgment_id'] for x in (ROOT/'protocol/eligible-old-judgment-origins.jsonl').read_text().splitlines()}
+- fresh=ROOT.parent/'ten-topic-gpt-studies-20261006/final-bank';condition=bank.read_json(fresh/'preparation.json')['request_condition'];fresh_rows=[json.loads(x) for x in (fresh/'closed-bank.jsonl').read_text().splitlines()];fresh_index={(r['user_id'],r['message_id'],r['client_condition_sha256']):r for r in fresh_rows}
+- result=[];out=ROOT/'independent-acceptance';out.mkdir(exist_ok=True)
++ qualified={intents[k]['model']:intents[k]['request_condition'] for k in success if intents[k]['purpose']=='qualification'};assert set(qualified)=={'openai-codex/gpt-5.6-sol','gemini-3.1-pro','kimi-k3','deepseek-flash'}
++ wire={r['request_id']:r for r in ledger if r['type']=='wire_request'};network_sha=bank.read_json(ROOT/'protocol/PREPARED_CONTRACT.json')['network_source_manifest_sha256'];old_sha=bank.file_hash(OLD/'judgments.jsonl')
++ old={r['judgment_id']:r for r in [json.loads(x) for x in (OLD/'judgments.jsonl').read_text().splitlines()]};eligible_old={e['judgment_id']:e for e in (json.loads(x) for x in (ROOT/'protocol/eligible-old-judgment-origins.jsonl').read_text().splitlines())}
++ fresh=ROOT.parent/'ten-topic-gpt-studies-20261006/final-bank';condition=bank.read_json(fresh/'preparation.json')['request_condition'];fresh_sha=bank.file_hash(fresh/'closed-bank.jsonl');assert all(condition[k]==qualified['openai-codex/gpt-5.6-sol'][k] for k in ['provider_route','requested_model','reasoning_effort','output_token_ceiling','wire_api','prompt_version','prompt_canonical_hash','structured_output_schema_hash']);fresh_rows=[json.loads(x) for x in (fresh/'closed-bank.jsonl').read_text().splitlines()];fresh_index={(r['user_id'],r['message_id'],r['client_condition_sha256']):r for r in fresh_rows}
++ seen=set();expected={(m,f'P{i}') for m in qualified for i in range(4)};result=[];out=ROOT/'independent-acceptance';out.mkdir(exist_ok=True)
+@@ -29,0 +36,2 @@ def main():
++  assert (model,template) in expected and (model,template) not in seen;seen.add((model,template));assert len(cell['terminals'])==1800
++  assert cell['network_source_manifest_sha256']==network_sha
+@@ -45,0 +54 @@ def main():
++      assert model=='openai-codex/gpt-5.6-sol' and template=='P0' and cell['bank_sha256']==fresh_sha and cell['bank_path']==str(fresh/'closed-bank.jsonl') and cell['request_condition']==condition
+@@ -50,0 +60,6 @@ def main():
++       assert j['requested_model']==('kimi-coding/k3-256k' if model=='kimi-k3' else model) and j['observed_model']==qualified[model]['required_observed_model']
++       assert source['path']==str(OLD/'judgments.jsonl') and source['sha256']==old_sha
++       declared=CONCURRENT_ROBUSTNESS_PROMPT_REGISTRY.resolve(template);assert j['prompt_version']==declared.prompt_version and j['prompt_canonical_hash']==declared.canonical_hash
++       assert_request_condition(eligible_old[j['judgment_id']]['effective_request_condition'],qualified[model],declared)
++       historical_input=DecisionInput(post=m.as_post(),profile=_primary_variant_profile(legacy.cohort.users_by_id[u]),peer_context=PeerContext(),platform_context=PlatformContext(),time_step=j['time_step'],prompt_version=declared.prompt_version)
++       assert build_engagement_prompt(historical_input)==messages
+@@ -53,0 +69,5 @@ def main():
++       assert request['user_id']==u and request['message_id']==m.message_id and source['path']==str(ROOT/'request-ledger.jsonl')
++       assert_request_condition(request['request_condition'],qualified[model],CONCURRENT_ROBUSTNESS_PROMPT_REGISTRY.resolve(template))
++       if identity in wire:
++        w=wire[identity];assert w['wire_model']==qualified[model]['required_observed_model'];assert w['requested_controls']['output_token_ceiling']==qualified[model]['output_token_ceiling'] and w['requested_controls'].get('reasoning_effort')==qualified[model]['reasoning_effort']
++        if model=='deepseek-flash':assert w['requested_controls'].get('thinking_mode')=='disabled'
+@@ -63 +83 @@ def main():
+-  fact={'status':'passed_this_cell','cell_id':cell['cell_id'],'path':str(path),'sha256':bank.file_hash(path),'exposures':1800,'barriers':30,'message_statistics':{k:dict(v) for k,v in summary.items()},'provider_calls_during_acceptance':0,'shared_components':'cohort builder, P0-P3 renderer and message-fit; raw edge-derived degree/neighbors/P95, ranking, draws, barriers and stats independently implemented'}
++  fact={'status':'passed_this_cell','cell_id':cell['cell_id'],'path':str(path),'sha256':bank.file_hash(path),'exposures':1800,'barriers':30,'message_statistics':{k:dict(v) for k,v in summary.items()},'request_conditions_checked':'all used fresh/old four-model judgments match successful real qualification plus declared P0-P3 prompt; GPT/P0 uses separately accepted bank contract','network_source_manifest_sha256':network_sha,'provider_calls_during_acceptance':0,'shared_components':'cohort builder, P0-P3 renderer and message-fit; raw edge-derived degree/neighbors/P95, ranking, draws, barriers and stats independently implemented'}

@@ -1,0 +1,41 @@
+branch=codex/ten-topic-full-pool-replay
+changed_field=independent acceptance binds real successful qualification/declared prompt, source model/input/hash, matrix uniqueness/exact terminal count and network source; GPT P0 binds accepted bank bytes and contract
+MODIFIED_FILE=/Users/liuqingyuan/.codex/worktrees/ten-topic-offline-replay/llm-abm-marketing-sim/runs/ten-topic-four-model-20261007/protocol/accept_completed_cells.py
+DIFF_FILE=/Users/liuqingyuan/.codex/worktrees/ten-topic-offline-replay/llm-abm-marketing-sim/runs/ten-topic-four-model-20261007/protocol/DIFF_WAVE8.txt
+VERIFICATION=/Users/liuqingyuan/.codex/worktrees/ten-topic-offline-replay/llm-abm-marketing-sim/runs/ten-topic-four-model-20261007/protocol/VERIFICATION_WAVE8.txt
+ROLLBACK=/Users/liuqingyuan/.codex/worktrees/ten-topic-offline-replay/llm-abm-marketing-sim/runs/ten-topic-four-model-20261007/protocol/ROLLBACK_WAVE8.sh
+[
+  {
+    "kind": "BASELINE",
+    "command": [
+      "/Users/liuqingyuan/.codex/worktrees/ten-topic-offline-replay/llm-abm-marketing-sim/.venv/bin/python",
+      "/Users/liuqingyuan/.codex/worktrees/ten-topic-offline-replay/llm-abm-marketing-sim/runs/ten-topic-four-model-20261007/protocol/check_condition_guard.py",
+      "/Users/liuqingyuan/.codex/worktrees/ten-topic-offline-replay/llm-abm-marketing-sim/runs/ten-topic-four-model-20261007/protocol/accept-baseline-wave8.py"
+    ],
+    "input": "metadata-only: matching qualification/template then adversarial route/token ceiling/canonical hash",
+    "literal_output": "frozen_request_condition_guard=false",
+    "exit_status": 1
+  },
+  {
+    "kind": "MODIFIED",
+    "command": [
+      "/Users/liuqingyuan/.codex/worktrees/ten-topic-offline-replay/llm-abm-marketing-sim/.venv/bin/python",
+      "/Users/liuqingyuan/.codex/worktrees/ten-topic-offline-replay/llm-abm-marketing-sim/runs/ten-topic-four-model-20261007/protocol/check_condition_guard.py",
+      "/Users/liuqingyuan/.codex/worktrees/ten-topic-offline-replay/llm-abm-marketing-sim/runs/ten-topic-four-model-20261007/protocol/accept_completed_cells.py"
+    ],
+    "input": "metadata-only: matching qualification/template then adversarial route/token ceiling/canonical hash",
+    "literal_output": "frozen_request_condition_guard=true;wrong_route_ceiling_hash_rejected=true",
+    "exit_status": 0
+  },
+  {
+    "kind": "ROLLBACK",
+    "command": [
+      "/Users/liuqingyuan/.codex/worktrees/ten-topic-offline-replay/llm-abm-marketing-sim/runs/ten-topic-four-model-20261007/protocol/ROLLBACK_WAVE8.sh",
+      "/Users/liuqingyuan/.codex/worktrees/ten-topic-offline-replay/llm-abm-marketing-sim/runs/ten-topic-four-model-20261007/protocol/.accept-rollback.py"
+    ],
+    "input": "modified scratch copy",
+    "literal_output": "byte_equal_baseline=true\nfrozen_request_condition_guard=false\nrestored_behavior_exit_status=1",
+    "exit_status": 0
+  }
+]
+Baseline and modified raw-path acceptance: PASS completed_cells=10 exposures=18000 provider_calls=0; exit0. 51 focused tests passed in2.70s, zero test Provider calls. Ruff F and py_compile passed. Rollback only on scratch: original absent guard restored; production modified file stays changed.
