@@ -2,25 +2,17 @@ diff --git a/runs/ten-topic-four-model-20261007/protocol/audit_ledger.py b/runs/
 index 8c65aac..0245ef9 100644
 --- a/runs/ten-topic-four-model-20261007/protocol/audit_ledger.py
 +++ b/runs/ten-topic-four-model-20261007/protocol/audit_ledger.py
-@@ -30,15 +30,29 @@ def main():
-   elif kind=='unknown_classified':assert identity in intents and identity not in responses
-   else:raise ValueError('unexpected ledger kind '+kind)
-  assert len(intents)<=29143
+@@ -33 +33 @@ def main():
 - logical=collections.defaultdict(list)
 + logical=collections.defaultdict(list);collections_by_id=collections.defaultdict(list)
-  for identity,e in intents.items():
-   # Older intents omitted the logical_id field; physical suffixes are explicit and stable.
-   key=e.get('logical_request_id') or identity.split(':attempt')[0].split(':explicit-reissue')[0];logical[key].append(identity)
+@@ -36,0 +37,6 @@ def main():
 +  collection=e.get('collection_id') or key;collections_by_id[collection].append(identity)
 +  if e.get('collection_number',1)>1:
 +   assert e['model']=='gemini-3.1-pro' and e['logical_request_id']==key
 +   authorization=json.loads(Path(e['collection_user_authorization']).read_text());assert authorization['global_physical_cap']==29143 and authorization['maximum_physical_attempts_per_collection']==3
 +   parent=e['exhausted_collection_parent_request_id'];assert parent in failures and parent not in success
 +   assert e['full_client_messages']==intents[parent]['full_client_messages'] and e['request_condition']==intents[parent]['request_condition']
-   if e.get('purpose')=='explicit_unknown_new_collection':
-    parent=e.get('unknown_parent_request_id') or key;assert parent in intents and parent not in responses and parent in failures
-    assert e['full_client_messages']==intents[parent]['full_client_messages'] and e['request_condition']==intents[parent]['request_condition']
-    assert e.get('explicit_user_authorization') and Path(e['explicit_user_authorization']).exists()
+@@ -41 +47,9 @@ def main():
 - for key,identities in logical.items():assert len(identities)<=3
 + for key,identities in collections_by_id.items():
 +  assert len(identities)<=3
@@ -31,50 +23,27 @@ index 8c65aac..0245ef9 100644
 +   assert parent==collections_by_id[previous][-1]
 + for key,identities in logical.items():
 +  if len(identities)>3:assert all(intents[i]['model']=='gemini-3.1-pro' for i in identities)
-  nominal=Decimal('0');nominal_known=0;fee=Decimal('0');fee_known=0;by_model=collections.defaultdict(collections.Counter)
-  for identity,e in intents.items():
-   model=e['model'];by_model[model]['physical_requests']+=1
-@@ -51,6 +65,6 @@ def main():
-   if settled and settled.get('nominal_usd') is not None:nominal+=Decimal(str(settled['nominal_usd']));nominal_known+=1
-   if settled and settled.get('provider_fee_cny') is not None:fee+=Decimal(str(settled['provider_fee_cny']));fee_known+=1
-  unresolved=sorted(set(intents)-set(success)-set(failures));unknown=sorted(k for k,e in failures.items() if k not in responses and (e.get('error_type')=='ProviderResponseProvenanceUnknown' or (e.get('failure_category') in ['transport','timeout'] and e.get('status_code') is None)))
+@@ -54 +68 @@ def main():
 - result={'status':'all_observed_events_consistent_live_snapshot' if unresolved else 'all_settled_events_consistent','at_utc':datetime.datetime.now(datetime.timezone.utc).isoformat(),'snapshot_path':str(snapshot),'snapshot_sha256':hashlib.sha256(raw).hexdigest(),'physical_requests':len(intents),'logical_request_groups_including_qualifications':len(logical),'qualified_successes':sum(intents[k]['purpose']=='qualification' for k in success),'successful_judgments_including_qualifications':len(success),'formal_successes':sum(intents[k]['purpose']!='qualification' for k in success),'known_failures_with_response_or_typed_HTTP_status':len(failures)-len(unknown),'original_unknowns_retained':unknown,'inflight_not_unknown':unresolved,'wire_evidence_records':len(wire),'older_wire_evidence_scope':'earlier stages retained intent metadata and typed response; new stages additionally retain actual adapter wire model/controls','by_model':{k:dict(v) for k,v in by_model.items()},'known_nominal_usd_subtotal':str(nominal),'nominal_cost_known_settlements':nominal_known,'unknown_nominal_settlements':len(success)+len(failures)-nominal_known,'known_fee_cny_subtotal':str(fee) if fee_known else None,'actual_cash_fee':None,'actual_cash_fee_is_not_zero':True,'cash_ceiling':'user_authorized_unlimited','physical_cap':29143,'provider_calls_during_audit':0,'shared_components':'JSON/Decimal/hashlib only; no production ledger index or accounting tracker'}
 + result={'status':'all_observed_events_consistent_live_snapshot' if unresolved else 'all_settled_events_consistent','at_utc':datetime.datetime.now(datetime.timezone.utc).isoformat(),'snapshot_path':str(snapshot),'snapshot_sha256':hashlib.sha256(raw).hexdigest(),'physical_requests':len(intents),'logical_request_groups_including_qualifications':len(logical),'explicit_additional_collection_count':sum(':collection' in k for k in collections_by_id),'qualified_successes':sum(intents[k]['purpose']=='qualification' for k in success),'successful_judgments_including_qualifications':len(success),'formal_successes':sum(intents[k]['purpose']!='qualification' for k in success),'known_failures_with_response_or_typed_HTTP_status':len(failures)-len(unknown),'original_unknowns_retained':unknown,'inflight_not_unknown':unresolved,'wire_evidence_records':len(wire),'older_wire_evidence_scope':'earlier stages retained intent metadata and typed response; new stages additionally retain actual adapter wire model/controls','by_model':{k:dict(v) for k,v in by_model.items()},'known_nominal_usd_subtotal':str(nominal),'nominal_cost_known_settlements':nominal_known,'unknown_nominal_settlements':len(success)+len(failures)-nominal_known,'known_fee_cny_subtotal':str(fee) if fee_known else None,'actual_cash_fee':None,'actual_cash_fee_is_not_zero':True,'cash_ceiling':'user_authorized_unlimited','physical_cap':29143,'provider_calls_during_audit':0,'shared_components':'JSON/Decimal/hashlib only; no production ledger index or accounting tracker'}
-  (out/'LEDGER_AUDIT.json').write_text(json.dumps(result,ensure_ascii=False,indent=2));print('PASS ledger physical='+str(len(intents))+' success='+str(len(success))+' unknown='+str(len(unknown))+' inflight='+str(len(unresolved)))
- if __name__=='__main__':main()
 diff --git a/runs/ten-topic-four-model-20261007/protocol/complete_authorized_matrix.py b/runs/ten-topic-four-model-20261007/protocol/complete_authorized_matrix.py
 index 6543dd9..1b1d426 100644
 --- a/runs/ten-topic-four-model-20261007/protocol/complete_authorized_matrix.py
 +++ b/runs/ten-topic-four-model-20261007/protocol/complete_authorized_matrix.py
-@@ -21,9 +21,9 @@ def inventory_processes():
- 
- def main():
-  auth=json.loads((ROOT/'protocol/UNKNOWN_CONTINUATION_AUTHORIZATION.json').read_text());assert auth['global_physical_cap']==29143
+@@ -24 +24 @@ def main():
 - state=ROOT/'protocol/MATRIX_EXECUTION_PROGRESS.json';jobs={};stopped={};attempted=set();generation=100
 + state=ROOT/'protocol/MATRIX_EXECUTION_PROGRESS.json';jobs={};stopped={};attempted=set();generation=max([200]+[int(q.name.split('-')[2]) for q in (ROOT/'protocol').glob('authorized-matrix-*-*-P*.log')])
-  prior=ROOT/'protocol/MATRIX_EXECUTION_STOP_HISTORY.json'
+@@ -26 +26 @@ def main():
 - if prior.exists():
 + if prior.exists() and not (ROOT/'protocol/GEMINI_COLLECTION_AUTHORIZATION.json').exists():
-   history=json.loads(prior.read_text());stopped={k:v for k,v in history.get('stopped',{}).items() if k=='Kimi/P1'}
-  env=dict(os.environ,PYTHONPATH=str(WORKTREE/'src'),PYTHONDONTWRITEBYTECODE='1')
-  while True:
 diff --git a/runs/ten-topic-four-model-20261007/protocol/resume_any_authorized.py b/runs/ten-topic-four-model-20261007/protocol/resume_any_authorized.py
 index 707dfe0..10ddde2 100644
 --- a/runs/ten-topic-four-model-20261007/protocol/resume_any_authorized.py
 +++ b/runs/ten-topic-four-model-20261007/protocol/resume_any_authorized.py
-@@ -96,7 +96,7 @@ def main(template,model):
-      else:
-       request_id=bank.fingerprint({'research':'ten-topic-four-model-20261007','model':model,'template':template,'user':u,'message':m.message_id,'messages_hash':mh})
-       logical_id=request_id
+@@ -99 +99 @@ def main(template,model):
 -      attempt_number=1;parent_unknown=None
 +      attempt_number=1;parent_unknown=None;collection_number=1;opened_new_collection=False;exhausted_parent=None
-       while True:
-        if request_id in cached_success:
-         decision=EngageDecision.model_validate(cached_success[request_id]['decision']);break
-@@ -110,8 +110,16 @@ def main(template,model):
-         if not unknown and not quota_restored and category not in ['malformed_structured_response','output_ceiling_exceeded','temporary_rate_limit','temporary_overload','rate_limited','upstream_unavailable','http_status']:raise ValueError('prior failure not eligible')
-         parent_unknown=request_id if unknown else None
-         attempt_number+=1
+@@ -113,2 +113,10 @@ def main(template,model):
 -        if attempt_number>3:raise ValueError('original per-pair attempt cap reached')
 -        request_id=logical_id+(':explicit-reissue'+str(attempt_number-1) if unknown else ':attempt'+str(attempt_number))
 +        if attempt_number>3:
@@ -87,23 +56,9 @@ index 707dfe0..10ddde2 100644
 +          opened_new_collection=True
 +        else:
 +         request_id=logical_id+(f':collection{collection_number}' if collection_number>1 else '')+(':explicit-reissue'+str(attempt_number-1) if unknown else ':attempt'+str(attempt_number))
-         continue
-        physical=physical_count()
-        if physical>=29143:raise ValueError('physical budget reached')
-@@ -120,14 +128,14 @@ def main(template,model):
-        wrapper=RecordedClient(client,request_id)
-        adapter=PiOpenAIDecisionAdapter(prompt_version=prompt.prompt_version,client=wrapper) if model=='openai-codex/gpt-5.6-sol' else OfficialKimiDecisionAdapter(prompt_version=prompt.prompt_version,client=wrapper) if model=='kimi-k3' else AntigravityGeminiDecisionAdapter(requested_model=model,prompt_version=prompt.prompt_version,client=wrapper) if model=='gemini-3.1-pro' else _FrozenRobustnessDecisionAdapter(condition=replace(_DEEPSEEK,requested_model='deepseek-flash',wire_model='deepseek-flash',required_observed_model='deepseek-flash'),prompt_version=prompt.prompt_version,client=wrapper)
-        assert adapter.condition.output_token_ceiling==(1024 if model=='kimi-k3' else 256)
+@@ -123 +131 @@ def main(template,model):
 -       append({'type':'intent','purpose':'explicit_unknown_new_collection' if parent_unknown else 'formal_exposure','quota_recovery_evidence':str(ROOT/'protocol/KIMI_ACCOUNT_STATUS.json') if model=='kimi-k3' and logical_id in known_fail and known_fail[logical_id].get('failure_category')=='quota_exhausted' else None,'unknown_parent_request_id':parent_unknown,'explicit_user_authorization':str(ROOT/'protocol/UNKNOWN_CONTINUATION_AUTHORIZATION.json') if parent_unknown else None,'request_id':request_id,'logical_request_id':logical_id,'attempt_number':attempt_number,'model':model,'template':template,'user_id':u,'message_id':m.message_id,'time_step':step,'full_client_messages':messages,'client_messages_sha256':mh,'request_condition':adapter.safe_metadata,'timeout_seconds':90 if model=='kimi-k3' else 30,'physical_ordinal':physical+1})
 +       append({'type':'intent','purpose':'explicit_unknown_new_collection' if parent_unknown else 'formal_exposure','quota_recovery_evidence':str(ROOT/'protocol/KIMI_ACCOUNT_STATUS.json') if model=='kimi-k3' and logical_id in known_fail and known_fail[logical_id].get('failure_category')=='quota_exhausted' else None,'unknown_parent_request_id':parent_unknown,'explicit_user_authorization':str(ROOT/'protocol/UNKNOWN_CONTINUATION_AUTHORIZATION.json') if parent_unknown else None,'request_id':request_id,'logical_request_id':logical_id,'attempt_number':attempt_number,'collection_number':collection_number,'collection_id':logical_id+(f':collection{collection_number}' if collection_number>1 else ''),'exhausted_collection_parent_request_id':exhausted_parent,'collection_user_authorization':str(ROOT/'protocol/GEMINI_COLLECTION_AUTHORIZATION.json') if collection_number>1 else None,'model':model,'template':template,'user_id':u,'message_id':m.message_id,'time_step':step,'full_client_messages':messages,'client_messages_sha256':mh,'request_condition':adapter.safe_metadata,'timeout_seconds':90 if model=='kimi-k3' else 30,'physical_ordinal':physical+1})
-        intents[request_id]={'request_id':request_id}
-        try:
-         decision=adapter.decide(data.post,data.profile,data.peer_context,data.platform_context,step)
-         settled={'type':'succeeded','request_id':request_id,'decision':decision.model_dump(mode='json'),'accounting':adapter.provider_accounting.model_dump(mode='json'),'provider_fee_cny':adapter.last_provider_fee_cny,'nominal_usd':adapter.last_subscription_nominal_cost_usd}
-         append(settled);cached_success[request_id]=settled;has_response.add(request_id);break
-        except Exception as exc:
+@@ -130 +138 @@ def main(template,model):
 -        settled={'type':'failed_or_unknown','request_id':request_id,'error_type':type(exc).__name__,'failure_category':getattr(exc,'failure_category',None),'retryable':getattr(exc,'retryable',False),'provider_fee_cny':adapter.last_provider_fee_cny,'nominal_usd':adapter.last_subscription_nominal_cost_usd}
 +        settled={'type':'failed_or_unknown','request_id':request_id,'error_type':type(exc).__name__,'failure_category':getattr(exc,'failure_category',None),'retryable':getattr(exc,'retryable',False),'status_code':getattr(exc,'status_code',None),'wait_seconds':getattr(exc,'wait_seconds',None),'provider_fee_cny':adapter.last_provider_fee_cny,'nominal_usd':adapter.last_subscription_nominal_cost_usd}
-         append(settled);known_fail[request_id]=settled
-         # Response existence is an actual durable observation, not inferred from exception text.
-         now=[json.loads(x) for x in LEDGER.read_text().splitlines()]
