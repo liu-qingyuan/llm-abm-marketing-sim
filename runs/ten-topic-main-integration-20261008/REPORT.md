@@ -1,6 +1,6 @@
 # 十话题 main 合并与成果持久保存
 
-当前阶段：main 已快进合入研究分支972c64f的全部35个新增提交；正式产物持久保存与main复验通过。推送和worktree清理的最终状态将在完成后追加。
+结论：合并、持久保存、main验证与本次worktree/分支清理完成。main先快进合入972c64f全部35个新增提交，再提交独立保留映射和核验工具。原有不相关分支保留。
 
 - 原main：bdedc9fbd17b5d77bbd49baba0b49bc9b3d3a856；研究分支：972c64ff125924421b52be3439e508bf23724ae9。
 - 五个完整正式目录位于 `/Users/liuqingyuan/work/llm-abm-marketing-sim/runs/`，不覆盖原项目已有结果。
@@ -33,3 +33,25 @@ cd /Users/liuqingyuan/work/llm-abm-marketing-sim
 ## 分支/HEAD记录的可回滚复验
 
 MERGED_HEAD.json保存真实合并后的main_head字段，DIFF_FILE.patch显示前后差异；VERIFICATION.txt记录精确BASELINE/MODIFIED/ROLLBACK命令、输入、输出和退出码。ROLLBACK.sh仅恢复scratch-head.json，恢复旧祖先检查状态；没有回退实际main、丢弃任何周报或覆盖正式结果。
+
+## 最终清理与远程同步
+
+- 清理前main内容提交a7db2927952c2fb3d89965efe4625d9446049bd9已正常push origin/main并逐字核对远程SHA。main包含原研究HEAD972c64f全部历史。
+- 调用Codex archive_worktree：初始queued，随后应用附件变为archived_worktree；Git worktree list只剩原项目main，旧目录不存在。忽略文件已提前单独复制并核验，并非依赖归档保住15GB数据。
+- 归档后正常git branch -d删除已合并研究分支；同名远程分支本来不存在。其他9个无关分支不删，不把本次范围扩展到全仓分支清理。
+- worktree实际删除后，独立verifier再次通过：7,588对象、9来源、2,800路径、264发布文件、80四模型交付及215旧v16文件；原contract SHA仍5bad500cf5a1040ea04476cf16e151ed7bcbdd68146bfad699675463f0bb1380。没有依赖旧路径的物理存在或修改历史字节。
+- 归档后main同一105测试再执行：105 passed in65.46s。公开HTML前后byte_equal，远端current/report/manifest/healthy完整读回文本不变。3份周报仍untracked且SHA与原始一致。
+- 最终本轮元数据提交也将正常push并用ls-remote验证，最终提交见交付消息；不force。
+- 未完成的本轮事项：无。无关分支的额外清理须单独确认；全仓完整pytest未跑、pyright缺环境、既有Ruff42错误仍如上记录，不声称这些检查通过。
+
+## 持久文件索引
+
+- COPY_MANIFEST.json / PRESERVATION_MAPPING.json：本地完整前后路径、SHA、alias目标；仅新侧car，原research/release内容不变。
+- READY_FOR_CLEANUP.json / POST_ARCHIVE_VERIFICATION.json：清理前后完整核验。
+- CLEANUP_GATE.json / FINAL_STATE.json：提交祖先、远程、未提交工作、归档及branch删除状态。
+- MAIN_TESTS.txt / POST_ARCHIVE_TESTS.txt：实际main测试。
+- SERVER_BEFORE.txt / SERVER_AFTER.txt：canonical对应服务器身份不变证据。
+
+COPY_MANIFEST SHA-256 `7da93b2522ebb944cffe6c8fb705afe4d5bf93f07466f50cd939117c8106fd3d`；PRESERVATION_MAPPING SHA-256 `4cf6730bf842e489be378b4f3dae0e14d0d543a404e8c5d3253f0b7dcb912a66`。
+
+服务器不可变release的264个文件又逐文件只读SHA复核通过（SERVER_RELEASE_INVENTORY.json），未写服务器。main本地GitNexus已刷新，未启用embeddings或调用模型。

@@ -1,0 +1,12 @@
+{
+  "status": "pass",
+  "main_head": "a7db2927952c2fb3d89965efe4625d9446049bd9",
+  "remote_main": "a7db2927952c2fb3d89965efe4625d9446049bd9",
+  "research_head": "972c64ff125924421b52be3439e508bf23724ae9",
+  "all_research_commits_in_main": true,
+  "preserved_objects": 7588,
+  "notes_unchanged": true,
+  "runtime_aliases_saved_then_unlinked": true,
+  "worktree_tracked_and_untracked_status_clean": true,
+  "provider_calls": 0
+}

@@ -1,0 +1,45 @@
+{
+  "status": "pass",
+  "main_content_commit": "a7db2927952c2fb3d89965efe4625d9446049bd9",
+  "merged_research_head": "972c64ff125924421b52be3439e508bf23724ae9",
+  "research_branch_deleted": true,
+  "same_name_remote_branch": "absent before and after; no remote deletion necessary",
+  "worktree_removed": true,
+  "worktree_archived_by_codex": true,
+  "worktrees": [
+    "/Users/liuqingyuan/work/llm-abm-marketing-sim a7db292 [main]"
+  ],
+  "preserved_objects": 7588,
+  "preserved_bytes": 14898050086,
+  "copy_manifest_sha256": "7da93b2522ebb944cffe6c8fb705afe4d5bf93f07466f50cd939117c8106fd3d",
+  "mapping_sha256": "4cf6730bf842e489be378b4f3dae0e14d0d543a404e8c5d3253f0b7dcb912a66",
+  "formal_preservation": {
+    "release_id": "ten-topic-v17-20261007T113429Z",
+    "release_files": 264,
+    "source_bindings": 9,
+    "gpt_paths": 2800,
+    "four_model_delivery_files": 80,
+    "protected_v16_files": 215,
+    "historical_contract_sha256": "5bad500cf5a1040ea04476cf16e151ed7bcbdd68146bfad699675463f0bb1380",
+    "historical_identity_rewritten": false
+  },
+  "original_weekly_hashes_unchanged": true,
+  "canonical_and_server_unchanged": true,
+  "provider_calls": 0,
+  "deployment_operations": 0,
+  "formal_experiments_reexecuted": 0,
+  "remaining_unrelated_branches": [
+    "codex/four-model-v15-publication",
+    "feat/ticket-178-presentation-closure",
+    "pi-agent-55fe9992-9c22-4bf",
+    "pi-agent-70506272-9b30-48f",
+    "pi-agent-7e2265f8-8359-4e1",
+    "pi-agent-83fe759f-9c0b-4ac",
+    "ralph/issue-7-doc-navigation-contract",
+    "segmented-operator-integration",
+    "ticket-180-complete"
+  ],
+  "server_release_inventory_verified": 264,
+  "post_archive_tests": "105 passed in65.46s",
+  "server_report_sha256": "82012e17b4176284d21443cf07ba9a05336730864a27208cc7093da493186251"
+}

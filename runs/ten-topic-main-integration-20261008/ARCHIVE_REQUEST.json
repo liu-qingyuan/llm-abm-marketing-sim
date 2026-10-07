@@ -1,0 +1,7 @@
+{
+  "tool": "archive_worktree",
+  "root": "/Users/liuqingyuan/.codex/worktrees/ten-topic-offline-replay/llm-abm-marketing-sim",
+  "observed_initial_result": {
+    "type": "queued"
+  }
+}
