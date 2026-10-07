@@ -641,7 +641,7 @@ async function expectTenTopicReport(page: Page): Promise<void> {
   await expect(models.locator('tbody tr')).toHaveCount(4);
   await expect(models.locator('polyline')).toHaveCount(4);
   await current.locator('[data-tt-lang="en"]').click();
-  await expect(current.locator('h1')).toHaveText('Whole-sample realized behavior');
+  await expect(current.locator('h1')).toHaveText('Whole-sample realized behavior', { useInnerText: true });
   await expect(page.locator('html')).toHaveAttribute('lang', 'en-US');
   await current.locator('[data-tt-lang="zh"]').click();
   const downloads = current.locator('a[download]');
