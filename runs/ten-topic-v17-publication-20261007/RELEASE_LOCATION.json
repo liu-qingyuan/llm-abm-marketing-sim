@@ -1,0 +1,9 @@
+{
+  "contract": "/Users/liuqingyuan/.codex/worktrees/ten-topic-offline-replay/llm-abm-marketing-sim/runs/ten-topic-v17-publication-20261007/ten-topic-v17-20261007T113429Z-release-contract.json",
+  "source_directory": "/Users/liuqingyuan/.codex/worktrees/ten-topic-offline-replay/llm-abm-marketing-sim/runs/ten-topic-v17-publication-20261007/ten-topic-v17-20261007T113429Z",
+  "release_id": "ten-topic-v17-20261007T113429Z",
+  "implementation_commit": "5246a46d06a0809f0cd3e9b184bb7a48fecb060b",
+  "report_sha256": "82012e17b4176284d21443cf07ba9a05336730864a27208cc7093da493186251",
+  "manifest_sha256": "e16f591b3cf18f2717137a4a21a726a299badaa208949d20e0cebe0c7574d479",
+  "artifact_count": 264
+}

@@ -1,0 +1,23 @@
+{
+  "ruff_errors": 42,
+  "unchanged_error_files": [
+    {
+      "path": "tests/integration/test_concurrent_recovery_quota_retry.py",
+      "same_as_publication_start": true,
+      "sha256": "3ac15589cd293844e2fd8a81c23753f714346426b17ed0e93ce545bdb00550bd"
+    },
+    {
+      "path": "tests/unit/test_concurrent_recovery_parallel_progress.py",
+      "same_as_publication_start": true,
+      "sha256": "7d34aed3a4c58b8981fdf97e7ae380d42246b41b51782822c546c8ccf8ea7840"
+    },
+    {
+      "path": "tests/unit/test_concurrent_recovery_quota_retry.py",
+      "same_as_publication_start": true,
+      "sha256": "b72ed9112142628a85f122beeebd12d8cebb934e05fa848a4842a5705489bfc1"
+    }
+  ],
+  "classification": "preexisting at 00906d2; no new failures in affected modules",
+  "pyright": "environment missing .venv/bin/pyright; not executed",
+  "full_pytest": "Not repeated: prior ~80-minute scan stopped at tests/integration/test_concurrent_recovery_parallel.py::test_parallel_acceptance_is_hash_bound_idempotent_and_zero_provider; 94 targeted tests passed in66.55s."
+}

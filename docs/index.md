@@ -4,24 +4,23 @@
 
 ## Current Research：统一研究入口
 
-[Canonical Final Research](https://abm.q1ngyuan.top/) 已发布 **composite v16**，保留 Whole sample、Prompt–Model 修订研究及历史结果/下载，追加 Parameter 与 Activity / Local Influence 两项独立研究。2026-09-20 11:44 UTC 完成原子发布与公网验收；HTML SHA-256 为 `e7c9cc0bffb8a148376fed4b49b58d8574784540a6b2dbaf0f8845a2d0cff659`。[发布及验证记录](references/sensitivity-v16-canonical-release-20260920.md)。
-
+[Canonical Final Research](https://abm.q1ngyuan.top/) 已发布 **十话题 v17**：全样本、推荐参数、用户指标敏感性与四模型×P0–P3统一接入正式 Report / Release。2026-10-07 12:11 UTC 完成原子发布、公网正文/交互/下载及最终身份验收；发布过程零 Provider 调用。单话题 v16 与更早历史结果及下载保留为明确标识的旧版。[发布记录](references/ten-topic-v17-canonical-release-20261007.md)。
 ### 研究地图
 
 | 研究 / 问题 | 改变与固定设定 | 样本、seed 与统计单位 | 最终证据 / 发布状态 |
 |---|---|---|---|
-| **Whole sample**：三条营销消息在全样本中的两阶段互动结果 | GPT-5.6 Sol / P0；Judgment → Realization；固定消息、网络与行为 seed | 36,400 用户 × M1–M3；109,200 次曝光；单次固定行为 seed，互动次数为整数 | [v13 主实验证据](references/full-pool-two-stage-v13-canonical-release-20260827.md)；已保留于 canonical v16 |
-| **Prompt–Model 修订研究**：判断模板与模型变化对应什么结果 | 4 模型 × P0–P3；16 cells；新两阶段机制，与早期 direct-action 分开 | 1,000 用户样本；28,800 次曝光；直接配对限共同 Batch 0，后续自适应路径仅描述 | [v15 最终证据与下载](references/revised-four-model-v15-canonical-release-20260912.md)；已发布；**原五模型计划并非全部完成** |
-| **Parameter**：推荐权重和邻居饱和阈值改变终点或时间路径吗 | GPT-5.6 Sol / P0；固定判断库、原样本/消息/图；7 权重点 × 阈值 1/3/6 | 1,000 用户；21 组 × 100 行为 seed = 2,100 路径；每路径 1,800 曝光；跨 seed 均值/区间 | [最终结果](references/gpt-p0-dynamic-parameter-results-20260917.md) · [本地报告](../runs/gpt-p0-dynamic-parameters-20260917-formal-01/report/report.html)；[已发布在线报告](https://abm.q1ngyuan.top/parameter/report.html) |
-| **Activity / Local Influence**：指标变体及其抽样联动如何改变传播 | GPT-5.6 Sol / P0；推荐权重固定 0.50/0.30/0.20、阈值 3；改变指标权重或 p99 归一化 | 每臂 1,000 用户；7 组 × 100 行为 seed = 700 路径；每路径 1,800 曝光；同 seed 配对均值/区间 | [最终报告](../runs/gpt-p0-index-sensitivity-20260920-formal-01/REPORT.md) · [本地网页](../runs/gpt-p0-index-sensitivity-20260920-formal-01/report.html) · [完成审计](../runs/gpt-p0-index-sensitivity-20260920-formal-01/completion-audit.json)；[已发布在线报告](https://abm.q1ngyuan.top/index-sensitivity/report.html) |
-| **历史研究**：direct-action 与指标排序审计 | 保留原机制、来源及原下载，不改写成新两阶段结果 | 原 1,000 用户研究与全样本分开；历史指标排序分析**不是传播仿真实验** | canonical 既有 Historical / Primary–Shadow / Ranking Weight / 旧 GPT 析因；不得与新研究合并分母 |
+| **Whole sample**：全样本两阶段实际互动 | GPT-5.6 Sol / P0；十话题合并历史图，既有判断与抽样锚点离线复用 | 36,400用户；109,200曝光；单次行为seed20260823；实际互动63,614/109,200 = 58.255% | [正式来源及复验](../runs/ten-topic-full-pool-20261006/REPORT.md)；canonical v17默认视图 |
+| **Prompt–Model**：四模型与P0–P3 | 同一新基准1,000人；4模型×4模板；新DeepSeek V4.1 Flash与旧V4 Flash有版本差异 | 16条件、28,800曝光；单次行为seed；共同初始用户panel配对，自适应路径描述 | [四模型正式验收](../runs/ten-topic-four-model-20261007/FINAL_REPORT.md)；canonical v17 |
+| **Parameter**：推荐权重与邻居饱和阈值 | 十话题新基准样本；原21参数矩阵、GPT-5.6 Sol / P0 | 21×100行为seed=2,100路径；每路径1,800曝光；终点均值范围62.278%–65.848% | [GPT两研究最终验收](../runs/ten-topic-gpt-final-acceptance-20261007/REPORT.md)；canonical v17 |
+| **Activity / Local Influence**：指标变体与抽样联动 | 原7臂，固定样本与重建样本按协议区分；Local原全话题度数口径不变 | 7×100行为seed=700路径；每路径1,800曝光；Local p99 rebuilt与新基准23/1000重合 | [正式统计](../runs/ten-topic-gpt-studies-20261006/formal-report/REPORT.md)；canonical v17 |
+| **旧版与历史** | 单话题v16、早期direct-action与历史指标排序分别保留 | 不与十话题结果合并分母；排序审计不是传播实验 | canonical“旧版与历史研究”；v16仍保留为回滚版本 |
 
 ### 先读口径，再读结果
 
 - P0–P3 是 AI 判断模板；M1–M3 是营销消息；S1–S3 是用户群，三者不互换。
 - 每次行为实现的互动数是整数。Parameter 与指标研究表中的小数是 **100 次实现的均值**；100 个行为 seed 不表示 LLM 重复判断 100 次，也不与 Whole sample 单次结果混作同一统计单位。
-- Parameter 在所测矩阵中，同 seed 终点相同，但曝光顺序和时间过程发生变化；不推断推荐参数普遍不敏感。
-- 指标研究区分**固定样本、重选初始种子**与**按原规则重建样本**。Local p99 重建后只有 108/1000 用户与基线重合；差异包含样本构成影响。Local 权重固定/重建臂输入相同，不算独立重复证据。
+- 十话题 Parameter 在所测矩阵中终点不再全部相同；差异包括曝光排序及反馈路径，不推断普遍稳健或不敏感。
+- 指标研究区分**固定样本、重选初始种子**与**按原规则重建样本**。十话题 Local p99 重建后只有 23/1000 用户与新基线重合；差异包含样本构成影响。Local 权重固定/重建臂输入相同，不算独立重复证据。
 - 行为 seed 区间仅反映固定判断/数据条件下的 Monte Carlo 不确定性。新旧判断时点与模型回答波动未充分分离；不宣称普遍稳健或纯指标因果效应。
 
 ### 权威 ownership 与发布接缝
@@ -29,14 +28,17 @@
 本页唯一拥有跨研究导航、统计口径对照与当前发布状态，不另建平行研究目录。单项结论及数值由各自最终 evidence/report 拥有；Module 的稳定 Interface 由架构文档说明：
 
 - [Whole sample / 两阶段机制](architecture/full-pool-two-stage-realization.md)
-- [十采集话题合并网络与独立离线重放合同](architecture/ten-topic-full-pool-replay.md)（新方法；既有 canonical 及历史结果不变）
+- [十采集话题合并网络与独立离线重放合同](architecture/ten-topic-full-pool-replay.md)（十话题当前方法；历史来源与结果保留）
+- [十话题 Report / v17 Release 合同](architecture/ten-topic-report-release.md)
 - [Prompt–Model / v15 Report、Release 合同](architecture/revised-four-model-release.md)
 - [Parameter / Study、Evidence、Report](architecture/gpt-p0-parameter-study.md)
 - [Deployment / 原子发布与回退](architecture/report-deployment.md)
 
 Report Module 拥有研究呈现及表图同源知识；Release Module 拥有证据接纳、旧文件保留和 immutable inventory；Deployment Module 只消费验证后的发布事实。这个 Seam 保持 Locality，避免把研究判断规则复制到 shell 或网页拼接器而形成 Information Leakage；不为导航增加透传 Module 或通用框架，Depth 来自既有 Interface 对证据与产物的完整验证。
 
-**发布合同：** v15 仍只接纳四模型闭合 projection；v16 以独立接纳合同追加这两项已完成研究。指标研究的 [evidence](../runs/gpt-p0-index-sensitivity-20260920-formal-01/evidence.json) 与 [曝光判断闭合](../runs/gpt-p0-index-sensitivity-20260920-formal-01/exposure-bank-closure.json) 明确 `production_deploy_eligible=false`：17,316 个 eligible inputs 中 17,315 个有判断，另 1 个 unknown 保留且已证明不会曝光，700 条路径所需曝光完整。这不等同完整判断库。经用户批准，v16 对明确绑定的最终证据与发布产物完成接纳验证；原字段、run 与账本不变。发布沿既有 Release / Deployment 事务完成，原 v15 保留为回退版本。验收记录见 [Operational #263](https://github.com/liu-qingyuan/llm-abm-marketing-sim/issues/263)。
+**当前合同：** v17 精确绑定已验收十话题四研究、工作簿及完整不可变库存，不改写旧来源 eligibility。公网来源/下载一致性和回滚证据见 [Operational #264](https://github.com/liu-qingyuan/llm-abm-marketing-sim/issues/264)。
+
+**历史发布合同：** v15 仍只接纳四模型闭合 projection；v16 以独立接纳合同追加这两项已完成研究。指标研究的 [evidence](../runs/gpt-p0-index-sensitivity-20260920-formal-01/evidence.json) 与 [曝光判断闭合](../runs/gpt-p0-index-sensitivity-20260920-formal-01/exposure-bank-closure.json) 明确 `production_deploy_eligible=false`：17,316 个 eligible inputs 中 17,315 个有判断，另 1 个 unknown 保留且已证明不会曝光，700 条路径所需曝光完整。这不等同完整判断库。经用户批准，v16 对明确绑定的最终证据与发布产物完成接纳验证；原字段、run 与账本不变。发布沿既有 Release / Deployment 事务完成，原 v15 保留为回退版本。验收记录见 [Operational #263](https://github.com/liu-qingyuan/llm-abm-marketing-sim/issues/263)。
 
 ## 运行与演示
 
@@ -71,7 +73,8 @@ Architecture 描述当前 Module、数据边界和稳定运行语义；ADR 记�
 
 - [References 总览](references/README.md)
 - [current dataset：锦江 final dataset 审计](references/jinjiang-final-dataset-audit-20260624.md)
-- [current composite release：两项敏感性研究追加 v16 发布记录](references/sensitivity-v16-canonical-release-20260920.md)
+- [current ten-topic release：四研究 v17 发布记录](references/ten-topic-v17-canonical-release-20261007.md)
+- [protected composite release：两项敏感性研究追加 v16 发布记录](references/sensitivity-v16-canonical-release-20260920.md)
 - [protected v15：四模型恢复研究及回退记录](references/revised-four-model-v15-canonical-release-20260912.md)
 - [protected main evidence：Full-Pool 两阶段 v13 canonical 发布记录](references/full-pool-two-stage-v13-canonical-release-20260827.md)
 - [current Retention：Retention final evidence](references/retention-cleanup-final-evidence-20260730.md)

@@ -4,6 +4,8 @@
 
 十话题追加版本使用独立 exact v17 dispatch，详见 [Ten-topic Report / Release](ten-topic-report-release.md)。v15/v16/v17 都消费其所属 Release Module 的 readiness，不套用旧 schema 或重新解释研究。v17 授权及 operation facts 使用独立版本名，沿用同一 canonical 目标及原子事务。
 
+公网客户端默认使用直连。`ABM_DEPLOY_PUBLIC_TRANSPORT=environment-proxy` 显式使用执行环境已有代理，仅改变验收客户端出站路径，不改变 canonical、服务器或部署拓扑。两种路径均保留 HTTP/1.1、TLS 证书校验、完整正文、字节数、SHA、重试及浏览器验收；未知值拒绝。不记录代理凭证。该选择及网络失败/回退证据写入具体 operational run。
+
 ## Module 与 Interface
 
 Deployment 流程保留三个稳定 Interface：

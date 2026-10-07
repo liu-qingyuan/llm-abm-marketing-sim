@@ -39,3 +39,7 @@ ROLLBACK=/Users/liuqingyuan/.codex/worktrees/ten-topic-offline-replay/llm-abm-ma
   }
 ]
 51 related tests passed in3.24s; Ruff and py_compile pass. First browser real-source preview found missing ignore estimate; fixed by deriving1−realized mean. Fresh browser errors0; tables4/curves4, parameter21/index7/model16 rows. Message2/P2/S1 filter four rows; English headline and mobile390px no overflow.144 segment curve endpoints match formal segment table. Provider calls0. Production modified Interface remains changed; scratch restored absent dispatch.
+
+Final publication: ten-topic-v17-20261007T113429Z; canonical=https://abm.q1ngyuan.top/; UTC2026-10-07T12:11:13Z; Provider0.
+94 related tests pass; local1/public1 Playwright pass.166 full public bodies/98 large manifest-bound; all47 new downloads full SHA pass; independent51 body SHA pass. Genuine v16 rollback after transport/browser failures verified old report/manifest SHA and healthy; final locked current identity new v17.
+Full repository Ruff42 unchanged errors; pyright127 environment missing; long mock scan not repeated.

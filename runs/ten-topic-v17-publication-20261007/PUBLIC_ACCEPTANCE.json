@@ -1,0 +1,331 @@
+{
+  "schema_version": "ten-topic-independent-publication-acceptance-v1",
+  "status": "pass",
+  "at_utc": "2026-10-07T12:11:31.378695+00:00",
+  "release_id": "ten-topic-v17-20261007T113429Z",
+  "provider_calls": 0,
+  "independent_checks": [
+    "HTML embedded JSON parsed without Report code",
+    "CSV exclusive counts and totals match rendered JSON",
+    "21/7 configurations with n100; 16 conditions with 28800 exposures",
+    "384 paired-panel estimates downloadable",
+    "all new public downloads and original historical HTML/manifest full body SHA matches"
+  ],
+  "shared_checks": "Production Release rematerialization/workbook cell comparison share the Report projection; original research acceptance supplies independent experiment validation.",
+  "whole_totals": {
+    "exposures": 109200,
+    "like": 63420,
+    "comment": 5,
+    "share": 189,
+    "ignore": 45586
+  },
+  "public_body_count": 51,
+  "public_bodies": [
+    {
+      "path": "artifact_manifest.json",
+      "sha256": "e16f591b3cf18f2717137a4a21a726a299badaa208949d20e0cebe0c7574d479",
+      "bytes": 32829,
+      "http_body_match": true
+    },
+    {
+      "path": "report.html",
+      "sha256": "82012e17b4176284d21443cf07ba9a05336730864a27208cc7093da493186251",
+      "bytes": 6153302,
+      "http_body_match": true
+    },
+    {
+      "path": "single-topic-artifact-manifest.json",
+      "sha256": "52e65d1bba4f75114fa3acadb56fe74684c6415aedfa078f9b0f11e01aaf8774",
+      "bytes": 25807,
+      "http_body_match": true
+    },
+    {
+      "path": "single-topic-report.html",
+      "sha256": "e7c9cc0bffb8a148376fed4b49b58d8574784540a6b2dbaf0f8845a2d0cff659",
+      "bytes": 3467002,
+      "http_body_match": true
+    },
+    {
+      "path": "ten-topic/index/all-curves.svg",
+      "sha256": "1038208c96b80289f0457aea3c37a7d2389b403626b2fc33b2a15b38d63ff3a6",
+      "bytes": 4932,
+      "http_body_match": true
+    },
+    {
+      "path": "ten-topic/index/composition.csv",
+      "sha256": "b2644725f4d83e7c82157e01d2556065e69d9921016693b3d32ad9e7697dc60e",
+      "bytes": 1964,
+      "http_body_match": true
+    },
+    {
+      "path": "ten-topic/index/estimates.csv",
+      "sha256": "c5f2191b8a6e42c0e7ad5f5f23ae98a41b7944083e513ce481835f533e40fa8f",
+      "bytes": 17676,
+      "http_body_match": true
+    },
+    {
+      "path": "ten-topic/index/mean-curves.csv",
+      "sha256": "72b647ce73c38fd3f218b60a1541c5804bdcd31ed06cf95cd9c8b7ef112c6060",
+      "bytes": 69323,
+      "http_body_match": true
+    },
+    {
+      "path": "ten-topic/index/message_1-curves.svg",
+      "sha256": "95078192dc4ed1af883df7df37a2f64f48f7cf5d1883e76d12a17bb16172e8b7",
+      "bytes": 4935,
+      "http_body_match": true
+    },
+    {
+      "path": "ten-topic/index/message_2-curves.svg",
+      "sha256": "10c5b96cbe6070709f9bebf7b461f6770b87054f2af82ed283bf07a52ec9c43c",
+      "bytes": 4934,
+      "http_body_match": true
+    },
+    {
+      "path": "ten-topic/index/message_3-curves.svg",
+      "sha256": "59de65c99f8945362a22b7cd3d2643ff814cac289d7c22b91ea2978eadb27763",
+      "bytes": 4945,
+      "http_body_match": true
+    },
+    {
+      "path": "ten-topic/index/paired-contrasts.csv",
+      "sha256": "97b68c46467663236174f48c9d641f46e18186098631146fb8151cfd7146794a",
+      "bytes": 18331,
+      "http_body_match": true
+    },
+    {
+      "path": "ten-topic/index/results.json",
+      "sha256": "ae98491856b6e453f9a74742ed6aae391af74433b1e991fbee810dc479d62051",
+      "bytes": 256183,
+      "http_body_match": true
+    },
+    {
+      "path": "ten-topic/methods.json",
+      "sha256": "ef3008d4bdd495050410a9fb088978ef6c4457531043034d8a59ea56b63e5ad6",
+      "bytes": 1107,
+      "http_body_match": true
+    },
+    {
+      "path": "ten-topic/models/P0-message_1-curves.svg",
+      "sha256": "6115a41dacedee2d00d0d6354923f4ad7760590ad5665f10cc05647bc9374c03",
+      "bytes": 3001,
+      "http_body_match": true
+    },
+    {
+      "path": "ten-topic/models/P0-message_2-curves.svg",
+      "sha256": "7544fc9783e60e8ba7509ac799ab83e2ef70d5cc2c278f515d3decfb463f6812",
+      "bytes": 3001,
+      "http_body_match": true
+    },
+    {
+      "path": "ten-topic/models/P0-message_3-curves.svg",
+      "sha256": "f7f3c51dbbb92aecf3dbe6807ce08f6fb5b003b0a6efa70fa41bc21c2fc625cf",
+      "bytes": 3017,
+      "http_body_match": true
+    },
+    {
+      "path": "ten-topic/models/P1-message_1-curves.svg",
+      "sha256": "10d3aba4e91c46e809bbb37b8a3179ce0390e3e3b52d22a35b0979f88a4b0b3d",
+      "bytes": 3003,
+      "http_body_match": true
+    },
+    {
+      "path": "ten-topic/models/P1-message_2-curves.svg",
+      "sha256": "0dae43b303f3e78b02a7af878fc4d99c96385b62e79853039200cd4d2406550a",
+      "bytes": 3009,
+      "http_body_match": true
+    },
+    {
+      "path": "ten-topic/models/P1-message_3-curves.svg",
+      "sha256": "c585885db7040effdcc0346d4b06d6049e8b6a39de435a8e3efa2431a4244385",
+      "bytes": 3006,
+      "http_body_match": true
+    },
+    {
+      "path": "ten-topic/models/P2-message_1-curves.svg",
+      "sha256": "35c96353d045f05b18283c435d17a7c86984354f6db72bef15bedcc87c1b2c91",
+      "bytes": 3013,
+      "http_body_match": true
+    },
+    {
+      "path": "ten-topic/models/P2-message_2-curves.svg",
+      "sha256": "d96f27a5c60d0fec04305b7998fcda3f1ffe738b41fabcc4ec7b1e8974086dc9",
+      "bytes": 3012,
+      "http_body_match": true
+    },
+    {
+      "path": "ten-topic/models/P2-message_3-curves.svg",
+      "sha256": "a2e3156d3ecee91fbcd5fe6dcc80df174bfb2ed865d27f72bc2eeca26f956d0a",
+      "bytes": 3019,
+      "http_body_match": true
+    },
+    {
+      "path": "ten-topic/models/P3-message_1-curves.svg",
+      "sha256": "ef3ff0b4b1d1fc8d7d12d625e0360c30af68640ea3dcf5d52f0867741c9b8e99",
+      "bytes": 3022,
+      "http_body_match": true
+    },
+    {
+      "path": "ten-topic/models/P3-message_2-curves.svg",
+      "sha256": "5f19488000ed58c1a6b035993bb6d1871af378cce4fd870326df9aa0c747c714",
+      "bytes": 3012,
+      "http_body_match": true
+    },
+    {
+      "path": "ten-topic/models/P3-message_3-curves.svg",
+      "sha256": "ac1dec0d3bf3c683b40ad43d77e4e189f607782ae857e69fbf8bfd2bce3b21be",
+      "bytes": 3009,
+      "http_body_match": true
+    },
+    {
+      "path": "ten-topic/models/conditions.csv",
+      "sha256": "8c43600f096802bc97f93b290f6ff0e64f252b9a170a094808ef43eb53111f49",
+      "bytes": 2367,
+      "http_body_match": true
+    },
+    {
+      "path": "ten-topic/models/curves.csv",
+      "sha256": "8c66f1e0b3ece285d64b4372efe84697f733d4708bc37ca827edeab2f9c0a4bb",
+      "bytes": 188037,
+      "http_body_match": true
+    },
+    {
+      "path": "ten-topic/models/messages.csv",
+      "sha256": "61f8dfff2285766e3113ecbdbc869e4b603bf5c8d808feffad4c046f3f155c79",
+      "bytes": 6520,
+      "http_body_match": true
+    },
+    {
+      "path": "ten-topic/models/old-new.csv",
+      "sha256": "dff249a5b7a8a626d8664f1310090612128111f77e82e44daedd62b03f1ad7b2",
+      "bytes": 3202,
+      "http_body_match": true
+    },
+    {
+      "path": "ten-topic/models/paired-seed-panel.csv",
+      "sha256": "fe1642271fe945a730a8adbf617b99d5d096414a877ce18def1f9b1f0c9b9c21",
+      "bytes": 86069,
+      "http_body_match": true
+    },
+    {
+      "path": "ten-topic/models/results.json",
+      "sha256": "ee3fdb5f00c963b233974fe1a091f49d4923c862cfb93259a5756659cf695ac5",
+      "bytes": 1718541,
+      "http_body_match": true
+    },
+    {
+      "path": "ten-topic/models/segment-curves.csv",
+      "sha256": "bd33dba04c638a6cac2379630fb30144492558b5dc4e6d16dc562530bd94c46c",
+      "bytes": 345970,
+      "http_body_match": true
+    },
+    {
+      "path": "ten-topic/models/segments.csv",
+      "sha256": "6e4120715df4a603d1900185b79a94e1f3bb485e87427ad667c837d4312f1f2d",
+      "bytes": 20210,
+      "http_body_match": true
+    },
+    {
+      "path": "ten-topic/parameter/all-curves.svg",
+      "sha256": "3734df1ea26fa3e9e8f8bb574b4b7755111a27f5f3edc81fd868b12e68467525",
+      "bytes": 12958,
+      "http_body_match": true
+    },
+    {
+      "path": "ten-topic/parameter/estimates.csv",
+      "sha256": "5d29a006d1892c1f04915e3d0f27e046966e0889600c708746bb14ab9bd7c1dc",
+      "bytes": 51865,
+      "http_body_match": true
+    },
+    {
+      "path": "ten-topic/parameter/mean-curves.csv",
+      "sha256": "5140fffb31cc71553bb5290aaae3de5cfec4be0d3293911d52b182f52cf83f29",
+      "bytes": 195440,
+      "http_body_match": true
+    },
+    {
+      "path": "ten-topic/parameter/message_1-curves.svg",
+      "sha256": "66f1f7643d6bf2ad2b941c956021b2d04e2d55a392a7d6361d10c1e17f2a048e",
+      "bytes": 12937,
+      "http_body_match": true
+    },
+    {
+      "path": "ten-topic/parameter/message_2-curves.svg",
+      "sha256": "3ea29ed65ba436db2a5bb924e8830aff2e1ada304ef5e0d254c917451c5aaace",
+      "bytes": 12970,
+      "http_body_match": true
+    },
+    {
+      "path": "ten-topic/parameter/message_3-curves.svg",
+      "sha256": "ecb697c5a04d33d7148ba1f1bc83017a4437bf8c119240688f1fe6b541a19d49",
+      "bytes": 12958,
+      "http_body_match": true
+    },
+    {
+      "path": "ten-topic/parameter/paired-contrasts.csv",
+      "sha256": "a971a46f225d3a453344d3b0ca94939144b094b5784152b4fc0adcd3e447d390",
+      "bytes": 15662,
+      "http_body_match": true
+    },
+    {
+      "path": "ten-topic/parameters/results.json",
+      "sha256": "b235466dff81f6935628c62f44501c4905e96da84c07ebacbe440319cdfc0713",
+      "bytes": 669534,
+      "http_body_match": true
+    },
+    {
+      "path": "ten-topic/public-statistics.json",
+      "sha256": "d6a6f6a99b6f04428f072c0d0551bdfae7df446f335f0d4b8eef0b17fcfa3301",
+      "bytes": 2665436,
+      "http_body_match": true
+    },
+    {
+      "path": "ten-topic/source-map.json",
+      "sha256": "285ef2159f0ffb7dc8040b5b9b4486202e582b6210540e549461d13fdff9f473",
+      "bytes": 1768,
+      "http_body_match": true
+    },
+    {
+      "path": "ten-topic/ten-topic-research.xlsx",
+      "sha256": "abf1d40d1b67549a379d2ea4ccba49412a7b9266612a2837fbfafb526f3a51af",
+      "bytes": 632374,
+      "http_body_match": true
+    },
+    {
+      "path": "ten-topic/whole/curves.csv",
+      "sha256": "4797a167e5e3b1621879584b165cf884e7b0fb8b7fe36d602deb9a92771b3bfc",
+      "bytes": 5441,
+      "http_body_match": true
+    },
+    {
+      "path": "ten-topic/whole/message_1-curves.svg",
+      "sha256": "5834b0ff9ebc5327a44480cf0f5834405122459808300a6294f0c0debf752c2c",
+      "bytes": 1386,
+      "http_body_match": true
+    },
+    {
+      "path": "ten-topic/whole/message_2-curves.svg",
+      "sha256": "ab48b0b39b8a98252ebf915db6b74d3f1eb95d683fc26dfed1981d6701edf6a5",
+      "bytes": 1388,
+      "http_body_match": true
+    },
+    {
+      "path": "ten-topic/whole/message_3-curves.svg",
+      "sha256": "27b66c8d8927b34328b5519e49bbd7eee26d981dd41b9c1d8a780a1703bd4d1e",
+      "bytes": 1389,
+      "http_body_match": true
+    },
+    {
+      "path": "ten-topic/whole/results.csv",
+      "sha256": "6cdaa726bcae93fc71655dbd24b0389eb9e617808131dfb99bcca7f37bea1f43",
+      "bytes": 1041,
+      "http_body_match": true
+    },
+    {
+      "path": "ten-topic/whole/results.json",
+      "sha256": "077347769c9ab68a9aefc00839422491d5a909fea10afa7a478cc48509bb02b5",
+      "bytes": 16923,
+      "http_body_match": true
+    }
+  ]
+}

@@ -1,0 +1,20 @@
+Release evidence validated: abm-report-release-contract-v17 | reviewed_ten_topic_four_studies_with_protected_single_topic_history | /Users/liuqingyuan/.codex/worktrees/ten-topic-offline-replay/llm-abm-marketing-sim/runs/ten-topic-v17-publication-20261007/ten-topic-v17-20261007T113429Z | accepted_final_ten_topic_studies_and_protected_historical | all_four_studies_accepted | persisted_formal_evidence_zero_provider_publication | report SHA-256 82012e17b4176284d21443cf07ba9a05336730864a27208cc7093da493186251
+Deployment authorization validated: abm-report-release-contract-v17 | ten-topic-v17-20261007T113429Z | authorization SHA-256 8c1319031132b4cd5dbc1ba1be4ff3966e5473e3157ad33a2d1161fb5edb975b
+Fresh rollback identity validated: sensitivity-v16-20260920T113800Z | report e7c9cc0bffb8a148376fed4b49b58d8574784540a6b2dbaf0f8845a2d0cff659 | manifest 52e65d1bba4f75114fa3acadb56fe74684c6415aedfa078f9b0f11e01aaf8774
+Reusing hash-verified remote release BandwagonHost2:/opt/llm-abm-marketing-sim-report/releases/ten-topic-v17-20261007T113429Z
+2026/10/07 11:43:50 [warn] 596799#596799: the "listen ... http2" directive is deprecated, use the "http2" directive instead in /etc/nginx/sites-enabled/abm.q1ngyuan.top:9
+2026/10/07 11:43:50 [warn] 596799#596799: the "listen ... http2" directive is deprecated, use the "http2" directive instead in /etc/nginx/sites-enabled/abm.q1ngyuan.top:10
+nginx: the configuration file /etc/nginx/nginx.conf syntax is ok
+nginx: configuration file /etc/nginx/nginx.conf test is successful
+ Container abm-research-report  Recreate
+Remote candidate, container, and Nginx checks passed
+ Container abm-research-report  Recreated
+ Container abm-research-report  Starting
+ Container abm-research-report  Started
+curl: (28) Connection timed out after 20001 milliseconds
+scripts/deploy_abm_report.sh: line 971: 19309 Terminated: 15          curl "${PUBLIC_REPORT_CURL_RETRY[@]}" -fsSL --max-time 1800 -H 'Cache-Control: no-cache' "https://${DOMAIN}/report.html?release=${RELEASE_ID}" -o "${PUBLIC_REPORT}"
+Public acceptance failed; restoring previous release /opt/llm-abm-marketing-sim-report/releases/sensitivity-v16-20260920T113800Z
+ Container abm-research-report  Recreate
+ Container abm-research-report  Recreated
+ Container abm-research-report  Starting
+ Container abm-research-report  Started

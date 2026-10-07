@@ -1,0 +1,102 @@
+Release evidence validated: abm-report-release-contract-v17 | reviewed_ten_topic_four_studies_with_protected_single_topic_history | /Users/liuqingyuan/.codex/worktrees/ten-topic-offline-replay/llm-abm-marketing-sim/runs/ten-topic-v17-publication-20261007/ten-topic-v17-20261007T113429Z | accepted_final_ten_topic_studies_and_protected_historical | all_four_studies_accepted | persisted_formal_evidence_zero_provider_publication | report SHA-256 82012e17b4176284d21443cf07ba9a05336730864a27208cc7093da493186251
+Deployment authorization validated: abm-report-release-contract-v17 | ten-topic-v17-20261007T113429Z | authorization SHA-256 8c1319031132b4cd5dbc1ba1be4ff3966e5473e3157ad33a2d1161fb5edb975b
+Fresh rollback identity validated: sensitivity-v16-20260920T113800Z | report e7c9cc0bffb8a148376fed4b49b58d8574784540a6b2dbaf0f8845a2d0cff659 | manifest 52e65d1bba4f75114fa3acadb56fe74684c6415aedfa078f9b0f11e01aaf8774
+Reusing hash-verified remote release BandwagonHost2:/opt/llm-abm-marketing-sim-report/releases/ten-topic-v17-20261007T113429Z
+2026/10/07 11:52:18 [warn] 611249#611249: the "listen ... http2" directive is deprecated, use the "http2" directive instead in /etc/nginx/sites-enabled/abm.q1ngyuan.top:9
+2026/10/07 11:52:18 [warn] 611249#611249: the "listen ... http2" directive is deprecated, use the "http2" directive instead in /etc/nginx/sites-enabled/abm.q1ngyuan.top:10
+nginx: the configuration file /etc/nginx/nginx.conf syntax is ok
+nginx: configuration file /etc/nginx/nginx.conf test is successful
+ Container abm-research-report  Recreate
+ Container abm-research-report  Recreated
+ Container abm-research-report  Starting
+ Container abm-research-report  Started
+Remote candidate, container, and Nginx checks passed
+Public client transport: environment-proxy; TLS and complete-body hash checks unchanged
+Public body policy: full-pool-paged-v1
+Public body batch 1/21: 8 artifacts
+Public body batch 1/21: passed
+Public body batch 2/21: 8 artifacts
+Public body batch 2/21: passed
+Public body batch 3/21: 8 artifacts
+Public body batch 3/21: passed
+Public body batch 4/21: 8 artifacts
+Public body batch 4/21: passed
+Public body batch 5/21: 8 artifacts
+Public body batch 5/21: passed
+Public body batch 6/21: 8 artifacts
+Public body batch 6/21: passed
+Public body batch 7/21: 8 artifacts
+Public body batch 7/21: passed
+Public body batch 8/21: 8 artifacts
+Public body batch 8/21: passed
+Public body batch 9/21: 8 artifacts
+Public body batch 9/21: passed
+Public body batch 10/21: 8 artifacts
+Public body batch 10/21: passed
+Public body batch 11/21: 8 artifacts
+Public body batch 11/21: passed
+Public body batch 12/21: 8 artifacts
+Public body batch 12/21: passed
+Public body batch 13/21: 8 artifacts
+Public body batch 13/21: passed
+Public body batch 14/21: 8 artifacts
+Public body batch 14/21: passed
+Public body batch 15/21: 8 artifacts
+Public body batch 15/21: passed
+Public body batch 16/21: 8 artifacts
+Public body batch 16/21: passed
+Public body batch 17/21: 8 artifacts
+Public body batch 17/21: passed
+Public body batch 18/21: 8 artifacts
+Public body batch 18/21: passed
+Public body batch 19/21: 8 artifacts
+Public body batch 19/21: passed
+Public body batch 20/21: 8 artifacts
+Public body batch 20/21: passed
+Public body batch 21/21: 6 artifacts
+Public body batch 21/21: passed
+Public artifact acceptance (full-pool-paged-v1): 166 full-body hashes (64753330 bytes) in 21 batches of at most 8; 98 manifest-bound large artifacts (1721373543 bytes)
+(node:21835) [DEP0205] DeprecationWarning: `module.register()` is deprecated. Use `module.registerHooks()` instead.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+
+Running 1 test using 1 worker
+
+(node:21836) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+(node:21836) [DEP0205] DeprecationWarning: `module.register()` is deprecated. Use `module.registerHooks()` instead.
+(node:21836) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+  ✘  1 tests/playwright/deployed-abm-report.spec.ts:674:7 › deployed Formal report › serves the approved report and artifacts without responsive errors (5.1m)
+
+
+  1) tests/playwright/deployed-abm-report.spec.ts:674:7 › deployed Formal report › serves the approved report and artifacts without responsive errors 
+
+    [31mTest timeout of 300000ms exceeded.[39m
+
+    attachment #1: screenshot (image/png) ──────────────────────────────────────────────────────────
+    test-results/playwright/deployed-abm-report-deploy-faf00-s-without-responsive-errors/test-failed-1.png
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+    attachment #2: video (video/webm) ──────────────────────────────────────────────────────────────
+    test-results/playwright/deployed-abm-report-deploy-faf00-s-without-responsive-errors/video.webm
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+    Error Context: test-results/playwright/deployed-abm-report-deploy-faf00-s-without-responsive-errors/error-context.md
+
+    attachment #4: trace (application/zip) ─────────────────────────────────────────────────────────
+    test-results/playwright/deployed-abm-report-deploy-faf00-s-without-responsive-errors/trace.zip
+    Usage:
+
+        npx playwright show-trace test-results/playwright/deployed-abm-report-deploy-faf00-s-without-responsive-errors/trace.zip
+
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+  Slow test file: tests/playwright/deployed-abm-report.spec.ts (5.1m)
+  Consider running tests from slow files in parallel. See: https://playwright.dev/docs/test-parallel
+  1 failed
+    tests/playwright/deployed-abm-report.spec.ts:674:7 › deployed Formal report › serves the approved report and artifacts without responsive errors 
+Public acceptance failed; restoring previous release /opt/llm-abm-marketing-sim-report/releases/sensitivity-v16-20260920T113800Z
+ Container abm-research-report  Recreate
+ Container abm-research-report  Recreated
+ Container abm-research-report  Starting
+ Container abm-research-report  Started

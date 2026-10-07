@@ -1,0 +1,1347 @@
+diff --git a/.gitignore b/.gitignore
+index 52f66c1..cdd6fa9 100644
+--- a/.gitignore
++++ b/.gitignore
+@@ -50,3 +50,7 @@ archive/**
+ /outputs/
+ /.recovery-campaign-*.json
+ /.recovery-campaign-*.json.lock
++
++AGENTS.md
++
++CLAUDE.md
+diff --git a/docs/architecture/README.md b/docs/architecture/README.md
+index 53fd4a6..ca3e3dd 100644
+--- a/docs/architecture/README.md
++++ b/docs/architecture/README.md
+@@ -4,6 +4,8 @@
+ 
+ ## 当前入口
+ 
++- [Ten-topic Report / Release](ten-topic-report-release.md)：十话题正式来源 exact admission、四研究同源聚合展示/下载、v17 immutable contract 与既有发布事务。
++
+ - [ABM Runtime 与仿真流程](abm-runtime.md)：通用 SimulationModel、PlatformEnvironment、SocialUserAgent、Decision Adapter、事件和输出边界。
+ - [Concurrent Message Competition Experiment](concurrent-message-competition-experiment.md)：当前三 message runtime、ranking、Primary/Shadow、diagnostics、report rebuild 和发布边界。
+ - [Full-Pool Segmented Continuation Runtime](full-pool-segmented-continuation.md)：只读 v1 prefix、十 lane continuation、显式/自动 recovery、strict fresh replay，以及 source-v2/v3/v4 到 Report/Evidence/Release v9/v10/v11 的版本化 persisted contracts。
+diff --git a/docs/architecture/report-deployment.md b/docs/architecture/report-deployment.md
+index 1faf511..44c03f4 100644
+--- a/docs/architecture/report-deployment.md
++++ b/docs/architecture/report-deployment.md
+@@ -2,6 +2,10 @@
+ 
+ 本文描述 Final Research immutable release 的 Deployment Module。该 Module 只消费 Release Module 已验证并投影的 deployment facts；它不重新解释 realization、Prompt、模型、Provider accounting、metrics、Report bytes 或 release eligibility。默认测试只使用本地 Adapter，不连接 canonical。
+ 
++十话题追加版本使用独立 exact v17 dispatch，详见 [Ten-topic Report / Release](ten-topic-report-release.md)。v15/v16/v17 都消费其所属 Release Module 的 readiness，不套用旧 schema 或重新解释研究。v17 授权及 operation facts 使用独立版本名，沿用同一 canonical 目标及原子事务。
++
++公网客户端默认使用直连。`ABM_DEPLOY_PUBLIC_TRANSPORT=environment-proxy` 显式使用执行环境已有代理，仅改变验收客户端出站路径，不改变 canonical、服务器或部署拓扑。两种路径均保留 HTTP/1.1、TLS 证书校验、完整正文、字节数、SHA、重试及浏览器验收；未知值拒绝。不记录代理凭证。该选择及网络失败/回退证据写入具体 operational run。
++
+ ## Module 与 Interface
+ 
+ Deployment 流程保留三个稳定 Interface：
+diff --git a/docs/architecture/ten-topic-report-release.md b/docs/architecture/ten-topic-report-release.md
+new file mode 100644
+index 0000000..10e67c5
+--- /dev/null
++++ b/docs/architecture/ten-topic-report-release.md
+@@ -0,0 +1,15 @@
++# Ten-topic Report / Release
++
++`ten_topic_release` owns exact admission of the reviewed Whole-sample, GPT parameter/index and four-model sources. `accept_ten_topic_sources` checks their pinned source identities, acceptance status and physical hashes, including all 2,800 GPT paths. It does not alter the earlier sources' deployment flags or accept arbitrary objects labelled Formal.
++
++`collect_ten_topic_public_data` projects only public aggregates. It checks exclusive counts/denominators, matches displayed GPT means against per-seed path metrics, and checks four-model category-curve endpoints against the formal tables. New user identifiers and response/judgment banks never enter this projection. The historical download policy remains unchanged.
++
++Report's `render_ten_topic_research` renders the four current research views in the existing editorial shell. Tables, interactive curves, CSV/JSON/SVG exports and the workbook use the same typed projection. `ten_topic_workbook_tables` owns the 17-sheet public interface; Release independently reads the ZIP/XML workbook cells and compares every value with that interface. This validates serialization, not a second independent research computation. The original research acceptances remain the independent research evidence.
++
++`promote_ten_topic_release` creates a new immutable directory and sibling exact `abm-report-release-contract-v17`. It binds explicit sources, implementation commit, immutable workbook input, endpoint and complete inventory. Historical v16 assets are byte-preserved; the original HTML/manifest are retained under explicit single-topic names. It never overwrites an existing release or calls a Provider.
++
++`validate_ten_topic_release` reconstructs the expected publication from the explicit inputs and compares all physical bytes, optionally including Deployment's isolated snapshot. Reconstruction shares Report/Release code with production and is a consistency check, not independent validation of the same research statistics. Exact source admission and prior research acceptances supply authenticity and experiment validation.
++
++Deployment consumes only `ten-topic-v17-release-readiness-v1`, then requires the independent, canonical `abm-report-v17-deployment-authorization-v1`. The existing fresh rollback readback, candidate inventory/health, atomic `current` switch, public body verification, browser interactions and locked final readback remain mandatory. Host/domain/root/topology are not changed by this schema.
++
++Statistics retain their original units: Whole sample is one realization over 109,200 exposures; parameter/index results are means and conditional Monte Carlo intervals over 100 behavior seeds; four-model results are 16 single-seed adaptive paths, with direct pairing confined to the common initial user panel. DeepSeek V4.1 Flash versus prior V4 Flash and Gemini gateway observability are disclosed. Network, sample and service-time changes are not isolated causal effects.
+diff --git a/docs/index.md b/docs/index.md
+index 45d5cbe..ae4c816 100644
+--- a/docs/index.md
++++ b/docs/index.md
+@@ -4,24 +4,23 @@
+ 
+ ## Current Research：统一研究入口
+ 
+-[Canonical Final Research](https://abm.q1ngyuan.top/) 已发布 **composite v16**，保留 Whole sample、Prompt–Model 修订研究及历史结果/下载，追加 Parameter 与 Activity / Local Influence 两项独立研究。2026-09-20 11:44 UTC 完成原子发布与公网验收；HTML SHA-256 为 `e7c9cc0bffb8a148376fed4b49b58d8574784540a6b2dbaf0f8845a2d0cff659`。[发布及验证记录](references/sensitivity-v16-canonical-release-20260920.md)。
+-
++[Canonical Final Research](https://abm.q1ngyuan.top/) 已发布 **十话题 v17**：全样本、推荐参数、用户指标敏感性与四模型×P0–P3统一接入正式 Report / Release。2026-10-07 12:11 UTC 完成原子发布、公网正文/交互/下载及最终身份验收；发布过程零 Provider 调用。单话题 v16 与更早历史结果及下载保留为明确标识的旧版。[发布记录](references/ten-topic-v17-canonical-release-20261007.md)。
+ ### 研究地图
+ 
+ | 研究 / 问题 | 改变与固定设定 | 样本、seed 与统计单位 | 最终证据 / 发布状态 |
+ |---|---|---|---|
+-| **Whole sample**：三条营销消息在全样本中的两阶段互动结果 | GPT-5.6 Sol / P0；Judgment → Realization；固定消息、网络与行为 seed | 36,400 用户 × M1–M3；109,200 次曝光；单次固定行为 seed，互动次数为整数 | [v13 主实验证据](references/full-pool-two-stage-v13-canonical-release-20260827.md)；已保留于 canonical v16 |
+-| **Prompt–Model 修订研究**：判断模板与模型变化对应什么结果 | 4 模型 × P0–P3；16 cells；新两阶段机制，与早期 direct-action 分开 | 1,000 用户样本；28,800 次曝光；直接配对限共同 Batch 0，后续自适应路径仅描述 | [v15 最终证据与下载](references/revised-four-model-v15-canonical-release-20260912.md)；已发布；**原五模型计划并非全部完成** |
+-| **Parameter**：推荐权重和邻居饱和阈值改变终点或时间路径吗 | GPT-5.6 Sol / P0；固定判断库、原样本/消息/图；7 权重点 × 阈值 1/3/6 | 1,000 用户；21 组 × 100 行为 seed = 2,100 路径；每路径 1,800 曝光；跨 seed 均值/区间 | [最终结果](references/gpt-p0-dynamic-parameter-results-20260917.md) · [本地报告](../runs/gpt-p0-dynamic-parameters-20260917-formal-01/report/report.html)；[已发布在线报告](https://abm.q1ngyuan.top/parameter/report.html) |
+-| **Activity / Local Influence**：指标变体及其抽样联动如何改变传播 | GPT-5.6 Sol / P0；推荐权重固定 0.50/0.30/0.20、阈值 3；改变指标权重或 p99 归一化 | 每臂 1,000 用户；7 组 × 100 行为 seed = 700 路径；每路径 1,800 曝光；同 seed 配对均值/区间 | [最终报告](../runs/gpt-p0-index-sensitivity-20260920-formal-01/REPORT.md) · [本地网页](../runs/gpt-p0-index-sensitivity-20260920-formal-01/report.html) · [完成审计](../runs/gpt-p0-index-sensitivity-20260920-formal-01/completion-audit.json)；[已发布在线报告](https://abm.q1ngyuan.top/index-sensitivity/report.html) |
+-| **历史研究**：direct-action 与指标排序审计 | 保留原机制、来源及原下载，不改写成新两阶段结果 | 原 1,000 用户研究与全样本分开；历史指标排序分析**不是传播仿真实验** | canonical 既有 Historical / Primary–Shadow / Ranking Weight / 旧 GPT 析因；不得与新研究合并分母 |
++| **Whole sample**：全样本两阶段实际互动 | GPT-5.6 Sol / P0；十话题合并历史图，既有判断与抽样锚点离线复用 | 36,400用户；109,200曝光；单次行为seed20260823；实际互动63,614/109,200 = 58.255% | [正式来源及复验](../runs/ten-topic-full-pool-20261006/REPORT.md)；canonical v17默认视图 |
++| **Prompt–Model**：四模型与P0–P3 | 同一新基准1,000人；4模型×4模板；新DeepSeek V4.1 Flash与旧V4 Flash有版本差异 | 16条件、28,800曝光；单次行为seed；共同初始用户panel配对，自适应路径描述 | [四模型正式验收](../runs/ten-topic-four-model-20261007/FINAL_REPORT.md)；canonical v17 |
++| **Parameter**：推荐权重与邻居饱和阈值 | 十话题新基准样本；原21参数矩阵、GPT-5.6 Sol / P0 | 21×100行为seed=2,100路径；每路径1,800曝光；终点均值范围62.278%–65.848% | [GPT两研究最终验收](../runs/ten-topic-gpt-final-acceptance-20261007/REPORT.md)；canonical v17 |
++| **Activity / Local Influence**：指标变体与抽样联动 | 原7臂，固定样本与重建样本按协议区分；Local原全话题度数口径不变 | 7×100行为seed=700路径；每路径1,800曝光；Local p99 rebuilt与新基准23/1000重合 | [正式统计](../runs/ten-topic-gpt-studies-20261006/formal-report/REPORT.md)；canonical v17 |
++| **旧版与历史** | 单话题v16、早期direct-action与历史指标排序分别保留 | 不与十话题结果合并分母；排序审计不是传播实验 | canonical“旧版与历史研究”；v16仍保留为回滚版本 |
+ 
+ ### 先读口径，再读结果
+ 
+ - P0–P3 是 AI 判断模板；M1–M3 是营销消息；S1–S3 是用户群，三者不互换。
+ - 每次行为实现的互动数是整数。Parameter 与指标研究表中的小数是 **100 次实现的均值**；100 个行为 seed 不表示 LLM 重复判断 100 次，也不与 Whole sample 单次结果混作同一统计单位。
+-- Parameter 在所测矩阵中，同 seed 终点相同，但曝光顺序和时间过程发生变化；不推断推荐参数普遍不敏感。
+-- 指标研究区分**固定样本、重选初始种子**与**按原规则重建样本**。Local p99 重建后只有 108/1000 用户与基线重合；差异包含样本构成影响。Local 权重固定/重建臂输入相同，不算独立重复证据。
++- 十话题 Parameter 在所测矩阵中终点不再全部相同；差异包括曝光排序及反馈路径，不推断普遍稳健或不敏感。
++- 指标研究区分**固定样本、重选初始种子**与**按原规则重建样本**。十话题 Local p99 重建后只有 23/1000 用户与新基线重合；差异包含样本构成影响。Local 权重固定/重建臂输入相同，不算独立重复证据。
+ - 行为 seed 区间仅反映固定判断/数据条件下的 Monte Carlo 不确定性。新旧判断时点与模型回答波动未充分分离；不宣称普遍稳健或纯指标因果效应。
+ 
+ ### 权威 ownership 与发布接缝
+@@ -29,14 +28,17 @@
+ 本页唯一拥有跨研究导航、统计口径对照与当前发布状态，不另建平行研究目录。单项结论及数值由各自最终 evidence/report 拥有；Module 的稳定 Interface 由架构文档说明：
+ 
+ - [Whole sample / 两阶段机制](architecture/full-pool-two-stage-realization.md)
+-- [十采集话题合并网络与独立离线重放合同](architecture/ten-topic-full-pool-replay.md)（新方法；既有 canonical 及历史结果不变）
++- [十采集话题合并网络与独立离线重放合同](architecture/ten-topic-full-pool-replay.md)（十话题当前方法；历史来源与结果保留）
++- [十话题 Report / v17 Release 合同](architecture/ten-topic-report-release.md)
+ - [Prompt–Model / v15 Report、Release 合同](architecture/revised-four-model-release.md)
+ - [Parameter / Study、Evidence、Report](architecture/gpt-p0-parameter-study.md)
+ - [Deployment / 原子发布与回退](architecture/report-deployment.md)
+ 
+ Report Module 拥有研究呈现及表图同源知识；Release Module 拥有证据接纳、旧文件保留和 immutable inventory；Deployment Module 只消费验证后的发布事实。这个 Seam 保持 Locality，避免把研究判断规则复制到 shell 或网页拼接器而形成 Information Leakage；不为导航增加透传 Module 或通用框架，Depth 来自既有 Interface 对证据与产物的完整验证。
+ 
+-**发布合同：** v15 仍只接纳四模型闭合 projection；v16 以独立接纳合同追加这两项已完成研究。指标研究的 [evidence](../runs/gpt-p0-index-sensitivity-20260920-formal-01/evidence.json) 与 [曝光判断闭合](../runs/gpt-p0-index-sensitivity-20260920-formal-01/exposure-bank-closure.json) 明确 `production_deploy_eligible=false`：17,316 个 eligible inputs 中 17,315 个有判断，另 1 个 unknown 保留且已证明不会曝光，700 条路径所需曝光完整。这不等同完整判断库。经用户批准，v16 对明确绑定的最终证据与发布产物完成接纳验证；原字段、run 与账本不变。发布沿既有 Release / Deployment 事务完成，原 v15 保留为回退版本。验收记录见 [Operational #263](https://github.com/liu-qingyuan/llm-abm-marketing-sim/issues/263)。
++**当前合同：** v17 精确绑定已验收十话题四研究、工作簿及完整不可变库存，不改写旧来源 eligibility。公网来源/下载一致性和回滚证据见 [Operational #264](https://github.com/liu-qingyuan/llm-abm-marketing-sim/issues/264)。
++
++**历史发布合同：** v15 仍只接纳四模型闭合 projection；v16 以独立接纳合同追加这两项已完成研究。指标研究的 [evidence](../runs/gpt-p0-index-sensitivity-20260920-formal-01/evidence.json) 与 [曝光判断闭合](../runs/gpt-p0-index-sensitivity-20260920-formal-01/exposure-bank-closure.json) 明确 `production_deploy_eligible=false`：17,316 个 eligible inputs 中 17,315 个有判断，另 1 个 unknown 保留且已证明不会曝光，700 条路径所需曝光完整。这不等同完整判断库。经用户批准，v16 对明确绑定的最终证据与发布产物完成接纳验证；原字段、run 与账本不变。发布沿既有 Release / Deployment 事务完成，原 v15 保留为回退版本。验收记录见 [Operational #263](https://github.com/liu-qingyuan/llm-abm-marketing-sim/issues/263)。
+ 
+ ## 运行与演示
+ 
+@@ -71,7 +73,8 @@ Architecture 描述当前 Module、数据边界和稳定运行语义；ADR 记
+ 
+ - [References 总览](references/README.md)
+ - [current dataset：锦江 final dataset 审计](references/jinjiang-final-dataset-audit-20260624.md)
+-- [current composite release：两项敏感性研究追加 v16 发布记录](references/sensitivity-v16-canonical-release-20260920.md)
++- [current ten-topic release：四研究 v17 发布记录](references/ten-topic-v17-canonical-release-20261007.md)
++- [protected composite release：两项敏感性研究追加 v16 发布记录](references/sensitivity-v16-canonical-release-20260920.md)
+ - [protected v15：四模型恢复研究及回退记录](references/revised-four-model-v15-canonical-release-20260912.md)
+ - [protected main evidence：Full-Pool 两阶段 v13 canonical 发布记录](references/full-pool-two-stage-v13-canonical-release-20260827.md)
+ - [current Retention：Retention final evidence](references/retention-cleanup-final-evidence-20260730.md)
+diff --git a/docs/references/README.md b/docs/references/README.md
+index 3cf1c29..bb55e24 100644
+--- a/docs/references/README.md
++++ b/docs/references/README.md
+@@ -6,6 +6,8 @@
+ 
+ 默认 AI 阅读顺序不超过 `current dataset`、`current Formal release`、`current Retention` 三个入口；只有问题需要时才进入 research prior 或 rollback evidence，machine evidence 仅用于 forensic-only 核验。
+ 
++当前十话题正式发布：[v17 canonical 发布](ten-topic-v17-canonical-release-20261007.md)。单话题 [v16 发布](sensitivity-v16-canonical-release-20260920.md) 是受保护回滚证据，不是十话题当前统计。
++
+ | 模式 | 入口 | 读取场景 |
+ |---|---|---|
+ | 默认读取 | [current dataset：锦江 final dataset 审计](jinjiang-final-dataset-audit-20260624.md)、[current Formal release：统一研究入口中的发布身份](../index.md)、[current Retention：Retention final evidence](retention-cleanup-final-evidence-20260730.md) | 先确定数据 lineage、当前发布身份和保留/质量 closure。 |
+diff --git a/docs/references/ten-topic-v17-canonical-release-20261007.md b/docs/references/ten-topic-v17-canonical-release-20261007.md
+new file mode 100644
+index 0000000..bbbecfd
+--- /dev/null
++++ b/docs/references/ten-topic-v17-canonical-release-20261007.md
+@@ -0,0 +1,15 @@
++# 十话题 v17 canonical 发布
++
++Canonical：<https://abm.q1ngyuan.top/>。2026-10-07T12:11:13Z 完成发布及验收。
++
++- Release：`ten-topic-v17-20261007T113429Z`；schema `abm-report-release-contract-v17`。
++- HTML SHA：`82012e17b4176284d21443cf07ba9a05336730864a27208cc7093da493186251`。
++- Manifest SHA：`e16f591b3cf18f2717137a4a21a726a299badaa208949d20e0cebe0c7574d479`。
++- Whole109,200曝光；参数21×100；指标7×100；四模型16条件28,800曝光。统计/曲线及47个新聚合下载同步；17-sheet工作簿逐单元格比对。
++- 264文件库存；166公网完整正文hash，其余98历史大型文件按既有manifest-bound策略；新下载全正文验收。公网桌面/手机、双语、筛选、历史交互通过；最终current身份加锁读回。
++- 真实回退已恢复v16旧hash/healthy，再对同一immutable candidate成功发布。v16 215文件全hash保留。Provider调用0；论文未修改、匿名仓库未制作。
++- 非全仓全部检查通过：既有Ruff42项、pyright缺环境与未跑长时mock集成扫描明确记录；相关94测试通过。
++
++[完整交付报告](../../runs/ten-topic-v17-publication-20261007/REPORT.md) · [部署机器证据](../../runs/ten-topic-v17-publication-20261007/DEPLOYMENT_OPERATION.json) · [独立公网验收](../../runs/ten-topic-v17-publication-20261007/PUBLIC_ACCEPTANCE.json) · [Operational #264](https://github.com/liu-qingyuan/llm-abm-marketing-sim/issues/264)。
++
++研究限制与具体来源hash见报告；网络、样本、指标变体与服务时点共同变化。DeepSeek V4.1 Flash与旧V4 Flash不同；Gemini网关alias限制披露；Kimi统一显示。100行为seed不是100次模型判断。
+diff --git a/playwright.config.ts b/playwright.config.ts
+index 6722b8b..02791a6 100644
+--- a/playwright.config.ts
++++ b/playwright.config.ts
+@@ -1,6 +1,15 @@
+ import { defineConfig } from '@playwright/test';
+ 
+ const executablePath = process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE;
++const useEnvironmentProxy = process.env.ABM_DEPLOY_PUBLIC_TRANSPORT === 'environment-proxy';
++const environmentProxy = process.env.https_proxy ?? process.env.HTTPS_PROXY ?? process.env.all_proxy ?? process.env.ALL_PROXY;
++if (useEnvironmentProxy && !environmentProxy) throw new Error('Explicit environment-proxy transport requires a configured proxy');
++const proxyUrl = useEnvironmentProxy ? new URL(environmentProxy!) : undefined;
++const proxy = proxyUrl ? {
++  server: `${proxyUrl.protocol}//${proxyUrl.host}`,
++  ...(proxyUrl.username ? { username: decodeURIComponent(proxyUrl.username) } : {}),
++  ...(proxyUrl.password ? { password: decodeURIComponent(proxyUrl.password) } : {}),
++} : undefined;
+ 
+ export default defineConfig({
+   testDir: './tests/playwright',
+@@ -14,6 +23,7 @@ export default defineConfig({
+     ['html', { outputFolder: 'playwright-report', open: 'never' }],
+   ],
+   use: {
++    proxy,
+     launchOptions: executablePath ? { executablePath } : undefined,
+     trace: 'retain-on-failure',
+     screenshot: 'only-on-failure',
+diff --git a/scripts/deploy_abm_report.sh b/scripts/deploy_abm_report.sh
+index 089a961..48db570 100755
+--- a/scripts/deploy_abm_report.sh
++++ b/scripts/deploy_abm_report.sh
+@@ -11,6 +11,8 @@ REMOTE_ROOT="${ABM_DEPLOY_REMOTE_ROOT:-/opt/llm-abm-marketing-sim-report}"
+ PORT="${ABM_DEPLOY_PORT:-18083}"
+ CONTAINER_NAME="${ABM_DEPLOY_CONTAINER_NAME:-abm-research-report}"
+ IMAGE="${ABM_DEPLOY_IMAGE:-nginx:1.27-alpine}"
++PUBLIC_TRANSPORT="${ABM_DEPLOY_PUBLIC_TRANSPORT:-direct}"
++[[ "${PUBLIC_TRANSPORT}" == direct || "${PUBLIC_TRANSPORT}" == environment-proxy ]] || { printf 'invalid public transport\n' >&2; exit 1; }
+ PYTHON="${ABM_DEPLOY_PYTHON:-python3}"
+ SOURCE_DIR=""
+ RELEASE_ID=""
+@@ -24,7 +26,7 @@ ROLLBACK_READBACK_FILE=""
+ LOCAL_CHECKSUMS_FILE=""
+ 
+ usage() {
+-  printf 'Usage: %s --contract <formal-release-contract> --source-dir <approved-run-directory> --release-id <release-id> [--authorization <v13-v14-v15-or-v16-operational-authorization>] [--operation-facts-output <operational-evidence>]\n' "$0" >&2
++  printf 'Usage: %s --contract <formal-release-contract> --source-dir <approved-run-directory> --release-id <release-id> [--authorization <v13-v14-v15-v16-or-v17-operational-authorization>] [--operation-facts-output <operational-evidence>]\n' "$0" >&2
+ }
+ 
+ fail() {
+@@ -188,7 +190,7 @@ PY
+ [[ "${VALIDATED_DOMAIN}" == "${DOMAIN}" ]] || fail "validated canonical domain is crossed"
+ [[ "${ARTIFACT_COUNT}" =~ ^[1-9][0-9]*$ ]] || fail "validated artifact count is invalid"
+ [[ "${CONTRACT_SHA}" =~ ^[a-f0-9]{64}$ ]] || fail "validated contract identity is invalid"
+-[[ "${RELEASE_CONTRACT_SCHEMA}" =~ ^abm-report-release-contract-v([2-9]|10|11|12|13|14|15|16)$ ]] || fail "validated release contract schema is invalid"
++[[ "${RELEASE_CONTRACT_SCHEMA}" =~ ^abm-report-release-contract-v([2-9]|10|11|12|13|14|15|16|17)$ ]] || fail "validated release contract schema is invalid"
+ [[ -z "${RELEASE_IDENTITY_SHA}" || "${RELEASE_IDENTITY_SHA}" =~ ^[a-f0-9]{64}$ ]] || fail "validated release identity is invalid"
+ SOURCE_DIR="${LOCAL_SNAPSHOT_DIR}"
+ find "${SOURCE_DIR}" -type d -exec chmod a-w {} +
+@@ -214,7 +216,7 @@ for artifact in facts["public_acceptance_artifacts"]:
+ PY
+ )
+ (( ${#PUBLIC_ACCEPTANCE_ARTIFACTS[@]} == ARTIFACT_COUNT )) || fail "validated public acceptance artifact list is incomplete"
+-if [[ "${RELEASE_CONTRACT_SCHEMA}" == "abm-report-release-contract-v13" || "${RELEASE_CONTRACT_SCHEMA}" == "abm-report-release-contract-v14" || "${RELEASE_CONTRACT_SCHEMA}" == "abm-report-release-contract-v15" || "${RELEASE_CONTRACT_SCHEMA}" == "abm-report-release-contract-v16" ]]; then
++if [[ "${RELEASE_CONTRACT_SCHEMA}" == "abm-report-release-contract-v13" || "${RELEASE_CONTRACT_SCHEMA}" == "abm-report-release-contract-v14" || "${RELEASE_CONTRACT_SCHEMA}" == "abm-report-release-contract-v15" || "${RELEASE_CONTRACT_SCHEMA}" == "abm-report-release-contract-v16" || "${RELEASE_CONTRACT_SCHEMA}" == "abm-report-release-contract-v17" ]]; then
+   DEPLOYMENT_PLAN_FILE="$(mktemp "${TMPDIR:-/tmp}/abm-report-deployment-plan.XXXXXX")"
+   DEPLOYMENT_PLAN_ARGS=(
+     preflight
+@@ -231,9 +233,9 @@ if [[ "${RELEASE_CONTRACT_SCHEMA}" == "abm-report-release-contract-v13" || "${RE
+     DEPLOYMENT_PLAN_ARGS+=(--authorization "${DEPLOYMENT_AUTHORIZATION}")
+   fi
+   "${PYTHON}" "${SCRIPT_DIR}/validate_abm_report_deployment.py" "${DEPLOYMENT_PLAN_ARGS[@]}"
+-  if [[ "${RELEASE_CONTRACT_SCHEMA}" == "abm-report-release-contract-v14" || "${RELEASE_CONTRACT_SCHEMA}" == "abm-report-release-contract-v15" || "${RELEASE_CONTRACT_SCHEMA}" == "abm-report-release-contract-v16" ]]; then
++  if [[ "${RELEASE_CONTRACT_SCHEMA}" == "abm-report-release-contract-v14" || "${RELEASE_CONTRACT_SCHEMA}" == "abm-report-release-contract-v15" || "${RELEASE_CONTRACT_SCHEMA}" == "abm-report-release-contract-v16" || "${RELEASE_CONTRACT_SCHEMA}" == "abm-report-release-contract-v17" ]]; then
+     [[ -n "${DEPLOYMENT_OPERATION_FACTS_OUTPUT}" ]] || \
+-      fail "v14/v15/v16 requires --operation-facts-output for separate operational evidence"
++      fail "v14/v15/v16/v17 requires --operation-facts-output for separate operational evidence"
+     [[ ! -L "${DEPLOYMENT_OPERATION_FACTS_OUTPUT}" ]] || \
+       fail "v14 operation facts output must not be a symlink"
+     [[ ! -e "${DEPLOYMENT_OPERATION_FACTS_OUTPUT}" ]] || \
+@@ -294,7 +296,7 @@ if [[ -n "${PREVIOUS_RELEASE_RECORD}" ]]; then
+   [[ -n "${PREVIOUS_RELEASE}" && "${PREVIOUS_REPORT_SHA}" =~ ^[a-f0-9]{64}$ && "${PREVIOUS_MANIFEST_SHA}" =~ ^[a-f0-9]{64}$ ]] || \
+     fail "current managed release identity is incomplete"
+ fi
+-if [[ "${RELEASE_CONTRACT_SCHEMA}" == "abm-report-release-contract-v13" || "${RELEASE_CONTRACT_SCHEMA}" == "abm-report-release-contract-v14" || "${RELEASE_CONTRACT_SCHEMA}" == "abm-report-release-contract-v15" || "${RELEASE_CONTRACT_SCHEMA}" == "abm-report-release-contract-v16" ]]; then
++if [[ "${RELEASE_CONTRACT_SCHEMA}" == "abm-report-release-contract-v13" || "${RELEASE_CONTRACT_SCHEMA}" == "abm-report-release-contract-v14" || "${RELEASE_CONTRACT_SCHEMA}" == "abm-report-release-contract-v15" || "${RELEASE_CONTRACT_SCHEMA}" == "abm-report-release-contract-v16" || "${RELEASE_CONTRACT_SCHEMA}" == "abm-report-release-contract-v17" ]]; then
+   [[ -n "${PREVIOUS_RELEASE}" ]] || fail "v13/v14 requires a fresh managed rollback identity"
+   ROLLBACK_READBACK_FILE="$(mktemp "${TMPDIR:-/tmp}/abm-report-rollback-readback.XXXXXX")"
+   "${PYTHON}" - \
+@@ -610,7 +612,7 @@ install -d -m 755 "${remote_root}/nginx" "${remote_root}/tls" "${remote_root}/re
+   printf 'deploy error: invalid validated contract identity\n' >&2
+   exit 1
+ }
+-[[ "${release_contract_schema}" =~ ^abm-report-release-contract-v([2-9]|10|11|12|13|14|15|16)$ ]] || {
++[[ "${release_contract_schema}" =~ ^abm-report-release-contract-v([2-9]|10|11|12|13|14|15|16|17)$ ]] || {
+   printf 'deploy error: invalid validated release contract schema\n' >&2
+   exit 1
+ }
+@@ -933,6 +935,11 @@ trap rollback_on_failure EXIT
+ 
+ PUBLIC_CURL_RETRY=(--noproxy '*' --http1.1 --retry 4 --retry-all-errors --retry-delay 2 --retry-max-time 120)
+ PUBLIC_REPORT_CURL_RETRY=(--noproxy '*' --http1.1 --retry 4 --retry-all-errors --retry-delay 2 --retry-max-time 1800)
++if [[ "${PUBLIC_TRANSPORT}" == environment-proxy ]]; then
++  PUBLIC_CURL_RETRY=(--http1.1 --retry 4 --retry-all-errors --retry-delay 2 --retry-max-time 120)
++  PUBLIC_REPORT_CURL_RETRY=(--http1.1 --retry 4 --retry-all-errors --retry-delay 2 --retry-max-time 1800)
++fi
++printf 'Public client transport: %s; TLS and complete-body hash checks unchanged\n' "${PUBLIC_TRANSPORT}"
+ for _attempt in 1 2 3 4 5 6 7 8; do
+   if curl "${PUBLIC_CURL_RETRY[@]}" -fsS --max-time 20 "https://${DOMAIN}/healthz" >/dev/null; then
+     break
+@@ -1032,7 +1039,7 @@ ABM_DEPLOY_PUBLIC_ARTIFACTS="${PUBLIC_ACCEPTANCE_ARTIFACTS_JSON}" \
+ ABM_DEPLOY_RELEASE_CONTRACT_SCHEMA="${RELEASE_CONTRACT_SCHEMA}" \
+   npx playwright test tests/playwright/deployed-abm-report.spec.ts
+ 
+-if [[ "${RELEASE_CONTRACT_SCHEMA}" == "abm-report-release-contract-v14" || "${RELEASE_CONTRACT_SCHEMA}" == "abm-report-release-contract-v15" || "${RELEASE_CONTRACT_SCHEMA}" == "abm-report-release-contract-v16" ]]; then
++if [[ "${RELEASE_CONTRACT_SCHEMA}" == "abm-report-release-contract-v14" || "${RELEASE_CONTRACT_SCHEMA}" == "abm-report-release-contract-v15" || "${RELEASE_CONTRACT_SCHEMA}" == "abm-report-release-contract-v16" || "${RELEASE_CONTRACT_SCHEMA}" == "abm-report-release-contract-v17" ]]; then
+   ssh "${DEPLOY_HOST}" bash -s -- \
+     "${REMOTE_ROOT}" \
+     "${REMOTE_RELEASE}" \
+@@ -1148,7 +1155,7 @@ write_v14_deployment_operation_facts(
+ )
+ PY
+ fi
+-if [[ "${RELEASE_CONTRACT_SCHEMA}" == "abm-report-release-contract-v15" || "${RELEASE_CONTRACT_SCHEMA}" == "abm-report-release-contract-v16" ]]; then
++if [[ "${RELEASE_CONTRACT_SCHEMA}" == "abm-report-release-contract-v15" || "${RELEASE_CONTRACT_SCHEMA}" == "abm-report-release-contract-v16" || "${RELEASE_CONTRACT_SCHEMA}" == "abm-report-release-contract-v17" ]]; then
+   OPERATION_FACTS_WRITE_ATTEMPTED=1
+   "${PYTHON}" - "${DEPLOYMENT_PLAN_FILE}" "${PUBLIC_BODY_SUMMARY}" "${DEPLOYED_AT_UTC}" "${DEPLOYMENT_OPERATION_FACTS_OUTPUT}" <<'V15_OPERATION'
+ import sys
+diff --git a/scripts/validate_abm_report_release.py b/scripts/validate_abm_report_release.py
+index bb52cc5..e15a19d 100755
+--- a/scripts/validate_abm_report_release.py
++++ b/scripts/validate_abm_report_release.py
+@@ -1850,7 +1850,7 @@ def _load_and_validate_release(
+             source_dir=source_dir,
+             snapshot_dir=snapshot_dir,
+         )
+-    elif schema_version in {"abm-report-release-contract-v15", "abm-report-release-contract-v16"}:
++    elif schema_version in {"abm-report-release-contract-v15", "abm-report-release-contract-v16", "abm-report-release-contract-v17"}:
+         _safe_contract_file(repo_root, contract_path)
+         try:
+             result = validate_concurrent_robustness_production_release(
+@@ -1912,6 +1912,7 @@ _DEPLOYMENT_REPORT_KINDS = {
+     ROBUSTNESS_RELEASE_CONTRACT_SCHEMA_V14: "full-pool",
+     "abm-report-release-contract-v15": "full-pool",
+     "abm-report-release-contract-v16": "full-pool",
++    "abm-report-release-contract-v17": "full-pool",
+ }
+ _DEPLOYMENT_RELEASE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,159}$")
+ _DEPLOYMENT_DOMAIN = re.compile(r"^[A-Za-z0-9.-]+$")
+@@ -2031,6 +2032,9 @@ def _build_deployment_facts(
+         "approved_downloads": sorted(approved_downloads),
+         "public_acceptance_artifacts": sorted(artifact_hashes),
+     }
++    if schema_version == "abm-report-release-contract-v17":
++        from llm_abm_sim.ten_topic_release import require_ten_topic_deployment_profile
++        facts.update(require_ten_topic_deployment_profile(result))
+     if schema_version == "abm-report-release-contract-v16":
+         from llm_abm_sim.sensitivity_release import require_sensitivity_deployment_profile
+         facts.update(require_sensitivity_deployment_profile(result))
+@@ -2106,6 +2110,10 @@ def _build_deployment_facts(
+ 
+ def _require_formal_production(result: dict[str, object]) -> None:
+     schema_version = result.get("schema_version")
++    if schema_version == "abm-report-release-contract-v17":
++        from llm_abm_sim.ten_topic_release import require_ten_topic_deployment_profile
++        require_ten_topic_deployment_profile(result)
++        return
+     if schema_version == "abm-report-release-contract-v16":
+         from llm_abm_sim.sensitivity_release import require_sensitivity_deployment_profile
+         require_sensitivity_deployment_profile(result)
+diff --git a/scripts/verify_abm_public_artifact_bodies.py b/scripts/verify_abm_public_artifact_bodies.py
+index eeeccab..d99d82e 100755
+--- a/scripts/verify_abm_public_artifact_bodies.py
++++ b/scripts/verify_abm_public_artifact_bodies.py
+@@ -4,6 +4,7 @@ from __future__ import annotations
+ import argparse
+ import hashlib
+ import json
++import os
+ import re
+ import subprocess
+ import sys
+@@ -35,6 +36,16 @@ class PublicArtifactAcceptanceError(RuntimeError):
+     pass
+ 
+ 
++def _public_transport_args() -> list[str]:
++    transport = os.environ.get("ABM_DEPLOY_PUBLIC_TRANSPORT", "direct")
++    if transport not in {"direct", "environment-proxy"}:
++        raise PublicArtifactAcceptanceError("unsupported public transport")
++    return [
++        *(["--noproxy", "*"] if transport == "direct" else []),
++        "--http1.1",
++    ]
++
++
+ @dataclass(frozen=True)
+ class _Artifact:
+     index: int
+@@ -182,9 +193,7 @@ def _verify_body(
+         completed = subprocess.run(
+             [
+                 "curl",
+-                "--noproxy",
+-                "*",
+-                "--http1.1",
++                *_public_transport_args(),
+                 "--retry",
+                 "4",
+                 "--retry-all-errors",
+diff --git a/src/llm_abm_sim/concurrent_robustness_release.py b/src/llm_abm_sim/concurrent_robustness_release.py
+index ac5eb14..5aaf8f0 100644
+--- a/src/llm_abm_sim/concurrent_robustness_release.py
++++ b/src/llm_abm_sim/concurrent_robustness_release.py
+@@ -6923,6 +6923,12 @@ def validate_concurrent_robustness_production_release(
+ ) -> dict[str, object]:
+     """Fail-closed validator used by the production deployment gate."""
+     schema_version = contract_document.get("schema_version")
++    if schema_version == "abm-report-release-contract-v17":
++        from .ten_topic_release import validate_ten_topic_release
++        return validate_ten_topic_release(
++            repo_root=repo_root, contract_document=dict(contract_document),
++            source_dir=source_dir, snapshot_dir=snapshot_dir,
++        )
+     if schema_version == "abm-report-release-contract-v16":
+         from .sensitivity_release import validate_sensitivity_release
+         return validate_sensitivity_release(
+diff --git a/src/llm_abm_sim/concurrent_robustness_report.py b/src/llm_abm_sim/concurrent_robustness_report.py
+index d7e39a2..3583604 100644
+--- a/src/llm_abm_sim/concurrent_robustness_report.py
++++ b/src/llm_abm_sim/concurrent_robustness_report.py
+@@ -1236,6 +1236,11 @@ def _validate_v2_realized_production_stage_facts(
+ class _ReportPresentationInterface:
+     """Package-internal seam for deterministic report composition and presentation stages."""
+ 
++    def render_ten_topic_research(self, base_html, data, *, release_id):
++        """Render accepted ten-topic aggregates, keeping v16 explicit historical."""
++        from .ten_topic_report import render_ten_topic_research
++        return render_ten_topic_research(base_html, data, release_id=release_id)
++
+     def render_sensitivity_research(self, base_html: bytes, *, release_id: str) -> bytes:
+         """Append the independently verified sensitivity reports, preserving v15."""
+         from .sensitivity_report import render_sensitivity_research
+diff --git a/src/llm_abm_sim/report_deployment.py b/src/llm_abm_sim/report_deployment.py
+index 65d43f0..cc09118 100644
+--- a/src/llm_abm_sim/report_deployment.py
++++ b/src/llm_abm_sim/report_deployment.py
+@@ -468,7 +468,7 @@ def _release_facts(
+     target: DeploymentTarget,
+ ) -> dict[str, object]:
+     schema = deployment_facts.get("release_contract_schema_version")
+-    if schema in {"abm-report-release-contract-v15", "abm-report-release-contract-v16"}:
++    if schema in {"abm-report-release-contract-v15", "abm-report-release-contract-v16", "abm-report-release-contract-v17"}:
+         return _v15_release_facts(deployment_facts, target)
+     if schema == V14_RELEASE_CONTRACT_SCHEMA:
+         return _v14_release_facts(deployment_facts, target)
+@@ -480,6 +480,8 @@ def _release_facts(
+ 
+ 
+ def _deployment_schemas(release_contract_schema: object) -> tuple[str, str]:
++    if release_contract_schema == "abm-report-release-contract-v17":
++        return "abm-report-v17-deployment-readiness-v1", "abm-report-v17-deployment-authorization-v1"
+     if release_contract_schema == "abm-report-release-contract-v16":
+         return "abm-report-v16-deployment-readiness-v1", "abm-report-v16-deployment-authorization-v1"
+     if release_contract_schema == "abm-report-release-contract-v15":
+@@ -1169,6 +1171,7 @@ def _v15_release_facts(deployment_facts, target):
+     readiness_schema = {
+         "abm-report-release-contract-v15": "revised-four-model-v15-release-readiness-v1",
+         "abm-report-release-contract-v16": "sensitivity-v16-release-readiness-v1",
++        "abm-report-release-contract-v17": "ten-topic-v17-release-readiness-v1",
+     }.get(schema)
+     readiness = _mapping(deployment_facts.get("release_readiness"), "v15 readiness")
+     hashes = _mapping(deployment_facts.get("artifact_sha256"), "v15 hashes")
+@@ -1203,7 +1206,7 @@ def _v15_release_facts(deployment_facts, target):
+ def _write_v15_deployment_operation_facts(*, plan_path: Path, public_summary_path: Path, deployed_at_utc: str, output_path: Path) -> None:
+     """Production-shell closure, called only after locked readback and browser gates."""
+     plan, plan_bytes = _load_canonical_json_object(plan_path, "v15 plan")
+-    if plan.get("release_contract_schema") not in {"abm-report-release-contract-v15", "abm-report-release-contract-v16"} or plan.get("schema_version") != DEPLOYMENT_PLAN_SCHEMA_V1 or plan.get("authorization_required") is not True:
++    if plan.get("release_contract_schema") not in {"abm-report-release-contract-v15", "abm-report-release-contract-v16", "abm-report-release-contract-v17"} or plan.get("schema_version") != DEPLOYMENT_PLAN_SCHEMA_V1 or plan.get("authorization_required") is not True:
+         raise DeploymentAuthorizationError("v15 operation requires its authorized plan")
+     target = _target_from_document(plan["deployment_target"])
+     _rollback_identity(plan.get("rollback_identity"), target=target)
+diff --git a/src/llm_abm_sim/ten_topic_release.py b/src/llm_abm_sim/ten_topic_release.py
+new file mode 100644
+index 0000000..5234a52
+--- /dev/null
++++ b/src/llm_abm_sim/ten_topic_release.py
+@@ -0,0 +1,487 @@
++"""Exact v17 accession of four reviewed ten-topic Formal studies.
++
++Source eligibility flags are historical facts and remain unchanged. Publication
++readiness belongs to this new contract, never a forged v15/v16 compatibility view.
++"""
++from __future__ import annotations
++
++import hashlib
++import json
++from collections.abc import Mapping
++from pathlib import Path
++from typing import Any
++
++SCHEMA = "abm-report-release-contract-v17"
++ENDPOINT = "https://abm.q1ngyuan.top/"
++# Reviewed source identities, not caller-supplied declarations of Formal status.
++SOURCE_SHA256 = {'whole_sample_manifest': '26b1bf7b796940952910ccfd78b5b259ff4f22ce48bf131f32be6a306300839d', 'gpt_acceptance': '5df02d59afb8d287257554103af156724f890f5c2b5229ff583df3e10cf4a576', 'gpt_inventory': '906637cc3997732c842996bf20b7d17911c57f8d2f4d2e6cffb3968e945935cd', 'gpt_path_manifest': 'd01006705b1ef826193b86d94c41741669f96b4626b6fd605ee7d505a0a123fa', 'gpt_evidence': '302d20eec48ab8c8d1dd61199fc048df9f8f61b2b002c54f0501f105485651e4', 'four_model_acceptance': '0b17d7df5b0fd55d18ff648a3c7a917d3c86dd43e48ed37e63d5d984dd257831', 'four_model_inventory': '268471c4a479a60eb95298e06896e88089fa788841a4351d7163111c86d6d5c1', 'four_model_bank_manifest': 'cbad2e56f7b615b47e40428bb83d52da43cd44a19f0b712e998e7595ac1aea98', 'protected_v16_contract': '6ef1f9baf777d29223fa1e9fab8d3cd1c86b368162f4f9f7491d86e83db63ef0'}
++
++def _sha(path: Path) -> str:
++    digest = hashlib.sha256()
++    with path.open('rb') as stream:
++        for chunk in iter(lambda: stream.read(1024 * 1024), b''):
++            digest.update(chunk)
++    return digest.hexdigest()
++
++
++def _bound(path: Path, expected: str) -> dict[str, Any]:
++    if (not path.is_file() or path.is_symlink() or path.absolute() != path.resolve()
++            or _sha(path) != expected):
++        raise ValueError(f'Formal source binding or regular-file identity drift: {path}')
++    return json.loads(path.read_bytes())
++
++
++def accept_ten_topic_sources(*, repo_root: str | Path,
++                            source_bindings: Mapping[str, Mapping[str, object]]) -> dict[str, Any]:
++    """Admit only the reviewed source bytes and their complete Formal inventories.
++
++    Caller supplies every explicit path/hash. No latest-directory search, Provider
++    invocation, simulation, source write, or public disclosure occurs here.
++    Returns accepted source facts for Report/Release composition; never deploys.
++    """
++    root = Path(repo_root).resolve()
++    if set(source_bindings) != set(SOURCE_SHA256):
++        raise ValueError('Exact four-study source binding set required')
++    documents = {}
++    paths = {}
++    for name, expected in SOURCE_SHA256.items():
++        reference = source_bindings[name]
++        if reference.get('sha256') != expected or not isinstance(reference.get('path'), str):
++            raise ValueError(f'Reviewed source binding mismatch: {name}')
++        path = Path(str(reference['path'])).absolute()
++        if name != 'protected_v16_contract' and not path.is_relative_to(root):
++            raise ValueError('New source binding escaped the existing worktree')
++        documents[name] = _bound(path, expected)
++        paths[name] = path
++    main = documents['whole_sample_manifest']
++    gpt = documents['gpt_acceptance']
++    four = documents['four_model_acceptance']
++    if (main['schema_version'] != 'full-pool-ten-topic-network-replay-v1'
++            or main['classification'] != 'offline_formal_judgment_network_intervention'
++            or main['counts']['exposures'] != 109200 or main['counts']['users'] != 36400
++            or main['production_deploy_eligible'] is not False
++            or gpt['status'] != 'pass' or gpt['paths'] != 2800
++            or gpt['exposures'] != 5040000 or gpt['unresolved_research_correctness_findings']
++            or four['status'] != 'pass_complete_16_conditions_with_disclosures'
++            or four['conditions'] != 16 or four['exposures'] != 28800
++            or four['unresolved_data_authenticity_path_or_statistics_findings']):
++        raise ValueError('Reviewed Formal scope or acceptance crossed')
++    for item in main['artifacts']:
++        path = paths['whole_sample_manifest'].parent / item['relative_path']
++        if _sha(path) != item['sha256']:
++            raise ValueError('Whole-sample artifact binding drift')
++    for name, expected in documents['gpt_inventory']['final_objects'].items():
++        if _sha(Path(name)) != expected:
++            raise ValueError('GPT final object binding drift')
++    gpt_manifest = documents['gpt_path_manifest']
++    if len(gpt_manifest['paths']) != 2800:
++        raise ValueError('GPT path matrix incomplete')
++    for name, expected in gpt_manifest['paths'].items():
++        path = paths['gpt_path_manifest'].parent / name
++        if _sha(path) != expected:
++            raise ValueError('GPT formal path binding drift')
++    for item in documents['four_model_inventory']:
++        if _sha(Path(item['path'])) != item['sha256']:
++            raise ValueError('Four-model final object binding drift')
++    protected = documents['protected_v16_contract']
++    if protected['schema_version'] != 'abm-report-release-contract-v16':
++        raise ValueError('Expected protected historical v16')
++    for name, expected in protected['artifact_sha256'].items():
++        if _sha(Path(protected['source_directory']) / name) != expected:
++            raise ValueError('Protected historical release inventory drift')
++    return {'schema_version': 'ten-topic-reviewed-publication-sources-v1',
++            'publication_contract_schema': SCHEMA, 'provider_calls': 0,
++            'whole_sample': {'users': 36400, 'exposures': 109200, 'behavior_seeds': 1},
++            'parameters': {'configurations': 21, 'behavior_seeds': 100, 'paths': 2100},
++            'index': {'arms': 7, 'behavior_seeds': 100, 'paths': 700},
++            'four_models': {'conditions': 16, 'exposures': 28800, 'behavior_seeds': 1},
++            'paths': {name: str(path) for name, path in paths.items()},
++            'source_sha256': dict(SOURCE_SHA256),
++            'protected_v16_directory': protected['source_directory'],
++            'source_eligibility_flags_preserved': True,
++            'new_release_and_public_validation_required': True}
++
++
++def collect_ten_topic_public_data(accepted_sources: Mapping[str, Any]) -> dict[str, Any]:
++    """Project accepted aggregate records, deriving displayed denominators and rates.
++
++    No user-level judgments, raw responses, credentials, or private diagnostics are
++    returned. Stored estimates remain conditional 100-behavior-seed statistics.
++    """
++    import csv
++    import statistics
++    from collections import Counter, defaultdict
++
++    if accepted_sources.get('schema_version') != 'ten-topic-reviewed-publication-sources-v1':
++        raise ValueError('Accepted publication sources required')
++    paths = accepted_sources['paths']
++    main = Path(paths['whole_sample_manifest']).parent
++    gpt = Path(paths['gpt_evidence']).parent
++    four = Path(paths['four_model_acceptance']).parent
++
++    def rows(path: Path) -> list[dict[str, Any]]:
++        with path.open(encoding='utf-8-sig', newline='') as stream:
++            result = list(csv.DictReader(stream))
++        for row in result:
++            for key, value in list(row.items()):
++                if value == '':
++                    row[key] = None
++                else:
++                    try:
++                        row[key] = int(value)
++                    except ValueError:
++                        try:
++                            row[key] = float(value)
++                        except ValueError:
++                            pass
++        return result
++
++    projection = rows(main / 'full-pool-realized-projection.csv')
++    by_group: dict[tuple[str, str], Counter] = defaultdict(Counter)
++    total: Counter = Counter()
++    for row in projection:
++        counts = {'exposures': row['Exposure'], 'like': row['Total Likes'],
++                  'comment': row['Total Comments'], 'share': row['Total Shares']}
++        counts['ignore'] = counts['exposures'] - sum(counts[k] for k in ('like', 'comment', 'share'))
++        if counts['ignore'] < 0:
++            raise ValueError('Whole-sample mutually exclusive actions crossed')
++        by_group[row['Message'], row['Segment']].update(counts)
++        total.update(counts)
++    if total['exposures'] != 109200:
++        raise ValueError('Whole-sample public denominator drift')
++    whole_rows = []
++    for (message, segment), counts in sorted(by_group.items()):
++        item = dict(counts, message=message, segment=segment)
++        for action in ('like', 'comment', 'share', 'ignore'):
++            item[action + '_rate'] = counts[action] / counts['exposures']
++        item['realized_rate'] = sum(counts[k] for k in ('like', 'comment', 'share')) / counts['exposures']
++        whole_rows.append(item)
++    comparison = rows(main / 'curve-comparison.csv')
++    trajectories: dict[tuple[str, int], dict[str, Any]] = defaultdict(dict)
++    for row in comparison:
++        key = row['message_id'], row['batch']
++        trajectories[key][row['action']] = row['new_cumulative']
++    whole_curves = []
++    for (message, batch), counts in sorted(trajectories.items()):
++        exposures = 36400 if batch == 30 else 1214 * batch
++        positive = sum(counts[k] for k in ('like', 'comment', 'share'))
++        whole_curves.append({'message': message, 'batch': batch, 'exposures': exposures,
++                             'realized_positive': positive, 'realized_rate': positive / exposures,
++                             **counts})
++    estimates = rows(gpt / 'arm-parameter-estimates.csv')
++    metrics = rows(gpt / 'old-new-path-metrics.csv')
++    grouped: dict[tuple[str, str, str], list[dict[str, Any]]] = defaultdict(list)
++    for row in metrics:
++        grouped[row['study'], row['configuration'], row['message']].append(row)
++        if sum(row['new_' + k] for k in ('like', 'comment', 'share', 'ignore')) != row['new_exposures']:
++            raise ValueError('Sensitivity public action denominator drift')
++    for estimate in estimates:
++        selected = grouped[estimate['study'], estimate['configuration'], estimate['message']]
++        metric = estimate['metric']
++        column = 'new_' + ('engagement_rate' if metric == 'engagement_rate' else metric)
++        if len(selected) != 100 or estimate['n'] != 100:
++            raise ValueError('Sensitivity statistic is not a 100-seed mean')
++        if abs(statistics.mean(r[column] for r in selected) - estimate['mean']) > 1e-10:
++            raise ValueError('Sensitivity published mean drift')
++    curves = rows(gpt / 'old-new-mean-curves.csv')
++    model_conditions = rows(four / 'formal-report/conditions.csv')
++    if len(model_conditions) != 16:
++        raise ValueError('Four-model public matrix incomplete')
++    for row in model_conditions:
++        if row['exposures'] != 1800 or sum(row[k] for k in ('like', 'comment', 'share', 'ignore')) != 1800:
++            raise ValueError('Four-model public denominator drift')
++        if abs(row['realized_positive'] / 1800 - row['realized_rate']) > 1e-12:
++            raise ValueError('Four-model realized rate drift')
++    model_labels = {r['model_id']: r['model'] for r in model_conditions}
++    segment_batches: dict[tuple[str, str, str, str, int], Counter] = defaultdict(Counter)
++    model_acceptance = json.loads((four / 'independent-acceptance/ACCEPTANCE_PROGRESS.json').read_bytes())
++    if model_acceptance['verified_conditions'] != 16:
++        raise ValueError('Bound model normalization matrix incomplete')
++    for reference in model_acceptance['cells']:
++        source = Path(reference['normalized_path'])
++        if _sha(source) != reference['normalized_sha256']:
++            raise ValueError('Bound model normalization source drift')
++        for line in source.read_text().splitlines():
++            event = json.loads(line)
++            key = event['model'], event['template'], event['message_id'], event['segment'], event['batch']
++            segment_batches[key]['exposures'] += 1
++            segment_batches[key][event['realized_action']] += 1
++    segment_curves = []
++    groups = sorted({k[:4] for k in segment_batches})
++    for model, template, message, segment in groups:
++        cumulative: Counter = Counter()
++        for batch in range(30):
++            cumulative.update(segment_batches[model, template, message, segment, batch])
++            positive = sum(cumulative[k] for k in ('like', 'comment', 'share'))
++            segment_curves.append({'model': model_labels[model], 'model_id': model,
++                                   'template': template, 'message': message, 'segment': segment,
++                                   'batch': batch, **dict(cumulative),
++                                   'realized_positive': positive,
++                                   'realized_rate': positive / cumulative['exposures']
++                                   if cumulative['exposures'] else None})
++    network = json.loads((four / 'FINAL_CORROBORATION.json').read_bytes())
++    prepared = json.loads((four / 'protocol/PREPARED_CONTRACT.json').read_bytes())
++    sample_reference = prepared['sample_reference']
++    if _sha(Path(sample_reference['path'])) != sample_reference['sha256']:
++        raise ValueError('Accepted sample reference drift')
++    samples = json.loads(Path(sample_reference['path']).read_bytes())
++    baseline_ids = set(next(r['sample_user_ids'] for r in samples if r['arm'] == 'baseline'))
++    rebuilt_ids = set(next(r['sample_user_ids'] for r in samples if r['arm'] == 'local_p99_rebuilt'))
++    rebuilt_overlap = len(baseline_ids & rebuilt_ids)
++    return {'schema_version': 'ten-topic-public-statistics-v1',
++            'network': {k: network[k] for k in ('p95', 'actual_ten_topic_names', 'raw_graph_identity',
++                                                'holdout_excluded', 'history_comments', 'history_videos')},
++            'whole': {'summary': dict(total), 'rows': whole_rows, 'curves': whole_curves},
++            'parameters': {'estimates': [r for r in estimates if r['study'] == 'parameters'],
++                           'curves': [r for r in curves if r['study'] == 'parameters'],
++                           'paired': rows(gpt / 'parameter-message-contrasts.csv')},
++            'index': {'local_p99_rebuilt_overlap': rebuilt_overlap, 'estimates': [r for r in estimates if r['study'] == 'index'],
++                      'curves': [r for r in curves if r['study'] == 'index'],
++                      'paired': rows(gpt / 'index-paired-estimates.csv'),
++                      'composition': rows(gpt / 'sample-composition.csv')},
++            'models': {'conditions': model_conditions, 'messages': rows(four / 'formal-report/messages.csv'),
++                       'segments': rows(four / 'formal-report/segments-messages.csv'),
++                       'curves': rows(four / 'formal-report/curves.csv'), 'segment_curves': segment_curves,
++                       'paired_seed': rows(four / 'formal-report/direct-seed-panel.csv'),
++                       'comparison': rows(four / 'formal-report/old-new.csv')},
++            'download_links': []}
++
++
++_CONTRACT_FIELDS = {'schema_version', 'release_purpose', 'release_id', 'source_directory',
++                    'implementation_commit', 'canonical_endpoint', 'sources', 'workbook',
++                    'artifact_sha256', 'release_identity_sha256', 'production_deploy_eligible',
++                    'provider_calls'}
++PURPOSE = 'reviewed_ten_topic_four_studies_with_protected_single_topic_history'
++
++
++def _json_bytes(value: Any) -> bytes:
++    return (json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(',', ':'), allow_nan=False) + '\n').encode()
++
++
++def _digest(value: Any) -> str:
++    return hashlib.sha256(_json_bytes(value)).hexdigest()
++
++
++def _validate_workbook(path: Path, expected_sha: str, data: dict[str, Any]) -> None:
++    """Decode exported XLSX independently and compare every typed aggregate cell."""
++    import math
++    import posixpath
++    import xml.etree.ElementTree as ET
++    import zipfile
++
++    from .ten_topic_report import ten_topic_workbook_tables
++
++    if not path.is_file() or path.is_symlink() or _sha(path) != expected_sha:
++        raise ValueError('Publication workbook binding drift')
++    ns = {'s': 'http://schemas.openxmlformats.org/spreadsheetml/2006/main'}
++    rns = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships'
++    expected = ten_topic_workbook_tables(data)
++    with zipfile.ZipFile(path) as archive:
++        shared = []
++        if 'xl/sharedStrings.xml' in archive.namelist():
++            shared = [''.join(t.text or '' for t in v.findall('.//s:t', ns))
++                      for v in ET.fromstring(archive.read('xl/sharedStrings.xml'))]
++        relationships = {e.attrib['Id']: e.attrib['Target'] for e in
++                         ET.fromstring(archive.read('xl/_rels/workbook.xml.rels'))}
++        sheets = ET.fromstring(archive.read('xl/workbook.xml')).findall('s:sheets/s:sheet', ns)
++        if {s.attrib['name'] for s in sheets} != set(expected):
++            raise ValueError('Workbook study sheet set crossed')
++        for sheet in sheets:
++            name = sheet.attrib['name']
++            target = relationships[sheet.attrib['{' + rns + '}id']]
++            target = target.lstrip('/') if target.startswith('/') else posixpath.normpath('xl/' + target)
++            cells = {}
++            for cell in ET.fromstring(archive.read(target)).findall('.//s:sheetData/s:row/s:c', ns):
++                kind = cell.attrib.get('t')
++                value = cell.find('s:v', ns)
++                text = value.text if value is not None else None
++                if kind == 's':
++                    parsed = shared[int(text)]
++                elif kind == 'inlineStr':
++                    parsed = ''.join(x.text or '' for x in cell.findall('.//s:t', ns))
++                elif kind == 'b':
++                    parsed = text == '1'
++                elif text is None:
++                    parsed = None
++                elif kind == 'str':
++                    parsed = text
++                else:
++                    parsed = float(text)
++                cells[cell.attrib['r']] = parsed
++            rows = expected[name]
++            columns = list(dict.fromkeys(k for row in rows for k in row))
++            matrix = [columns, *[[row.get(k) for k in columns] for row in rows]]
++            expected_addresses = set()
++            for row_index, row in enumerate(matrix, 1):
++                for column, wanted in enumerate(row, 1):
++                    letters = ''
++                    n = column
++                    while n:
++                        n, digit = divmod(n - 1, 26)
++                        letters = chr(65 + digit) + letters
++                    address = letters + str(row_index)
++                    expected_addresses.add(address)
++                    actual = cells.get(address)
++                    if isinstance(wanted, (float, int)) and not isinstance(wanted, bool):
++                        valid = isinstance(actual, (float, int)) and math.isclose(actual, wanted, rel_tol=1e-12, abs_tol=1e-10)
++                    else:
++                        valid = actual == wanted
++                    if not valid:
++                        raise ValueError(f'Workbook cell/source mismatch: {name}!{address}')
++            if any(v is not None and k not in expected_addresses for k, v in cells.items()):
++                raise ValueError('Unexpected public workbook data')
++
++
++def _materialize_ten_topic(root: Path, sources: Mapping[str, Mapping[str, object]],
++                           workbook: Mapping[str, str], release_id: str, commit: str):
++    from .concurrent_robustness_report import _REPORT_PRESENTATION
++    from .ten_topic_report import ten_topic_public_downloads
++
++    accepted = accept_ten_topic_sources(repo_root=root, source_bindings=sources)
++    data = collect_ten_topic_public_data(accepted)
++    _validate_workbook(Path(workbook['path']), workbook['sha256'], data)
++    downloads = ten_topic_public_downloads(data)
++    downloads['ten-topic/ten-topic-research.xlsx'] = Path(workbook['path']).read_bytes()
++    data['download_links'] = [{'path': name, 'label': name.removeprefix('ten-topic/')} for name in sorted(downloads)]
++    downloads['ten-topic/public-statistics.json'] = _json_bytes(data)
++    data['download_links'].append({'path': 'ten-topic/public-statistics.json', 'label': 'Public statistics JSON'})
++    base = Path(accepted['protected_v16_directory'])
++    old = json.loads(Path(str(sources['protected_v16_contract']['path'])).read_bytes())
++    report = _REPORT_PRESENTATION.render_ten_topic_research((base / 'report.html').read_bytes(), data, release_id=release_id)
++    public_sources = {'schema_version': 'ten-topic-public-source-map-v1',
++                      'network': data['network'], 'studies': {k: accepted[k] for k in ('whole_sample', 'parameters', 'index', 'four_models')},
++                      'source_sha256': accepted['source_sha256'], 'source_eligibility_preserved': True,
++                      'publication_provider_calls': 0, 'actual_deepseek_model': 'deepseek-flash / V4.1 Flash',
++                      'gemini_observed_alias': 'gemini-pro-agent;hidden context not observed'}
++    downloads['ten-topic/source-map.json'] = _json_bytes(public_sources)
++    downloads['single-topic-report.html'] = (base / 'report.html').read_bytes()
++    downloads['single-topic-artifact-manifest.json'] = (base / 'artifact_manifest.json').read_bytes()
++    data['download_links'].append({'path': 'ten-topic/source-map.json', 'label': 'Formal source map JSON'})
++    report = _REPORT_PRESENTATION.render_ten_topic_research((base / 'report.html').read_bytes(), data, release_id=release_id)
++    content = {name: digest for name, digest in old['artifact_sha256'].items() if name not in {'report.html', 'artifact_manifest.json'}}
++    if set(content) & set(downloads):
++        raise ValueError('New public downloads overlap protected historical files')
++    content.update({name: hashlib.sha256(payload).hexdigest() for name, payload in downloads.items()})
++    content['report.html'] = hashlib.sha256(report).hexdigest()
++    identity = _digest({'schema': SCHEMA, 'release_id': release_id, 'implementation_commit': commit,
++                        'sources': sources, 'workbook': workbook, 'content_sha256': content})
++    old_manifest = json.loads((base / 'artifact_manifest.json').read_bytes())
++    approved = old_manifest['approved_downloads']
++    if isinstance(approved, dict):
++        approved = list(approved.values())
++    manifest = {'schema_version': 'abm-report-release-manifest-v17', 'release_contract_schema': SCHEMA,
++                'release_id': release_id, 'release_identity_sha256': identity, 'implementation_commit': commit,
++                'production_deploy_eligible': True, 'provider_calls': 0, 'content_sha256': content,
++                'approved_downloads': sorted(set(approved) | set(downloads)),
++                'protected_v16_release_identity': old['release_identity_sha256'],
++                'public_policy': 'new artifacts aggregate only;no new raw responses/credentials/user judgment bank'}
++    files = {**downloads, 'report.html': report, 'artifact_manifest.json': _json_bytes(manifest)}
++    hashes = {**content, 'artifact_manifest.json': _digest(manifest)}
++    return base, files, hashes, identity
++
++
++def promote_ten_topic_release(*, repo_root: str | Path, source_bindings: Mapping[str, Mapping[str, object]],
++                              workbook: Mapping[str, str], destination_dir: str | Path,
++                              release_id: str, implementation_commit: str) -> Path:
++    """Create the immutable v17 publication from explicit reviewed sources, never deploy."""
++    import os
++    import re
++    import shutil
++    import tempfile
++
++    root = Path(repo_root).resolve()
++    destination = Path(destination_dir).absolute()
++    contract_path = destination.with_name(destination.name + '-release-contract.json')
++    if (destination.is_symlink() or destination != destination.resolve() or not destination.is_relative_to(root)
++            or destination.exists() or contract_path.exists()
++            or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.-]{0,159}', release_id)
++            or not re.fullmatch(r'[0-9a-f]{40}', implementation_commit)):
++        raise ValueError('Invalid or overlapping immutable release destination/identity')
++    for ref in source_bindings.values():
++        if destination.is_relative_to(Path(str(ref['path'])).parent):
++            raise ValueError('Release destination overlaps an input')
++    if set(workbook) != {'path', 'sha256'}:
++        raise ValueError('Exact workbook binding required')
++    base, files, hashes, identity = _materialize_ten_topic(root, source_bindings, workbook, release_id, implementation_commit)
++    if base.is_relative_to(destination) or destination.is_relative_to(base):
++        raise ValueError('Protected release overlap')
++    contract = {'schema_version': SCHEMA, 'release_purpose': PURPOSE, 'release_id': release_id,
++                'source_directory': str(destination), 'implementation_commit': implementation_commit,
++                'canonical_endpoint': ENDPOINT, 'sources': dict(source_bindings), 'workbook': dict(workbook),
++                'artifact_sha256': hashes, 'release_identity_sha256': identity,
++                'production_deploy_eligible': True, 'provider_calls': 0}
++    destination.parent.mkdir(parents=True, exist_ok=True)
++    staging = Path(tempfile.mkdtemp(prefix='.v17-', dir=destination.parent))
++    installed = False
++    try:
++        shutil.copytree(base, staging, dirs_exist_ok=True)
++        for folder in [staging, *(p for p in staging.rglob('*') if p.is_dir())]:
++            folder.chmod(0o755)
++        for name, payload in files.items():
++            target = staging / name
++            target.parent.mkdir(parents=True, exist_ok=True)
++            if target.exists():
++                target.chmod(0o644)
++            target.write_bytes(payload)
++        from .concurrent_robustness_revised import inventory
++        if {k: v['sha256'] for k, v in inventory(staging).items()} != hashes:
++            raise ValueError('Staged v17 inventory drift')
++        for target in staging.rglob('*'):
++            if target.is_file():
++                target.chmod(0o444)
++        with contract_path.open('xb') as stream:
++            installed = True
++            stream.write(_json_bytes(contract))
++        contract_path.chmod(0o444)
++        os.rename(staging, destination)
++    except BaseException:
++        if installed:
++            contract_path.unlink()
++        raise
++    finally:
++        if staging.exists():
++            shutil.rmtree(staging)
++    return contract_path
++
++
++def validate_ten_topic_release(*, repo_root: str | Path, contract_document: Mapping[str, Any],
++                               source_dir: str | Path, snapshot_dir: str | Path | None = None) -> dict[str, Any]:
++    """Rebuild expected publication bytes and compare complete physical inventories."""
++    import re
++
++    from .concurrent_robustness_revised import inventory
++
++    c = dict(contract_document)
++    if (set(c) != _CONTRACT_FIELDS or c['schema_version'] != SCHEMA or c['release_purpose'] != PURPOSE
++            or c['canonical_endpoint'] != ENDPOINT or c['provider_calls'] != 0
++            or c['production_deploy_eligible'] is not True):
++        raise ValueError('Invalid ten-topic publication contract')
++    root = Path(repo_root).resolve()
++    source = Path(source_dir).absolute()
++    if (source != source.resolve() or not source.is_relative_to(root) or str(source) != c['source_directory']
++            or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.-]{0,159}', c['release_id'])
++            or not re.fullmatch(r'[0-9a-f]{40}', c['implementation_commit'])):
++        raise ValueError('Publication contract source/identity drift')
++    _, _, hashes, identity = _materialize_ten_topic(root, c['sources'], c['workbook'], c['release_id'], c['implementation_commit'])
++    if hashes != c['artifact_sha256'] or identity != c['release_identity_sha256']:
++        raise ValueError('Publication contract reconstruction drift')
++    for folder in [source, *([Path(snapshot_dir)] if snapshot_dir else [])]:
++        if {k: v['sha256'] for k, v in inventory(folder).items()} != hashes:
++            raise ValueError('Publication physical inventory drift')
++    return {**c, 'formal_research_evidence': True, 'realized_source_identity': identity,
++            'report_sha256': hashes['report.html'], 'manifest_sha256': hashes['artifact_manifest.json'],
++            'sampling_method': 'accepted_final_ten_topic_studies_and_protected_historical',
++            'sampling_status': 'all_four_studies_accepted',
++            'decision_execution_mode': 'persisted_formal_evidence_zero_provider_publication'}
++
++
++def require_ten_topic_deployment_profile(result: Mapping[str, Any]) -> dict[str, Any]:
++    """Project validated v17 facts only; deployment does not own study knowledge."""
++    if (result.get('schema_version') != SCHEMA or result.get('formal_research_evidence') is not True
++            or result.get('production_deploy_eligible') is not True or result.get('provider_calls') != 0):
++        raise ValueError('v17 requires validated four-study Formal publication')
++    return {'realized_source_identity': result['realized_source_identity'], 'release_readiness': {
++        'schema_version': 'ten-topic-v17-release-readiness-v1', 'release_contract_schema': SCHEMA,
++        'release_id': result['release_id'], 'realized_source_identity': result['realized_source_identity'],
++        'canonical_endpoint': ENDPOINT, 'provider_calls': 0, 'operational_authorization_required': True,
++        'deployment_authorized': False, 'public_acceptance_recorded': False}}
+diff --git a/src/llm_abm_sim/ten_topic_report.py b/src/llm_abm_sim/ten_topic_report.py
+new file mode 100644
+index 0000000..17212ca
+--- /dev/null
++++ b/src/llm_abm_sim/ten_topic_report.py
+@@ -0,0 +1,206 @@
++"""Current ten-topic research presentation in the existing editorial shell."""
++from __future__ import annotations
++
++import html
++import json
++import re
++from typing import Any
++
++_STYLE = '''<style>
++.ten-topic-current{max-width:1200px;margin:auto;padding:0 1.5rem 3rem}.tt-hero{display:grid;grid-template-columns:2fr 1fr;gap:2rem;padding:4rem 0 2rem}.tt-hero h1{font-size:clamp(2.5rem,6vw,5.8rem);line-height:1.08;margin:1rem 0;color:#19232c}.tt-shelf{color:#1e55be;letter-spacing:.08em;font-weight:700}.tt-stat{background:white;border:1px solid #ccd7e4;border-radius:12px;padding:1.5rem;align-self:center}.tt-stat strong{font-size:3rem;color:#245aba}.tt-controls{display:flex;gap:.7rem;flex-wrap:wrap;align-items:center;margin:1rem 0}.tt-controls select,.tt-controls button{padding:.6rem;border:1px solid #b8c6d8;border-radius:6px;background:#fff;color:#19232c}.tt-overflow{overflow:auto;margin:1rem 0}.tt-table{border-collapse:collapse;width:100%;background:#fff;font-size:.9rem}.tt-table td,.tt-table th{padding:.7rem;text-align:right;border-bottom:1px solid #d8e0ea;white-space:nowrap}.tt-table th:first-child,.tt-table td:first-child{text-align:left}.tt-table th{background:#edf2f8}.tt-note{color:#526377;font-size:.95rem;line-height:1.65}.tt-plots svg{max-width:100%;height:auto;display:block;background:#fff;border:1px solid #d8e0ea;border-radius:10px}.tt-legend{display:flex;flex-wrap:wrap;gap:1rem;padding:.7rem;font-size:.85rem}.tt-downloads{display:flex;flex-wrap:wrap;gap:.6rem 1rem}.tt-en{display:none}.ten-topic-current[data-language=en] .tt-en{display:initial}.ten-topic-current[data-language=en] .tt-zh{display:none}#single-topic-history{max-width:1200px;margin:2rem auto;border-top:1px solid #ccd7e4;padding:1rem 0}#single-topic-history>summary{font-size:1.35rem;font-weight:700;cursor:pointer}@media(max-width:650px){.tt-hero{grid-template-columns:1fr;padding-top:2rem}.ten-topic-current{padding:0 .9rem 2rem}.tt-table{font-size:.8rem}}
++</style>'''
++
++_SCRIPT = r'''<script>
++(()=>{'use strict';const root=document.querySelector('.ten-topic-current');if(!root)return;
++const d=JSON.parse(document.getElementById('ten-topic-public-data').textContent);const pct=x=>(100*Number(x)).toFixed(3)+'%';const num=x=>Number(x).toLocaleString(undefined,{maximumFractionDigits:3});
++const title={baseline:'Baseline',activity_weights:'Activity weights',activity_p99:'Activity p99',local_weights_fixed:'Local weights · fixed',local_weights_rebuilt:'Local weights · rebuilt',local_p99_fixed:'Local p99 · fixed',local_p99_rebuilt:'Local p99 · rebuilt'};
++const esc=x=>String(x).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
++const table=(target,headers,rows)=>{target.innerHTML='<table class="tt-table"><thead><tr>'+headers.map(x=>'<th>'+esc(x)+'</th>').join('')+'</tr></thead><tbody>'+rows.map(r=>'<tr>'+r.map(x=>'<td>'+esc(x)+'</td>').join('')+'</tr>').join('')+'</tbody></table>';};
++function plot(target,groups){const colors=['#245aba','#bb5534','#188875','#9c4e95','#756b27','#333f6b','#657889'];let body='<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 440" role="img" aria-label="Cumulative realized engagement rate / 累计实际互动率"><rect width="900" height="440" fill="white"/>';
++for(let y=0;y<=4;y++){const sy=340-y*72;body+='<line x1="65" y1="'+sy+'" x2="850" y2="'+sy+'" stroke="#dbe2ea"/><text x="10" y="'+(sy+5)+'" fill="#526377">'+(y*25)+'%</text>';}
++let legend='';groups.forEach((g,i)=>{const color=colors[i%colors.length];const points=g.rows.map(r=>[65+Number(r.batch)*785/30,340-Number(r.rate)*288].join(',')).join(' ');body+='<polyline fill="none" stroke="'+color+'" stroke-width="2.5" points="'+points+'"/>';legend+='<span style="color:'+color+'">'+esc(g.name)+'</span>';});
++for(let x=0;x<=30;x+=5)body+='<text x="'+(65+x*785/30)+'" y="365" fill="#526377">'+x+'</text>';body+='<text x="65" y="405" fill="#526377">Batch / 传播批次 · cumulative realized interactions ÷ cumulative exposures</text></svg>';target.innerHTML=body+'<div class="tt-legend">'+legend+'</div>';}
++function whole(){const rows=d.whole.rows.map(r=>[r.message,r.segment,num(r.exposures),pct(r.like_rate),pct(r.comment_rate),pct(r.share_rate),pct(r.ignore_rate),pct(r.realized_rate)]);table(root.querySelector('[data-tt-table=whole]'),['Message','Segment','Exposure','Like','Comment','Share','Ignore','Realized'],rows);plot(root.querySelector('[data-tt-plot=whole]'),['message_1','message_2','message_3'].map(m=>({name:m,rows:d.whole.curves.filter(r=>r.message===m).map(r=>({batch:r.batch,rate:r.realized_rate}))})));}
++function sensitivity(study){const section=root.querySelector('[data-tt-study='+study+']');const m=section.querySelector('[data-tt-message]').value;const e=d[study].estimates.filter(r=>r.message===m);const keys=[...new Set(e.map(r=>r.configuration))];const rows=keys.map(k=>{const find=q=>e.find(r=>r.configuration===k&&r.metric===q);const rate=find('engagement_rate');const den=m==='all'?1800:600;return [title[k]||k,pct(rate.mean),pct(rate.lower)+' – '+pct(rate.upper),pct(find('like').mean/den),pct(find('comment').mean/den),pct(find('share').mean/den),pct(1-rate.mean),pct(rate.old_mean)];});table(section.querySelector('[data-tt-table]'),['Condition','Realized mean','95% interval','Like mean','Comment mean','Share mean','Ignore mean','Old mean'],rows);
++const select=section.querySelector('[data-tt-condition]');if(!select.options.length){select.add(new Option('All conditions','all'));keys.forEach(k=>select.add(new Option(title[k]||k,k)));}const selected=select.value;const shown=keys.filter(k=>selected==='all'||selected===k);plot(section.querySelector('[data-tt-plot]'),shown.map(k=>({name:title[k]||k,rows:d[study].curves.filter(r=>r.configuration===k&&r.message===m).map(r=>({batch:r.batch,rate:r.new_rate_mean}))})));}
++function models(){const section=root.querySelector('[data-tt-study=models]'),m=section.querySelector('[data-tt-message]').value,t=section.querySelector('[data-tt-template]').value,s=section.querySelector('[data-tt-segment]').value;let rows=m==='all'?d.models.conditions:s==='all'?d.models.messages:d.models.segments;const seg=section.querySelector('[data-tt-segment]');seg.disabled=m==='all';if(m==='all')seg.value='all';rows=rows.filter(r=>(m==='all'||r.message===m)&&(t==='all'||r.template===t)&&(m==='all'||s==='all'||r.segment===s));
++table(section.querySelector('[data-tt-table]'),['Model','Prompt','Exposure','Realized','Like','Comment','Share','Ignore'],rows.map(r=>[r.model,r.template,num(r.exposures),pct(r.realized_rate),pct(r.like/r.exposures),pct(r.comment/r.exposures),pct(r.share/r.exposures),pct(r.ignore/r.exposures)]));
++const templates=t==='all'?['P0','P1','P2','P3']:[t];const names=[...new Set(d.models.conditions.map(r=>r.model))];const groups=[];templates.forEach(tm=>names.forEach(n=>{const grouped=new Map();(m!=='all'&&s!=='all'?d.models.segment_curves:d.models.curves).filter(r=>r.model===n&&r.template===tm&&(m==='all'||r.message===m)&&(m==='all'||s==='all'||r.segment===s)).forEach(r=>{const b=Number(r.batch)+1;const sum=grouped.get(b)||{p:0,e:0};sum.p+=Number(r.realized_positive);sum.e+=Number(r.exposures);grouped.set(b,sum);});groups.push({name:n+' '+tm+' '+m,rows:[...grouped].filter(([b,v])=>v.e>0).sort((a,b)=>a[0]-b[0]).map(([batch,v])=>({batch,rate:v.p/v.e}))});}));plot(section.querySelector('[data-tt-plot]'),groups);}
++root.addEventListener('change',e=>{const section=e.target.closest('[data-tt-study]');if(!section)return;const s=section.dataset.ttStudy;if(s==='models')models();else sensitivity(s);});
++root.querySelectorAll('[data-tt-lang]').forEach(b=>b.addEventListener('click',()=>{root.dataset.language=b.dataset.ttLang;document.documentElement.lang=b.dataset.ttLang==='en'?'en-US':'zh-CN';const old=document.querySelector('[data-full-pool-language="'+document.documentElement.lang+'"]');if(old)old.click();root.querySelectorAll('[data-tt-lang]').forEach(x=>x.setAttribute('aria-pressed',String(x===b)));}));
++function oldAnchor(){const hash=location.hash;if(!hash)return;const el=document.getElementById(decodeURIComponent(hash.slice(1)));if(el){let p=el.parentElement;while(p){if(p.tagName==='DETAILS')p.open=true;p=p.parentElement;}}}window.addEventListener('hashchange',oldAnchor);oldAnchor();
++whole();sensitivity('parameters');sensitivity('index');models();
++})();</script>'''
++
++
++def _bi(zh: str, en: str) -> str:
++    return f'<span class="tt-zh">{html.escape(zh)}</span><span class="tt-en">{html.escape(en)}</span>'
++
++
++def _message_control() -> str:
++    return '<label>Message <select data-tt-message><option value="all">All messages</option><option value="message_1">M1</option><option value="message_2">M2</option><option value="message_3">M3</option></select></label>'
++
++
++def render_ten_topic_research(base_html: bytes, data: dict[str, Any], *, release_id: str) -> bytes:
++    """Render current formal aggregate views and keep the old report explicitly historical."""
++    if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.-]{0,159}', release_id):
++        raise ValueError('Invalid release id')
++    base = base_html.decode('utf-8')
++    marker = '<meta name="abm-release-contract" content="abm-report-release-contract-v16">'
++    if base.count('<body>') != 1 or base.count('</body>') != 1 or base.count(marker) != 1:
++        raise ValueError('Expected protected v16 editorial report')
++    if data.get('schema_version') != 'ten-topic-public-statistics-v1':
++        raise ValueError('Public aggregate statistics required')
++    start, end = base.index('<body>') + 6, base.rindex('</body>')
++    legacy = base[start:end]
++    legacy, n = re.subn(r'<nav id="research-navigation".*?</nav>', '', legacy, flags=re.DOTALL)
++    if n != 1:
++        raise ValueError('Protected research navigation must be unique')
++    for identifier in ('full-pool-main', 'revised-robustness', 'parameter-study', 'index-sensitivity-study'):
++        legacy = re.sub(r'(?<![\w-])id="' + identifier + '"', 'id="legacy-' + identifier + '"', legacy)
++        legacy = legacy.replace('href="#' + identifier + '"', 'href="#legacy-' + identifier + '"')
++    whole = data['whole']['summary']
++    denominator = whole['exposures']
++    positive = sum(whole[k] for k in ('like', 'comment', 'share'))
++    if denominator != 109200 or sum(whole[k] for k in ('like', 'comment', 'share', 'ignore')) != denominator:
++        raise ValueError('Whole-sample display denominator or actions crossed')
++    topics = '、'.join(data['network'].get('actual_ten_topic_names', []))
++    navigation = '<nav id="research-navigation" aria-label="研究导航 / Research navigation" style="padding:1rem;max-width:1200px;margin:auto"><h2>研究导航 / Research navigation</h2><p>十话题合并历史网络 · Ten-topic historical interaction network</p><ul>'
++    for anchor, label in [('full-pool-main','Whole sample'),('parameter-study','Parameter'),('index-sensitivity-study','Activity / Local Influence'),('revised-robustness','Prompt–Model'),('single-topic-history','旧版与历史研究 / Historical research')]:
++        navigation += f'<li><a href="#{anchor}">{label}</a></li>'
++    navigation += '</ul></nav>'
++    current = '<main class="ten-topic-current" data-language="zh" data-testid="ten-topic-current"><div class="tt-controls" role="group" aria-label="报告语言"><button data-tt-lang="zh" aria-pressed="true">中文</button><button data-tt-lang="en" aria-pressed="false">English</button></div><section id="full-pool-main" class="tt-hero"><div><p class="tt-shelf">'+_bi('正式研究 · 十话题历史互动网络','Formal research · ten-topic historical network')+'<h1>'+_bi('全样本实际行为','Whole-sample realized behavior')+'</h1><p>'+_bi('36,400用户 · 三条消息 · 30传播批次','36,400 users · three messages · 30 batches')+f'</p></div><div class="tt-stat"><p>Realized interaction / 实际互动</p><strong>{positive/denominator:.3%}</strong><p>{positive:,} / {denominator:,} exposures</p></div></section>'
++    current += '<section class="full-pool-section"><h2>'+_bi('方法与统计口径','Methods and units')+'</h2><p>'+_bi('仅合并最终正式数据集的十个实际采集话题，保留holdout排除、建边、去重与权重累计规则。Network Influence加权度及P95、反馈邻居和种子邻居补选均采用该网络；Local Influence原有全话题度数部分、Activity和Global Influence口径不变。','The network combines exactly ten collected topics in the final dataset, with unchanged holdout, edge and weight rules. Weighted Network Influence, feedback neighbors and sampling connections share it; existing Activity, Local and Global Influence definitions remain unchanged.')+'</p><p class="tt-note">P95 = '+str(data['network']['p95'])+' · '+html.escape(topics)+'</p><p>'+_bi('推荐权重0.50/0.30/0.20，邻居饱和阈值3。种子优先、逐用户消息仅曝光一次；三消息完成后才更新下一批反馈。意向判断经概率抽样才成为实际行为，二者不互换。','Recommendation weights 0.50/0.30/0.20 and neighbor saturation 3. Seed priority and unique user-message exposure are retained; feedback commits only after all three messages. Intent is not realized behavior.')+'</p></section>'
++    current += '<section class="full-pool-section"><h2>'+_bi('全样本结果与传播曲线','Whole-sample results and trajectories')+'</h2><p class="tt-note">'+_bi('单次行为seed20260823；每条消息36,400次曝光。表格比例以相应消息/类别实际曝光为分母；曲线为逐批累计互动÷累计曝光。','One behavior seed, 20260823; 36,400 exposures per message. Table rates use the displayed group exposures; curves use cumulative interactions divided by cumulative exposures.')+'</p><div class="tt-overflow" data-tt-table="whole"></div><div class="tt-plots" data-tt-plot="whole"></div></section>'
++    endpoint_rates = [r['mean'] for r in data['parameters']['estimates'] if r['metric'] == 'engagement_rate' and r['message'] == 'all']
++    parameter_range = f'{min(endpoint_rates):.3%}–{max(endpoint_rates):.3%}' if endpoint_rates else ''
++    rebuilt_overlap = data['index']['local_p99_rebuilt_overlap']
++    for study, identifier, zh, en, note in [('parameters','parameter-study','推荐参数研究','Recommendation parameters',f'21组×100行为seed，共2,100路径。各路径1,800曝光，30批。终点不再全部相同，范围{parameter_range}；不是普遍稳健或不敏感结论。'),('index','index-sensitivity-study','用户指标敏感性研究','User-indicator sensitivity',f'原7臂×100行为seed，共700路径。区分fixed与rebuilt，Local p99重建与新基准重合{rebuilt_overlap}/1000；样本构成也是变化来源。Local权重fixed/rebuilt及两研究共享baseline不是独立重复证据。')]:
++        current += f'<section id="{identifier}" class="full-pool-section" data-tt-study="{study}"><h2>'+_bi(zh,en)+'</h2><p class="tt-note">'+_bi(note, f'21 configurations and 100 behavior seeds: 2,100 paths. Endpoints differ in the tested matrix: {parameter_range}. This is not a universal robustness result.' if study == 'parameters' else f'Seven original arms and 100 behavior seeds: 700 paths. Fixed and rebuilt arms differ in meaning. Local p99 rebuilt overlaps the new baseline by {rebuilt_overlap}/1000 users. Shared baseline and identical Local-weight arms are not independent replications.')+'</p><p class="tt-note">'+_bi('分母每消息600、三消息合计1,800。显示100行为seed均值及df99 Student-t普通95%区间，仅描述固定判断/数据下的行为Monte Carlo误差；100seed不是100次LLM判断。原Bonferroni家族参数123、指标120的同时区间保留在对应数据下载。','Denominators are 600 per message and 1,800 overall. Means and ordinary df99 Student-t intervals reflect 100 behavior seeds conditional on fixed judgments/data, not 100 LLM judgments. Original simultaneous intervals remain in the downloads.')+'</p><div class="tt-controls">'+_message_control()+'<label>Curve <select data-tt-condition></select></label></div><div class="tt-overflow" data-tt-table></div><div class="tt-plots" data-tt-plot></div></section>'
++    current += '<section id="revised-robustness" class="full-pool-section" data-tt-study="models"><h2>'+_bi('四模型与P0–P3','Four models and P0–P3')+'</h2><p class="tt-note">'+_bi('同一新基准1,000人，16条件×1,800曝光，共28,800曝光；单次行为seed20260823，非100seed均值。DeepSeek新版本V4.1 Flash，旧版V4 Flash。Kimi统一显示；Gemini观测为原网关alias gemini-pro-agent，隐藏上下文和原生后端不可观测。','The same new 1,000-user baseline: 16 conditions, 1,800 exposures each, 28,800 total. One behavior seed, not a 100-seed mean. DeepSeek is user-authorized V4.1 Flash versus old V4 Flash; Kimi remains one research model. Gemini exposes the original gateway alias, with hidden effective context/backend limits.')+'</p><div class="tt-controls">'+_message_control()+'<label>Prompt <select data-tt-template><option value="all">All</option>'+''.join(f'<option value="P{i}">P{i}</option>' for i in range(4))+'</select></label><label>Segment <select data-tt-segment><option value="all">All</option><option>S1</option><option>S2</option><option>S3</option></select></label></div><div class="tt-overflow" data-tt-table></div><div class="tt-plots" data-tt-plot></div><p class="tt-note">'+_bi('共同Batch0仅20seed用户×3消息，原500次用户block bootstrap配对区间见下载；自适应路径仅描述，不把曝光、用户或复用记录冒充独立实验重复。S1–S3是合成标签，不是确认的心理画像。','The fixed common Batch0 panel has 20 seed users and three messages; original 500 user-block bootstrap intervals are downloadable. Adaptive paths are descriptive, not independent repeated experiments. S1–S3 are synthetic labels, not verified psychological profiles.')+'</p></section>'
++    current += '<section id="ten-topic-downloads" class="full-pool-section"><h2>'+_bi('对应结果与数据下载','Matching results and downloads')+'</h2><div class="tt-downloads">'
++    for item in data.get('download_links', []):
++        current += f'<a download href="{html.escape(item["path"],quote=True)}">{html.escape(item["label"])}</a>'
++    current += '</div><p class="tt-note">'+_bi('各部分的CSV、JSON、工作簿与曲线均来自本版本已验收统计，不公开新原始响应、凭证或用户明细判断库。新旧差异共同包含网络、样本及服务时点，不作纯网络、纯指标因果推断。','CSV, JSON, workbooks and curves use the accepted statistics for this version. No new raw responses, credentials or user judgment banks are public. Changes jointly reflect network, sampling and service timing, not isolated causal effects.')+'</p></section></main>'
++    payload=json.dumps(data,ensure_ascii=False,sort_keys=True,separators=(',',':')).replace('<',r'\u003c').replace('>',r'\u003e').replace('&',r'\u0026')
++    body=navigation+current+'<details id="single-topic-history"><summary>旧版：单一话题网络及既有历史研究 / Previous single-topic and historical research</summary><p class="tt-note">以下保留旧版原统计、交互和下载，不属于上方十话题新版本；不同研究不合并分母。</p>'+legacy+'</details><script type="application/json" id="ten-topic-public-data">'+payload+'</script>'+_SCRIPT
++    result=base[:start]+body+base[end:]
++    result=result.replace(marker,'<meta name="abm-release-contract" content="abm-report-release-contract-v17">')
++    result,n=re.subn(r'<meta name="abm-release-id" content="[^"]+">',f'<meta name="abm-release-id" content="{html.escape(release_id)}">',result)
++    if n != 1:
++        raise ValueError('Release metadata must be unique')
++    return result.replace('</head>',_STYLE+'</head>',1).encode()
++
++
++def public_curve_svg(groups: list[dict[str, Any]], *, title: str) -> bytes:
++    """Export the same cumulative-rate coordinates/units used by the page plots."""
++    colors = ['#245aba', '#bb5534', '#188875', '#9c4e95', '#756b27', '#333f6b', '#657889']
++    height = max(480, 420 + ((len(groups) + 2) // 3) * 17)
++    body = [f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 {height}" role="img">',
++            '<rect width="900" height="480" fill="white"/>',
++            f'<title>{html.escape(title)}</title>']
++    for tick in range(5):
++        y = 340 - tick * 72
++        body += [f'<line x1="65" y1="{y}" x2="850" y2="{y}" stroke="#dbe2ea"/>',
++                 f'<text x="10" y="{y + 5}" fill="#526377">{tick * 25}%</text>']
++    for index, group in enumerate(groups):
++        points = ' '.join(f"{65 + r['batch'] * 785 / 30:g},{340 - r['rate'] * 288:g}"
++                          for r in group['rows'] if r['rate'] is not None)
++        color = colors[index % len(colors)]
++        body.append(f'<polyline fill="none" stroke="{color}" stroke-width="2.5" points="{points}"/>')
++        body.append(f'<text x="{65 + (index % 3) * 265}" y="{395 + (index // 3) * 17}" fill="{color}" font-size="11">{html.escape(group["name"])}</text>')
++    body.append('<text x="65" y="370" fill="#526377">Batch · cumulative realized interactions / cumulative exposures</text></svg>')
++    return '\n'.join(body).encode()
++
++
++def ten_topic_public_downloads(data: dict[str, Any]) -> dict[str, bytes]:
++    """Publish only aggregate study tables, curve points and contextual JSON."""
++    import csv
++    import io
++
++    def csv_bytes(rows: list[dict[str, Any]]) -> bytes:
++        if not rows:
++            raise ValueError('Empty formal public table')
++        columns = list(dict.fromkeys(key for row in rows for key in row))
++        stream = io.StringIO(newline='')
++        writer = csv.DictWriter(stream, fieldnames=columns)
++        writer.writeheader()
++        writer.writerows(rows)
++        return stream.getvalue().encode('utf-8-sig')
++
++    tables = {
++        'whole/results.csv': data['whole']['rows'], 'whole/curves.csv': data['whole']['curves'],
++        'parameter/estimates.csv': data['parameters']['estimates'],
++        'parameter/mean-curves.csv': data['parameters']['curves'],
++        'parameter/paired-contrasts.csv': data['parameters']['paired'],
++        'index/estimates.csv': data['index']['estimates'], 'index/mean-curves.csv': data['index']['curves'],
++        'index/paired-contrasts.csv': data['index']['paired'], 'index/composition.csv': data['index']['composition'],
++        'models/conditions.csv': data['models']['conditions'], 'models/messages.csv': data['models']['messages'],
++        'models/segments.csv': data['models']['segments'], 'models/curves.csv': data['models']['curves'],
++        'models/segment-curves.csv': data['models']['segment_curves'],
++        'models/old-new.csv': data['models']['comparison'],
++        'models/paired-seed-panel.csv': data['models']['paired_seed'],
++    }
++    files = {'ten-topic/' + name: csv_bytes(rows) for name, rows in tables.items()}
++    for study in ('whole', 'parameters', 'index', 'models'):
++        files['ten-topic/' + study + '/results.json'] = json.dumps(
++            data[study], ensure_ascii=False, sort_keys=True, separators=(',', ':'), allow_nan=False).encode()
++    files['ten-topic/methods.json'] = json.dumps({
++        'network': data['network'], 'behavior_seed': 20260823,
++        'whole_and_models_behavior_realizations': 1, 'sensitivity_behavior_seeds': 100,
++        'sensitivity_interval': 'df99 Student-t conditional on fixed judgments/data; original families preserved',
++        'holdout_rules_unchanged': True, 'sample_build_rule_unchanged_new_network': True,
++        'local_p99_rebuilt_baseline_overlap': data['index']['local_p99_rebuilt_overlap'],
++        'model_version_change': 'DeepSeek V4 Flash old versus user-approved V4.1 Flash new',
++        'gemini_observed_model': 'gemini-pro-agent; original gateway, hidden effective context not observed',
++        'comparison_scope': 'joint network/sample/service-time and indicator/model version effects; not isolated causal effects',
++        'provider_calls_during_publication': 0,
++    }, ensure_ascii=False, sort_keys=True, separators=(',', ':')).encode()
++    for message in ('message_1', 'message_2', 'message_3'):
++        groups = [{'name': message, 'rows': [{'batch': r['batch'], 'rate': r['realized_rate']}
++                                            for r in data['whole']['curves'] if r['message'] == message]}]
++        files[f'ten-topic/whole/{message}-curves.svg'] = public_curve_svg(groups, title='Whole sample ' + message)
++    for study, folder in [('parameters', 'parameter'), ('index', 'index')]:
++        for message in ('all', 'message_1', 'message_2', 'message_3'):
++            selected = [r for r in data[study]['curves'] if r['message'] == message]
++            keys = sorted({r['configuration'] for r in selected})
++            groups = [{'name': key, 'rows': [{'batch': r['batch'], 'rate': r['new_rate_mean']}
++                                            for r in selected if r['configuration'] == key]} for key in keys]
++            files[f'ten-topic/{folder}/{message}-curves.svg'] = public_curve_svg(groups, title=folder + ' 100-seed mean ' + message)
++    for template in ('P0', 'P1', 'P2', 'P3'):
++        for message in ('message_1', 'message_2', 'message_3'):
++            selected = [r for r in data['models']['curves'] if r['template'] == template and r['message'] == message]
++            names = sorted({r['model'] for r in selected})
++            groups = [{'name': name, 'rows': [{'batch': r['batch'] + 1, 'rate': r['realized_rate']}
++                                             for r in selected if r['model'] == name]} for name in names]
++            files[f'ten-topic/models/{template}-{message}-curves.svg'] = public_curve_svg(groups, title=template + ' ' + message)
++    return files
++
++
++def ten_topic_workbook_tables(data: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
++    """Aggregate workbook source tables; no private roots or per-user data."""
++    return {
++        'Methods': [
++            {'Item': 'Network', 'Value': 'Ten actual collected topics; holdout-safe historical interactions'},
++            {'Item': 'Network P95', 'Value': data['network']['p95']},
++            {'Item': 'Whole sample', 'Value': '36,400 users;109,200 exposures;single behavior seed20260823'},
++            {'Item': 'Parameter', 'Value': '21 configurations;100 behavior seeds;2,100 paths'},
++            {'Item': 'Indicator', 'Value': '7 arms;100 behavior seeds;700 paths'},
++            {'Item': 'Local p99 rebuilt overlap', 'Value': data['index']['local_p99_rebuilt_overlap']},
++            {'Item': 'Four models', 'Value': '16 conditions;28,800 exposures;single behavior seed20260823'},
++            {'Item': 'Intervals', 'Value': 'df99 Student-t, conditional behavior Monte Carlo; not LLM repetitions'},
++            {'Item': 'Rates', 'Value': 'Actual interactions / stated exposures; curves use cumulative denominator'},
++            {'Item': 'DeepSeek', 'Value': 'User-approved V4.1 Flash new;V4 Flash historical'},
++            {'Item': 'Gemini', 'Value': 'Observed gateway alias gemini-pro-agent;hidden effective context unobserved'},
++            {'Item': 'Interpretation', 'Value': 'Joint network/sample/indicator/model service-time changes;not isolated causal effects'},
++        ],
++        'Whole results': data['whole']['rows'], 'Whole curves': data['whole']['curves'],
++        'Parameter estimates': data['parameters']['estimates'], 'Parameter curves': data['parameters']['curves'],
++        'Parameter contrasts': data['parameters']['paired'],
++        'Indicator estimates': data['index']['estimates'], 'Indicator curves': data['index']['curves'],
++        'Indicator contrasts': data['index']['paired'], 'Sample composition': data['index']['composition'],
++        'Model conditions': data['models']['conditions'], 'Model messages': data['models']['messages'],
++        'Model segments': data['models']['segments'], 'Model curves': data['models']['curves'],
++        'Category curves': data['models']['segment_curves'], 'Model old new': data['models']['comparison'],
++        'Model paired seeds': data['models']['paired_seed'],
++    }
+diff --git a/tests/playwright/deployed-abm-report.spec.ts b/tests/playwright/deployed-abm-report.spec.ts
+index 33f1d5f..ebd8378 100644
+--- a/tests/playwright/deployed-abm-report.spec.ts
++++ b/tests/playwright/deployed-abm-report.spec.ts
+@@ -54,6 +54,7 @@ async function expectNoHorizontalOverflow(page: Page): Promise<void> {
+   const hasHorizontalOverflow = await page.evaluate(
+     () => document.documentElement.scrollWidth > window.innerWidth + 1,
+   );
++  if (hasHorizontalOverflow) console.log(await page.evaluate(() => ({width: innerWidth, scroll: document.documentElement.scrollWidth, overflowing: Array.from(document.querySelectorAll('body > *, #single-topic-history > *, [data-testid="revised-robustness"] *')).filter(e => e.getBoundingClientRect().right > innerWidth + 1).slice(0, 20).map(e => ({tag: e.tagName, id: e.id, cls: e.className, right: e.getBoundingClientRect().right}))})));
+   expect(hasHorizontalOverflow).toBeFalsy();
+ }
+ 
+@@ -281,6 +282,7 @@ async function expectFullPoolReport(page: Page): Promise<void> {
+     'abm-report-release-contract-v14',
+     'abm-report-release-contract-v15',
+     'abm-report-release-contract-v16',
++    'abm-report-release-contract-v17',
+   ].includes(releaseContractSchema ?? '');
+   await expect(page).toHaveTitle(isTwoStage ? 'Full-Pool 两阶段互动实现' : 'Full-Pool 主实验');
+   await expect(page.locator('html')).toHaveAttribute('lang', 'zh-CN');
+@@ -444,7 +446,7 @@ async function expectFullPoolReport(page: Page): Promise<void> {
+     }
+     await expect(page.locator('#index-sensitivity-study')).toContainText('108/1000');
+   }
+-  if (['abm-report-release-contract-v15', 'abm-report-release-contract-v16'].includes(releaseContractSchema ?? '')) {
++  if (['abm-report-release-contract-v15', 'abm-report-release-contract-v16', 'abm-report-release-contract-v17'].includes(releaseContractSchema ?? '')) {
+     await expect(page.locator('[data-full-pool-i18n="history.copy"]')).toContainText('新增跨厂商四模型恢复研究独立使用');
+     await page.getByTestId('run-evidence-mode-button').click();
+     const revised = page.getByTestId('revised-robustness-section');
+@@ -493,7 +495,7 @@ async function expectFullPoolReport(page: Page): Promise<void> {
+   await fallbackSummary.click();
+   await expect(fallback).not.toHaveAttribute('open', '');
+   await expect(page.getByTestId('full-pool-trace-page-status')).toContainText('Page 1 of');
+-  if (['abm-report-release-contract-v15', 'abm-report-release-contract-v16'].includes(releaseContractSchema ?? '')) {
++  if (['abm-report-release-contract-v15', 'abm-report-release-contract-v16', 'abm-report-release-contract-v17'].includes(releaseContractSchema ?? '')) {
+     await expect(page.locator('[data-full-pool-i18n="history.copy"]')).toContainText('four-model recovery study independently uses Judgment to Realization');
+   }
+ }
+@@ -616,13 +618,46 @@ async function expectFullPoolDownloads(page: Page): Promise<void> {
+   expect(new Set(hrefs.filter((href) => href.endsWith('.mmd'))).size).toBe(
+     releaseContractSchema === 'abm-report-release-contract-v14' ? 9 : 8,
+   );
+-  if (releaseContractSchema === 'abm-report-release-contract-v14') {
++  if (['abm-report-release-contract-v14', 'abm-report-release-contract-v17'].includes(releaseContractSchema ?? '')) {
+     expect(new Set(hrefs.filter((href) => href.endsWith('.xlsx'))).size).toBe(1);
+   }
+ }
+ 
++async function expectTenTopicReport(page: Page): Promise<void> {
++  const current = page.getByTestId('ten-topic-current');
++  await expect(current).toBeVisible();
++  await expect(page.locator('meta[name="abm-release-contract"]')).toHaveAttribute('content', 'abm-report-release-contract-v17');
++  await expect(current.locator('#full-pool-main')).toContainText('109,200');
++  await expect(current.locator('[data-tt-study="parameters"] tbody tr')).toHaveCount(21);
++  await expect(current.locator('[data-tt-study="index"] tbody tr')).toHaveCount(7);
++  await expect(current.locator('[data-tt-study="models"] tbody tr')).toHaveCount(16);
++  await expect(current).toContainText('23/1000');
++  await expect(current.locator('[data-tt-study="models"]')).toContainText('V4.1 Flash');
++  await expect(current.locator('[data-tt-study="models"]')).toContainText('gemini-pro-agent');
++  await expect(current.locator('svg')).toHaveCount(4);
++  const models = current.locator('[data-tt-study="models"]');
++  await models.locator('[data-tt-message]').selectOption('message_2');
++  await models.locator('[data-tt-template]').selectOption('P2');
++  await models.locator('[data-tt-segment]').selectOption('S1');
++  await expect(models.locator('tbody tr')).toHaveCount(4);
++  await expect(models.locator('polyline')).toHaveCount(4);
++  await current.locator('[data-tt-lang="en"]').click();
++  await expect(current.locator('h1')).toHaveText('Whole-sample realized behavior', { useInnerText: true });
++  await expect(page.locator('html')).toHaveAttribute('lang', 'en-US');
++  await current.locator('[data-tt-lang="zh"]').click();
++  const downloads = current.locator('a[download]');
++  expect(await downloads.count()).toBeGreaterThan(40);
++  await expect(current.locator('a[href="ten-topic/ten-topic-research.xlsx"]')).toHaveCount(1);
++  // The protected existing interaction suite still runs on the labelled historical copy.
++  await page.locator('#single-topic-history > summary').click();
++  await expect(page.locator('#single-topic-history')).toHaveAttribute('open', '');
++  await expectFullPoolReport(page);
++}
++
+ async function expectReportByKind(page: Page): Promise<void> {
+-  if (reportKind === 'full-pool') {
++  if (releaseContractSchema === 'abm-report-release-contract-v17') {
++    await expectTenTopicReport(page);
++  } else if (reportKind === 'full-pool') {
+     await expectFullPoolReport(page);
+   } else if (reportKind === 'concurrent-robustness') {
+     await expectConcurrentRobustnessReport(page);
+diff --git a/tests/unit/test_public_artifact_acceptance.py b/tests/unit/test_public_artifact_acceptance.py
+index e4f7d1a..c736226 100644
+--- a/tests/unit/test_public_artifact_acceptance.py
++++ b/tests/unit/test_public_artifact_acceptance.py
+@@ -28,6 +28,9 @@ from pathlib import Path
+ from urllib.parse import unquote, urlsplit
+ 
+ args = sys.argv[1:]
++assert '--insecure' not in args and '-k' not in args
++assert '--http1.1' in args and '--retry-all-errors' in args
++assert ('--noproxy' in args) == (os.environ.get('ABM_DEPLOY_PUBLIC_TRANSPORT', 'direct') == 'direct')
+ output = Path(args[args.index('-o') + 1])
+ url = next(value for value in reversed(args) if value.startswith('https://'))
+ relative = unquote(urlsplit(url).path).lstrip('/')
+@@ -85,8 +88,10 @@ def _fixture(tmp_path: Path, *, small_count: int = 10) -> tuple[Path, Path, Path
+     return facts, snapshot, public, downloads
+ 
+ 
++@pytest.mark.parametrize('transport', ['direct', 'environment-proxy'])
+ def test_public_body_verifier_processes_fixed_batches_and_manifest_binds_large_files(
+     tmp_path: Path,
++    transport: str,
+ ) -> None:
+     facts, snapshot, public, downloads = _fixture(tmp_path)
+     summary = tmp_path / "summary.json"
+@@ -95,6 +100,7 @@ def test_public_body_verifier_processes_fixed_batches_and_manifest_binds_large_f
+         {
+             "PATH": f"{tmp_path / 'bin'}:{env['PATH']}",
+             "FAKE_PUBLIC_ROOT": str(public),
++            "ABM_DEPLOY_PUBLIC_TRANSPORT": transport,
+         }
+     )
+ 
+diff --git a/tests/unit/test_report_deployment.py b/tests/unit/test_report_deployment.py
+index bf53122..7d3011c 100644
+--- a/tests/unit/test_report_deployment.py
++++ b/tests/unit/test_report_deployment.py
+@@ -783,7 +783,7 @@ def test_v13_v14_authorization_and_fresh_readback_gates_precede_remote_writes()
+ 
+     authorization_gate = script.index("validate_abm_report_deployment.py")
+     operation_output_gate = script.index(
+-        "v14/v15/v16 requires --operation-facts-output"
++        "v14/v15/v16/v17 requires --operation-facts-output"
+     )
+     first_ssh = script.index('if ssh "${DEPLOY_HOST}"')
+     readback_gate = script.index("verify-readback")
+diff --git a/tests/unit/test_ten_topic_release.py b/tests/unit/test_ten_topic_release.py
+new file mode 100644
+index 0000000..34af072
+--- /dev/null
++++ b/tests/unit/test_ten_topic_release.py
+@@ -0,0 +1,26 @@
++from pathlib import Path
++
++import pytest
++
++from llm_abm_sim.ten_topic_release import accept_ten_topic_sources
++
++
++def test_arbitrary_mock_report_is_not_admitted(tmp_path: Path):
++    candidate = tmp_path / 'mock.json'
++    candidate.write_text('{"status":"pass","classification":"mock"}')
++    with pytest.raises(ValueError,match='binding'):
++        accept_ten_topic_sources(repo_root=tmp_path,source_bindings={'whole_sample_manifest':{'path':str(candidate),'sha256':'0'*64}})
++
++
++def test_v17_contract_never_accepts_old_schema_or_extra_fields(tmp_path: Path):
++    from llm_abm_sim.ten_topic_release import validate_ten_topic_release
++
++    with pytest.raises(ValueError, match='contract'):
++        validate_ten_topic_release(repo_root=tmp_path, contract_document={'schema_version': 'abm-report-release-contract-v16'}, source_dir=tmp_path)
++
++
++def test_shell_admits_v17_only_after_validated_facts():
++    shell = (Path(__file__).resolve().parents[2] / 'scripts/deploy_abm_report.sh').read_text()
++    gate = '^abm-report-release-contract-v([2-9]|10|11|12|13|14|15|16|17)$'
++    assert shell.count(gate) == 2  # Local facts and remote candidate schema checks.
++    assert shell.index('--require-formal-production') < shell.index(gate)
+diff --git a/tests/unit/test_ten_topic_report.py b/tests/unit/test_ten_topic_report.py
+new file mode 100644
+index 0000000..ab7c7da
+--- /dev/null
++++ b/tests/unit/test_ten_topic_report.py
+@@ -0,0 +1,27 @@
++from llm_abm_sim.concurrent_robustness_report import _REPORT_PRESENTATION
++
++BASE = b'<html><head><meta name="abm-release-id" content="old"><meta name="abm-release-contract" content="abm-report-release-contract-v16"></head><body><nav id="research-navigation">old navigation</nav><main id="full-pool-main"><p>old single-topic result</p></main><section id="revised-robustness">old models</section><section id="parameter-study">old parameters</section><section id="index-sensitivity-study">old index</section><section id="unrelated">unrelated preserved</section><script>/* unrelated controls preserved */</script></body></html>'
++
++
++def test_new_research_is_default_old_research_explicit_and_unrelated_preserved():
++    data = {'schema_version': 'ten-topic-public-statistics-v1', 'network': {'p95': 5},
++            'whole': {'summary': {'exposures': 109200, 'like': 63420, 'comment': 5, 'share': 189, 'ignore': 45586}, 'rows': [], 'curves': []},
++            'parameters': {'estimates': [], 'curves': []}, 'index': {'local_p99_rebuilt_overlap': 23, 'estimates': [], 'curves': []},
++            'models': {'conditions': [], 'curves': []}, 'download_links': []}
++    result = _REPORT_PRESENTATION.render_ten_topic_research(BASE, data, release_id='ten-topic-v17')
++    assert b'content="abm-report-release-contract-v17"' in result
++    assert b'content="ten-topic-v17"' in result
++    assert b'id="full-pool-main"' in result and b'id="legacy-full-pool-main"' in result
++    assert '十个实际采集话题'.encode() in result
++    assert b'old single-topic result' in result and b'unrelated preserved' in result
++    assert b'/* unrelated controls preserved */' in result
++    assert result.index(b'id="full-pool-main"') < result.index(b'id="single-topic-history"')
++    import json
++    import re
++
++    data['network']['fixture_text'] = '<script>&</script>'
++    result = _REPORT_PRESENTATION.render_ten_topic_research(BASE, data, release_id='ten-topic-v17')
++    payload = re.search(rb'<script type="application/json" id="ten-topic-public-data">(.*?)</script>', result, re.S)
++    assert payload is not None
++    assert b'<script>' not in payload[1]
++    assert json.loads(payload[1])['network']['fixture_text'] == '<script>&</script>'
