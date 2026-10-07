@@ -468,7 +468,7 @@ def _release_facts(
     target: DeploymentTarget,
 ) -> dict[str, object]:
     schema = deployment_facts.get("release_contract_schema_version")
-    if schema in {"abm-report-release-contract-v15", "abm-report-release-contract-v16"}:
+    if schema in {"abm-report-release-contract-v15", "abm-report-release-contract-v16", "abm-report-release-contract-v17"}:
         return _v15_release_facts(deployment_facts, target)
     if schema == V14_RELEASE_CONTRACT_SCHEMA:
         return _v14_release_facts(deployment_facts, target)
@@ -480,6 +480,8 @@ def _release_facts(
 
 
 def _deployment_schemas(release_contract_schema: object) -> tuple[str, str]:
+    if release_contract_schema == "abm-report-release-contract-v17":
+        return "abm-report-v17-deployment-readiness-v1", "abm-report-v17-deployment-authorization-v1"
     if release_contract_schema == "abm-report-release-contract-v16":
         return "abm-report-v16-deployment-readiness-v1", "abm-report-v16-deployment-authorization-v1"
     if release_contract_schema == "abm-report-release-contract-v15":
@@ -1169,6 +1171,7 @@ def _v15_release_facts(deployment_facts, target):
     readiness_schema = {
         "abm-report-release-contract-v15": "revised-four-model-v15-release-readiness-v1",
         "abm-report-release-contract-v16": "sensitivity-v16-release-readiness-v1",
+        "abm-report-release-contract-v17": "ten-topic-v17-release-readiness-v1",
     }.get(schema)
     readiness = _mapping(deployment_facts.get("release_readiness"), "v15 readiness")
     hashes = _mapping(deployment_facts.get("artifact_sha256"), "v15 hashes")
@@ -1203,7 +1206,7 @@ def _v15_release_facts(deployment_facts, target):
 def _write_v15_deployment_operation_facts(*, plan_path: Path, public_summary_path: Path, deployed_at_utc: str, output_path: Path) -> None:
     """Production-shell closure, called only after locked readback and browser gates."""
     plan, plan_bytes = _load_canonical_json_object(plan_path, "v15 plan")
-    if plan.get("release_contract_schema") not in {"abm-report-release-contract-v15", "abm-report-release-contract-v16"} or plan.get("schema_version") != DEPLOYMENT_PLAN_SCHEMA_V1 or plan.get("authorization_required") is not True:
+    if plan.get("release_contract_schema") not in {"abm-report-release-contract-v15", "abm-report-release-contract-v16", "abm-report-release-contract-v17"} or plan.get("schema_version") != DEPLOYMENT_PLAN_SCHEMA_V1 or plan.get("authorization_required") is not True:
         raise DeploymentAuthorizationError("v15 operation requires its authorized plan")
     target = _target_from_document(plan["deployment_target"])
     _rollback_identity(plan.get("rollback_identity"), target=target)

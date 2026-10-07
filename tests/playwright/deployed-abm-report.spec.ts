@@ -281,6 +281,7 @@ async function expectFullPoolReport(page: Page): Promise<void> {
     'abm-report-release-contract-v14',
     'abm-report-release-contract-v15',
     'abm-report-release-contract-v16',
+    'abm-report-release-contract-v17',
   ].includes(releaseContractSchema ?? '');
   await expect(page).toHaveTitle(isTwoStage ? 'Full-Pool 两阶段互动实现' : 'Full-Pool 主实验');
   await expect(page.locator('html')).toHaveAttribute('lang', 'zh-CN');
@@ -444,7 +445,7 @@ async function expectFullPoolReport(page: Page): Promise<void> {
     }
     await expect(page.locator('#index-sensitivity-study')).toContainText('108/1000');
   }
-  if (['abm-report-release-contract-v15', 'abm-report-release-contract-v16'].includes(releaseContractSchema ?? '')) {
+  if (['abm-report-release-contract-v15', 'abm-report-release-contract-v16', 'abm-report-release-contract-v17'].includes(releaseContractSchema ?? '')) {
     await expect(page.locator('[data-full-pool-i18n="history.copy"]')).toContainText('新增跨厂商四模型恢复研究独立使用');
     await page.getByTestId('run-evidence-mode-button').click();
     const revised = page.getByTestId('revised-robustness-section');
@@ -493,7 +494,7 @@ async function expectFullPoolReport(page: Page): Promise<void> {
   await fallbackSummary.click();
   await expect(fallback).not.toHaveAttribute('open', '');
   await expect(page.getByTestId('full-pool-trace-page-status')).toContainText('Page 1 of');
-  if (['abm-report-release-contract-v15', 'abm-report-release-contract-v16'].includes(releaseContractSchema ?? '')) {
+  if (['abm-report-release-contract-v15', 'abm-report-release-contract-v16', 'abm-report-release-contract-v17'].includes(releaseContractSchema ?? '')) {
     await expect(page.locator('[data-full-pool-i18n="history.copy"]')).toContainText('four-model recovery study independently uses Judgment to Realization');
   }
 }
@@ -616,13 +617,46 @@ async function expectFullPoolDownloads(page: Page): Promise<void> {
   expect(new Set(hrefs.filter((href) => href.endsWith('.mmd'))).size).toBe(
     releaseContractSchema === 'abm-report-release-contract-v14' ? 9 : 8,
   );
-  if (releaseContractSchema === 'abm-report-release-contract-v14') {
+  if (['abm-report-release-contract-v14', 'abm-report-release-contract-v17'].includes(releaseContractSchema ?? '')) {
     expect(new Set(hrefs.filter((href) => href.endsWith('.xlsx'))).size).toBe(1);
   }
 }
 
+async function expectTenTopicReport(page: Page): Promise<void> {
+  const current = page.getByTestId('ten-topic-current');
+  await expect(current).toBeVisible();
+  await expect(page.locator('meta[name="abm-release-contract"]')).toHaveAttribute('content', 'abm-report-release-contract-v17');
+  await expect(current.locator('#full-pool-main')).toContainText('109,200');
+  await expect(current.locator('[data-tt-study="parameters"] tbody tr')).toHaveCount(21);
+  await expect(current.locator('[data-tt-study="index"] tbody tr')).toHaveCount(7);
+  await expect(current.locator('[data-tt-study="models"] tbody tr')).toHaveCount(16);
+  await expect(current).toContainText('23/1000');
+  await expect(current.locator('[data-tt-study="models"]')).toContainText('V4.1 Flash');
+  await expect(current.locator('[data-tt-study="models"]')).toContainText('gemini-pro-agent');
+  await expect(current.locator('svg')).toHaveCount(4);
+  const models = current.locator('[data-tt-study="models"]');
+  await models.locator('[data-tt-message]').selectOption('message_2');
+  await models.locator('[data-tt-template]').selectOption('P2');
+  await models.locator('[data-tt-segment]').selectOption('S1');
+  await expect(models.locator('tbody tr')).toHaveCount(4);
+  await expect(models.locator('polyline')).toHaveCount(4);
+  await current.locator('[data-tt-lang="en"]').click();
+  await expect(current.locator('h1')).toHaveText('Whole-sample realized behavior');
+  await expect(page.locator('html')).toHaveAttribute('lang', 'en-US');
+  await current.locator('[data-tt-lang="zh"]').click();
+  const downloads = current.locator('a[download]');
+  expect(await downloads.count()).toBeGreaterThan(40);
+  await expect(current.locator('a[href="ten-topic/ten-topic-research.xlsx"]')).toHaveCount(1);
+  // The protected existing interaction suite still runs on the labelled historical copy.
+  await page.locator('#single-topic-history > summary').click();
+  await expect(page.locator('#single-topic-history')).toHaveAttribute('open', '');
+  await expectFullPoolReport(page);
+}
+
 async function expectReportByKind(page: Page): Promise<void> {
-  if (reportKind === 'full-pool') {
+  if (releaseContractSchema === 'abm-report-release-contract-v17') {
+    await expectTenTopicReport(page);
+  } else if (reportKind === 'full-pool') {
     await expectFullPoolReport(page);
   } else if (reportKind === 'concurrent-robustness') {
     await expectConcurrentRobustnessReport(page);

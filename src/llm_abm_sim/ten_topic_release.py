@@ -244,3 +244,243 @@ def collect_ten_topic_public_data(accepted_sources: Mapping[str, Any]) -> dict[s
                        'curves': rows(four / 'formal-report/curves.csv'), 'segment_curves': segment_curves,
                        'comparison': rows(four / 'formal-report/old-new.csv')},
             'download_links': []}
+
+
+_CONTRACT_FIELDS = {'schema_version', 'release_purpose', 'release_id', 'source_directory',
+                    'implementation_commit', 'canonical_endpoint', 'sources', 'workbook',
+                    'artifact_sha256', 'release_identity_sha256', 'production_deploy_eligible',
+                    'provider_calls'}
+PURPOSE = 'reviewed_ten_topic_four_studies_with_protected_single_topic_history'
+
+
+def _json_bytes(value: Any) -> bytes:
+    return (json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(',', ':'), allow_nan=False) + '\n').encode()
+
+
+def _digest(value: Any) -> str:
+    return hashlib.sha256(_json_bytes(value)).hexdigest()
+
+
+def _validate_workbook(path: Path, expected_sha: str, data: dict[str, Any]) -> None:
+    """Decode exported XLSX independently and compare every typed aggregate cell."""
+    import math
+    import posixpath
+    import xml.etree.ElementTree as ET
+    import zipfile
+
+    from .ten_topic_report import ten_topic_workbook_tables
+
+    if not path.is_file() or path.is_symlink() or _sha(path) != expected_sha:
+        raise ValueError('Publication workbook binding drift')
+    ns = {'s': 'http://schemas.openxmlformats.org/spreadsheetml/2006/main'}
+    rns = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships'
+    expected = ten_topic_workbook_tables(data)
+    with zipfile.ZipFile(path) as archive:
+        shared = []
+        if 'xl/sharedStrings.xml' in archive.namelist():
+            shared = [''.join(t.text or '' for t in v.findall('.//s:t', ns))
+                      for v in ET.fromstring(archive.read('xl/sharedStrings.xml'))]
+        relationships = {e.attrib['Id']: e.attrib['Target'] for e in
+                         ET.fromstring(archive.read('xl/_rels/workbook.xml.rels'))}
+        sheets = ET.fromstring(archive.read('xl/workbook.xml')).findall('s:sheets/s:sheet', ns)
+        if {s.attrib['name'] for s in sheets} != set(expected):
+            raise ValueError('Workbook study sheet set crossed')
+        for sheet in sheets:
+            name = sheet.attrib['name']
+            target = relationships[sheet.attrib['{' + rns + '}id']]
+            target = target.lstrip('/') if target.startswith('/') else posixpath.normpath('xl/' + target)
+            cells = {}
+            for cell in ET.fromstring(archive.read(target)).findall('.//s:sheetData/s:row/s:c', ns):
+                kind = cell.attrib.get('t')
+                value = cell.find('s:v', ns)
+                text = value.text if value is not None else None
+                if kind == 's':
+                    parsed = shared[int(text)]
+                elif kind == 'inlineStr':
+                    parsed = ''.join(x.text or '' for x in cell.findall('.//s:t', ns))
+                elif kind == 'b':
+                    parsed = text == '1'
+                elif text is None:
+                    parsed = None
+                elif kind == 'str':
+                    parsed = text
+                else:
+                    parsed = float(text)
+                cells[cell.attrib['r']] = parsed
+            rows = expected[name]
+            columns = list(dict.fromkeys(k for row in rows for k in row))
+            matrix = [columns, *[[row.get(k) for k in columns] for row in rows]]
+            expected_addresses = set()
+            for row_index, row in enumerate(matrix, 1):
+                for column, wanted in enumerate(row, 1):
+                    letters = ''
+                    n = column
+                    while n:
+                        n, digit = divmod(n - 1, 26)
+                        letters = chr(65 + digit) + letters
+                    address = letters + str(row_index)
+                    expected_addresses.add(address)
+                    actual = cells.get(address)
+                    if isinstance(wanted, (float, int)) and not isinstance(wanted, bool):
+                        valid = isinstance(actual, (float, int)) and math.isclose(actual, wanted, rel_tol=1e-12, abs_tol=1e-10)
+                    else:
+                        valid = actual == wanted
+                    if not valid:
+                        raise ValueError(f'Workbook cell/source mismatch: {name}!{address}')
+            if any(v is not None and k not in expected_addresses for k, v in cells.items()):
+                raise ValueError('Unexpected public workbook data')
+
+
+def _materialize_ten_topic(root: Path, sources: Mapping[str, Mapping[str, object]],
+                           workbook: Mapping[str, str], release_id: str, commit: str):
+    from .concurrent_robustness_report import _REPORT_PRESENTATION
+    from .ten_topic_report import ten_topic_public_downloads
+
+    accepted = accept_ten_topic_sources(repo_root=root, source_bindings=sources)
+    data = collect_ten_topic_public_data(accepted)
+    _validate_workbook(Path(workbook['path']), workbook['sha256'], data)
+    downloads = ten_topic_public_downloads(data)
+    downloads['ten-topic/ten-topic-research.xlsx'] = Path(workbook['path']).read_bytes()
+    data['download_links'] = [{'path': name, 'label': name.removeprefix('ten-topic/')} for name in sorted(downloads)]
+    downloads['ten-topic/public-statistics.json'] = _json_bytes(data)
+    data['download_links'].append({'path': 'ten-topic/public-statistics.json', 'label': 'Public statistics JSON'})
+    base = Path(accepted['protected_v16_directory'])
+    old = json.loads(Path(str(sources['protected_v16_contract']['path'])).read_bytes())
+    report = _REPORT_PRESENTATION.render_ten_topic_research((base / 'report.html').read_bytes(), data, release_id=release_id)
+    public_sources = {'schema_version': 'ten-topic-public-source-map-v1',
+                      'network': data['network'], 'studies': {k: accepted[k] for k in ('whole_sample', 'parameters', 'index', 'four_models')},
+                      'source_sha256': accepted['source_sha256'], 'source_eligibility_preserved': True,
+                      'publication_provider_calls': 0, 'actual_deepseek_model': 'deepseek-flash / V4.1 Flash',
+                      'gemini_observed_alias': 'gemini-pro-agent;hidden context not observed'}
+    downloads['ten-topic/source-map.json'] = _json_bytes(public_sources)
+    downloads['single-topic-report.html'] = (base / 'report.html').read_bytes()
+    downloads['single-topic-artifact-manifest.json'] = (base / 'artifact_manifest.json').read_bytes()
+    data['download_links'].append({'path': 'ten-topic/source-map.json', 'label': 'Formal source map JSON'})
+    report = _REPORT_PRESENTATION.render_ten_topic_research((base / 'report.html').read_bytes(), data, release_id=release_id)
+    content = {name: digest for name, digest in old['artifact_sha256'].items() if name not in {'report.html', 'artifact_manifest.json'}}
+    if set(content) & set(downloads):
+        raise ValueError('New public downloads overlap protected historical files')
+    content.update({name: hashlib.sha256(payload).hexdigest() for name, payload in downloads.items()})
+    content['report.html'] = hashlib.sha256(report).hexdigest()
+    identity = _digest({'schema': SCHEMA, 'release_id': release_id, 'implementation_commit': commit,
+                        'sources': sources, 'workbook': workbook, 'content_sha256': content})
+    old_manifest = json.loads((base / 'artifact_manifest.json').read_bytes())
+    approved = old_manifest['approved_downloads']
+    if isinstance(approved, dict):
+        approved = list(approved.values())
+    manifest = {'schema_version': 'abm-report-release-manifest-v17', 'release_contract_schema': SCHEMA,
+                'release_id': release_id, 'release_identity_sha256': identity, 'implementation_commit': commit,
+                'production_deploy_eligible': True, 'provider_calls': 0, 'content_sha256': content,
+                'approved_downloads': sorted(set(approved) | set(downloads)),
+                'protected_v16_release_identity': old['release_identity_sha256'],
+                'public_policy': 'new artifacts aggregate only;no new raw responses/credentials/user judgment bank'}
+    files = {**downloads, 'report.html': report, 'artifact_manifest.json': _json_bytes(manifest)}
+    hashes = {**content, 'artifact_manifest.json': _digest(manifest)}
+    return base, files, hashes, identity
+
+
+def promote_ten_topic_release(*, repo_root: str | Path, source_bindings: Mapping[str, Mapping[str, object]],
+                              workbook: Mapping[str, str], destination_dir: str | Path,
+                              release_id: str, implementation_commit: str) -> Path:
+    """Create the immutable v17 publication from explicit reviewed sources, never deploy."""
+    import os
+    import re
+    import shutil
+    import tempfile
+
+    root = Path(repo_root).resolve()
+    destination = Path(destination_dir).absolute()
+    contract_path = destination.with_name(destination.name + '-release-contract.json')
+    if (destination.is_symlink() or destination != destination.resolve() or not destination.is_relative_to(root)
+            or destination.exists() or contract_path.exists()
+            or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.-]{0,159}', release_id)
+            or not re.fullmatch(r'[0-9a-f]{40}', implementation_commit)):
+        raise ValueError('Invalid or overlapping immutable release destination/identity')
+    for ref in source_bindings.values():
+        if destination.is_relative_to(Path(str(ref['path'])).parent):
+            raise ValueError('Release destination overlaps an input')
+    if set(workbook) != {'path', 'sha256'}:
+        raise ValueError('Exact workbook binding required')
+    base, files, hashes, identity = _materialize_ten_topic(root, source_bindings, workbook, release_id, implementation_commit)
+    if base.is_relative_to(destination) or destination.is_relative_to(base):
+        raise ValueError('Protected release overlap')
+    contract = {'schema_version': SCHEMA, 'release_purpose': PURPOSE, 'release_id': release_id,
+                'source_directory': str(destination), 'implementation_commit': implementation_commit,
+                'canonical_endpoint': ENDPOINT, 'sources': dict(source_bindings), 'workbook': dict(workbook),
+                'artifact_sha256': hashes, 'release_identity_sha256': identity,
+                'production_deploy_eligible': True, 'provider_calls': 0}
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    staging = Path(tempfile.mkdtemp(prefix='.v17-', dir=destination.parent))
+    installed = False
+    try:
+        shutil.copytree(base, staging, dirs_exist_ok=True)
+        for folder in [staging, *(p for p in staging.rglob('*') if p.is_dir())]:
+            folder.chmod(0o755)
+        for name, payload in files.items():
+            target = staging / name
+            target.parent.mkdir(parents=True, exist_ok=True)
+            if target.exists():
+                target.chmod(0o644)
+            target.write_bytes(payload)
+        from .concurrent_robustness_revised import inventory
+        if {k: v['sha256'] for k, v in inventory(staging).items()} != hashes:
+            raise ValueError('Staged v17 inventory drift')
+        for target in staging.rglob('*'):
+            if target.is_file():
+                target.chmod(0o444)
+        with contract_path.open('xb') as stream:
+            installed = True
+            stream.write(_json_bytes(contract))
+        contract_path.chmod(0o444)
+        os.rename(staging, destination)
+    except BaseException:
+        if installed:
+            contract_path.unlink()
+        raise
+    finally:
+        if staging.exists():
+            shutil.rmtree(staging)
+    return contract_path
+
+
+def validate_ten_topic_release(*, repo_root: str | Path, contract_document: Mapping[str, Any],
+                               source_dir: str | Path, snapshot_dir: str | Path | None = None) -> dict[str, Any]:
+    """Rebuild expected publication bytes and compare complete physical inventories."""
+    import re
+
+    from .concurrent_robustness_revised import inventory
+
+    c = dict(contract_document)
+    if (set(c) != _CONTRACT_FIELDS or c['schema_version'] != SCHEMA or c['release_purpose'] != PURPOSE
+            or c['canonical_endpoint'] != ENDPOINT or c['provider_calls'] != 0
+            or c['production_deploy_eligible'] is not True):
+        raise ValueError('Invalid ten-topic publication contract')
+    root = Path(repo_root).resolve()
+    source = Path(source_dir).absolute()
+    if (source != source.resolve() or not source.is_relative_to(root) or str(source) != c['source_directory']
+            or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.-]{0,159}', c['release_id'])
+            or not re.fullmatch(r'[0-9a-f]{40}', c['implementation_commit'])):
+        raise ValueError('Publication contract source/identity drift')
+    _, _, hashes, identity = _materialize_ten_topic(root, c['sources'], c['workbook'], c['release_id'], c['implementation_commit'])
+    if hashes != c['artifact_sha256'] or identity != c['release_identity_sha256']:
+        raise ValueError('Publication contract reconstruction drift')
+    for folder in [source, *([Path(snapshot_dir)] if snapshot_dir else [])]:
+        if {k: v['sha256'] for k, v in inventory(folder).items()} != hashes:
+            raise ValueError('Publication physical inventory drift')
+    return {**c, 'formal_research_evidence': True, 'realized_source_identity': identity,
+            'report_sha256': hashes['report.html'], 'manifest_sha256': hashes['artifact_manifest.json'],
+            'sampling_method': 'accepted_final_ten_topic_studies_and_protected_historical',
+            'sampling_status': 'all_four_studies_accepted',
+            'decision_execution_mode': 'persisted_formal_evidence_zero_provider_publication'}
+
+
+def require_ten_topic_deployment_profile(result: Mapping[str, Any]) -> dict[str, Any]:
+    """Project validated v17 facts only; deployment does not own study knowledge."""
+    if (result.get('schema_version') != SCHEMA or result.get('formal_research_evidence') is not True
+            or result.get('production_deploy_eligible') is not True or result.get('provider_calls') != 0):
+        raise ValueError('v17 requires validated four-study Formal publication')
+    return {'realized_source_identity': result['realized_source_identity'], 'release_readiness': {
+        'schema_version': 'ten-topic-v17-release-readiness-v1', 'release_contract_schema': SCHEMA,
+        'release_id': result['release_id'], 'realized_source_identity': result['realized_source_identity'],
+        'canonical_endpoint': ENDPOINT, 'provider_calls': 0, 'operational_authorization_required': True,
+        'deployment_authorized': False, 'public_acceptance_recorded': False}}

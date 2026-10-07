@@ -27,7 +27,7 @@ function models(){const section=root.querySelector('[data-tt-study=models]'),m=s
 table(section.querySelector('[data-tt-table]'),['Model','Prompt','Exposure','Realized','Like','Comment','Share','Ignore'],rows.map(r=>[r.model,r.template,num(r.exposures),pct(r.realized_rate),pct(r.like/r.exposures),pct(r.comment/r.exposures),pct(r.share/r.exposures),pct(r.ignore/r.exposures)]));
 const templates=t==='all'?['P0','P1','P2','P3']:[t];const names=[...new Set(d.models.conditions.map(r=>r.model))];const groups=[];templates.forEach(tm=>names.forEach(n=>{const grouped=new Map();(m!=='all'&&s!=='all'?d.models.segment_curves:d.models.curves).filter(r=>r.model===n&&r.template===tm&&(m==='all'||r.message===m)&&(m==='all'||s==='all'||r.segment===s)).forEach(r=>{const b=Number(r.batch)+1;const sum=grouped.get(b)||{p:0,e:0};sum.p+=Number(r.realized_positive);sum.e+=Number(r.exposures);grouped.set(b,sum);});groups.push({name:n+' '+tm+' '+m,rows:[...grouped].filter(([b,v])=>v.e>0).sort((a,b)=>a[0]-b[0]).map(([batch,v])=>({batch,rate:v.p/v.e}))});}));plot(section.querySelector('[data-tt-plot]'),groups);}
 root.addEventListener('change',e=>{const section=e.target.closest('[data-tt-study]');if(!section)return;const s=section.dataset.ttStudy;if(s==='models')models();else sensitivity(s);});
-root.querySelectorAll('[data-tt-lang]').forEach(b=>b.addEventListener('click',()=>{root.dataset.language=b.dataset.ttLang;root.querySelectorAll('[data-tt-lang]').forEach(x=>x.setAttribute('aria-pressed',String(x===b)));}));
+root.querySelectorAll('[data-tt-lang]').forEach(b=>b.addEventListener('click',()=>{root.dataset.language=b.dataset.ttLang;document.documentElement.lang=b.dataset.ttLang==='en'?'en-US':'zh-CN';const old=document.querySelector('[data-full-pool-language="'+document.documentElement.lang+'"]');if(old)old.click();root.querySelectorAll('[data-tt-lang]').forEach(x=>x.setAttribute('aria-pressed',String(x===b)));}));
 function oldAnchor(){const hash=location.hash;if(!hash)return;const el=document.getElementById(decodeURIComponent(hash.slice(1)));if(el){let p=el.parentElement;while(p){if(p.tagName==='DETAILS')p.open=true;p=p.parentElement;}}}window.addEventListener('hashchange',oldAnchor);oldAnchor();
 whole();sensitivity('parameters');sensitivity('index');models();
 })();</script>'''
@@ -90,3 +90,115 @@ def render_ten_topic_research(base_html: bytes, data: dict[str, Any], *, release
     if n != 1:
         raise ValueError('Release metadata must be unique')
     return result.replace('</head>',_STYLE+'</head>',1).encode()
+
+
+def public_curve_svg(groups: list[dict[str, Any]], *, title: str) -> bytes:
+    """Export the same cumulative-rate coordinates/units used by the page plots."""
+    colors = ['#245aba', '#bb5534', '#188875', '#9c4e95', '#756b27', '#333f6b', '#657889']
+    height = max(480, 420 + ((len(groups) + 2) // 3) * 17)
+    body = [f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 {height}" role="img">',
+            '<rect width="900" height="480" fill="white"/>',
+            f'<title>{html.escape(title)}</title>']
+    for tick in range(5):
+        y = 340 - tick * 72
+        body += [f'<line x1="65" y1="{y}" x2="850" y2="{y}" stroke="#dbe2ea"/>',
+                 f'<text x="10" y="{y + 5}" fill="#526377">{tick * 25}%</text>']
+    for index, group in enumerate(groups):
+        points = ' '.join(f"{65 + r['batch'] * 785 / 30:g},{340 - r['rate'] * 288:g}"
+                          for r in group['rows'] if r['rate'] is not None)
+        color = colors[index % len(colors)]
+        body.append(f'<polyline fill="none" stroke="{color}" stroke-width="2.5" points="{points}"/>')
+        body.append(f'<text x="{65 + (index % 3) * 265}" y="{395 + (index // 3) * 17}" fill="{color}" font-size="11">{html.escape(group["name"])}</text>')
+    body.append('<text x="65" y="370" fill="#526377">Batch · cumulative realized interactions / cumulative exposures</text></svg>')
+    return '\n'.join(body).encode()
+
+
+def ten_topic_public_downloads(data: dict[str, Any]) -> dict[str, bytes]:
+    """Publish only aggregate study tables, curve points and contextual JSON."""
+    import csv
+    import io
+
+    def csv_bytes(rows: list[dict[str, Any]]) -> bytes:
+        if not rows:
+            raise ValueError('Empty formal public table')
+        columns = list(dict.fromkeys(key for row in rows for key in row))
+        stream = io.StringIO(newline='')
+        writer = csv.DictWriter(stream, fieldnames=columns)
+        writer.writeheader()
+        writer.writerows(rows)
+        return stream.getvalue().encode('utf-8-sig')
+
+    tables = {
+        'whole/results.csv': data['whole']['rows'], 'whole/curves.csv': data['whole']['curves'],
+        'parameter/estimates.csv': data['parameters']['estimates'],
+        'parameter/mean-curves.csv': data['parameters']['curves'],
+        'parameter/paired-contrasts.csv': data['parameters']['paired'],
+        'index/estimates.csv': data['index']['estimates'], 'index/mean-curves.csv': data['index']['curves'],
+        'index/paired-contrasts.csv': data['index']['paired'], 'index/composition.csv': data['index']['composition'],
+        'models/conditions.csv': data['models']['conditions'], 'models/messages.csv': data['models']['messages'],
+        'models/segments.csv': data['models']['segments'], 'models/curves.csv': data['models']['curves'],
+        'models/segment-curves.csv': data['models']['segment_curves'],
+        'models/old-new.csv': data['models']['comparison'],
+    }
+    files = {'ten-topic/' + name: csv_bytes(rows) for name, rows in tables.items()}
+    for study in ('whole', 'parameters', 'index', 'models'):
+        files['ten-topic/' + study + '/results.json'] = json.dumps(
+            data[study], ensure_ascii=False, sort_keys=True, separators=(',', ':'), allow_nan=False).encode()
+    files['ten-topic/methods.json'] = json.dumps({
+        'network': data['network'], 'behavior_seed': 20260823,
+        'whole_and_models_behavior_realizations': 1, 'sensitivity_behavior_seeds': 100,
+        'sensitivity_interval': 'df99 Student-t conditional on fixed judgments/data; original families preserved',
+        'holdout_rules_unchanged': True, 'sample_build_rule_unchanged_new_network': True,
+        'local_p99_rebuilt_baseline_overlap': data['index']['local_p99_rebuilt_overlap'],
+        'model_version_change': 'DeepSeek V4 Flash old versus user-approved V4.1 Flash new',
+        'gemini_observed_model': 'gemini-pro-agent; original gateway, hidden effective context not observed',
+        'comparison_scope': 'joint network/sample/service-time and indicator/model version effects; not isolated causal effects',
+        'provider_calls_during_publication': 0,
+    }, ensure_ascii=False, sort_keys=True, separators=(',', ':')).encode()
+    for message in ('message_1', 'message_2', 'message_3'):
+        groups = [{'name': message, 'rows': [{'batch': r['batch'], 'rate': r['realized_rate']}
+                                            for r in data['whole']['curves'] if r['message'] == message]}]
+        files[f'ten-topic/whole/{message}-curves.svg'] = public_curve_svg(groups, title='Whole sample ' + message)
+    for study, folder in [('parameters', 'parameter'), ('index', 'index')]:
+        for message in ('all', 'message_1', 'message_2', 'message_3'):
+            selected = [r for r in data[study]['curves'] if r['message'] == message]
+            keys = sorted({r['configuration'] for r in selected})
+            groups = [{'name': key, 'rows': [{'batch': r['batch'], 'rate': r['new_rate_mean']}
+                                            for r in selected if r['configuration'] == key]} for key in keys]
+            files[f'ten-topic/{folder}/{message}-curves.svg'] = public_curve_svg(groups, title=folder + ' 100-seed mean ' + message)
+    for template in ('P0', 'P1', 'P2', 'P3'):
+        for message in ('message_1', 'message_2', 'message_3'):
+            selected = [r for r in data['models']['curves'] if r['template'] == template and r['message'] == message]
+            names = sorted({r['model'] for r in selected})
+            groups = [{'name': name, 'rows': [{'batch': r['batch'] + 1, 'rate': r['realized_rate']}
+                                             for r in selected if r['model'] == name]} for name in names]
+            files[f'ten-topic/models/{template}-{message}-curves.svg'] = public_curve_svg(groups, title=template + ' ' + message)
+    return files
+
+
+def ten_topic_workbook_tables(data: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
+    """Aggregate workbook source tables; no private roots or per-user data."""
+    return {
+        'Methods': [
+            {'Item': 'Network', 'Value': 'Ten actual collected topics; holdout-safe historical interactions'},
+            {'Item': 'Network P95', 'Value': data['network']['p95']},
+            {'Item': 'Whole sample', 'Value': '36,400 users;109,200 exposures;single behavior seed20260823'},
+            {'Item': 'Parameter', 'Value': '21 configurations;100 behavior seeds;2,100 paths'},
+            {'Item': 'Indicator', 'Value': '7 arms;100 behavior seeds;700 paths'},
+            {'Item': 'Local p99 rebuilt overlap', 'Value': data['index']['local_p99_rebuilt_overlap']},
+            {'Item': 'Four models', 'Value': '16 conditions;28,800 exposures;single behavior seed20260823'},
+            {'Item': 'Intervals', 'Value': 'df99 Student-t, conditional behavior Monte Carlo; not LLM repetitions'},
+            {'Item': 'Rates', 'Value': 'Actual interactions / stated exposures; curves use cumulative denominator'},
+            {'Item': 'DeepSeek', 'Value': 'User-approved V4.1 Flash new;V4 Flash historical'},
+            {'Item': 'Gemini', 'Value': 'Observed gateway alias gemini-pro-agent;hidden effective context unobserved'},
+            {'Item': 'Interpretation', 'Value': 'Joint network/sample/indicator/model service-time changes;not isolated causal effects'},
+        ],
+        'Whole results': data['whole']['rows'], 'Whole curves': data['whole']['curves'],
+        'Parameter estimates': data['parameters']['estimates'], 'Parameter curves': data['parameters']['curves'],
+        'Parameter contrasts': data['parameters']['paired'],
+        'Indicator estimates': data['index']['estimates'], 'Indicator curves': data['index']['curves'],
+        'Indicator contrasts': data['index']['paired'], 'Sample composition': data['index']['composition'],
+        'Model conditions': data['models']['conditions'], 'Model messages': data['models']['messages'],
+        'Model segments': data['models']['segments'], 'Model curves': data['models']['curves'],
+        'Category curves': data['models']['segment_curves'], 'Model old new': data['models']['comparison'],
+    }

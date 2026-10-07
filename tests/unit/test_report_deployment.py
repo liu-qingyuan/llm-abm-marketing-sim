@@ -783,7 +783,7 @@ def test_v13_v14_authorization_and_fresh_readback_gates_precede_remote_writes() 
 
     authorization_gate = script.index("validate_abm_report_deployment.py")
     operation_output_gate = script.index(
-        "v14/v15/v16 requires --operation-facts-output"
+        "v14/v15/v16/v17 requires --operation-facts-output"
     )
     first_ssh = script.index('if ssh "${DEPLOY_HOST}"')
     readback_gate = script.index("verify-readback")
