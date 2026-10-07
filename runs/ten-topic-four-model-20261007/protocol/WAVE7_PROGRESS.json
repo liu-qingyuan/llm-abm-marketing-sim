@@ -1,6 +1,6 @@
 {
   "status": "resumed_external_blockers_removed",
-  "at_utc": "2026-10-07T02:47:04.022589+00:00",
+  "at_utc": "2026-10-07T02:54:04.348443+00:00",
   "base_commit": "470a245b7b9022ac49d467f1ccc129bcaf9db0ac",
   "worktree": "/Users/liuqingyuan/.codex/worktrees/ten-topic-offline-replay/llm-abm-marketing-sim",
   "branch": "codex/ten-topic-full-pool-replay",
@@ -26,6 +26,15 @@
     5094,
     5095
   ],
-  "offline_regression": "18 passed; Ruff F pass; py_compile pass",
-  "rollback": "scratch only; original <=3 logical behavior restored, production retains authorized collection branch"
+  "offline_regression": "35 passed in2.64s; Ruff F pass; py_compile pass",
+  "rollback": "scratch only; original <=3 logical behavior restored, production retains authorized collection branch",
+  "physical_requests_snapshot": 12967,
+  "succeeded_judgments_including_qualifications": 12936,
+  "original_unknown_count": 6,
+  "inflight_count": 4,
+  "explicit_gemini_collection_count": 3,
+  "completed_conditions": 10,
+  "required_conditions": 16,
+  "goal_status": "active",
+  "preservation": "20 original source/GPT bank hashes unchanged"
 }
