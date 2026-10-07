@@ -54,6 +54,7 @@ async function expectNoHorizontalOverflow(page: Page): Promise<void> {
   const hasHorizontalOverflow = await page.evaluate(
     () => document.documentElement.scrollWidth > window.innerWidth + 1,
   );
+  if (hasHorizontalOverflow) console.log(await page.evaluate(() => ({width: innerWidth, scroll: document.documentElement.scrollWidth, overflowing: Array.from(document.querySelectorAll('body > *, #single-topic-history > *, [data-testid="revised-robustness"] *')).filter(e => e.getBoundingClientRect().right > innerWidth + 1).slice(0, 20).map(e => ({tag: e.tagName, id: e.id, cls: e.className, right: e.getBoundingClientRect().right}))})));
   expect(hasHorizontalOverflow).toBeFalsy();
 }
 
