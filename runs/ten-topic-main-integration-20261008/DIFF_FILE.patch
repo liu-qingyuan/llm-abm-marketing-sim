@@ -1,0 +1,9 @@
+--- /Users/liuqingyuan/work/llm-abm-marketing-sim/runs/ten-topic-main-integration-20261008/BEFORE.json
++++ /Users/liuqingyuan/work/llm-abm-marketing-sim/runs/ten-topic-main-integration-20261008/MERGED_HEAD.json
+@@ -1,5 +1,5 @@
+ {
+-  "main_head": "bdedc9fbd17b5d77bbd49baba0b49bc9b3d3a856",
++  "main_head": "972c64ff125924421b52be3439e508bf23724ae9",
+   "research_head": "972c64ff125924421b52be3439e508bf23724ae9",
+   "main_untracked": [
+     {

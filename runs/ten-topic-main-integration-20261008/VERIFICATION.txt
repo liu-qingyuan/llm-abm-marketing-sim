@@ -1,0 +1,44 @@
+{
+  "branch": "main",
+  "changed_field": "main_head / research commit ancestry",
+  "original_file_sha256": "4a7260a5f100c3a059f5b7aa9ba8a121ad046b8a2359291092a7589c06f787aa",
+  "MODIFIED_FILE": "/Users/liuqingyuan/work/llm-abm-marketing-sim/runs/ten-topic-main-integration-20261008/MERGED_HEAD.json",
+  "DIFF_FILE": "/Users/liuqingyuan/work/llm-abm-marketing-sim/runs/ten-topic-main-integration-20261008/DIFF_FILE.patch",
+  "VERIFICATION": "/Users/liuqingyuan/work/llm-abm-marketing-sim/runs/ten-topic-main-integration-20261008/VERIFICATION.txt",
+  "ROLLBACK": "/Users/liuqingyuan/work/llm-abm-marketing-sim/runs/ten-topic-main-integration-20261008/ROLLBACK.sh",
+  "tests": [
+    {
+      "kind": "BASELINE",
+      "command": [
+        "/Users/liuqingyuan/work/llm-abm-marketing-sim/.venv/bin/python",
+        "/Users/liuqingyuan/work/llm-abm-marketing-sim/runs/ten-topic-main-integration-20261008/check_head_record.py",
+        "/Users/liuqingyuan/work/llm-abm-marketing-sim/runs/ten-topic-main-integration-20261008/BEFORE.json"
+      ],
+      "input": "/Users/liuqingyuan/work/llm-abm-marketing-sim/runs/ten-topic-main-integration-20261008/BEFORE.json",
+      "literal_output": "research_history_in_main=false",
+      "exit_status": 1
+    },
+    {
+      "kind": "MODIFIED",
+      "command": [
+        "/Users/liuqingyuan/work/llm-abm-marketing-sim/.venv/bin/python",
+        "/Users/liuqingyuan/work/llm-abm-marketing-sim/runs/ten-topic-main-integration-20261008/check_head_record.py",
+        "/Users/liuqingyuan/work/llm-abm-marketing-sim/runs/ten-topic-main-integration-20261008/MERGED_HEAD.json"
+      ],
+      "input": "/Users/liuqingyuan/work/llm-abm-marketing-sim/runs/ten-topic-main-integration-20261008/MERGED_HEAD.json",
+      "literal_output": "research_history_in_main=true",
+      "exit_status": 0
+    },
+    {
+      "kind": "ROLLBACK",
+      "command": [
+        "/Users/liuqingyuan/work/llm-abm-marketing-sim/runs/ten-topic-main-integration-20261008/ROLLBACK.sh",
+        "/Users/liuqingyuan/work/llm-abm-marketing-sim/runs/ten-topic-main-integration-20261008/scratch-head.json"
+      ],
+      "input": "modified scratch copy; actual main and worktree untouched",
+      "literal_output": "byte_equal_baseline=true\nresearch_history_in_main=false\nrestored_behavior_exit_status=1",
+      "exit_status": 0
+    }
+  ],
+  "restored_behavior": "scratch record matches original main HEAD; actual main remains merged"
+}

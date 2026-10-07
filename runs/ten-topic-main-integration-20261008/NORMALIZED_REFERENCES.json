@@ -1,0 +1,46 @@
+[
+  {
+    "captured": "/Users/liuqingyuan/.codex/worktrees/ten-topic-offline-replay/llm-abm-marketing-sim/tests/playwright/deployed-abm-report.spec.ts:472:5",
+    "resolved_existing": "/Users/liuqingyuan/.codex/worktrees/ten-topic-offline-replay/llm-abm-marketing-sim/tests/playwright/deployed-abm-report.spec.ts"
+  },
+  {
+    "captured": "/Users/liuqingyuan/.codex/worktrees/ten-topic-offline-replay/llm-abm-marketing-sim/tests/playwright/deployed-abm-report.spec.ts:57:33",
+    "resolved_existing": "/Users/liuqingyuan/.codex/worktrees/ten-topic-offline-replay/llm-abm-marketing-sim/tests/playwright/deployed-abm-report.spec.ts"
+  },
+  {
+    "captured": "/Users/liuqingyuan/.codex/worktrees/ten-topic-offline-replay/llm-abm-marketing-sim/tests/playwright/deployed-abm-report.spec.ts:653:3",
+    "resolved_existing": "/Users/liuqingyuan/.codex/worktrees/ten-topic-offline-replay/llm-abm-marketing-sim/tests/playwright/deployed-abm-report.spec.ts"
+  },
+  {
+    "captured": "/Users/liuqingyuan/.codex/worktrees/ten-topic-offline-replay/llm-abm-marketing-sim/tests/playwright/deployed-abm-report.spec.ts:658:5",
+    "resolved_existing": "/Users/liuqingyuan/.codex/worktrees/ten-topic-offline-replay/llm-abm-marketing-sim/tests/playwright/deployed-abm-report.spec.ts"
+  },
+  {
+    "captured": "/Users/liuqingyuan/.codex/worktrees/ten-topic-offline-replay/llm-abm-marketing-sim/tests/playwright/deployed-abm-report.spec.ts:694:5",
+    "resolved_existing": "/Users/liuqingyuan/.codex/worktrees/ten-topic-offline-replay/llm-abm-marketing-sim/tests/playwright/deployed-abm-report.spec.ts"
+  },
+  {
+    "captured": "/Users/liuqingyuan/.codex/worktrees/ten-topic-offline-replay/llm-abm-marketing-sim/tests/playwright/deployed-abm-report.spec.ts:708:5",
+    "resolved_existing": "/Users/liuqingyuan/.codex/worktrees/ten-topic-offline-replay/llm-abm-marketing-sim/tests/playwright/deployed-abm-report.spec.ts"
+  },
+  {
+    "captured": "/Users/liuqingyuan/.codex/worktrees/ten-topic-offline-replay/llm-abm-marketing-sim/tests/playwright/deployed-abm-report.spec.ts:74:39",
+    "resolved_existing": "/Users/liuqingyuan/.codex/worktrees/ten-topic-offline-replay/llm-abm-marketing-sim/tests/playwright/deployed-abm-report.spec.ts"
+  },
+  {
+    "captured": "/Users/liuqingyuan/.codex/worktrees/ten-topic-offline-replay/llm-abm-marketing-sim/tests/playwright/deployed-abm-report.spec.ts:86:5",
+    "resolved_existing": "/Users/liuqingyuan/.codex/worktrees/ten-topic-offline-replay/llm-abm-marketing-sim/tests/playwright/deployed-abm-report.spec.ts"
+  },
+  {
+    "captured": "/Users/liuqingyuan/work/llm-abm-marketing-sim/data/processed/jinjiang_douyin/jinjiang-final-caption-hashtag-comments-profiles-latent-v1-validation-20260705T000000Z；holdout与3条原始消息沿用审计源配置。",
+    "resolved_existing": "/Users/liuqingyuan/work/llm-abm-marketing-sim/data/processed/jinjiang_douyin/jinjiang-final-caption-hashtag-comments-profiles-latent-v1-validation-20260705T000000Z"
+  },
+  {
+    "captured": "/Users/liuqingyuan/work/llm-abm-marketing-sim/outputs/01a08bb3-1446-7f51-8933-cd49b50e9ccb/four-model-final-20260912-verified/\\u56db\\u6a21\\u578b\\u5b8c\\u6210\\u7edf\\u8ba1.xlsx",
+    "resolved_existing": "/Users/liuqingyuan/work/llm-abm-marketing-sim/outputs/01a08bb3-1446-7f51-8933-cd49b50e9ccb/four-model-final-20260912-verified/四模型完成统计.xlsx"
+  },
+  {
+    "captured": "/Users/liuqingyuan/work/llm-abm-marketing-sim/outputs/01a08bb3-1446-7f51-8933-cd49b50e9ccb/four-model-final-20260912-verified/\\u56db\\u6a21\\u578b\\u5b8c\\u6210\\u7edf\\u8ba1.xlsx.inspect.ndjson",
+    "resolved_existing": "/Users/liuqingyuan/work/llm-abm-marketing-sim/outputs/01a08bb3-1446-7f51-8933-cd49b50e9ccb/four-model-final-20260912-verified/四模型完成统计.xlsx.inspect.ndjson"
+  }
+]

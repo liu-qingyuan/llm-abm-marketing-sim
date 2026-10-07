@@ -1,0 +1,118 @@
+{
+  "counts": {
+    "skills-lock.json": {
+      "files": 1,
+      "bytes": 9553
+    },
+    "CONTEXT.md": {
+      "files": 1,
+      "bytes": 54534
+    },
+    "pyproject.toml": {
+      "files": 1,
+      "bytes": 2102
+    },
+    "README.md": {
+      "files": 1,
+      "bytes": 8887
+    },
+    ".gitignore": {
+      "files": 1,
+      "bytes": 999
+    },
+    "package-lock.json": {
+      "files": 1,
+      "bytes": 2251
+    },
+    "package.json": {
+      "files": 1,
+      "bytes": 340
+    },
+    ".gitnexusignore": {
+      "files": 1,
+      "bytes": 1004
+    },
+    "playwright.config.ts": {
+      "files": 1,
+      "bytes": 1323
+    },
+    ".env.example": {
+      "files": 1,
+      "bytes": 479
+    },
+    "AGENTS.md": {
+      "files": 1,
+      "bytes": 7860
+    },
+    ".git": {
+      "files": 1,
+      "bytes": 91
+    },
+    "archive": {
+      "files": 2,
+      "bytes": 61239
+    },
+    "tests": {
+      "files": 228,
+      "bytes": 20655047
+    },
+    ".claude": {
+      "files": 6,
+      "bytes": 28303
+    },
+    "docs": {
+      "files": 86,
+      "bytes": 5237235
+    },
+    "configs": {
+      "files": 22,
+      "bytes": 73136
+    },
+    "scripts": {
+      "files": 28,
+      "bytes": 660474
+    },
+    ".playwright-cli": {
+      "files": 12,
+      "bytes": 397296
+    },
+    "playwright-report": {
+      "files": 1,
+      "bytes": 576312
+    },
+    "test-results": {
+      "files": 1,
+      "bytes": 45
+    },
+    "data": {
+      "files": 6,
+      "bytes": 6832
+    },
+    "runs": {
+      "files": 7475,
+      "bytes": 14895725296
+    },
+    "src": {
+      "files": 191,
+      "bytes": 20708180
+    }
+  },
+  "symlinks": [
+    {
+      "path": "node_modules",
+      "target": "/Users/liuqingyuan/work/llm-abm-marketing-sim/node_modules",
+      "exists": true
+    },
+    {
+      "path": ".venv",
+      "target": "/Users/liuqingyuan/work/llm-abm-marketing-sim/.venv",
+      "exists": true
+    },
+    {
+      "path": "runs/ten-topic-v17-publication-20261007/workbook-build/node_modules",
+      "target": "/Users/liuqingyuan/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/node_modules",
+      "exists": true
+    }
+  ],
+  "absolute_reference_count": 3490
+}

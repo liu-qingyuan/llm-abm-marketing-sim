@@ -7,6 +7,8 @@
 [Canonical Final Research](https://abm.q1ngyuan.top/) 已发布 **十话题 v17**：全样本、推荐参数、用户指标敏感性与四模型×P0–P3统一接入正式 Report / Release。2026-10-07 12:11 UTC 完成原子发布、公网正文/交互/下载及最终身份验收；发布过程零 Provider 调用。单话题 v16 与更早历史结果及下载保留为明确标识的旧版。[发布记录](references/ten-topic-v17-canonical-release-20261007.md)。
 ### 研究地图
 
+十话题成果已并入原项目 main；本地正式目录持久保存、历史绝对路径与原字节不改写。[持久来源映射及读取方法](references/ten-topic-main-preservation-20261008.md)。
+
 | 研究 / 问题 | 改变与固定设定 | 样本、seed 与统计单位 | 最终证据 / 发布状态 |
 |---|---|---|---|
 | **Whole sample**：全样本两阶段实际互动 | GPT-5.6 Sol / P0；十话题合并历史图，既有判断与抽样锚点离线复用 | 36,400用户；109,200曝光；单次行为seed20260823；实际互动63,614/109,200 = 58.255% | [正式来源及复验](../runs/ten-topic-full-pool-20261006/REPORT.md)；canonical v17默认视图 |

@@ -1,0 +1,13 @@
+{
+  "counts": {
+    "migrated_worktree_refs": 3410,
+    "original_project_refs": 76,
+    "other_or_historical": 4
+  },
+  "nonexistent_historical_strings": 16,
+  "policy": "literal log/code paths and attempted nonexistent records are not treated as active Formal SHA bindings; exact Formal inventories verified separately",
+  "external_credential_configuration": "outside removed worktree; existing file not read/copied",
+  "data_directory": "worktree contains only six committed README/gitkeep files; actual dataset references are in original project and remain in place",
+  "other_untracked": "20 files preserved; bytecode/index/test caches reproducible and not required research source",
+  "outputs": "no worktree outputs directory; old comparison outputs remain in original project"
+}

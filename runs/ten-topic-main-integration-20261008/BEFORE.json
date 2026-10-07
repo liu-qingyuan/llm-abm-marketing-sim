@@ -1,0 +1,35 @@
+{
+  "main_head": "bdedc9fbd17b5d77bbd49baba0b49bc9b3d3a856",
+  "research_head": "972c64ff125924421b52be3439e508bf23724ae9",
+  "main_untracked": [
+    {
+      "path": "/Users/liuqingyuan/work/llm-abm-marketing-sim/docs/weekly/2026-09-14-锦江绿色营销四模型稳健性实验完成与结果发布.md",
+      "sha256": "1d5cb68624717bf0d5bc5078ab9dbef91578b1c089463f9fc90d0d1d4b815d07"
+    },
+    {
+      "path": "/Users/liuqingyuan/work/llm-abm-marketing-sim/docs/weekly/2026-09-18-锦江绿色营销动态参数敏感性研究与阶段结论.md",
+      "sha256": "5ef548566970e0d1239ade4a92fe4d1358600330780a5bd82896d273ee1af4ac"
+    },
+    {
+      "path": "/Users/liuqingyuan/work/llm-abm-marketing-sim/docs/weekly/2026-10-06-Study3方法文档修订与匿名代码发布准备.md",
+      "sha256": "824fb4e651aed8dea7aeca87d6c213171e3ba1062028c45b22efcbfc5cb44ebf"
+    }
+  ],
+  "other_local_branches": [
+    "codex/four-model-v15-publication",
+    "codex/ten-topic-full-pool-replay",
+    "feat/ticket-178-presentation-closure",
+    "main",
+    "pi-agent-55fe9992-9c22-4bf",
+    "pi-agent-70506272-9b30-48f",
+    "pi-agent-7e2265f8-8359-4e1",
+    "pi-agent-83fe759f-9c0b-4ac",
+    "ralph/issue-7-doc-navigation-contract",
+    "segmented-operator-integration",
+    "ticket-180-complete"
+  ],
+  "remote_heads": [
+    "d59896ee5ac0ebab39e86a71bf9f37b9c9c77cbe\trefs/heads/codex/four-model-v15-publication",
+    "082d6601da1f9815e42f1798dcce656389e55503\trefs/heads/main"
+  ]
+}
