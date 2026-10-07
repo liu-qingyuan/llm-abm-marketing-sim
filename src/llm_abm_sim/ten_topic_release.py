@@ -242,6 +242,7 @@ def collect_ten_topic_public_data(accepted_sources: Mapping[str, Any]) -> dict[s
             'models': {'conditions': model_conditions, 'messages': rows(four / 'formal-report/messages.csv'),
                        'segments': rows(four / 'formal-report/segments-messages.csv'),
                        'curves': rows(four / 'formal-report/curves.csv'), 'segment_curves': segment_curves,
+                       'paired_seed': rows(four / 'formal-report/direct-seed-panel.csv'),
                        'comparison': rows(four / 'formal-report/old-new.csv')},
             'download_links': []}
 

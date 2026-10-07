@@ -139,6 +139,7 @@ def ten_topic_public_downloads(data: dict[str, Any]) -> dict[str, bytes]:
         'models/segments.csv': data['models']['segments'], 'models/curves.csv': data['models']['curves'],
         'models/segment-curves.csv': data['models']['segment_curves'],
         'models/old-new.csv': data['models']['comparison'],
+        'models/paired-seed-panel.csv': data['models']['paired_seed'],
     }
     files = {'ten-topic/' + name: csv_bytes(rows) for name, rows in tables.items()}
     for study in ('whole', 'parameters', 'index', 'models'):
@@ -201,4 +202,5 @@ def ten_topic_workbook_tables(data: dict[str, Any]) -> dict[str, list[dict[str, 
         'Model conditions': data['models']['conditions'], 'Model messages': data['models']['messages'],
         'Model segments': data['models']['segments'], 'Model curves': data['models']['curves'],
         'Category curves': data['models']['segment_curves'], 'Model old new': data['models']['comparison'],
+        'Model paired seeds': data['models']['paired_seed'],
     }

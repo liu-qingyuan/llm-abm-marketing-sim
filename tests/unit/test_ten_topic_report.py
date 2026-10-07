@@ -16,3 +16,12 @@ def test_new_research_is_default_old_research_explicit_and_unrelated_preserved()
     assert b'old single-topic result' in result and b'unrelated preserved' in result
     assert b'/* unrelated controls preserved */' in result
     assert result.index(b'id="full-pool-main"') < result.index(b'id="single-topic-history"')
+    import json
+    import re
+
+    data['network']['fixture_text'] = '<script>&</script>'
+    result = _REPORT_PRESENTATION.render_ten_topic_research(BASE, data, release_id='ten-topic-v17')
+    payload = re.search(rb'<script type="application/json" id="ten-topic-public-data">(.*?)</script>', result, re.S)
+    assert payload is not None
+    assert b'<script>' not in payload[1]
+    assert json.loads(payload[1])['network']['fixture_text'] == '<script>&</script>'
