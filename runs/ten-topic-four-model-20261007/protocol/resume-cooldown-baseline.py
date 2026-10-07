@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Original GPT route, actual-exposure collection; durable intent prevents silent redispatch."""
-import time,json,os,argparse,shlex,datetime
+import time,json,os,argparse,shlex
 from dataclasses import replace
 from pathlib import Path
 from llm_abm_sim import _parameter_judgment_bank as bank
@@ -16,7 +16,6 @@ from llm_abm_sim.concurrent_robustness_operator import _new_client
 from qualify import RecordedClient,append,LEDGER
 from ledger_store import physical_count
 from quota_recovery import quota_recovery_allowed
-from cooldown_policy import observed_retry_not_before
 ROOT=Path(__file__).resolve().parents[1]
 ORIGINAL=Path('/Users/liuqingyuan/work/llm-abm-marketing-sim')
 OLD=ORIGINAL/'outputs/01a08bb3-1446-7f51-8933-cd49b50e9ccb/four-model-final-20260912-verified'
@@ -97,7 +96,7 @@ def main(template,model):
      else:
       request_id=bank.fingerprint({'research':'ten-topic-four-model-20261007','model':model,'template':template,'user':u,'message':m.message_id,'messages_hash':mh})
       logical_id=request_id
-      attempt_number=1;parent_unknown=None;collection_number=1;opened_new_collection=False;exhausted_parent=None;dispatch_not_before=None
+      attempt_number=1;parent_unknown=None;collection_number=1;opened_new_collection=False;exhausted_parent=None
       while True:
        if request_id in cached_success:
         decision=EngageDecision.model_validate(cached_success[request_id]['decision']);break
@@ -105,8 +104,6 @@ def main(template,model):
         failure=known_fail.get(request_id)
         if failure is None:raise ValueError('prior unsettled intent lacks a terminal-process classification')
         category=failure.get('failure_category')
-        observed=observed_retry_not_before(failure)
-        if observed is not None:dispatch_not_before=max(dispatch_not_before,observed) if dispatch_not_before else observed
         unknown=request_id not in has_response and (failure.get('error_type')=='ProviderResponseProvenanceUnknown' or category in ['transport','timeout'])
         quota_restored=model=='kimi-k3' and quota_recovery_allowed(failure,bank.read_json(ROOT/'protocol/KIMI_ACCOUNT_STATUS.json'))
         if not failure.get('retryable') and not unknown and not quota_restored:raise ValueError('nonretryable prior failure')
@@ -124,12 +121,6 @@ def main(template,model):
         else:
          request_id=logical_id+(f':collection{collection_number}' if collection_number>1 else '')+(':explicit-reissue'+str(attempt_number-1) if unknown else ':attempt'+str(attempt_number))
         continue
-       if dispatch_not_before is not None:
-        remaining=(dispatch_not_before-datetime.datetime.now(datetime.timezone.utc)).total_seconds()
-        if remaining>0:
-         event({'kind':'provider_cooldown_wait','model':model,'template':template,'dispatch_not_before_utc':dispatch_not_before.isoformat(),'wait_seconds':remaining,'logical_request_id':logical_id,'collection_number':collection_number,'no_intent_or_request_dispatched_while_waiting':True})
-         print('COOLDOWN',template,dispatch_not_before.isoformat(),flush=True)
-         time.sleep(remaining)
        physical=physical_count()
        if physical>=29143:raise ValueError('physical budget reached')
        if client_cache is None:client_cache=MoonshotOfficialClient(api_key=os.environ['MOONSHOT_API_KEY'],live_enabled=True) if model=='kimi-k3' else _new_client('deepseek-v4-flash' if model=='deepseek-flash' else model,30)
@@ -137,14 +128,14 @@ def main(template,model):
        wrapper=RecordedClient(client,request_id)
        adapter=PiOpenAIDecisionAdapter(prompt_version=prompt.prompt_version,client=wrapper) if model=='openai-codex/gpt-5.6-sol' else OfficialKimiDecisionAdapter(prompt_version=prompt.prompt_version,client=wrapper) if model=='kimi-k3' else AntigravityGeminiDecisionAdapter(requested_model=model,prompt_version=prompt.prompt_version,client=wrapper) if model=='gemini-3.1-pro' else _FrozenRobustnessDecisionAdapter(condition=replace(_DEEPSEEK,requested_model='deepseek-flash',wire_model='deepseek-flash',required_observed_model='deepseek-flash'),prompt_version=prompt.prompt_version,client=wrapper)
        assert adapter.condition.output_token_ceiling==(1024 if model=='kimi-k3' else 256)
-       append({'type':'intent','purpose':'explicit_unknown_new_collection' if parent_unknown else 'formal_exposure','quota_recovery_evidence':str(ROOT/'protocol/KIMI_ACCOUNT_STATUS.json') if model=='kimi-k3' and logical_id in known_fail and known_fail[logical_id].get('failure_category')=='quota_exhausted' else None,'unknown_parent_request_id':parent_unknown,'explicit_user_authorization':str(ROOT/'protocol/UNKNOWN_CONTINUATION_AUTHORIZATION.json') if parent_unknown else None,'request_id':request_id,'logical_request_id':logical_id,'cooldown_policy':'observed-Retry-After-before-dispatch-v1','dispatch_not_before_utc':dispatch_not_before.isoformat() if dispatch_not_before else None,'attempt_number':attempt_number,'collection_number':collection_number,'collection_id':logical_id+(f':collection{collection_number}' if collection_number>1 else ''),'exhausted_collection_parent_request_id':exhausted_parent,'collection_user_authorization':str(ROOT/'protocol/GEMINI_COLLECTION_AUTHORIZATION.json') if collection_number>1 else None,'model':model,'template':template,'user_id':u,'message_id':m.message_id,'time_step':step,'full_client_messages':messages,'client_messages_sha256':mh,'request_condition':adapter.safe_metadata,'timeout_seconds':90 if model=='kimi-k3' else 30,'physical_ordinal':physical+1})
+       append({'type':'intent','purpose':'explicit_unknown_new_collection' if parent_unknown else 'formal_exposure','quota_recovery_evidence':str(ROOT/'protocol/KIMI_ACCOUNT_STATUS.json') if model=='kimi-k3' and logical_id in known_fail and known_fail[logical_id].get('failure_category')=='quota_exhausted' else None,'unknown_parent_request_id':parent_unknown,'explicit_user_authorization':str(ROOT/'protocol/UNKNOWN_CONTINUATION_AUTHORIZATION.json') if parent_unknown else None,'request_id':request_id,'logical_request_id':logical_id,'attempt_number':attempt_number,'collection_number':collection_number,'collection_id':logical_id+(f':collection{collection_number}' if collection_number>1 else ''),'exhausted_collection_parent_request_id':exhausted_parent,'collection_user_authorization':str(ROOT/'protocol/GEMINI_COLLECTION_AUTHORIZATION.json') if collection_number>1 else None,'model':model,'template':template,'user_id':u,'message_id':m.message_id,'time_step':step,'full_client_messages':messages,'client_messages_sha256':mh,'request_condition':adapter.safe_metadata,'timeout_seconds':90 if model=='kimi-k3' else 30,'physical_ordinal':physical+1})
        intents[request_id]={'request_id':request_id}
        try:
         decision=adapter.decide(data.post,data.profile,data.peer_context,data.platform_context,step)
         settled={'type':'succeeded','request_id':request_id,'decision':decision.model_dump(mode='json'),'accounting':adapter.provider_accounting.model_dump(mode='json'),'provider_fee_cny':adapter.last_provider_fee_cny,'nominal_usd':adapter.last_subscription_nominal_cost_usd}
         append(settled);cached_success[request_id]=settled;has_response.add(request_id);break
        except Exception as exc:
-        settled={'type':'failed_or_unknown','at_utc':datetime.datetime.now(datetime.timezone.utc).isoformat(),'request_id':request_id,'error_type':type(exc).__name__,'failure_category':getattr(exc,'failure_category',None),'retryable':getattr(exc,'retryable',False),'status_code':getattr(exc,'status_code',None),'wait_seconds':getattr(exc,'wait_seconds',None),'provider_fee_cny':adapter.last_provider_fee_cny,'nominal_usd':adapter.last_subscription_nominal_cost_usd}
+        settled={'type':'failed_or_unknown','request_id':request_id,'error_type':type(exc).__name__,'failure_category':getattr(exc,'failure_category',None),'retryable':getattr(exc,'retryable',False),'status_code':getattr(exc,'status_code',None),'wait_seconds':getattr(exc,'wait_seconds',None),'provider_fee_cny':adapter.last_provider_fee_cny,'nominal_usd':adapter.last_subscription_nominal_cost_usd}
         append(settled);known_fail[request_id]=settled
         # Response existence is an actual durable observation, not inferred from exception text.
         now=[json.loads(x) for x in LEDGER.read_text().splitlines()]

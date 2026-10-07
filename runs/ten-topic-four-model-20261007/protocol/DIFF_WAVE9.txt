@@ -1,0 +1,53 @@
+diff --git a/runs/ten-topic-four-model-20261007/protocol/audit_ledger.py b/runs/ten-topic-four-model-20261007/protocol/audit_ledger.py
+index 0245ef9..e5cf755 100644
+--- a/runs/ten-topic-four-model-20261007/protocol/audit_ledger.py
++++ b/runs/ten-topic-four-model-20261007/protocol/audit_ledger.py
+@@ -33 +33 @@ def main():
+- logical=collections.defaultdict(list);collections_by_id=collections.defaultdict(list)
++ logical=collections.defaultdict(list);collections_by_id=collections.defaultdict(list);retry_after_violations=[];cooldown_checked=0
+@@ -54,0 +55,14 @@ def main():
++  deadline=None
++  for identity in identities:
++   e=intents[identity];at=datetime.datetime.fromisoformat(e['at_utc']) if 'at_utc' in e else None
++   if deadline and at and at<deadline:
++    assert not e.get('cooldown_policy'), 'post-fix dispatch precedes observed Retry-After'
++    retry_after_violations.append({'request_id':identity,'model':e['model'],'template':e.get('template'),'intent_at_utc':at.isoformat(),'observed_not_before_utc':deadline.isoformat(),'scope':'pre-fix failure attempts preserved; no retroactive ledger correction'})
++   if e.get('cooldown_policy'):
++    cooldown_checked+=1
++    declared=e.get('dispatch_not_before_utc')
++    if declared:assert at>=datetime.datetime.fromisoformat(declared)
++   failure=failures.get(identity,{})
++   wait=failure.get('wait_seconds')
++   if isinstance(wait,(int,float)) and not isinstance(wait,bool) and wait>0 and 'at_utc' in failure:
++    observed=datetime.datetime.fromisoformat(failure['at_utc'])+datetime.timedelta(seconds=wait);deadline=max(deadline,observed) if deadline else observed
+@@ -68 +82 @@ def main():
+- result={'status':'all_observed_events_consistent_live_snapshot' if unresolved else 'all_settled_events_consistent','at_utc':datetime.datetime.now(datetime.timezone.utc).isoformat(),'snapshot_path':str(snapshot),'snapshot_sha256':hashlib.sha256(raw).hexdigest(),'physical_requests':len(intents),'logical_request_groups_including_qualifications':len(logical),'explicit_additional_collection_count':sum(':collection' in k for k in collections_by_id),'qualified_successes':sum(intents[k]['purpose']=='qualification' for k in success),'successful_judgments_including_qualifications':len(success),'formal_successes':sum(intents[k]['purpose']!='qualification' for k in success),'known_failures_with_response_or_typed_HTTP_status':len(failures)-len(unknown),'original_unknowns_retained':unknown,'inflight_not_unknown':unresolved,'wire_evidence_records':len(wire),'older_wire_evidence_scope':'earlier stages retained intent metadata and typed response; new stages additionally retain actual adapter wire model/controls','by_model':{k:dict(v) for k,v in by_model.items()},'known_nominal_usd_subtotal':str(nominal),'nominal_cost_known_settlements':nominal_known,'unknown_nominal_settlements':len(success)+len(failures)-nominal_known,'known_fee_cny_subtotal':str(fee) if fee_known else None,'actual_cash_fee':None,'actual_cash_fee_is_not_zero':True,'cash_ceiling':'user_authorized_unlimited','physical_cap':29143,'provider_calls_during_audit':0,'shared_components':'JSON/Decimal/hashlib only; no production ledger index or accounting tracker'}
++ result={'status':'all_observed_events_consistent_live_snapshot' if unresolved else 'all_settled_events_consistent','at_utc':datetime.datetime.now(datetime.timezone.utc).isoformat(),'snapshot_path':str(snapshot),'snapshot_sha256':hashlib.sha256(raw).hexdigest(),'physical_requests':len(intents),'logical_request_groups_including_qualifications':len(logical),'pre_fix_retry_after_violations_retained':retry_after_violations,'post_fix_cooldown_intents_checked':cooldown_checked,'explicit_additional_collection_count':sum(':collection' in k for k in collections_by_id),'qualified_successes':sum(intents[k]['purpose']=='qualification' for k in success),'successful_judgments_including_qualifications':len(success),'formal_successes':sum(intents[k]['purpose']!='qualification' for k in success),'known_failures_with_response_or_typed_HTTP_status':len(failures)-len(unknown),'original_unknowns_retained':unknown,'inflight_not_unknown':unresolved,'wire_evidence_records':len(wire),'older_wire_evidence_scope':'earlier stages retained intent metadata and typed response; new stages additionally retain actual adapter wire model/controls','by_model':{k:dict(v) for k,v in by_model.items()},'known_nominal_usd_subtotal':str(nominal),'nominal_cost_known_settlements':nominal_known,'unknown_nominal_settlements':len(success)+len(failures)-nominal_known,'known_fee_cny_subtotal':str(fee) if fee_known else None,'actual_cash_fee':None,'actual_cash_fee_is_not_zero':True,'cash_ceiling':'user_authorized_unlimited','physical_cap':29143,'provider_calls_during_audit':0,'shared_components':'JSON/Decimal/hashlib only; no production ledger index or accounting tracker'}
+diff --git a/runs/ten-topic-four-model-20261007/protocol/resume_any_authorized.py b/runs/ten-topic-four-model-20261007/protocol/resume_any_authorized.py
+index 10ddde2..741144c 100644
+--- a/runs/ten-topic-four-model-20261007/protocol/resume_any_authorized.py
++++ b/runs/ten-topic-four-model-20261007/protocol/resume_any_authorized.py
+@@ -3 +3 @@
+-import time,json,os,argparse,shlex
++import time,json,os,argparse,shlex,datetime
+@@ -18,0 +19 @@ from quota_recovery import quota_recovery_allowed
++from cooldown_policy import observed_retry_not_before
+@@ -99 +100 @@ def main(template,model):
+-      attempt_number=1;parent_unknown=None;collection_number=1;opened_new_collection=False;exhausted_parent=None
++      attempt_number=1;parent_unknown=None;collection_number=1;opened_new_collection=False;exhausted_parent=None;dispatch_not_before=None
+@@ -106,0 +108,2 @@ def main(template,model):
++        observed=observed_retry_not_before(failure)
++        if observed is not None:dispatch_not_before=max(dispatch_not_before,observed) if dispatch_not_before else observed
+@@ -123,0 +127,6 @@ def main(template,model):
++       if dispatch_not_before is not None:
++        remaining=(dispatch_not_before-datetime.datetime.now(datetime.timezone.utc)).total_seconds()
++        if remaining>0:
++         event({'kind':'provider_cooldown_wait','model':model,'template':template,'dispatch_not_before_utc':dispatch_not_before.isoformat(),'wait_seconds':remaining,'logical_request_id':logical_id,'collection_number':collection_number,'no_intent_or_request_dispatched_while_waiting':True})
++         print('COOLDOWN',template,dispatch_not_before.isoformat(),flush=True)
++         time.sleep(remaining)
+@@ -131 +140 @@ def main(template,model):
+-       append({'type':'intent','purpose':'explicit_unknown_new_collection' if parent_unknown else 'formal_exposure','quota_recovery_evidence':str(ROOT/'protocol/KIMI_ACCOUNT_STATUS.json') if model=='kimi-k3' and logical_id in known_fail and known_fail[logical_id].get('failure_category')=='quota_exhausted' else None,'unknown_parent_request_id':parent_unknown,'explicit_user_authorization':str(ROOT/'protocol/UNKNOWN_CONTINUATION_AUTHORIZATION.json') if parent_unknown else None,'request_id':request_id,'logical_request_id':logical_id,'attempt_number':attempt_number,'collection_number':collection_number,'collection_id':logical_id+(f':collection{collection_number}' if collection_number>1 else ''),'exhausted_collection_parent_request_id':exhausted_parent,'collection_user_authorization':str(ROOT/'protocol/GEMINI_COLLECTION_AUTHORIZATION.json') if collection_number>1 else None,'model':model,'template':template,'user_id':u,'message_id':m.message_id,'time_step':step,'full_client_messages':messages,'client_messages_sha256':mh,'request_condition':adapter.safe_metadata,'timeout_seconds':90 if model=='kimi-k3' else 30,'physical_ordinal':physical+1})
++       append({'type':'intent','purpose':'explicit_unknown_new_collection' if parent_unknown else 'formal_exposure','quota_recovery_evidence':str(ROOT/'protocol/KIMI_ACCOUNT_STATUS.json') if model=='kimi-k3' and logical_id in known_fail and known_fail[logical_id].get('failure_category')=='quota_exhausted' else None,'unknown_parent_request_id':parent_unknown,'explicit_user_authorization':str(ROOT/'protocol/UNKNOWN_CONTINUATION_AUTHORIZATION.json') if parent_unknown else None,'request_id':request_id,'logical_request_id':logical_id,'cooldown_policy':'observed-Retry-After-before-dispatch-v1','dispatch_not_before_utc':dispatch_not_before.isoformat() if dispatch_not_before else None,'attempt_number':attempt_number,'collection_number':collection_number,'collection_id':logical_id+(f':collection{collection_number}' if collection_number>1 else ''),'exhausted_collection_parent_request_id':exhausted_parent,'collection_user_authorization':str(ROOT/'protocol/GEMINI_COLLECTION_AUTHORIZATION.json') if collection_number>1 else None,'model':model,'template':template,'user_id':u,'message_id':m.message_id,'time_step':step,'full_client_messages':messages,'client_messages_sha256':mh,'request_condition':adapter.safe_metadata,'timeout_seconds':90 if model=='kimi-k3' else 30,'physical_ordinal':physical+1})
+@@ -138 +147 @@ def main(template,model):
+-        settled={'type':'failed_or_unknown','request_id':request_id,'error_type':type(exc).__name__,'failure_category':getattr(exc,'failure_category',None),'retryable':getattr(exc,'retryable',False),'status_code':getattr(exc,'status_code',None),'wait_seconds':getattr(exc,'wait_seconds',None),'provider_fee_cny':adapter.last_provider_fee_cny,'nominal_usd':adapter.last_subscription_nominal_cost_usd}
++        settled={'type':'failed_or_unknown','at_utc':datetime.datetime.now(datetime.timezone.utc).isoformat(),'request_id':request_id,'error_type':type(exc).__name__,'failure_category':getattr(exc,'failure_category',None),'retryable':getattr(exc,'retryable',False),'status_code':getattr(exc,'status_code',None),'wait_seconds':getattr(exc,'wait_seconds',None),'provider_fee_cny':adapter.last_provider_fee_cny,'nominal_usd':adapter.last_subscription_nominal_cost_usd}

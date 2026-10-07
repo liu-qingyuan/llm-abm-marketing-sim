@@ -1,0 +1,43 @@
+branch=codex/ten-topic-full-pool-replay
+changed_field=observed Retry-After cooldown before subsequent physical dispatch; pre-fix violations retained, only verified missing workers classified unknown
+MODIFIED_FILE=/Users/liuqingyuan/.codex/worktrees/ten-topic-offline-replay/llm-abm-marketing-sim/runs/ten-topic-four-model-20261007/protocol/resume_any_authorized.py
+DIFF_FILE=/Users/liuqingyuan/.codex/worktrees/ten-topic-offline-replay/llm-abm-marketing-sim/runs/ten-topic-four-model-20261007/protocol/DIFF_WAVE9.txt
+VERIFICATION=/Users/liuqingyuan/.codex/worktrees/ten-topic-offline-replay/llm-abm-marketing-sim/runs/ten-topic-four-model-20261007/protocol/VERIFICATION_WAVE9.txt
+ROLLBACK=/Users/liuqingyuan/.codex/worktrees/ten-topic-offline-replay/llm-abm-marketing-sim/runs/ten-topic-four-model-20261007/protocol/ROLLBACK_WAVE9.sh
+[
+  {
+    "kind": "BASELINE",
+    "command": [
+      "/Users/liuqingyuan/.codex/worktrees/ten-topic-offline-replay/llm-abm-marketing-sim/.venv/bin/python",
+      "/Users/liuqingyuan/.codex/worktrees/ten-topic-offline-replay/llm-abm-marketing-sim/runs/ten-topic-four-model-20261007/protocol/check_cooldown_hook.py",
+      "/Users/liuqingyuan/.codex/worktrees/ten-topic-offline-replay/llm-abm-marketing-sim/runs/ten-topic-four-model-20261007/protocol/resume-cooldown-baseline.py"
+    ],
+    "input": "observed failure at04:13:08 UTC +7192seconds Retry-After; inspect placement before new intent/dispatch",
+    "literal_output": "cooldown_before_dispatch=false",
+    "exit_status": 1
+  },
+  {
+    "kind": "MODIFIED",
+    "command": [
+      "/Users/liuqingyuan/.codex/worktrees/ten-topic-offline-replay/llm-abm-marketing-sim/.venv/bin/python",
+      "/Users/liuqingyuan/.codex/worktrees/ten-topic-offline-replay/llm-abm-marketing-sim/runs/ten-topic-four-model-20261007/protocol/check_cooldown_hook.py",
+      "/Users/liuqingyuan/.codex/worktrees/ten-topic-offline-replay/llm-abm-marketing-sim/runs/ten-topic-four-model-20261007/protocol/resume_any_authorized.py"
+    ],
+    "input": "observed failure at04:13:08 UTC +7192seconds Retry-After; inspect placement before new intent/dispatch",
+    "literal_output": "cooldown_before_dispatch=true\nobserved_deadline=2026-10-07T06:13:00+00:00",
+    "exit_status": 0
+  },
+  {
+    "kind": "ROLLBACK",
+    "command": [
+      "/Users/liuqingyuan/.codex/worktrees/ten-topic-offline-replay/llm-abm-marketing-sim/runs/ten-topic-four-model-20261007/protocol/ROLLBACK_WAVE9.sh",
+      "/Users/liuqingyuan/.codex/worktrees/ten-topic-offline-replay/llm-abm-marketing-sim/runs/ten-topic-four-model-20261007/protocol/.cooldown-rollback.py"
+    ],
+    "input": "modified scratch copy only",
+    "literal_output": "byte_equal_baseline=true\ncooldown_before_dispatch=false\nrestored_behavior_exit_status=1",
+    "exit_status": 0
+  }
+]
+61 focused offline tests passed in2.75s; Ruff F and py_compile passed. Test/ledger audit Provider calls=0. Scratch restored original no-cooldown behavior; production keeps modified waiting gate. Fourteen premature pre-fix attempts remain in original ledger; no raw record edited or deleted.
+
+Additional independent cooldown audit regression: 64 passed in2.65s; exit0. Post-fix early dispatch rejected; on-deadline dispatch accepted; old violations retained.

@@ -1,0 +1,48 @@
+{
+  "at_utc": "2026-10-07T05:37:43.746316+00:00",
+  "status": "resumed_after_observed_turn_abort",
+  "previous_goal_turn": "progress followed by verified waits; external abortion terminated processes; no restart based solely on timeout",
+  "required_conditions": 16,
+  "complete_conditions": 10,
+  "verified_running_pids": {
+    "Gemini/P1": {
+      "pid": 33194,
+      "identity": "Wed Oct  7 13:34:09 2026     /opt/homebrew/Cellar/python@3.12/3.12.13_4/Frameworks/Python.framework/Versions/3.12/Resources/Python.app/Contents/MacOS/Python /Users/liuqingyuan/.codex/worktrees/ten-topic-offline-replay/llm-abm-marketing-sim/runs/ten-topic-four-model-20261007/protocol/resume_any_authorized.py --template P1 --model gemini-3.1-pro",
+      "state": "observed Retry-After cooldown, no Gemini intent while waiting"
+    },
+    "Gemini/P2": {
+      "pid": 33195,
+      "identity": "Wed Oct  7 13:34:09 2026     /opt/homebrew/Cellar/python@3.12/3.12.13_4/Frameworks/Python.framework/Versions/3.12/Resources/Python.app/Contents/MacOS/Python /Users/liuqingyuan/.codex/worktrees/ten-topic-offline-replay/llm-abm-marketing-sim/runs/ten-topic-four-model-20261007/protocol/resume_any_authorized.py --template P2 --model gemini-3.1-pro",
+      "state": "observed Retry-After cooldown, no Gemini intent while waiting"
+    },
+    "Gemini/P3": {
+      "pid": 33196,
+      "identity": "Wed Oct  7 13:34:09 2026     /opt/homebrew/Cellar/python@3.12/3.12.13_4/Frameworks/Python.framework/Versions/3.12/Resources/Python.app/Contents/MacOS/Python /Users/liuqingyuan/.codex/worktrees/ten-topic-offline-replay/llm-abm-marketing-sim/runs/ten-topic-four-model-20261007/protocol/resume_any_authorized.py --template P3 --model gemini-3.1-pro",
+      "state": "observed Retry-After cooldown, no Gemini intent while waiting"
+    },
+    "Kimi/P1": {
+      "pid": 33197,
+      "identity": "Wed Oct  7 13:34:09 2026     /opt/homebrew/Cellar/python@3.12/3.12.13_4/Frameworks/Python.framework/Versions/3.12/Resources/Python.app/Contents/MacOS/Python /Users/liuqingyuan/.codex/worktrees/ten-topic-offline-replay/llm-abm-marketing-sim/runs/ten-topic-four-model-20261007/protocol/resume_any_authorized.py --template P1 --model kimi-k3",
+      "state": "actual exposure collection"
+    },
+    "Kimi/P2": {
+      "pid": 33198,
+      "identity": "Wed Oct  7 13:34:09 2026     /opt/homebrew/Cellar/python@3.12/3.12.13_4/Frameworks/Python.framework/Versions/3.12/Resources/Python.app/Contents/MacOS/Python /Users/liuqingyuan/.codex/worktrees/ten-topic-offline-replay/llm-abm-marketing-sim/runs/ten-topic-four-model-20261007/protocol/resume_any_authorized.py --template P2 --model kimi-k3",
+      "state": "actual exposure collection"
+    },
+    "Kimi/P3": {
+      "pid": 33199,
+      "identity": "Wed Oct  7 13:34:09 2026     /opt/homebrew/Cellar/python@3.12/3.12.13_4/Frameworks/Python.framework/Versions/3.12/Resources/Python.app/Contents/MacOS/Python /Users/liuqingyuan/.codex/worktrees/ten-topic-offline-replay/llm-abm-marketing-sim/runs/ten-topic-four-model-20261007/protocol/resume_any_authorized.py --template P3 --model kimi-k3",
+      "state": "actual exposure collection"
+    }
+  },
+  "physical_requests": 15847,
+  "unknowns_retained": 15,
+  "new_interruption_unknowns": 3,
+  "retry_after_fix": "respect server deadline before new physical intent; 14 pre-fix violations retained",
+  "gemini_not_before_utc": "2026-10-07T06:13:00.537607+00:00",
+  "physical_cap": 29143,
+  "goal_status": "active",
+  "formal_complete": false,
+  "offline_tests": "64 passed in2.65s; Ruff F/py_compile pass"
+}
