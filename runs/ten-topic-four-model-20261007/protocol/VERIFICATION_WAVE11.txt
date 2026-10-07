@@ -1,0 +1,41 @@
+branch=codex/ten-topic-full-pool-replay
+changed_field=call-ledger aggregation explicitly binds user/message/full input/model/template/request conditions; missing costs remain unknown, not zero
+MODIFIED_FILE=/Users/liuqingyuan/.codex/worktrees/ten-topic-offline-replay/llm-abm-marketing-sim/runs/ten-topic-four-model-20261007/protocol/summarize_call_ledger.py
+DIFF_FILE=/Users/liuqingyuan/.codex/worktrees/ten-topic-offline-replay/llm-abm-marketing-sim/runs/ten-topic-four-model-20261007/protocol/DIFF_WAVE11.txt
+VERIFICATION=/Users/liuqingyuan/.codex/worktrees/ten-topic-offline-replay/llm-abm-marketing-sim/runs/ten-topic-four-model-20261007/protocol/VERIFICATION_WAVE11.txt
+ROLLBACK=/Users/liuqingyuan/.codex/worktrees/ten-topic-offline-replay/llm-abm-marketing-sim/runs/ten-topic-four-model-20261007/protocol/ROLLBACK_WAVE11.sh
+[
+  {
+    "kind": "BASELINE",
+    "command": [
+      "/Users/liuqingyuan/.codex/worktrees/ten-topic-offline-replay/llm-abm-marketing-sim/.venv/bin/python",
+      "/Users/liuqingyuan/.codex/worktrees/ten-topic-offline-replay/llm-abm-marketing-sim/runs/ten-topic-four-model-20261007/protocol/check_call_identity.py",
+      "/Users/liuqingyuan/.codex/worktrees/ten-topic-offline-replay/llm-abm-marketing-sim/runs/ten-topic-four-model-20261007/protocol/call-summary-first-version.py"
+    ],
+    "input": "identical rendered messages/request conditions but distinct user/message identifiers",
+    "literal_output": "unique_input_requires_user_and_message=false",
+    "exit_status": 1
+  },
+  {
+    "kind": "MODIFIED",
+    "command": [
+      "/Users/liuqingyuan/.codex/worktrees/ten-topic-offline-replay/llm-abm-marketing-sim/.venv/bin/python",
+      "/Users/liuqingyuan/.codex/worktrees/ten-topic-offline-replay/llm-abm-marketing-sim/runs/ten-topic-four-model-20261007/protocol/check_call_identity.py",
+      "/Users/liuqingyuan/.codex/worktrees/ten-topic-offline-replay/llm-abm-marketing-sim/runs/ten-topic-four-model-20261007/protocol/summarize_call_ledger.py"
+    ],
+    "input": "identical rendered messages/request conditions but distinct user/message identifiers",
+    "literal_output": "unique_input_requires_user_and_message=true",
+    "exit_status": 0
+  },
+  {
+    "kind": "ROLLBACK",
+    "command": [
+      "/Users/liuqingyuan/.codex/worktrees/ten-topic-offline-replay/llm-abm-marketing-sim/runs/ten-topic-four-model-20261007/protocol/ROLLBACK_WAVE11.sh",
+      "/Users/liuqingyuan/.codex/worktrees/ten-topic-offline-replay/llm-abm-marketing-sim/runs/ten-topic-four-model-20261007/protocol/.call-summary-rollback.py"
+    ],
+    "input": "modified scratch copy only",
+    "literal_output": "byte_equal_baseline=true\nunique_input_requires_user_and_message=false\nrestored_behavior_exit_status=1",
+    "exit_status": 0
+  }
+]
+82 focused tests passed in2.62s; Ruff F and py_compile passed; zero test Provider calls. First written summary signature version restored only on scratch; actual builder retains complete identity. The first version is reconstructed byte-for-byte from the first written tool input (only signature field list changed), not an older research program.

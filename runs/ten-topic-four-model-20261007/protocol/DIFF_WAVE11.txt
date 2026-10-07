@@ -1,0 +1,5 @@
+--- call-summary-first-version.py
++++ summarize_call_ledger.py
+@@ -10 +10 @@
+- v={k:intent.get(k) for k in ['model','template','full_client_messages','request_condition']}
++ v={k:intent.get(k) for k in ['model','template','user_id','message_id','full_client_messages','request_condition']}
