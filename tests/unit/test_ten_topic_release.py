@@ -17,3 +17,10 @@ def test_v17_contract_never_accepts_old_schema_or_extra_fields(tmp_path: Path):
 
     with pytest.raises(ValueError, match='contract'):
         validate_ten_topic_release(repo_root=tmp_path, contract_document={'schema_version': 'abm-report-release-contract-v16'}, source_dir=tmp_path)
+
+
+def test_shell_admits_v17_only_after_validated_facts():
+    shell = (Path(__file__).resolve().parents[2] / 'scripts/deploy_abm_report.sh').read_text()
+    gate = '^abm-report-release-contract-v([2-9]|10|11|12|13|14|15|16|17)$'
+    assert gate in shell
+    assert shell.index('--require-formal-production') < shell.index(gate)

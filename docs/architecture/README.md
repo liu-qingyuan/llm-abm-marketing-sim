@@ -4,6 +4,8 @@
 
 ## 当前入口
 
+- [Ten-topic Report / Release](ten-topic-report-release.md)：十话题正式来源 exact admission、四研究同源聚合展示/下载、v17 immutable contract 与既有发布事务。
+
 - [ABM Runtime 与仿真流程](abm-runtime.md)：通用 SimulationModel、PlatformEnvironment、SocialUserAgent、Decision Adapter、事件和输出边界。
 - [Concurrent Message Competition Experiment](concurrent-message-competition-experiment.md)：当前三 message runtime、ranking、Primary/Shadow、diagnostics、report rebuild 和发布边界。
 - [Full-Pool Segmented Continuation Runtime](full-pool-segmented-continuation.md)：只读 v1 prefix、十 lane continuation、显式/自动 recovery、strict fresh replay，以及 source-v2/v3/v4 到 Report/Evidence/Release v9/v10/v11 的版本化 persisted contracts。

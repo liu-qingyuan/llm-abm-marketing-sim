@@ -2,6 +2,8 @@
 
 本文描述 Final Research immutable release 的 Deployment Module。该 Module 只消费 Release Module 已验证并投影的 deployment facts；它不重新解释 realization、Prompt、模型、Provider accounting、metrics、Report bytes 或 release eligibility。默认测试只使用本地 Adapter，不连接 canonical。
 
+十话题追加版本使用独立 exact v17 dispatch，详见 [Ten-topic Report / Release](ten-topic-report-release.md)。v15/v16/v17 都消费其所属 Release Module 的 readiness，不套用旧 schema 或重新解释研究。v17 授权及 operation facts 使用独立版本名，沿用同一 canonical 目标及原子事务。
+
 ## Module 与 Interface
 
 Deployment 流程保留三个稳定 Interface：
