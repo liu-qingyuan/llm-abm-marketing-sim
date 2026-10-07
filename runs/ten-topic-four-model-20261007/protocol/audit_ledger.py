@@ -40,6 +40,13 @@ def main():
    authorization=json.loads(Path(e['collection_user_authorization']).read_text());assert authorization['global_physical_cap']==29143 and authorization['maximum_physical_attempts_per_collection']==3
    parent=e['exhausted_collection_parent_request_id'];assert parent in failures and parent not in success
    assert e['full_client_messages']==intents[parent]['full_client_messages'] and e['request_condition']==intents[parent]['request_condition']
+  if e.get('purpose')=='explicit_known_invalid_new_collection':
+   parent=e['known_invalid_parent_request_id'];assert parent in failures and parent in responses and parent not in success
+   assert e['model']=='kimi-k3' and failures[parent]['failure_category']=='malformed_structured_response' and failures[parent]['retryable'] is False
+   assert responses[parent]['observed_model']=='kimi-k3' and responses[parent]['usage_status']=='complete' and responses[parent]['output_tokens']<=1024
+   tokens=[responses[parent][k] for k in ['input_tokens','output_tokens','total_tokens']];assert all(type(n) is int and n>=0 for n in tokens) and tokens[0]+tokens[1]==tokens[2]
+   assert e['full_client_messages']==intents[parent]['full_client_messages'] and e['request_condition']==intents[parent]['request_condition']
+   authorization=json.loads(Path(e['known_invalid_authorization']).read_text());assert authorization['per_input_total_physical_attempts']==3 and authorization['global_physical_cap']==29143
   if e.get('purpose')=='explicit_unknown_new_collection':
    parent=e.get('unknown_parent_request_id') or key;assert parent in intents and parent not in responses and parent in failures
    assert e['full_client_messages']==intents[parent]['full_client_messages'] and e['request_condition']==intents[parent]['request_condition']

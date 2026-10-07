@@ -1,0 +1,18 @@
+{
+  "schema": "same-input-known-invalid-explicit-recollection-v1",
+  "at_utc": "2026-10-07T06:19:40.110699+00:00",
+  "user_authorization_text": "后面也是一样的。如果说有这种出现类似这种问题的话，你就继续补就行了，不需要经过我的同意。",
+  "interpretation": "separate real recollection for observed malformed official Kimi response; original retryable=false/failure/raw response retained",
+  "per_input_total_physical_attempts": 3,
+  "global_physical_cap": 29143,
+  "same_model_channel_input_generation_settings": true,
+  "no_token_ceiling_increase": 1024,
+  "no_unknown_relabeling": true,
+  "excluded": [
+    "model_identity",
+    "usage_evidence",
+    "response_evidence",
+    "quota_exhausted",
+    "authentication"
+  ]
+}

@@ -1,0 +1,10 @@
+{
+  "request_id": "89c0466266e9f1ea2c88fa0ebbabf9a69e1d02fb89773823feb8d8f241370fef",
+  "observed_model": "kimi-k3",
+  "output_tokens": 1024,
+  "decision_text_characters": 0,
+  "finish_reason_persisted": false,
+  "failed_category": "malformed_structured_response",
+  "original_retryable": false,
+  "truncation_is_not_directly_verified": "1024 output tokens and invalid structured response are observed; no finish_reason captured; truncation attribution is inference only"
+}

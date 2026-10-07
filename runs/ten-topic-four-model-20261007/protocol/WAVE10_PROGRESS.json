@@ -1,0 +1,19 @@
+{
+  "at_utc": "2026-10-07T06:25:38.763306+00:00",
+  "status": "eleven_formal_conditions_verified_remaining_running_or_cooldown",
+  "required_conditions": 16,
+  "verified_conditions": 11,
+  "verified_exposures": 19800,
+  "verified_barriers": 330,
+  "physical_requests_snapshot": 16538,
+  "physical_cap": 29143,
+  "retained_unknowns": 16,
+  "explicit_known_invalid_recollections": 1,
+  "explicit_known_invalid_successes": 1,
+  "original_invalid_response_and_retryable_false_retained": true,
+  "new_token_ceiling": false,
+  "regression": "75 passed in2.62s; Ruff F/py_compile pass",
+  "statistics_reverification": "1144 table/curve/comparison rows,264 paired-seed bootstrap rows; Provider0",
+  "goal_status": "active",
+  "not_final": true
+}

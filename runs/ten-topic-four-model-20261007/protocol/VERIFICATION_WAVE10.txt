@@ -1,0 +1,41 @@
+branch=codex/ten-topic-full-pool-replay
+changed_field=explicit known-invalid Kimi recollection under user blanket authorization, same input/settings, max3 total, original retryable=false and real invalid response preserved
+MODIFIED_FILE=/Users/liuqingyuan/.codex/worktrees/ten-topic-offline-replay/llm-abm-marketing-sim/runs/ten-topic-four-model-20261007/protocol/resume_any_authorized.py
+DIFF_FILE=/Users/liuqingyuan/.codex/worktrees/ten-topic-offline-replay/llm-abm-marketing-sim/runs/ten-topic-four-model-20261007/protocol/DIFF_WAVE10.txt
+VERIFICATION=/Users/liuqingyuan/.codex/worktrees/ten-topic-offline-replay/llm-abm-marketing-sim/runs/ten-topic-four-model-20261007/protocol/VERIFICATION_WAVE10.txt
+ROLLBACK=/Users/liuqingyuan/.codex/worktrees/ten-topic-offline-replay/llm-abm-marketing-sim/runs/ten-topic-four-model-20261007/protocol/ROLLBACK_WAVE10.sh
+[
+  {
+    "kind": "BASELINE",
+    "command": [
+      "/Users/liuqingyuan/.codex/worktrees/ten-topic-offline-replay/llm-abm-marketing-sim/.venv/bin/python",
+      "/Users/liuqingyuan/.codex/worktrees/ten-topic-offline-replay/llm-abm-marketing-sim/runs/ten-topic-four-model-20261007/protocol/check_invalid_hook.py",
+      "/Users/liuqingyuan/.codex/worktrees/ten-topic-offline-replay/llm-abm-marketing-sim/runs/ten-topic-four-model-20261007/protocol/resume-invalid-baseline.py"
+    ],
+    "input": "known invalid official Kimi structured response; explicit same-input recollection without retryability rewrite or ceiling increase",
+    "literal_output": "known_invalid_separate_collection=false",
+    "exit_status": 1
+  },
+  {
+    "kind": "MODIFIED",
+    "command": [
+      "/Users/liuqingyuan/.codex/worktrees/ten-topic-offline-replay/llm-abm-marketing-sim/.venv/bin/python",
+      "/Users/liuqingyuan/.codex/worktrees/ten-topic-offline-replay/llm-abm-marketing-sim/runs/ten-topic-four-model-20261007/protocol/check_invalid_hook.py",
+      "/Users/liuqingyuan/.codex/worktrees/ten-topic-offline-replay/llm-abm-marketing-sim/runs/ten-topic-four-model-20261007/protocol/resume_any_authorized.py"
+    ],
+    "input": "known invalid official Kimi structured response; explicit same-input recollection without retryability rewrite or ceiling increase",
+    "literal_output": "known_invalid_separate_collection=true",
+    "exit_status": 0
+  },
+  {
+    "kind": "ROLLBACK",
+    "command": [
+      "/Users/liuqingyuan/.codex/worktrees/ten-topic-offline-replay/llm-abm-marketing-sim/runs/ten-topic-four-model-20261007/protocol/ROLLBACK_WAVE10.sh",
+      "/Users/liuqingyuan/.codex/worktrees/ten-topic-offline-replay/llm-abm-marketing-sim/runs/ten-topic-four-model-20261007/protocol/.invalid-rollback.py"
+    ],
+    "input": "modified scratch copy only",
+    "literal_output": "byte_equal_baseline=true\nknown_invalid_separate_collection=false\nrestored_behavior_exit_status=1",
+    "exit_status": 0
+  }
+]
+75 relevant tests passed in2.62s; py_compile and Ruff F pass. Eleven formal cells independently reaccepted: PASS completed_cells=11 exposures=19800 provider_calls=0; exit0. Scratch-only rollback restores absence of new collection hook; production modified file remains changed.
