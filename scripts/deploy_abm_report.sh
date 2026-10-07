@@ -610,7 +610,7 @@ install -d -m 755 "${remote_root}/nginx" "${remote_root}/tls" "${remote_root}/re
   printf 'deploy error: invalid validated contract identity\n' >&2
   exit 1
 }
-[[ "${release_contract_schema}" =~ ^abm-report-release-contract-v([2-9]|10|11|12|13|14|15|16)$ ]] || {
+[[ "${release_contract_schema}" =~ ^abm-report-release-contract-v([2-9]|10|11|12|13|14|15|16|17)$ ]] || {
   printf 'deploy error: invalid validated release contract schema\n' >&2
   exit 1
 }
