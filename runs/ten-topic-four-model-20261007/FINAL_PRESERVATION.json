@@ -1,0 +1,233 @@
+{
+  "status": "pass",
+  "original_main_head": "bdedc9fbd17b5d77bbd49baba0b49bc9b3d3a856",
+  "historical_four_model_source_files_unchanged": 19,
+  "previous_gpt_bank_unchanged": true,
+  "checks": [
+    {
+      "path": "/Users/liuqingyuan/work/llm-abm-marketing-sim/outputs/01a08bb3-1446-7f51-8933-cd49b50e9ccb/four-model-final-20260912-verified/Evidence.json",
+      "sha256": "a7407bf355d6049af8667a69b540fe2b29591d7f8e7ef71d6cb08d01fee72b17",
+      "unchanged": true
+    },
+    {
+      "path": "/Users/liuqingyuan/work/llm-abm-marketing-sim/outputs/01a08bb3-1446-7f51-8933-cd49b50e9ccb/four-model-final-20260912-verified/attempts.jsonl",
+      "sha256": "01f48a5018e6c63b35a278d7d72e41279e50b3e0d530e34215a1db13a65bbcf2",
+      "unchanged": true
+    },
+    {
+      "path": "/Users/liuqingyuan/work/llm-abm-marketing-sim/outputs/01a08bb3-1446-7f51-8933-cd49b50e9ccb/four-model-final-20260912-verified/batch_commits.jsonl",
+      "sha256": "48ec6e1a96594aa2df2adcb04d0b567eca402a996ad84bc381df8ed72f4cad58",
+      "unchanged": true
+    },
+    {
+      "path": "/Users/liuqingyuan/work/llm-abm-marketing-sim/outputs/01a08bb3-1446-7f51-8933-cd49b50e9ccb/four-model-final-20260912-verified/cells-preview.png",
+      "sha256": "18afb0359cdbc6d0e838ae3db578cc28c1ff08c1698aad24882062a84778557c",
+      "unchanged": true
+    },
+    {
+      "path": "/Users/liuqingyuan/work/llm-abm-marketing-sim/outputs/01a08bb3-1446-7f51-8933-cd49b50e9ccb/four-model-final-20260912-verified/cells.csv",
+      "sha256": "0ed8c71adc60c6f9089d3461626dd8c67b37a42399754a6f6b6259fc32e6179e",
+      "unchanged": true
+    },
+    {
+      "path": "/Users/liuqingyuan/work/llm-abm-marketing-sim/outputs/01a08bb3-1446-7f51-8933-cd49b50e9ccb/four-model-final-20260912-verified/completion-audit.json",
+      "sha256": "91075ac5b7cea8a48c652972fb5f77f35f352c0dd2b4a91515fdd185d3062121",
+      "unchanged": true
+    },
+    {
+      "path": "/Users/liuqingyuan/work/llm-abm-marketing-sim/outputs/01a08bb3-1446-7f51-8933-cd49b50e9ccb/four-model-final-20260912-verified/delivery-verification.json",
+      "sha256": "e49257bf7ddc0738ea2ce3a198b9eb9b0b690eb971522a77adf06405d7c5d5f5",
+      "unchanged": true
+    },
+    {
+      "path": "/Users/liuqingyuan/work/llm-abm-marketing-sim/outputs/01a08bb3-1446-7f51-8933-cd49b50e9ccb/four-model-final-20260912-verified/judgments-preview.png",
+      "sha256": "e7a4b6dcbaf338f3fe33a67b3b28e0648c0e92f59711588543f7ec419be9c3f9",
+      "unchanged": true
+    },
+    {
+      "path": "/Users/liuqingyuan/work/llm-abm-marketing-sim/outputs/01a08bb3-1446-7f51-8933-cd49b50e9ccb/four-model-final-20260912-verified/judgments.csv",
+      "sha256": "0a75a3cd7a6bab32f9293d5a0c7abe65576b1a5fb95d6f937d03d8bdc6dedc64",
+      "unchanged": true
+    },
+    {
+      "path": "/Users/liuqingyuan/work/llm-abm-marketing-sim/outputs/01a08bb3-1446-7f51-8933-cd49b50e9ccb/four-model-final-20260912-verified/judgments.jsonl",
+      "sha256": "b9f9554f8072a5460b6246a55ec554b88351dea99bc8e68b6196008a820ac233",
+      "unchanged": true
+    },
+    {
+      "path": "/Users/liuqingyuan/work/llm-abm-marketing-sim/outputs/01a08bb3-1446-7f51-8933-cd49b50e9ccb/four-model-final-20260912-verified/models.csv",
+      "sha256": "c715e2735d183cecf7e463e3418b62fd281c6ee912dc8087fdccbe8b8f4173e3",
+      "unchanged": true
+    },
+    {
+      "path": "/Users/liuqingyuan/work/llm-abm-marketing-sim/outputs/01a08bb3-1446-7f51-8933-cd49b50e9ccb/four-model-final-20260912-verified/realized_terminals.jsonl",
+      "sha256": "74cb5044f04b32ec64ad46a6df7dbe0184b1ec7dca18ac658f3335d340c15d23",
+      "unchanged": true
+    },
+    {
+      "path": "/Users/liuqingyuan/work/llm-abm-marketing-sim/outputs/01a08bb3-1446-7f51-8933-cd49b50e9ccb/four-model-final-20260912-verified/report.html",
+      "sha256": "824e4a543925c20a23d78c9c834016501e663955ce59f08a2d51a82ac31493b2",
+      "unchanged": true
+    },
+    {
+      "path": "/Users/liuqingyuan/work/llm-abm-marketing-sim/outputs/01a08bb3-1446-7f51-8933-cd49b50e9ccb/four-model-final-20260912-verified/summary-preview.png",
+      "sha256": "2888a7b3f4e5417d3014eba005aa0ab21f81ea498b67634f7bfccdc22b47f03b",
+      "unchanged": true
+    },
+    {
+      "path": "/Users/liuqingyuan/work/llm-abm-marketing-sim/outputs/01a08bb3-1446-7f51-8933-cd49b50e9ccb/four-model-final-20260912-verified/workbook-input.json",
+      "sha256": "ae45e9b80711567d607038bd650cfd51258669f471dbb981cd2cc7f358ca1987",
+      "unchanged": true
+    },
+    {
+      "path": "/Users/liuqingyuan/work/llm-abm-marketing-sim/outputs/01a08bb3-1446-7f51-8933-cd49b50e9ccb/four-model-final-20260912-verified/\u56db\u6a21\u578b\u5b8c\u6210\u7edf\u8ba1.xlsx",
+      "sha256": "094bfafd7e102e7d9221168bae7bd72771ef703ce4e4ec0547fca9980ec4b48e",
+      "unchanged": true
+    },
+    {
+      "path": "/Users/liuqingyuan/work/llm-abm-marketing-sim/outputs/01a08bb3-1446-7f51-8933-cd49b50e9ccb/four-model-final-20260912-verified/\u56db\u6a21\u578b\u5b8c\u6210\u7edf\u8ba1.xlsx.inspect.ndjson",
+      "sha256": "50edf91ce73b78eff6c9d3cb9f01a1d98b3cec8faf2a453c36d649d8d7f8c45c",
+      "unchanged": true
+    },
+    {
+      "path": "/Users/liuqingyuan/work/llm-abm-marketing-sim/runs/concurrent-robustness-recovery-formal-20260909T213305Z/plan.json",
+      "sha256": "2d64026ce755a5a5c3e8dd42f6c74add7dc1435b42adef3cbc47dac030da9b16",
+      "unchanged": true
+    },
+    {
+      "path": "/Users/liuqingyuan/work/llm-abm-marketing-sim/runs/concurrent-robustness-v2-recovery-offline-audit-20260908T194655Z/.inherited-proposal.recovery-control/bundles/a28681fbaf27c90552dd4a8c4e410696353e99ff18dc176d6ec5a41872311977/bundle.json",
+      "sha256": "ce26efded477a0f4dbed5fb5299639b99dcf4f95c4e3e20177281748cbbadc4a",
+      "unchanged": true
+    },
+    {
+      "path": "/Users/liuqingyuan/.codex/worktrees/ten-topic-offline-replay/llm-abm-marketing-sim/runs/ten-topic-gpt-studies-20261006/final-bank/closed-bank.jsonl",
+      "sha256": "cea5316de20aa361b40cb9c02ed2f9bb0e2db54e9e92df67fdaed654bf188fb0",
+      "unchanged": true
+    },
+    {
+      "path": "/Users/liuqingyuan/.codex/worktrees/ten-topic-offline-replay/llm-abm-marketing-sim/runs/ten-topic-gpt-studies-20261006/final-bank/closure.json",
+      "sha256": "c912bcce687541a354deaf96ea054ecba96be4cfb4558f1636085b7d2f9cfda0",
+      "unchanged": true
+    },
+    {
+      "path": "/Users/liuqingyuan/.codex/worktrees/ten-topic-offline-replay/llm-abm-marketing-sim/runs/ten-topic-gpt-studies-20261006/final-bank/preparation.json",
+      "sha256": "2403a520c5b972c9f2dd085df75843a44464ccaa671f62a0b90928a1b08b97ef",
+      "unchanged": true
+    },
+    {
+      "path": "/Users/liuqingyuan/.codex/worktrees/ten-topic-offline-replay/llm-abm-marketing-sim/runs/ten-topic-gpt-studies-20261006/formal-report/REPORT.md",
+      "sha256": "f7f372cc754c67e6dc6936cdffb086e6ecb739b26e5c7f260b46ae1d21891ed2",
+      "unchanged": true
+    },
+    {
+      "path": "/Users/liuqingyuan/.codex/worktrees/ten-topic-offline-replay/llm-abm-marketing-sim/runs/ten-topic-gpt-studies-20261006/formal-report/arm-parameter-estimates.csv",
+      "sha256": "f43a6216fac2e48e5f11f4dbe231635586a1c7edf2500b367d5428d5b10168a8",
+      "unchanged": true
+    },
+    {
+      "path": "/Users/liuqingyuan/.codex/worktrees/ten-topic-offline-replay/llm-abm-marketing-sim/runs/ten-topic-gpt-studies-20261006/formal-report/evidence.json",
+      "sha256": "302d20eec48ab8c8d1dd61199fc048df9f8f61b2b002c54f0501f105485651e4",
+      "unchanged": true
+    },
+    {
+      "path": "/Users/liuqingyuan/.codex/worktrees/ten-topic-offline-replay/llm-abm-marketing-sim/runs/ten-topic-gpt-studies-20261006/formal-report/index-paired-estimates.csv",
+      "sha256": "bf7dc11455fd1871eec7ea3488ea5e387af4c8ebd6b9000618c46f873f60f1ef",
+      "unchanged": true
+    },
+    {
+      "path": "/Users/liuqingyuan/.codex/worktrees/ten-topic-offline-replay/llm-abm-marketing-sim/runs/ten-topic-gpt-studies-20261006/formal-report/old-new-cumulative-curves.csv",
+      "sha256": "f84aadee86714d08b87957cfd6e70ceb0ffb10bf1e5019672108f92b9074d59a",
+      "unchanged": true
+    },
+    {
+      "path": "/Users/liuqingyuan/.codex/worktrees/ten-topic-offline-replay/llm-abm-marketing-sim/runs/ten-topic-gpt-studies-20261006/formal-report/old-new-exposure-order.csv",
+      "sha256": "ed4a2ae3ccd2140f6556b70798f10de91b77521462fee1a164c11321ad522bb8",
+      "unchanged": true
+    },
+    {
+      "path": "/Users/liuqingyuan/.codex/worktrees/ten-topic-offline-replay/llm-abm-marketing-sim/runs/ten-topic-gpt-studies-20261006/formal-report/old-new-mean-curves.csv",
+      "sha256": "18ca38b4c86f2873aef9d96d34b97a3f2c2489b449029e7f815152eea1e6c7dc",
+      "unchanged": true
+    },
+    {
+      "path": "/Users/liuqingyuan/.codex/worktrees/ten-topic-offline-replay/llm-abm-marketing-sim/runs/ten-topic-gpt-studies-20261006/formal-report/old-new-paired-estimates.csv",
+      "sha256": "962a8bf13aa4ee7b3ebad0ed388caf21a9e78979da205f3c77f241e2fa7e3ae6",
+      "unchanged": true
+    },
+    {
+      "path": "/Users/liuqingyuan/.codex/worktrees/ten-topic-offline-replay/llm-abm-marketing-sim/runs/ten-topic-gpt-studies-20261006/formal-report/old-new-path-metrics.csv",
+      "sha256": "b2a03377fcc22652aed22a0dad3a07359e9298fad11343cee758909641e1d64c",
+      "unchanged": true
+    },
+    {
+      "path": "/Users/liuqingyuan/.codex/worktrees/ten-topic-offline-replay/llm-abm-marketing-sim/runs/ten-topic-gpt-studies-20261006/formal-report/parameter-message-contrasts.csv",
+      "sha256": "1f7f97037694f321f0c82d66e7c50b38e5e02f0b756ceeb2deec36b91b513769",
+      "unchanged": true
+    },
+    {
+      "path": "/Users/liuqingyuan/.codex/worktrees/ten-topic-offline-replay/llm-abm-marketing-sim/runs/ten-topic-gpt-studies-20261006/formal-report/sample-composition.csv",
+      "sha256": "81d504676483a5147864a1a50011fbf2038da66d6d6b71737f9636f7e9b3d2f4",
+      "unchanged": true
+    },
+    {
+      "path": "/Users/liuqingyuan/.codex/worktrees/ten-topic-offline-replay/llm-abm-marketing-sim/runs/ten-topic-gpt-studies-20261006/formal-report/synthetic-label-composition.csv",
+      "sha256": "f33864dc40f68eb4c22fed243d4232131173a2504cc07c3b68040f1406031c82",
+      "unchanged": true
+    },
+    {
+      "path": "/Users/liuqingyuan/.codex/worktrees/ten-topic-offline-replay/llm-abm-marketing-sim/runs/ten-topic-gpt-studies-20261006/formal-paths/manifest.json",
+      "sha256": "d01006705b1ef826193b86d94c41741669f96b4626b6fd605ee7d505a0a123fa",
+      "unchanged": true
+    },
+    {
+      "path": "/Users/liuqingyuan/.codex/worktrees/ten-topic-offline-replay/llm-abm-marketing-sim/runs/ten-topic-full-pool-20261006/main/batch-commits.jsonl",
+      "sha256": "d22e0e3446ff7ef6265affd6c1350bb193b772b0a489dc8ac36e09f44ee41896",
+      "unchanged": true
+    },
+    {
+      "path": "/Users/liuqingyuan/.codex/worktrees/ten-topic-offline-replay/llm-abm-marketing-sim/runs/ten-topic-full-pool-20261006/main/candidate-rows.jsonl",
+      "sha256": "a54e4227cadbf467b9109d61ba5b39e725ef466ece0c4bb50a979169def44e87",
+      "unchanged": true
+    },
+    {
+      "path": "/Users/liuqingyuan/.codex/worktrees/ten-topic-offline-replay/llm-abm-marketing-sim/runs/ten-topic-full-pool-20261006/main/curve-comparison.csv",
+      "sha256": "a1e6a804eecc7debff6f33787aeec6a27294cd2ef56b94bad082b586607ec9ef",
+      "unchanged": true
+    },
+    {
+      "path": "/Users/liuqingyuan/.codex/worktrees/ten-topic-offline-replay/llm-abm-marketing-sim/runs/ten-topic-full-pool-20261006/main/full-pool-realized-projection.csv",
+      "sha256": "5735fe72a4dd6b839c0b8e9c2e8c8c4fd181a299e098bb706af8fb09c5869efb",
+      "unchanged": true
+    },
+    {
+      "path": "/Users/liuqingyuan/.codex/worktrees/ten-topic-offline-replay/llm-abm-marketing-sim/runs/ten-topic-full-pool-20261006/main/latent-membership.csv",
+      "sha256": "17f6f14d884e1e7192c19a2962b2799b0054beee5abadf76c144b15d0146d213",
+      "unchanged": true
+    },
+    {
+      "path": "/Users/liuqingyuan/.codex/worktrees/ten-topic-offline-replay/llm-abm-marketing-sim/runs/ten-topic-full-pool-20261006/main/network.json",
+      "sha256": "590daf18c7938e612ef8162c63a88798e12eb73fce9defb8d05dafdc65c3394f",
+      "unchanged": true
+    },
+    {
+      "path": "/Users/liuqingyuan/.codex/worktrees/ten-topic-offline-replay/llm-abm-marketing-sim/runs/ten-topic-full-pool-20261006/main/pair-rows.jsonl",
+      "sha256": "aacf3b1bcb8306b568c3ac1d115ef963983032c1d3f95083d1d96f8aa645df46",
+      "unchanged": true
+    },
+    {
+      "path": "/Users/liuqingyuan/.codex/worktrees/ten-topic-offline-replay/llm-abm-marketing-sim/runs/ten-topic-full-pool-20261006/main/preflight.json",
+      "sha256": "be2158eaf0d530eba079821fead6fab7ea3fa163fa9affa08dd20f31e173f40c",
+      "unchanged": true
+    },
+    {
+      "path": "/Users/liuqingyuan/.codex/worktrees/ten-topic-offline-replay/llm-abm-marketing-sim/runs/ten-topic-full-pool-20261006/main/realized-terminal-rows.jsonl",
+      "sha256": "f54bad6c59c2236056d994c26d29598161e7e8efb8932d2b42bf8403b9977eb1",
+      "unchanged": true
+    }
+  ],
+  "provider_calls": 0,
+  "previous_gpt_final_objects_unchanged": 16,
+  "previous_full_pool_artifacts_unchanged": 9,
+  "previous_gpt_2800_paths_unchanged": 2800,
+  "previous_gpt_path_manifest_sha256": "d01006705b1ef826193b86d94c41741669f96b4626b6fd605ee7d505a0a123fa"
+}

@@ -1,0 +1,76 @@
+[
+  {
+    "command": [
+      "/Users/liuqingyuan/work/llm-abm-marketing-sim/.venv/bin/python",
+      "/Users/liuqingyuan/.codex/worktrees/ten-topic-offline-replay/llm-abm-marketing-sim/runs/ten-topic-four-model-20261007/protocol/accept_completed_cells.py"
+    ],
+    "exit_status": 0,
+    "log": "/Users/liuqingyuan/.codex/worktrees/ten-topic-offline-replay/llm-abm-marketing-sim/runs/ten-topic-four-model-20261007/protocol/final-accept_completed_cells.py.log",
+    "literal_output": "PASS completed_cells=16 exposures=28800 provider_calls=0"
+  },
+  {
+    "command": [
+      "/Users/liuqingyuan/work/llm-abm-marketing-sim/.venv/bin/python",
+      "/Users/liuqingyuan/.codex/worktrees/ten-topic-offline-replay/llm-abm-marketing-sim/runs/ten-topic-four-model-20261007/protocol/close_exposure_bank.py"
+    ],
+    "exit_status": 0,
+    "log": "/Users/liuqingyuan/.codex/worktrees/ten-topic-offline-replay/llm-abm-marketing-sim/runs/ten-topic-four-model-20261007/protocol/final-close_exposure_bank.py.log",
+    "literal_output": "BANK actual_exposure_pairs=28800 conditions=16 provider_calls=0"
+  },
+  {
+    "command": [
+      "/Users/liuqingyuan/work/llm-abm-marketing-sim/.venv/bin/python",
+      "/Users/liuqingyuan/.codex/worktrees/ten-topic-offline-replay/llm-abm-marketing-sim/runs/ten-topic-four-model-20261007/protocol/report_matrix.py"
+    ],
+    "exit_status": 0,
+    "log": "/Users/liuqingyuan/.codex/worktrees/ten-topic-offline-replay/llm-abm-marketing-sim/runs/ten-topic-four-model-20261007/protocol/final-report_matrix.py.log",
+    "literal_output": "REPORT conditions=16 provider_calls=0 status=complete_statistics_pending_final_release_acceptance"
+  },
+  {
+    "command": [
+      "/Users/liuqingyuan/work/llm-abm-marketing-sim/.venv/bin/python",
+      "/Users/liuqingyuan/.codex/worktrees/ten-topic-offline-replay/llm-abm-marketing-sim/runs/ten-topic-four-model-20261007/protocol/verify_statistics.py"
+    ],
+    "exit_status": 0,
+    "log": "/Users/liuqingyuan/.codex/worktrees/ten-topic-offline-replay/llm-abm-marketing-sim/runs/ten-topic-four-model-20261007/protocol/final-verify_statistics.py.log",
+    "literal_output": "PASS statistics conditions=16 tables=1664 bootstrap=384 provider_calls=0"
+  },
+  {
+    "command": [
+      "/Users/liuqingyuan/work/llm-abm-marketing-sim/.venv/bin/python",
+      "/Users/liuqingyuan/.codex/worktrees/ten-topic-offline-replay/llm-abm-marketing-sim/runs/ten-topic-four-model-20261007/protocol/audit_ledger.py"
+    ],
+    "exit_status": 0,
+    "log": "/Users/liuqingyuan/.codex/worktrees/ten-topic-offline-replay/llm-abm-marketing-sim/runs/ten-topic-four-model-20261007/protocol/final-audit_ledger.py.log",
+    "literal_output": "PASS ledger physical=18089 success=18030 unknown=17 inflight=0"
+  },
+  {
+    "command": [
+      "/Users/liuqingyuan/work/llm-abm-marketing-sim/.venv/bin/python",
+      "/Users/liuqingyuan/.codex/worktrees/ten-topic-offline-replay/llm-abm-marketing-sim/runs/ten-topic-four-model-20261007/protocol/plot_curves.py"
+    ],
+    "exit_status": 0,
+    "log": "/Users/liuqingyuan/.codex/worktrees/ten-topic-offline-replay/llm-abm-marketing-sim/runs/ten-topic-four-model-20261007/protocol/final-plot_curves.py.log",
+    "literal_output": "PLOTS messages=3 source=checked_actual_curves provider_calls=0"
+  },
+  {
+    "command": [
+      "PYTHONPATH=/Users/liuqingyuan/.codex/worktrees/ten-topic-offline-replay/llm-abm-marketing-sim/src",
+      "LLM_ABM_RUN_LIVE_LLM=0",
+      "/Users/liuqingyuan/.codex/worktrees/ten-topic-offline-replay/llm-abm-marketing-sim/.venv/bin/python",
+      "/Users/liuqingyuan/.codex/worktrees/ten-topic-offline-replay/llm-abm-marketing-sim/runs/ten-topic-four-model-20261007/protocol/summarize_call_ledger.py"
+    ],
+    "exit_status": 0,
+    "literal_output": "CALL_LEDGER conditions=16 physical=18089 qualification=5 cash=unknown provider_calls=0"
+  },
+  {
+    "command": [
+      "PYTHONPATH=/Users/liuqingyuan/.codex/worktrees/ten-topic-offline-replay/llm-abm-marketing-sim/src",
+      "LLM_ABM_RUN_LIVE_LLM=0",
+      "/Users/liuqingyuan/.codex/worktrees/ten-topic-offline-replay/llm-abm-marketing-sim/.venv/bin/python",
+      "/Users/liuqingyuan/.codex/worktrees/ten-topic-offline-replay/llm-abm-marketing-sim/runs/ten-topic-four-model-20261007/protocol/final_corroboration.py"
+    ],
+    "exit_status": 0,
+    "literal_output": "PASS corroboration response_json=18030 raw_graph=5a1f88c0871603361da798497d282945b1317532a5ef9b1fde1b0d2fa9911eea sample=1000 provider_calls=0"
+  }
+]

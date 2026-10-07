@@ -1,0 +1,46 @@
+{
+  "status": "pass_fresh_raw_corroboration",
+  "real_success_response_json_checked": 18030,
+  "source_ledger_sha256": "3840fd1bb5b36f02dedf1fca61b14fa84b2ea5efb46f0e80871ad1cfd3c10316",
+  "raw_graph_identity": "5a1f88c0871603361da798497d282945b1317532a5ef9b1fde1b0d2fa9911eea",
+  "p95": 5.0,
+  "eligible_population": 36400,
+  "edges": 39779,
+  "total_edge_weight": 52587,
+  "actual_ten_topic_names": [
+    "绵阳锦江国际酒店",
+    "锦江之星",
+    "锦江之星品尚",
+    "锦江之星海口",
+    "锦江之星酒店",
+    "锦江都城酒店",
+    "锦江都城酒店吉安",
+    "锦江酒店",
+    "锦江酒店中国区",
+    "锦江酒店华西区"
+  ],
+  "final_dataset_lineage": [
+    {
+      "name": "videos.csv",
+      "current_derivative_path": "/Users/liuqingyuan/work/llm-abm-marketing-sim/data/processed/jinjiang_douyin/jinjiang-final-caption-hashtag-comments-profiles-latent-v1-validation-20260705T000000Z/videos.csv",
+      "final_actual_dataset_path": "/Users/liuqingyuan/work/llm-abm-marketing-sim/data/processed/jinjiang_douyin/jinjiang-final-caption-hashtag-comments-profiles-20260624T092200Z/videos.csv",
+      "sha256_equal": "d5170cfaaf8e674522d2f6b743022c98eae9f4241717339d2a7135efe5260302"
+    },
+    {
+      "name": "all_comments.csv",
+      "current_derivative_path": "/Users/liuqingyuan/work/llm-abm-marketing-sim/data/processed/jinjiang_douyin/jinjiang-final-caption-hashtag-comments-profiles-latent-v1-validation-20260705T000000Z/all_comments.csv",
+      "final_actual_dataset_path": "/Users/liuqingyuan/work/llm-abm-marketing-sim/data/processed/jinjiang_douyin/jinjiang-final-caption-hashtag-comments-profiles-20260624T092200Z/all_comments.csv",
+      "sha256_equal": "af4ee4966afadc807746aa028d6a1ce1a4f1759777cd4d9ee04c5c2c7a64c5c8"
+    }
+  ],
+  "holdout_excluded": "7328592728139353363",
+  "history_comments": 50604,
+  "history_videos": 4211,
+  "old_new_baseline_sample_overlap": 646,
+  "sample_rebuilt_independently": 1000,
+  "seeds": 20,
+  "shared_components": "user traits/cohort preparation only for comparison; raw graph/sampler reused previous independent acceptance source, not production graph/sampler; std JSON reparse uses no production decision parser",
+  "independent_raw_algorithm_path": "/Users/liuqingyuan/.codex/worktrees/ten-topic-offline-replay/llm-abm-marketing-sim/runs/ten-topic-gpt-final-acceptance-20261007/audit.py",
+  "independent_raw_algorithm_sha256": "dd7ed76e643636b91275116d13a7fea4407a2a1920a07a581e2f3644e19cc093",
+  "provider_calls": 0
+}

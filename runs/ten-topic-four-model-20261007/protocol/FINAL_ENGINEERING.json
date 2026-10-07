@@ -1,0 +1,11 @@
+{
+  "repository_py_compile_exit_status": 0,
+  "focused_tests": "84 passed in2.78s",
+  "focused_ruff_F_exit_status": 0,
+  "repository_ruff_existing_issues": 42,
+  "exact_original_ruff_baseline_equal": true,
+  "introduced_ruff_issues": 0,
+  "pyright": "not installed, previous exit127 retained; no dependency added",
+  "full_pytest": "not repeated; documented original synthetic concurrent recovery test exceeded80minutes; no production core change this final stage",
+  "provider_calls_by_tests": 0
+}
