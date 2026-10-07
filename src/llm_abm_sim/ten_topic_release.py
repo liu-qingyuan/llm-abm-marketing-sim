@@ -100,3 +100,147 @@ def accept_ten_topic_sources(*, repo_root: str | Path,
             'protected_v16_directory': protected['source_directory'],
             'source_eligibility_flags_preserved': True,
             'new_release_and_public_validation_required': True}
+
+
+def collect_ten_topic_public_data(accepted_sources: Mapping[str, Any]) -> dict[str, Any]:
+    """Project accepted aggregate records, deriving displayed denominators and rates.
+
+    No user-level judgments, raw responses, credentials, or private diagnostics are
+    returned. Stored estimates remain conditional 100-behavior-seed statistics.
+    """
+    import csv
+    import statistics
+    from collections import Counter, defaultdict
+
+    if accepted_sources.get('schema_version') != 'ten-topic-reviewed-publication-sources-v1':
+        raise ValueError('Accepted publication sources required')
+    paths = accepted_sources['paths']
+    main = Path(paths['whole_sample_manifest']).parent
+    gpt = Path(paths['gpt_evidence']).parent
+    four = Path(paths['four_model_acceptance']).parent
+
+    def rows(path: Path) -> list[dict[str, Any]]:
+        with path.open(encoding='utf-8-sig', newline='') as stream:
+            result = list(csv.DictReader(stream))
+        for row in result:
+            for key, value in list(row.items()):
+                if value == '':
+                    row[key] = None
+                else:
+                    try:
+                        row[key] = int(value)
+                    except ValueError:
+                        try:
+                            row[key] = float(value)
+                        except ValueError:
+                            pass
+        return result
+
+    projection = rows(main / 'full-pool-realized-projection.csv')
+    by_group: dict[tuple[str, str], Counter] = defaultdict(Counter)
+    total: Counter = Counter()
+    for row in projection:
+        counts = {'exposures': row['Exposure'], 'like': row['Total Likes'],
+                  'comment': row['Total Comments'], 'share': row['Total Shares']}
+        counts['ignore'] = counts['exposures'] - sum(counts[k] for k in ('like', 'comment', 'share'))
+        if counts['ignore'] < 0:
+            raise ValueError('Whole-sample mutually exclusive actions crossed')
+        by_group[row['Message'], row['Segment']].update(counts)
+        total.update(counts)
+    if total['exposures'] != 109200:
+        raise ValueError('Whole-sample public denominator drift')
+    whole_rows = []
+    for (message, segment), counts in sorted(by_group.items()):
+        item = dict(counts, message=message, segment=segment)
+        for action in ('like', 'comment', 'share', 'ignore'):
+            item[action + '_rate'] = counts[action] / counts['exposures']
+        item['realized_rate'] = sum(counts[k] for k in ('like', 'comment', 'share')) / counts['exposures']
+        whole_rows.append(item)
+    comparison = rows(main / 'curve-comparison.csv')
+    trajectories: dict[tuple[str, int], dict[str, Any]] = defaultdict(dict)
+    for row in comparison:
+        key = row['message_id'], row['batch']
+        trajectories[key][row['action']] = row['new_cumulative']
+    whole_curves = []
+    for (message, batch), counts in sorted(trajectories.items()):
+        exposures = 36400 if batch == 30 else 1214 * batch
+        positive = sum(counts[k] for k in ('like', 'comment', 'share'))
+        whole_curves.append({'message': message, 'batch': batch, 'exposures': exposures,
+                             'realized_positive': positive, 'realized_rate': positive / exposures,
+                             **counts})
+    estimates = rows(gpt / 'arm-parameter-estimates.csv')
+    metrics = rows(gpt / 'old-new-path-metrics.csv')
+    grouped: dict[tuple[str, str, str], list[dict[str, Any]]] = defaultdict(list)
+    for row in metrics:
+        grouped[row['study'], row['configuration'], row['message']].append(row)
+        if sum(row['new_' + k] for k in ('like', 'comment', 'share', 'ignore')) != row['new_exposures']:
+            raise ValueError('Sensitivity public action denominator drift')
+    for estimate in estimates:
+        selected = grouped[estimate['study'], estimate['configuration'], estimate['message']]
+        metric = estimate['metric']
+        column = 'new_' + ('engagement_rate' if metric == 'engagement_rate' else metric)
+        if len(selected) != 100 or estimate['n'] != 100:
+            raise ValueError('Sensitivity statistic is not a 100-seed mean')
+        if abs(statistics.mean(r[column] for r in selected) - estimate['mean']) > 1e-10:
+            raise ValueError('Sensitivity published mean drift')
+    curves = rows(gpt / 'old-new-mean-curves.csv')
+    model_conditions = rows(four / 'formal-report/conditions.csv')
+    if len(model_conditions) != 16:
+        raise ValueError('Four-model public matrix incomplete')
+    for row in model_conditions:
+        if row['exposures'] != 1800 or sum(row[k] for k in ('like', 'comment', 'share', 'ignore')) != 1800:
+            raise ValueError('Four-model public denominator drift')
+        if abs(row['realized_positive'] / 1800 - row['realized_rate']) > 1e-12:
+            raise ValueError('Four-model realized rate drift')
+    model_labels = {r['model_id']: r['model'] for r in model_conditions}
+    segment_batches: dict[tuple[str, str, str, str, int], Counter] = defaultdict(Counter)
+    model_acceptance = json.loads((four / 'independent-acceptance/ACCEPTANCE_PROGRESS.json').read_bytes())
+    if model_acceptance['verified_conditions'] != 16:
+        raise ValueError('Bound model normalization matrix incomplete')
+    for reference in model_acceptance['cells']:
+        source = Path(reference['normalized_path'])
+        if _sha(source) != reference['normalized_sha256']:
+            raise ValueError('Bound model normalization source drift')
+        for line in source.read_text().splitlines():
+            event = json.loads(line)
+            key = event['model'], event['template'], event['message_id'], event['segment'], event['batch']
+            segment_batches[key]['exposures'] += 1
+            segment_batches[key][event['realized_action']] += 1
+    segment_curves = []
+    groups = sorted({k[:4] for k in segment_batches})
+    for model, template, message, segment in groups:
+        cumulative: Counter = Counter()
+        for batch in range(30):
+            cumulative.update(segment_batches[model, template, message, segment, batch])
+            positive = sum(cumulative[k] for k in ('like', 'comment', 'share'))
+            segment_curves.append({'model': model_labels[model], 'model_id': model,
+                                   'template': template, 'message': message, 'segment': segment,
+                                   'batch': batch, **dict(cumulative),
+                                   'realized_positive': positive,
+                                   'realized_rate': positive / cumulative['exposures']
+                                   if cumulative['exposures'] else None})
+    network = json.loads((four / 'FINAL_CORROBORATION.json').read_bytes())
+    prepared = json.loads((four / 'protocol/PREPARED_CONTRACT.json').read_bytes())
+    sample_reference = prepared['sample_reference']
+    if _sha(Path(sample_reference['path'])) != sample_reference['sha256']:
+        raise ValueError('Accepted sample reference drift')
+    samples = json.loads(Path(sample_reference['path']).read_bytes())
+    baseline_ids = set(next(r['sample_user_ids'] for r in samples if r['arm'] == 'baseline'))
+    rebuilt_ids = set(next(r['sample_user_ids'] for r in samples if r['arm'] == 'local_p99_rebuilt'))
+    rebuilt_overlap = len(baseline_ids & rebuilt_ids)
+    return {'schema_version': 'ten-topic-public-statistics-v1',
+            'network': {k: network[k] for k in ('p95', 'actual_ten_topic_names', 'raw_graph_identity',
+                                                'holdout_excluded', 'history_comments', 'history_videos')},
+            'whole': {'summary': dict(total), 'rows': whole_rows, 'curves': whole_curves},
+            'parameters': {'estimates': [r for r in estimates if r['study'] == 'parameters'],
+                           'curves': [r for r in curves if r['study'] == 'parameters'],
+                           'paired': rows(gpt / 'parameter-message-contrasts.csv')},
+            'index': {'local_p99_rebuilt_overlap': rebuilt_overlap, 'estimates': [r for r in estimates if r['study'] == 'index'],
+                      'curves': [r for r in curves if r['study'] == 'index'],
+                      'paired': rows(gpt / 'index-paired-estimates.csv'),
+                      'composition': rows(gpt / 'sample-composition.csv')},
+            'models': {'conditions': model_conditions, 'messages': rows(four / 'formal-report/messages.csv'),
+                       'segments': rows(four / 'formal-report/segments-messages.csv'),
+                       'curves': rows(four / 'formal-report/curves.csv'), 'segment_curves': segment_curves,
+                       'comparison': rows(four / 'formal-report/old-new.csv')},
+            'download_links': []}

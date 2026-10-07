@@ -1,0 +1,41 @@
+branch=codex/ten-topic-full-pool-replay
+changed_field=new report Interface and accepted aggregate statistic projection; old source/root report remains explicit historical
+MODIFIED_FILE=/Users/liuqingyuan/.codex/worktrees/ten-topic-offline-replay/llm-abm-marketing-sim/src/llm_abm_sim/concurrent_robustness_report.py
+DIFF_FILE=/Users/liuqingyuan/.codex/worktrees/ten-topic-offline-replay/llm-abm-marketing-sim/runs/ten-topic-v17-publication-20261007/report-stage/DIFF_FILE.patch
+VERIFICATION=/Users/liuqingyuan/.codex/worktrees/ten-topic-offline-replay/llm-abm-marketing-sim/runs/ten-topic-v17-publication-20261007/report-stage/VERIFICATION.txt
+ROLLBACK=/Users/liuqingyuan/.codex/worktrees/ten-topic-offline-replay/llm-abm-marketing-sim/runs/ten-topic-v17-publication-20261007/report-stage/ROLLBACK.sh
+[
+  {
+    "kind": "BASELINE",
+    "command": [
+      "/Users/liuqingyuan/.codex/worktrees/ten-topic-offline-replay/llm-abm-marketing-sim/.venv/bin/python",
+      "/Users/liuqingyuan/.codex/worktrees/ten-topic-offline-replay/llm-abm-marketing-sim/runs/ten-topic-v17-publication-20261007/report-stage/check_facade.py",
+      "/Users/liuqingyuan/.codex/worktrees/ten-topic-offline-replay/llm-abm-marketing-sim/runs/ten-topic-v17-publication-20261007/report-stage/ORIGINAL_FACADE.py"
+    ],
+    "input": "new Report Module Interface dispatch",
+    "literal_output": "ten_topic_report_interface=false",
+    "exit_status": 1
+  },
+  {
+    "kind": "MODIFIED",
+    "command": [
+      "/Users/liuqingyuan/.codex/worktrees/ten-topic-offline-replay/llm-abm-marketing-sim/.venv/bin/python",
+      "/Users/liuqingyuan/.codex/worktrees/ten-topic-offline-replay/llm-abm-marketing-sim/runs/ten-topic-v17-publication-20261007/report-stage/check_facade.py",
+      "/Users/liuqingyuan/.codex/worktrees/ten-topic-offline-replay/llm-abm-marketing-sim/src/llm_abm_sim/concurrent_robustness_report.py"
+    ],
+    "input": "new Report Module Interface dispatch",
+    "literal_output": "ten_topic_report_interface=true",
+    "exit_status": 0
+  },
+  {
+    "kind": "ROLLBACK",
+    "command": [
+      "/Users/liuqingyuan/.codex/worktrees/ten-topic-offline-replay/llm-abm-marketing-sim/runs/ten-topic-v17-publication-20261007/report-stage/ROLLBACK.sh",
+      "/Users/liuqingyuan/.codex/worktrees/ten-topic-offline-replay/llm-abm-marketing-sim/runs/ten-topic-v17-publication-20261007/report-stage/rollback-scratch.py"
+    ],
+    "input": "modified scratch copy only",
+    "literal_output": "byte_equal_baseline=true\nten_topic_report_interface=false\nrestored_behavior_exit_status=1",
+    "exit_status": 0
+  }
+]
+51 related tests passed in3.24s; Ruff and py_compile pass. First browser real-source preview found missing ignore estimate; fixed by deriving1−realized mean. Fresh browser errors0; tables4/curves4, parameter21/index7/model16 rows. Message2/P2/S1 filter four rows; English headline and mobile390px no overflow.144 segment curve endpoints match formal segment table. Provider calls0. Production modified Interface remains changed; scratch restored absent dispatch.

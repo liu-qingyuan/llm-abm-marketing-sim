@@ -1236,6 +1236,11 @@ def _validate_v2_realized_production_stage_facts(
 class _ReportPresentationInterface:
     """Package-internal seam for deterministic report composition and presentation stages."""
 
+    def render_ten_topic_research(self, base_html, data, *, release_id):
+        """Render accepted ten-topic aggregates, keeping v16 explicit historical."""
+        from .ten_topic_report import render_ten_topic_research
+        return render_ten_topic_research(base_html, data, release_id=release_id)
+
     def render_sensitivity_research(self, base_html: bytes, *, release_id: str) -> bytes:
         """Append the independently verified sensitivity reports, preserving v15."""
         from .sensitivity_report import render_sensitivity_research
