@@ -1,0 +1,41 @@
+branch=codex/ten-topic-full-pool-replay
+changed_field=explicit authorized Gemini collection batches; max3 per collection, global29143; frozen input/condition and exhausted original retained
+MODIFIED_FILE=/Users/liuqingyuan/.codex/worktrees/ten-topic-offline-replay/llm-abm-marketing-sim/runs/ten-topic-four-model-20261007/protocol/audit_ledger.py
+DIFF_FILE=/Users/liuqingyuan/.codex/worktrees/ten-topic-offline-replay/llm-abm-marketing-sim/runs/ten-topic-four-model-20261007/protocol/DIFF_WAVE7.txt
+VERIFICATION=/Users/liuqingyuan/.codex/worktrees/ten-topic-offline-replay/llm-abm-marketing-sim/runs/ten-topic-four-model-20261007/protocol/VERIFICATION_WAVE7.txt
+ROLLBACK=/Users/liuqingyuan/.codex/worktrees/ten-topic-offline-replay/llm-abm-marketing-sim/runs/ten-topic-four-model-20261007/protocol/ROLLBACK_WAVE7.sh
+[
+  {
+    "kind": "BASELINE",
+    "command": [
+      "/Users/liuqingyuan/.codex/worktrees/ten-topic-offline-replay/llm-abm-marketing-sim/.venv/bin/python",
+      "/Users/liuqingyuan/.codex/worktrees/ten-topic-offline-replay/llm-abm-marketing-sim/runs/ten-topic-four-model-20261007/protocol/wave7/check_collection.py",
+      "/Users/liuqingyuan/.codex/worktrees/ten-topic-offline-replay/llm-abm-marketing-sim/runs/ten-topic-four-model-20261007/protocol/wave7/audit_ledger.py"
+    ],
+    "input": "offline failure-only fixture: original 3 exhausted plus 1 authorized fresh Gemini collection",
+    "literal_output": "authorized_separate_collection_accepted=false",
+    "exit_status": 1
+  },
+  {
+    "kind": "MODIFIED",
+    "command": [
+      "/Users/liuqingyuan/.codex/worktrees/ten-topic-offline-replay/llm-abm-marketing-sim/.venv/bin/python",
+      "/Users/liuqingyuan/.codex/worktrees/ten-topic-offline-replay/llm-abm-marketing-sim/runs/ten-topic-four-model-20261007/protocol/wave7/check_collection.py",
+      "/Users/liuqingyuan/.codex/worktrees/ten-topic-offline-replay/llm-abm-marketing-sim/runs/ten-topic-four-model-20261007/protocol/audit_ledger.py"
+    ],
+    "input": "offline failure-only fixture: original 3 exhausted plus 1 authorized fresh Gemini collection",
+    "literal_output": "PASS ledger physical=4 success=0 unknown=0 inflight=0\nauthorized_separate_collection_accepted=true",
+    "exit_status": 0
+  },
+  {
+    "kind": "ROLLBACK",
+    "command": [
+      "/Users/liuqingyuan/.codex/worktrees/ten-topic-offline-replay/llm-abm-marketing-sim/runs/ten-topic-four-model-20261007/protocol/ROLLBACK_WAVE7.sh",
+      "/Users/liuqingyuan/.codex/worktrees/ten-topic-offline-replay/llm-abm-marketing-sim/runs/ten-topic-four-model-20261007/protocol/wave7/rollback-scratch.py"
+    ],
+    "input": "modified scratch copy",
+    "literal_output": "byte_equal_baseline=true\nauthorized_separate_collection_accepted=false\nrestored_behavior_exit_status=1",
+    "exit_status": 0
+  }
+]
+18 offline tests passed; Ruff F pass; py_compile pass. Original behavior restored on scratch only; production modified file stays changed.

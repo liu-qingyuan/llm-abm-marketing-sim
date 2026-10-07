@@ -1,0 +1,15 @@
+{
+  "purpose": "read_only_account_balance_not_model_judgment",
+  "method": "GET",
+  "endpoint": "https://api.moonshot.cn/v1/users/me/balance",
+  "status_code": 200,
+  "at_utc": "2026-10-07T02:44:12.242688+00:00",
+  "model_requests": 0,
+  "account_metadata_http_requests": 1,
+  "secret_material_persisted": false,
+  "balance_cny": {
+    "available_balance": 199.9203,
+    "voucher_balance": 0,
+    "cash_balance": 199.9203
+  }
+}

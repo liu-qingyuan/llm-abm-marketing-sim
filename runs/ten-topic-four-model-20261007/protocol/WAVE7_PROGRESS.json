@@ -1,0 +1,31 @@
+{
+  "status": "resumed_external_blockers_removed",
+  "at_utc": "2026-10-07T02:47:04.022589+00:00",
+  "base_commit": "470a245b7b9022ac49d467f1ccc129bcaf9db0ac",
+  "worktree": "/Users/liuqingyuan/.codex/worktrees/ten-topic-offline-replay/llm-abm-marketing-sim",
+  "branch": "codex/ten-topic-full-pool-replay",
+  "kimi_balance_cny": 199.9203,
+  "gemini_additional_batch_authorization": {
+    "schema": "explicit-gemini-collection-batches-v1",
+    "authorized_at_utc": "2026-10-07T02:44:36.116066+00:00",
+    "user_text": "Kimi 充值了。 确认Gemini原3次尝试耗尽后另建显式补采批次。",
+    "model": "gemini-3.1-pro",
+    "provider_route": "antigravity_openai_compatible_gateway",
+    "maximum_physical_attempts_per_collection": 3,
+    "global_physical_cap": 29143,
+    "cash_limit": null,
+    "preserve_all_original_attempts": true,
+    "same_input_and_request_conditions": true,
+    "one_additional_collection_per_input_per_recovery_execution": true
+  },
+  "physical_cap": 29143,
+  "completion_not_claimed": true,
+  "live_worker_pids": [
+    5092,
+    5093,
+    5094,
+    5095
+  ],
+  "offline_regression": "18 passed; Ruff F pass; py_compile pass",
+  "rollback": "scratch only; original <=3 logical behavior restored, production retains authorized collection branch"
+}

@@ -21,9 +21,9 @@ def inventory_processes():
 
 def main():
  auth=json.loads((ROOT/'protocol/UNKNOWN_CONTINUATION_AUTHORIZATION.json').read_text());assert auth['global_physical_cap']==29143
- state=ROOT/'protocol/MATRIX_EXECUTION_PROGRESS.json';jobs={};stopped={};attempted=set();generation=100
+ state=ROOT/'protocol/MATRIX_EXECUTION_PROGRESS.json';jobs={};stopped={};attempted=set();generation=max([200]+[int(q.name.split('-')[2]) for q in (ROOT/'protocol').glob('authorized-matrix-*-*-P*.log')])
  prior=ROOT/'protocol/MATRIX_EXECUTION_STOP_HISTORY.json'
- if prior.exists():
+ if prior.exists() and not (ROOT/'protocol/GEMINI_COLLECTION_AUTHORIZATION.json').exists():
   history=json.loads(prior.read_text());stopped={k:v for k,v in history.get('stopped',{}).items() if k=='Kimi/P1'}
  env=dict(os.environ,PYTHONPATH=str(WORKTREE/'src'),PYTHONDONTWRITEBYTECODE='1')
  while True:
