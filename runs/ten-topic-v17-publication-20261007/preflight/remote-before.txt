@@ -1,4 +1,4 @@
 /opt/llm-abm-marketing-sim-report/releases/sensitivity-v16-20260920T113800Z
 e7c9cc0bffb8a148376fed4b49b58d8574784540a6b2dbaf0f8845a2d0cff659  /opt/llm-abm-marketing-sim-report/current/report.html
 52e65d1bba4f75114fa3acadb56fe74684c6415aedfa078f9b0f11e01aaf8774  /opt/llm-abm-marketing-sim-report/current/artifact_manifest.json
-nginx:1.27-alpine /opt/llm-abm-marketing-sim-report/nginx/default.conf:/etc/nginx/conf.d/default.conf /opt/llm-abm-marketing-sim-report/current:/usr/share/nginx/html 
+nginx:1.27-alpine /opt/llm-abm-marketing-sim-report/nginx/default.conf:/etc/nginx/conf.d/default.conf /opt/llm-abm-marketing-sim-report/current:/usr/share/nginx/html
