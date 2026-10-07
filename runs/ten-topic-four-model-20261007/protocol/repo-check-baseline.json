@@ -1,0 +1,10 @@
+{
+  "repository_py_compile_exit_status": 0,
+  "ruff_worktree_issues": 42,
+  "ruff_original_issues": 42,
+  "ruff_exact_baseline_equal": true,
+  "ruff_introduced_issues": [],
+  "pyright_exit_status": 127,
+  "pyright_environment": "not installed; no new dependency installed",
+  "full_pytest_not_repeated": "previous 80minute synthetic historical recovery test identified in prior final acceptance; this turn only applicable focused offline tests"
+}
