@@ -30,6 +30,7 @@ from urllib.parse import unquote, urlsplit
 args = sys.argv[1:]
 assert '--insecure' not in args and '-k' not in args
 assert '--http1.1' in args and '--retry-all-errors' in args
+assert '--compressed' in args
 assert ('--noproxy' in args) == (os.environ.get('ABM_DEPLOY_PUBLIC_TRANSPORT', 'direct') == 'direct')
 output = Path(args[args.index('-o') + 1])
 url = next(value for value in reversed(args) if value.startswith('https://'))

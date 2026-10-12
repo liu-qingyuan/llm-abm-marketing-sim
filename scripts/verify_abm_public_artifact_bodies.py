@@ -43,6 +43,7 @@ def _public_transport_args() -> list[str]:
     return [
         *(["--noproxy", "*"] if transport == "direct" else []),
         "--http1.1",
+        "--compressed",
     ]
 
 

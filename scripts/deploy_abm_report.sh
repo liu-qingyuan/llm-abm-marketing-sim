@@ -933,11 +933,11 @@ rollback_on_failure() {
 }
 trap rollback_on_failure EXIT
 
-PUBLIC_CURL_RETRY=(--noproxy '*' --http1.1 --retry 4 --retry-all-errors --retry-delay 2 --retry-max-time 120)
-PUBLIC_REPORT_CURL_RETRY=(--noproxy '*' --http1.1 --retry 4 --retry-all-errors --retry-delay 2 --retry-max-time 1800)
+PUBLIC_CURL_RETRY=(--noproxy '*' --http1.1 --compressed --retry 4 --retry-all-errors --retry-delay 2 --retry-max-time 120)
+PUBLIC_REPORT_CURL_RETRY=(--noproxy '*' --http1.1 --compressed --retry 4 --retry-all-errors --retry-delay 2 --retry-max-time 1800)
 if [[ "${PUBLIC_TRANSPORT}" == environment-proxy ]]; then
-  PUBLIC_CURL_RETRY=(--http1.1 --retry 4 --retry-all-errors --retry-delay 2 --retry-max-time 120)
-  PUBLIC_REPORT_CURL_RETRY=(--http1.1 --retry 4 --retry-all-errors --retry-delay 2 --retry-max-time 1800)
+  PUBLIC_CURL_RETRY=(--http1.1 --compressed --retry 4 --retry-all-errors --retry-delay 2 --retry-max-time 120)
+  PUBLIC_REPORT_CURL_RETRY=(--http1.1 --compressed --retry 4 --retry-all-errors --retry-delay 2 --retry-max-time 1800)
 fi
 printf 'Public client transport: %s; TLS and complete-body hash checks unchanged\n' "${PUBLIC_TRANSPORT}"
 for _attempt in 1 2 3 4 5 6 7 8; do
