@@ -6,7 +6,7 @@
 
 默认 AI 阅读顺序不超过 `current dataset`、`current Formal release`、`current Retention` 三个入口；只有问题需要时才进入 research prior 或 rollback evidence，machine evidence 仅用于 forensic-only 核验。
 
-当前十话题正式发布：[v17 canonical 发布](ten-topic-v17-canonical-release-20261007.md)。单话题 [v16 发布](sensitivity-v16-canonical-release-20260920.md) 是受保护回滚证据，不是十话题当前统计。
+当前十话题正式发布：[v18 canonical 发布](ten-topic-v18-canonical-release-20261013.md)。旧[v17发布](ten-topic-v17-canonical-release-20261007.md)保留为历史与实际回退依据。单话题 [v16 发布](sensitivity-v16-canonical-release-20260920.md) 是受保护回滚证据，不是十话题当前统计。
 
 | 模式 | 入口 | 读取场景 |
 |---|---|---|

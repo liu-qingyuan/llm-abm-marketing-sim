@@ -59,6 +59,7 @@ EXPECTED_REFERENCE_FILES = {
     "docs/references/revised-four-model-v15-canonical-release-20260912.md",
     "docs/references/sensitivity-v16-canonical-release-20260920.md",
     "docs/references/ten-topic-v17-canonical-release-20261007.md",
+    "docs/references/ten-topic-v18-canonical-release-20261013.md",
     "docs/references/ten-topic-main-preservation-20261008.md",
 }
 REMOVED_REFERENCE_FILES = {
@@ -281,6 +282,7 @@ def test_references_reading_order_and_root_navigation_contract() -> None:
         (DOCS_ROOT / "references" / "revised-four-model-v15-canonical-release-20260912.md").resolve(),
         (DOCS_ROOT / "references" / "sensitivity-v16-canonical-release-20260920.md").resolve(),
         (DOCS_ROOT / "references" / "ten-topic-v17-canonical-release-20261007.md").resolve(),
+        (DOCS_ROOT / "references" / "ten-topic-v18-canonical-release-20261013.md").resolve(),
         (DOCS_ROOT / "references" / "ten-topic-main-preservation-20261008.md").resolve(),
     }
 

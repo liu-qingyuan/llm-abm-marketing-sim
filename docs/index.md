@@ -4,17 +4,17 @@
 
 ## Current Research：统一研究入口
 
-[Canonical Final Research](https://abm.q1ngyuan.top/) 已发布 **十话题 v17**：全样本、推荐参数、用户指标敏感性与四模型×P0–P3统一接入正式 Report / Release。2026-10-07 12:11 UTC 完成原子发布、公网正文/交互/下载及最终身份验收；发布过程零 Provider 调用。单话题 v16 与更早历史结果及下载保留为明确标识的旧版。[发布记录](references/ten-topic-v17-canonical-release-20261007.md)。
+[Canonical Final Research](https://abm.q1ngyuan.top/) 已发布 **十话题 v18**：全样本、推荐参数、用户指标敏感性与五模型×P0–P3统一接入正式 Report / Release。2026-10-12 22:16:58 UTC 完成原子发布、公网313项hash/交互/下载及最终身份验收；发布过程零 Provider 调用。三个新增模型12条件与两个历史对照8条件分别披露；旧v17、单话题v16及更早历史字节保留。[发布记录](references/ten-topic-v18-canonical-release-20261013.md)。
 ### 研究地图
 
 十话题成果已并入原项目 main；本地正式目录持久保存、历史绝对路径与原字节不改写。[持久来源映射及读取方法](references/ten-topic-main-preservation-20261008.md)。
 
 | 研究 / 问题 | 改变与固定设定 | 样本、seed 与统计单位 | 最终证据 / 发布状态 |
 |---|---|---|---|
-| **Whole sample**：全样本两阶段实际互动 | GPT-5.6 Sol / P0；十话题合并历史图，既有判断与抽样锚点离线复用 | 36,400用户；109,200曝光；单次行为seed20260823；实际互动63,614/109,200 = 58.255% | [正式来源及复验](../runs/ten-topic-full-pool-20261006/REPORT.md)；canonical v17默认视图 |
-| **Prompt–Model**：四模型与P0–P3 | 同一新基准1,000人；4模型×4模板；新DeepSeek V4.1 Flash与旧V4 Flash有版本差异 | 16条件、28,800曝光；单次行为seed；共同初始用户panel配对，自适应路径描述 | [四模型正式验收](../runs/ten-topic-four-model-20261007/FINAL_REPORT.md)；canonical v17 |
-| **Parameter**：推荐权重与邻居饱和阈值 | 十话题新基准样本；原21参数矩阵、GPT-5.6 Sol / P0 | 21×100行为seed=2,100路径；每路径1,800曝光；终点均值范围62.278%–65.848% | [GPT两研究最终验收](../runs/ten-topic-gpt-final-acceptance-20261007/REPORT.md)；canonical v17 |
-| **Activity / Local Influence**：指标变体与抽样联动 | 原7臂，固定样本与重建样本按协议区分；Local原全话题度数口径不变 | 7×100行为seed=700路径；每路径1,800曝光；Local p99 rebuilt与新基准23/1000重合 | [正式统计](../runs/ten-topic-gpt-studies-20261006/formal-report/REPORT.md)；canonical v17 |
+| **Whole sample**：全样本两阶段实际互动 | GPT-5.6 Sol / P0；十话题合并历史图，既有判断与抽样锚点离线复用 | 36,400用户；109,200曝光；单次行为seed20260823；实际互动63,614/109,200 = 58.255% | [正式来源及复验](../runs/ten-topic-full-pool-20261006/REPORT.md)；canonical v18默认视图 |
+| **Prompt–Model**：五模型与P0–P3 | 同一有序1,000人panel；GPT6.0/GPT6.1/Max新增12条件，DeepSeek/GPT5.6复用历史8条件；跨时点与观察后选型披露 | 20条件、36,000曝光；单次behaviorseed20260823；共同初始20seed用户配对，自适应路径描述 | [新版正式验收](../runs/ten-topic-four-model-revision-20261011-formal-01/FINAL_REPORT.md)；canonical v18；旧v17保留 |
+| **Parameter**：推荐权重与邻居饱和阈值 | 十话题新基准样本；原21参数矩阵、GPT-5.6 Sol / P0 | 21×100行为seed=2,100路径；每路径1,800曝光；终点均值范围62.278%–65.848% | [GPT两研究最终验收](../runs/ten-topic-gpt-final-acceptance-20261007/REPORT.md)；canonical v18 |
+| **Activity / Local Influence**：指标变体与抽样联动 | 原7臂，固定样本与重建样本按协议区分；Local原全话题度数口径不变 | 7×100行为seed=700路径；每路径1,800曝光；Local p99 rebuilt与新基准23/1000重合 | [正式统计](../runs/ten-topic-gpt-studies-20261006/formal-report/REPORT.md)；canonical v18 |
 | **旧版与历史** | 单话题v16、早期direct-action与历史指标排序分别保留 | 不与十话题结果合并分母；排序审计不是传播实验 | canonical“旧版与历史研究”；v16仍保留为回滚版本 |
 
 ### 先读口径，再读结果
@@ -31,14 +31,14 @@
 
 - [Whole sample / 两阶段机制](architecture/full-pool-two-stage-realization.md)
 - [十采集话题合并网络与独立离线重放合同](architecture/ten-topic-full-pool-replay.md)（十话题当前方法；历史来源与结果保留）
-- [十话题 Report / v17 Release 合同](architecture/ten-topic-report-release.md)
+- [十话题 Report / v17–v18 Release 合同](architecture/ten-topic-report-release.md)
 - [Prompt–Model / v15 Report、Release 合同](architecture/revised-four-model-release.md)
 - [Parameter / Study、Evidence、Report](architecture/gpt-p0-parameter-study.md)
 - [Deployment / 原子发布与回退](architecture/report-deployment.md)
 
 Report Module 拥有研究呈现及表图同源知识；Release Module 拥有证据接纳、旧文件保留和 immutable inventory；Deployment Module 只消费验证后的发布事实。这个 Seam 保持 Locality，避免把研究判断规则复制到 shell 或网页拼接器而形成 Information Leakage；不为导航增加透传 Module 或通用框架，Depth 来自既有 Interface 对证据与产物的完整验证。
 
-**当前合同：** v17 精确绑定已验收十话题四研究、工作簿及完整不可变库存，不改写旧来源 eligibility。公网来源/下载一致性和回滚证据见 [Operational #264](https://github.com/liu-qingyuan/llm-abm-marketing-sim/issues/264)。
+**当前合同：** v18 精确绑定已验收十话题四研究、五模型新版evidence/cutoff费用及17表工作簿和313项不可变库存，不改写旧来源eligibility；原9键接缝及v17合同保留。公网来源/下载一致性和实际失败回退证据见 [Operational #265](https://github.com/liu-qingyuan/llm-abm-marketing-sim/issues/265)。旧v17见 [原发布记录](references/ten-topic-v17-canonical-release-20261007.md)。
 
 **历史发布合同：** v15 仍只接纳四模型闭合 projection；v16 以独立接纳合同追加这两项已完成研究。指标研究的 [evidence](../runs/gpt-p0-index-sensitivity-20260920-formal-01/evidence.json) 与 [曝光判断闭合](../runs/gpt-p0-index-sensitivity-20260920-formal-01/exposure-bank-closure.json) 明确 `production_deploy_eligible=false`：17,316 个 eligible inputs 中 17,315 个有判断，另 1 个 unknown 保留且已证明不会曝光，700 条路径所需曝光完整。这不等同完整判断库。经用户批准，v16 对明确绑定的最终证据与发布产物完成接纳验证；原字段、run 与账本不变。发布沿既有 Release / Deployment 事务完成，原 v15 保留为回退版本。验收记录见 [Operational #263](https://github.com/liu-qingyuan/llm-abm-marketing-sim/issues/263)。
 
@@ -75,7 +75,8 @@ Architecture 描述当前 Module、数据边界和稳定运行语义；ADR 记�
 
 - [References 总览](references/README.md)
 - [current dataset：锦江 final dataset 审计](references/jinjiang-final-dataset-audit-20260624.md)
-- [current ten-topic release：四研究 v17 发布记录](references/ten-topic-v17-canonical-release-20261007.md)
+- [current ten-topic release：四研究与五模型 v18 发布记录](references/ten-topic-v18-canonical-release-20261013.md)
+- [protected ten-topic v17 发布记录](references/ten-topic-v17-canonical-release-20261007.md)
 - [protected composite release：两项敏感性研究追加 v16 发布记录](references/sensitivity-v16-canonical-release-20260920.md)
 - [protected v15：四模型恢复研究及回退记录](references/revised-four-model-v15-canonical-release-20260912.md)
 - [protected main evidence：Full-Pool 两阶段 v13 canonical 发布记录](references/full-pool-two-stage-v13-canonical-release-20260827.md)
