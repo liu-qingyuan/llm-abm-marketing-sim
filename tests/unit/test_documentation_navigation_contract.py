@@ -53,6 +53,13 @@ EXPECTED_REFERENCE_FILES = {
     "docs/references/concurrent-message-editorial-v2-visual-encoding-references/visual-encoding-reference-network-feedback-v2.png",
     "docs/references/retention-cleanup-final-evidence-20260730.md",
     "docs/references/retention-cleanup-execution-20260730.json",
+    "docs/references/gpt-p0-judgment-reuse-audit-20260916.md",
+    "docs/references/gpt-p0-dynamic-parameter-plan-20260917.md",
+    "docs/references/gpt-p0-dynamic-parameter-results-20260917.md",
+    "docs/references/revised-four-model-v15-canonical-release-20260912.md",
+    "docs/references/sensitivity-v16-canonical-release-20260920.md",
+    "docs/references/ten-topic-v17-canonical-release-20261007.md",
+    "docs/references/ten-topic-main-preservation-20261008.md",
 }
 REMOVED_REFERENCE_FILES = {
     "docs/references/PostContent.md",
@@ -228,7 +235,19 @@ def test_required_evidence_and_weekly_navigation_remain() -> None:
 
     weekly_text = _read(DOCS_ROOT / "weekly" / "README.md")
     assert "不覆盖 current Architecture" in weekly_text
-    assert len(list((DOCS_ROOT / "weekly").glob("*.md"))) == 11
+    # Drafts/untracked weekly files are not durable navigation entries.
+    weekly_root = (DOCS_ROOT / "weekly").resolve()
+    tracked_reports = {
+        path.resolve()
+        for path in _tracked_markdown_files()
+        if path.parent.resolve() == weekly_root and path.name != "README.md"
+    }
+    linked_reports = {
+        target for _, target in _local_markdown_links(weekly_root / "README.md")
+        if target.parent == weekly_root
+    }
+    assert tracked_reports
+    assert linked_reports == tracked_reports
 
 
 def test_references_reading_order_and_root_navigation_contract() -> None:
@@ -259,6 +278,10 @@ def test_references_reading_order_and_root_navigation_contract() -> None:
         (DOCS_ROOT / "references" / "jinjiang-final-dataset-audit-20260624.md").resolve(),
         (DOCS_ROOT / "references" / "full-pool-two-stage-v13-canonical-release-20260827.md").resolve(),
         (DOCS_ROOT / "references" / "retention-cleanup-final-evidence-20260730.md").resolve(),
+        (DOCS_ROOT / "references" / "revised-four-model-v15-canonical-release-20260912.md").resolve(),
+        (DOCS_ROOT / "references" / "sensitivity-v16-canonical-release-20260920.md").resolve(),
+        (DOCS_ROOT / "references" / "ten-topic-v17-canonical-release-20261007.md").resolve(),
+        (DOCS_ROOT / "references" / "ten-topic-main-preservation-20261008.md").resolve(),
     }
 
 

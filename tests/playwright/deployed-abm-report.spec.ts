@@ -283,6 +283,7 @@ async function expectFullPoolReport(page: Page): Promise<void> {
     'abm-report-release-contract-v15',
     'abm-report-release-contract-v16',
     'abm-report-release-contract-v17',
+    'abm-report-release-contract-v18',
   ].includes(releaseContractSchema ?? '');
   await expect(page).toHaveTitle(isTwoStage ? 'Full-Pool 两阶段互动实现' : 'Full-Pool 主实验');
   await expect(page.locator('html')).toHaveAttribute('lang', 'zh-CN');
@@ -446,7 +447,7 @@ async function expectFullPoolReport(page: Page): Promise<void> {
     }
     await expect(page.locator('#index-sensitivity-study')).toContainText('108/1000');
   }
-  if (['abm-report-release-contract-v15', 'abm-report-release-contract-v16', 'abm-report-release-contract-v17'].includes(releaseContractSchema ?? '')) {
+  if (['abm-report-release-contract-v15', 'abm-report-release-contract-v16', 'abm-report-release-contract-v17', 'abm-report-release-contract-v18'].includes(releaseContractSchema ?? '')) {
     await expect(page.locator('[data-full-pool-i18n="history.copy"]')).toContainText('新增跨厂商四模型恢复研究独立使用');
     await page.getByTestId('run-evidence-mode-button').click();
     const revised = page.getByTestId('revised-robustness-section');
@@ -495,7 +496,7 @@ async function expectFullPoolReport(page: Page): Promise<void> {
   await fallbackSummary.click();
   await expect(fallback).not.toHaveAttribute('open', '');
   await expect(page.getByTestId('full-pool-trace-page-status')).toContainText('Page 1 of');
-  if (['abm-report-release-contract-v15', 'abm-report-release-contract-v16', 'abm-report-release-contract-v17'].includes(releaseContractSchema ?? '')) {
+  if (['abm-report-release-contract-v15', 'abm-report-release-contract-v16', 'abm-report-release-contract-v17', 'abm-report-release-contract-v18'].includes(releaseContractSchema ?? '')) {
     await expect(page.locator('[data-full-pool-i18n="history.copy"]')).toContainText('four-model recovery study independently uses Judgment to Realization');
   }
 }
@@ -621,26 +622,41 @@ async function expectFullPoolDownloads(page: Page): Promise<void> {
   if (['abm-report-release-contract-v14', 'abm-report-release-contract-v17'].includes(releaseContractSchema ?? '')) {
     expect(new Set(hrefs.filter((href) => href.endsWith('.xlsx'))).size).toBe(1);
   }
+  if (releaseContractSchema === 'abm-report-release-contract-v18') {
+    expect(new Set(hrefs.filter((href) => href.endsWith('.xlsx')))).toEqual(new Set([
+      'ten-topic/ten-topic-research.xlsx', 'ten-topic-v17/ten-topic-research.xlsx',
+    ]));
+  }
 }
 
 async function expectTenTopicReport(page: Page): Promise<void> {
+  const revised = releaseContractSchema === 'abm-report-release-contract-v18';
   const current = page.getByTestId('ten-topic-current');
   await expect(current).toBeVisible();
-  await expect(page.locator('meta[name="abm-release-contract"]')).toHaveAttribute('content', 'abm-report-release-contract-v17');
+  await expect(page.locator('meta[name="abm-release-contract"]')).toHaveAttribute('content', releaseContractSchema!);
   await expect(current.locator('#full-pool-main')).toContainText('109,200');
   await expect(current.locator('[data-tt-study="parameters"] tbody tr')).toHaveCount(21);
   await expect(current.locator('[data-tt-study="index"] tbody tr')).toHaveCount(7);
-  await expect(current.locator('[data-tt-study="models"] tbody tr')).toHaveCount(16);
+  await expect(current.locator('[data-tt-study="models"] tbody tr')).toHaveCount(revised ? 20 : 16);
   await expect(current).toContainText('23/1000');
-  await expect(current.locator('[data-tt-study="models"]')).toContainText('V4.1 Flash');
-  await expect(current.locator('[data-tt-study="models"]')).toContainText('gemini-pro-agent');
+  if (revised) {
+    await expect(current.locator('[data-tt-study="models"]')).toContainText('36,000');
+    for (const model of ['GPT 6.0', 'GPT 6.1', 'Qwen3.8 Max', 'DeepSeek (historical)', 'GPT 5.6 (historical)']) {
+      await expect(current.locator('[data-tt-study="models"]')).toContainText(model);
+    }
+    await expect(current.locator('[data-tt-study="models"]')).toContainText('互动率不是准确率');
+    await expect(current.locator('a[href="ten-topic-v17/ten-topic-research.xlsx"]')).toHaveCount(1);
+  } else {
+    await expect(current.locator('[data-tt-study="models"]')).toContainText('V4.1 Flash');
+    await expect(current.locator('[data-tt-study="models"]')).toContainText('gemini-pro-agent');
+  }
   await expect(current.locator('svg')).toHaveCount(4);
   const models = current.locator('[data-tt-study="models"]');
   await models.locator('[data-tt-message]').selectOption('message_2');
   await models.locator('[data-tt-template]').selectOption('P2');
   await models.locator('[data-tt-segment]').selectOption('S1');
-  await expect(models.locator('tbody tr')).toHaveCount(4);
-  await expect(models.locator('polyline')).toHaveCount(4);
+  await expect(models.locator('tbody tr')).toHaveCount(revised ? 5 : 4);
+  await expect(models.locator('polyline')).toHaveCount(revised ? 5 : 4);
   await current.locator('[data-tt-lang="en"]').click();
   await expect(current.locator('h1')).toHaveText('Whole-sample realized behavior', { useInnerText: true });
   await expect(page.locator('html')).toHaveAttribute('lang', 'en-US');
@@ -655,7 +671,7 @@ async function expectTenTopicReport(page: Page): Promise<void> {
 }
 
 async function expectReportByKind(page: Page): Promise<void> {
-  if (releaseContractSchema === 'abm-report-release-contract-v17') {
+  if (['abm-report-release-contract-v17', 'abm-report-release-contract-v18'].includes(releaseContractSchema ?? '')) {
     await expectTenTopicReport(page);
   } else if (reportKind === 'full-pool') {
     await expectFullPoolReport(page);

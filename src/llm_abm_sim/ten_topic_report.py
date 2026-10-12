@@ -41,6 +41,37 @@ def _message_control() -> str:
     return '<label>Message <select data-tt-message><option value="all">All messages</option><option value="message_1">M1</option><option value="message_2">M2</option><option value="message_3">M3</option></select></label>'
 
 
+def _revision_model_scope(data: dict[str, Any]) -> bool:
+    """Identify the exact revised public matrix; Release still owns authenticity."""
+    rows = data['models']['conditions']
+    new = {'gpt-6-sol', 'gpt-6.1-sol', 'qwen3.8-max'}
+    if len(rows) != 20 and not any(row.get('model_id') in new for row in rows):
+        return False
+    expected = {(model, f'P{template}')
+                for model in new | {'deepseek-flash', 'gpt-5.6-sol'}
+                for template in range(4)}
+    if (len(rows) != 20
+            or {(row.get('model_id'), row.get('template')) for row in rows} != expected):
+        raise ValueError('Revised five-model public matrix must contain exactly 20 conditions')
+    for row in rows:
+        actions = [row.get(key) for key in ('like', 'comment', 'share', 'ignore')]
+        if (type(row.get('exposures')) is not int or row['exposures'] != 1800
+                or any(type(value) is not int or value < 0 for value in actions)
+                or sum(actions) != 1800
+                or type(row.get('realized_positive')) is not int
+                or row['realized_positive'] != sum(actions[:3])
+                or type(row.get('realized_rate')) not in (int, float)
+                or row.get('realized_rate') != sum(actions[:3]) / 1800):
+            raise ValueError('Revised five-model public denominator or realized actions crossed')
+    return True
+
+
+_REVISION_SCOPE_ZH = '同一有序1,000人panel、20名seed和三条营销消息。五模型×P0–P3共20条件、36,000曝光：GPT 6.0、GPT 6.1及qwen3.8-max新增12条件、21,600曝光；官方直连DeepSeek和新版十话题历史GPT 5.6复用8条件、14,400曝光，不是新增实验。单次行为seed20260823，非100seed均值。'
+_REVISION_SCOPE_EN = 'The same ordered 1,000-user panel, 20 seeds and three marketing messages: five models and P0–P3, 20 conditions and 36,000 exposures. GPT 6.0, GPT 6.1 and qwen3.8-max contribute 12 new conditions and 21,600 exposures. Original official-direct DeepSeek and historical ten-topic GPT 5.6 contribute eight reused conditions and 14,400 exposures, not new experiments. One behavior seed, 20260823, not a 100-seed mean.'
+_REVISION_LIMITS_ZH = '跨时点历史复用与观察后选型均须披露，不把模型差异解释为纯版本因果效应。Max小样本P3的53.33%已在选型前被观察；没有新增60%筛选门槛，保留全部方向与结果。互动率不是准确率。GPT原订阅来源及服务端原生model、响应ID按真实回执追踪；两次独立SSE检查缺失的HTTP请求ID保持unknown，不用本地descriptor补齐。qwen3.8-max未日期SKU的echo不构成不可变权重证明；DeepSeek及GPT 5.6保留历史身份粒度。未报告reasoning_tokens保持unknown，供应商推理等级不视为等价。共同初始20seed用户×3消息仅支持有限配对，自适应路径仅描述；不继承旧四模型bootstrap区间，不把曝光、用户或复用记录当作独立实验重复。S1–S3是合成标签。'
+_REVISION_LIMITS_EN = 'Cross-time reuse and selection after observing results are disclosed, not isolated model-version causal effects. Max small-sample P3 at 53.33% was observed before selection; no new 60% filter is imposed and all results are retained. Interaction rate is not accuracy. Original GPT subscription source and native server model/response IDs are receipt-traced; missing HTTP request IDs in the two independent SSE checks remain unknown, never filled from local descriptors. An undated qwen3.8-max SKU echo is not immutable-weight evidence; legacy identity granularity is retained. Unreported reasoning_tokens remain unknown and provider reasoning levels are not equivalent. Only the common initial 20-seed by three-message panel supports limited pairing. Adaptive paths are descriptive; old four-model bootstrap intervals are not inherited and exposures, users and reused judgments are not independent replications. S1–S3 are synthetic labels.'
+
+
 def render_ten_topic_research(base_html: bytes, data: dict[str, Any], *, release_id: str) -> bytes:
     """Render current formal aggregate views and keep the old report explicitly historical."""
     if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.-]{0,159}', release_id):
@@ -51,6 +82,7 @@ def render_ten_topic_research(base_html: bytes, data: dict[str, Any], *, release
         raise ValueError('Expected protected v16 editorial report')
     if data.get('schema_version') != 'ten-topic-public-statistics-v1':
         raise ValueError('Public aggregate statistics required')
+    revised_models = _revision_model_scope(data)
     start, end = base.index('<body>') + 6, base.rindex('</body>')
     legacy = base[start:end]
     legacy, n = re.subn(r'<nav id="research-navigation".*?</nav>', '', legacy, flags=re.DOTALL)
@@ -77,7 +109,7 @@ def render_ten_topic_research(base_html: bytes, data: dict[str, Any], *, release
     rebuilt_overlap = data['index']['local_p99_rebuilt_overlap']
     for study, identifier, zh, en, note in [('parameters','parameter-study','推荐参数研究','Recommendation parameters',f'21组×100行为seed，共2,100路径。各路径1,800曝光，30批。终点不再全部相同，范围{parameter_range}；不是普遍稳健或不敏感结论。'),('index','index-sensitivity-study','用户指标敏感性研究','User-indicator sensitivity',f'原7臂×100行为seed，共700路径。区分fixed与rebuilt，Local p99重建与新基准重合{rebuilt_overlap}/1000；样本构成也是变化来源。Local权重fixed/rebuilt及两研究共享baseline不是独立重复证据。')]:
         current += f'<section id="{identifier}" class="full-pool-section" data-tt-study="{study}"><h2>'+_bi(zh,en)+'</h2><p class="tt-note">'+_bi(note, f'21 configurations and 100 behavior seeds: 2,100 paths. Endpoints differ in the tested matrix: {parameter_range}. This is not a universal robustness result.' if study == 'parameters' else f'Seven original arms and 100 behavior seeds: 700 paths. Fixed and rebuilt arms differ in meaning. Local p99 rebuilt overlaps the new baseline by {rebuilt_overlap}/1000 users. Shared baseline and identical Local-weight arms are not independent replications.')+'</p><p class="tt-note">'+_bi('分母每消息600、三消息合计1,800。显示100行为seed均值及df99 Student-t普通95%区间，仅描述固定判断/数据下的行为Monte Carlo误差；100seed不是100次LLM判断。原Bonferroni家族参数123、指标120的同时区间保留在对应数据下载。','Denominators are 600 per message and 1,800 overall. Means and ordinary df99 Student-t intervals reflect 100 behavior seeds conditional on fixed judgments/data, not 100 LLM judgments. Original simultaneous intervals remain in the downloads.')+'</p><div class="tt-controls">'+_message_control()+'<label>Curve <select data-tt-condition></select></label></div><div class="tt-overflow" data-tt-table></div><div class="tt-plots" data-tt-plot></div></section>'
-    current += '<section id="revised-robustness" class="full-pool-section" data-tt-study="models"><h2>'+_bi('四模型与P0–P3','Four models and P0–P3')+'</h2><p class="tt-note">'+_bi('同一新基准1,000人，16条件×1,800曝光，共28,800曝光；单次行为seed20260823，非100seed均值。DeepSeek新版本V4.1 Flash，旧版V4 Flash。Kimi统一显示；Gemini观测为原网关alias gemini-pro-agent，隐藏上下文和原生后端不可观测。','The same new 1,000-user baseline: 16 conditions, 1,800 exposures each, 28,800 total. One behavior seed, not a 100-seed mean. DeepSeek is user-authorized V4.1 Flash versus old V4 Flash; Kimi remains one research model. Gemini exposes the original gateway alias, with hidden effective context/backend limits.')+'</p><div class="tt-controls">'+_message_control()+'<label>Prompt <select data-tt-template><option value="all">All</option>'+''.join(f'<option value="P{i}">P{i}</option>' for i in range(4))+'</select></label><label>Segment <select data-tt-segment><option value="all">All</option><option>S1</option><option>S2</option><option>S3</option></select></label></div><div class="tt-overflow" data-tt-table></div><div class="tt-plots" data-tt-plot></div><p class="tt-note">'+_bi('共同Batch0仅20seed用户×3消息，原500次用户block bootstrap配对区间见下载；自适应路径仅描述，不把曝光、用户或复用记录冒充独立实验重复。S1–S3是合成标签，不是确认的心理画像。','The fixed common Batch0 panel has 20 seed users and three messages; original 500 user-block bootstrap intervals are downloadable. Adaptive paths are descriptive, not independent repeated experiments. S1–S3 are synthetic labels, not verified psychological profiles.')+'</p></section>'
+    current += '<section id="revised-robustness" class="full-pool-section" data-tt-study="models"><h2>'+(_bi('五模型与P0–P3','Five models and P0–P3') if revised_models else _bi('四模型与P0–P3','Four models and P0–P3'))+'</h2><p class="tt-note">'+(_bi(_REVISION_SCOPE_ZH, _REVISION_SCOPE_EN) if revised_models else _bi('同一新基准1,000人，16条件×1,800曝光，共28,800曝光；单次行为seed20260823，非100seed均值。DeepSeek新版本V4.1 Flash，旧版V4 Flash。Kimi统一显示；Gemini观测为原网关alias gemini-pro-agent，隐藏上下文和原生后端不可观测。','The same new 1,000-user baseline: 16 conditions, 1,800 exposures each, 28,800 total. One behavior seed, not a 100-seed mean. DeepSeek is user-authorized V4.1 Flash versus old V4 Flash; Kimi remains one research model. Gemini exposes the original gateway alias, with hidden effective context/backend limits.'))+'</p><div class="tt-controls">'+_message_control()+'<label>Prompt <select data-tt-template><option value="all">All</option>'+''.join(f'<option value="P{i}">P{i}</option>' for i in range(4))+'</select></label><label>Segment <select data-tt-segment><option value="all">All</option><option>S1</option><option>S2</option><option>S3</option></select></label></div><div class="tt-overflow" data-tt-table></div><div class="tt-plots" data-tt-plot></div><p class="tt-note">'+(_bi(_REVISION_LIMITS_ZH, _REVISION_LIMITS_EN) if revised_models else _bi('共同Batch0仅20seed用户×3消息，原500次用户block bootstrap配对区间见下载；自适应路径仅描述，不把曝光、用户或复用记录冒充独立实验重复。S1–S3是合成标签，不是确认的心理画像。','The fixed common Batch0 panel has 20 seed users and three messages; original 500 user-block bootstrap intervals are downloadable. Adaptive paths are descriptive, not independent repeated experiments. S1–S3 are synthetic labels, not verified psychological profiles.'))+'</p></section>'
     current += '<section id="ten-topic-downloads" class="full-pool-section"><h2>'+_bi('对应结果与数据下载','Matching results and downloads')+'</h2><div class="tt-downloads">'
     for item in data.get('download_links', []):
         current += f'<a download href="{html.escape(item["path"],quote=True)}">{html.escape(item["label"])}</a>'
@@ -85,7 +117,8 @@ def render_ten_topic_research(base_html: bytes, data: dict[str, Any], *, release
     payload=json.dumps(data,ensure_ascii=False,sort_keys=True,separators=(',',':')).replace('<',r'\u003c').replace('>',r'\u003e').replace('&',r'\u0026')
     body=navigation+current+'<details id="single-topic-history"><summary>旧版：单一话题网络及既有历史研究 / Previous single-topic and historical research</summary><p class="tt-note">以下保留旧版原统计、交互和下载，不属于上方十话题新版本；不同研究不合并分母。</p>'+legacy+'</details><script type="application/json" id="ten-topic-public-data">'+payload+'</script>'+_SCRIPT
     result=base[:start]+body+base[end:]
-    result=result.replace(marker,'<meta name="abm-release-contract" content="abm-report-release-contract-v17">')
+    schema = 'abm-report-release-contract-v18' if revised_models else 'abm-report-release-contract-v17'
+    result=result.replace(marker,f'<meta name="abm-release-contract" content="{schema}">')
     result,n=re.subn(r'<meta name="abm-release-id" content="[^"]+">',f'<meta name="abm-release-id" content="{html.escape(release_id)}">',result)
     if n != 1:
         raise ValueError('Release metadata must be unique')
@@ -117,6 +150,7 @@ def ten_topic_public_downloads(data: dict[str, Any]) -> dict[str, bytes]:
     """Publish only aggregate study tables, curve points and contextual JSON."""
     import csv
     import io
+    revised_models = _revision_model_scope(data)
 
     def csv_bytes(rows: list[dict[str, Any]]) -> bytes:
         if not rows:
@@ -145,7 +179,7 @@ def ten_topic_public_downloads(data: dict[str, Any]) -> dict[str, bytes]:
     for study in ('whole', 'parameters', 'index', 'models'):
         files['ten-topic/' + study + '/results.json'] = json.dumps(
             data[study], ensure_ascii=False, sort_keys=True, separators=(',', ':'), allow_nan=False).encode()
-    files['ten-topic/methods.json'] = json.dumps({
+    methods = {
         'network': data['network'], 'behavior_seed': 20260823,
         'whole_and_models_behavior_realizations': 1, 'sensitivity_behavior_seeds': 100,
         'sensitivity_interval': 'df99 Student-t conditional on fixed judgments/data; original families preserved',
@@ -155,7 +189,22 @@ def ten_topic_public_downloads(data: dict[str, Any]) -> dict[str, bytes]:
         'gemini_observed_model': 'gemini-pro-agent; original gateway, hidden effective context not observed',
         'comparison_scope': 'joint network/sample/service-time and indicator/model version effects; not isolated causal effects',
         'provider_calls_during_publication': 0,
-    }, ensure_ascii=False, sort_keys=True, separators=(',', ':')).encode()
+    }
+    if revised_models:
+        methods.pop('model_version_change')
+        methods.pop('gemini_observed_model')
+        methods.update({
+            'model_matrix': {'models': 5, 'conditions': 20, 'exposures': 36000,
+                             'new_conditions': 12, 'new_exposures': 21600,
+                             'legacy_conditions': 8, 'legacy_exposures': 14400},
+            'unreported_reasoning_tokens': 'unknown',
+            'provider_reasoning_levels_equivalent': False,
+            'selection_after_observation': True,
+            'interaction_rate_is_accuracy': False,
+            'model_identity_and_comparison_limits': _REVISION_LIMITS_EN,
+        })
+    files['ten-topic/methods.json'] = json.dumps(
+        methods, ensure_ascii=False, sort_keys=True, separators=(',', ':')).encode()
     for message in ('message_1', 'message_2', 'message_3'):
         groups = [{'name': message, 'rows': [{'batch': r['batch'], 'rate': r['realized_rate']}
                                             for r in data['whole']['curves'] if r['message'] == message]}]
@@ -179,7 +228,8 @@ def ten_topic_public_downloads(data: dict[str, Any]) -> dict[str, bytes]:
 
 def ten_topic_workbook_tables(data: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
     """Aggregate workbook source tables; no private roots or per-user data."""
-    return {
+    revised_models = _revision_model_scope(data)
+    tables = {
         'Methods': [
             {'Item': 'Network', 'Value': 'Ten actual collected topics; holdout-safe historical interactions'},
             {'Item': 'Network P95', 'Value': data['network']['p95']},
@@ -204,3 +254,14 @@ def ten_topic_workbook_tables(data: dict[str, Any]) -> dict[str, list[dict[str, 
         'Category curves': data['models']['segment_curves'], 'Model old new': data['models']['comparison'],
         'Model paired seeds': data['models']['paired_seed'],
     }
+    if revised_models:
+        tables['Methods'] = [row for row in tables['Methods']
+                             if row['Item'] not in ('Four models', 'DeepSeek', 'Gemini')]
+        tables['Methods'] += [
+            {'Item': 'Five models', 'Value': '20 conditions;36,000 exposures;single behavior seed20260823'},
+            {'Item': 'New / historical', 'Value': '12 new conditions;21,600 exposures;8 historical conditions;14,400 exposures'},
+            {'Item': 'Model identity', 'Value': 'GPT native response-ID tracing;undated Max SKU is not immutable-weight evidence;legacy identity granularity retained'},
+            {'Item': 'Missing usage', 'Value': 'Unreported reasoning_tokens remain unknown;provider reasoning levels are not equivalent'},
+            {'Item': 'Selection and inference', 'Value': _REVISION_LIMITS_EN},
+        ]
+    return tables

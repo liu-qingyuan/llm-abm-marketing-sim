@@ -26,7 +26,7 @@ ROLLBACK_READBACK_FILE=""
 LOCAL_CHECKSUMS_FILE=""
 
 usage() {
-  printf 'Usage: %s --contract <formal-release-contract> --source-dir <approved-run-directory> --release-id <release-id> [--authorization <v13-v14-v15-v16-or-v17-operational-authorization>] [--operation-facts-output <operational-evidence>]\n' "$0" >&2
+  printf 'Usage: %s --contract <formal-release-contract> --source-dir <approved-run-directory> --release-id <release-id> [--authorization <v13-v14-v15-v16-v17-or-v18-operational-authorization>] [--operation-facts-output <operational-evidence>]\n' "$0" >&2
 }
 
 fail() {
@@ -190,7 +190,7 @@ PY
 [[ "${VALIDATED_DOMAIN}" == "${DOMAIN}" ]] || fail "validated canonical domain is crossed"
 [[ "${ARTIFACT_COUNT}" =~ ^[1-9][0-9]*$ ]] || fail "validated artifact count is invalid"
 [[ "${CONTRACT_SHA}" =~ ^[a-f0-9]{64}$ ]] || fail "validated contract identity is invalid"
-[[ "${RELEASE_CONTRACT_SCHEMA}" =~ ^abm-report-release-contract-v([2-9]|10|11|12|13|14|15|16|17)$ ]] || fail "validated release contract schema is invalid"
+[[ "${RELEASE_CONTRACT_SCHEMA}" =~ ^abm-report-release-contract-v([2-9]|10|11|12|13|14|15|16|17|18)$ ]] || fail "validated release contract schema is invalid"
 [[ -z "${RELEASE_IDENTITY_SHA}" || "${RELEASE_IDENTITY_SHA}" =~ ^[a-f0-9]{64}$ ]] || fail "validated release identity is invalid"
 SOURCE_DIR="${LOCAL_SNAPSHOT_DIR}"
 find "${SOURCE_DIR}" -type d -exec chmod a-w {} +
@@ -216,7 +216,7 @@ for artifact in facts["public_acceptance_artifacts"]:
 PY
 )
 (( ${#PUBLIC_ACCEPTANCE_ARTIFACTS[@]} == ARTIFACT_COUNT )) || fail "validated public acceptance artifact list is incomplete"
-if [[ "${RELEASE_CONTRACT_SCHEMA}" == "abm-report-release-contract-v13" || "${RELEASE_CONTRACT_SCHEMA}" == "abm-report-release-contract-v14" || "${RELEASE_CONTRACT_SCHEMA}" == "abm-report-release-contract-v15" || "${RELEASE_CONTRACT_SCHEMA}" == "abm-report-release-contract-v16" || "${RELEASE_CONTRACT_SCHEMA}" == "abm-report-release-contract-v17" ]]; then
+if [[ "${RELEASE_CONTRACT_SCHEMA}" == "abm-report-release-contract-v13" || "${RELEASE_CONTRACT_SCHEMA}" == "abm-report-release-contract-v14" || "${RELEASE_CONTRACT_SCHEMA}" == "abm-report-release-contract-v15" || "${RELEASE_CONTRACT_SCHEMA}" == "abm-report-release-contract-v16" || "${RELEASE_CONTRACT_SCHEMA}" == "abm-report-release-contract-v17" || "${RELEASE_CONTRACT_SCHEMA}" == "abm-report-release-contract-v18" ]]; then
   DEPLOYMENT_PLAN_FILE="$(mktemp "${TMPDIR:-/tmp}/abm-report-deployment-plan.XXXXXX")"
   DEPLOYMENT_PLAN_ARGS=(
     preflight
@@ -233,9 +233,9 @@ if [[ "${RELEASE_CONTRACT_SCHEMA}" == "abm-report-release-contract-v13" || "${RE
     DEPLOYMENT_PLAN_ARGS+=(--authorization "${DEPLOYMENT_AUTHORIZATION}")
   fi
   "${PYTHON}" "${SCRIPT_DIR}/validate_abm_report_deployment.py" "${DEPLOYMENT_PLAN_ARGS[@]}"
-  if [[ "${RELEASE_CONTRACT_SCHEMA}" == "abm-report-release-contract-v14" || "${RELEASE_CONTRACT_SCHEMA}" == "abm-report-release-contract-v15" || "${RELEASE_CONTRACT_SCHEMA}" == "abm-report-release-contract-v16" || "${RELEASE_CONTRACT_SCHEMA}" == "abm-report-release-contract-v17" ]]; then
+  if [[ "${RELEASE_CONTRACT_SCHEMA}" == "abm-report-release-contract-v14" || "${RELEASE_CONTRACT_SCHEMA}" == "abm-report-release-contract-v15" || "${RELEASE_CONTRACT_SCHEMA}" == "abm-report-release-contract-v16" || "${RELEASE_CONTRACT_SCHEMA}" == "abm-report-release-contract-v17" || "${RELEASE_CONTRACT_SCHEMA}" == "abm-report-release-contract-v18" ]]; then
     [[ -n "${DEPLOYMENT_OPERATION_FACTS_OUTPUT}" ]] || \
-      fail "v14/v15/v16/v17 requires --operation-facts-output for separate operational evidence"
+      fail "v14/v15/v16/v17/v18 requires --operation-facts-output for separate operational evidence"
     [[ ! -L "${DEPLOYMENT_OPERATION_FACTS_OUTPUT}" ]] || \
       fail "v14 operation facts output must not be a symlink"
     [[ ! -e "${DEPLOYMENT_OPERATION_FACTS_OUTPUT}" ]] || \
@@ -250,10 +250,10 @@ if [[ "${RELEASE_CONTRACT_SCHEMA}" == "abm-report-release-contract-v13" || "${RE
       "${CANONICAL_SOURCE_DIR}"/*) fail "v14 operation facts must remain outside the immutable Release" ;;
     esac
   elif [[ -n "${DEPLOYMENT_OPERATION_FACTS_OUTPUT}" ]]; then
-    fail "--operation-facts-output is only valid for abm-report-release-contract-v14, v15 or v16"
+    fail "--operation-facts-output is only valid for abm-report-release-contract-v14 through v18"
   fi
 elif [[ -n "${DEPLOYMENT_AUTHORIZATION}" || -n "${DEPLOYMENT_OPERATION_FACTS_OUTPUT}" ]]; then
-  fail "--authorization and --operation-facts-output require an authorized v13, v14, v15 or v16 release contract"
+  fail "--authorization and --operation-facts-output require an authorized v13 through v18 release contract"
 fi
 REMOTE_RELEASE="${REMOTE_ROOT}/releases/${RELEASE_ID}"
 
@@ -296,7 +296,7 @@ if [[ -n "${PREVIOUS_RELEASE_RECORD}" ]]; then
   [[ -n "${PREVIOUS_RELEASE}" && "${PREVIOUS_REPORT_SHA}" =~ ^[a-f0-9]{64}$ && "${PREVIOUS_MANIFEST_SHA}" =~ ^[a-f0-9]{64}$ ]] || \
     fail "current managed release identity is incomplete"
 fi
-if [[ "${RELEASE_CONTRACT_SCHEMA}" == "abm-report-release-contract-v13" || "${RELEASE_CONTRACT_SCHEMA}" == "abm-report-release-contract-v14" || "${RELEASE_CONTRACT_SCHEMA}" == "abm-report-release-contract-v15" || "${RELEASE_CONTRACT_SCHEMA}" == "abm-report-release-contract-v16" || "${RELEASE_CONTRACT_SCHEMA}" == "abm-report-release-contract-v17" ]]; then
+if [[ "${RELEASE_CONTRACT_SCHEMA}" == "abm-report-release-contract-v13" || "${RELEASE_CONTRACT_SCHEMA}" == "abm-report-release-contract-v14" || "${RELEASE_CONTRACT_SCHEMA}" == "abm-report-release-contract-v15" || "${RELEASE_CONTRACT_SCHEMA}" == "abm-report-release-contract-v16" || "${RELEASE_CONTRACT_SCHEMA}" == "abm-report-release-contract-v17" || "${RELEASE_CONTRACT_SCHEMA}" == "abm-report-release-contract-v18" ]]; then
   [[ -n "${PREVIOUS_RELEASE}" ]] || fail "v13/v14 requires a fresh managed rollback identity"
   ROLLBACK_READBACK_FILE="$(mktemp "${TMPDIR:-/tmp}/abm-report-rollback-readback.XXXXXX")"
   "${PYTHON}" - \
@@ -612,7 +612,7 @@ install -d -m 755 "${remote_root}/nginx" "${remote_root}/tls" "${remote_root}/re
   printf 'deploy error: invalid validated contract identity\n' >&2
   exit 1
 }
-[[ "${release_contract_schema}" =~ ^abm-report-release-contract-v([2-9]|10|11|12|13|14|15|16|17)$ ]] || {
+[[ "${release_contract_schema}" =~ ^abm-report-release-contract-v([2-9]|10|11|12|13|14|15|16|17|18)$ ]] || {
   printf 'deploy error: invalid validated release contract schema\n' >&2
   exit 1
 }
@@ -1039,7 +1039,7 @@ ABM_DEPLOY_PUBLIC_ARTIFACTS="${PUBLIC_ACCEPTANCE_ARTIFACTS_JSON}" \
 ABM_DEPLOY_RELEASE_CONTRACT_SCHEMA="${RELEASE_CONTRACT_SCHEMA}" \
   npx playwright test tests/playwright/deployed-abm-report.spec.ts
 
-if [[ "${RELEASE_CONTRACT_SCHEMA}" == "abm-report-release-contract-v14" || "${RELEASE_CONTRACT_SCHEMA}" == "abm-report-release-contract-v15" || "${RELEASE_CONTRACT_SCHEMA}" == "abm-report-release-contract-v16" || "${RELEASE_CONTRACT_SCHEMA}" == "abm-report-release-contract-v17" ]]; then
+if [[ "${RELEASE_CONTRACT_SCHEMA}" == "abm-report-release-contract-v14" || "${RELEASE_CONTRACT_SCHEMA}" == "abm-report-release-contract-v15" || "${RELEASE_CONTRACT_SCHEMA}" == "abm-report-release-contract-v16" || "${RELEASE_CONTRACT_SCHEMA}" == "abm-report-release-contract-v17" || "${RELEASE_CONTRACT_SCHEMA}" == "abm-report-release-contract-v18" ]]; then
   ssh "${DEPLOY_HOST}" bash -s -- \
     "${REMOTE_ROOT}" \
     "${REMOTE_RELEASE}" \
@@ -1155,7 +1155,7 @@ write_v14_deployment_operation_facts(
 )
 PY
 fi
-if [[ "${RELEASE_CONTRACT_SCHEMA}" == "abm-report-release-contract-v15" || "${RELEASE_CONTRACT_SCHEMA}" == "abm-report-release-contract-v16" || "${RELEASE_CONTRACT_SCHEMA}" == "abm-report-release-contract-v17" ]]; then
+if [[ "${RELEASE_CONTRACT_SCHEMA}" == "abm-report-release-contract-v15" || "${RELEASE_CONTRACT_SCHEMA}" == "abm-report-release-contract-v16" || "${RELEASE_CONTRACT_SCHEMA}" == "abm-report-release-contract-v17" || "${RELEASE_CONTRACT_SCHEMA}" == "abm-report-release-contract-v18" ]]; then
   OPERATION_FACTS_WRITE_ATTEMPTED=1
   "${PYTHON}" - "${DEPLOYMENT_PLAN_FILE}" "${PUBLIC_BODY_SUMMARY}" "${DEPLOYED_AT_UTC}" "${DEPLOYMENT_OPERATION_FACTS_OUTPUT}" <<'V15_OPERATION'
 import sys

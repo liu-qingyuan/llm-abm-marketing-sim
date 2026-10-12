@@ -6923,7 +6923,7 @@ def validate_concurrent_robustness_production_release(
 ) -> dict[str, object]:
     """Fail-closed validator used by the production deployment gate."""
     schema_version = contract_document.get("schema_version")
-    if schema_version == "abm-report-release-contract-v17":
+    if schema_version in {"abm-report-release-contract-v17", "abm-report-release-contract-v18"}:
         from .ten_topic_release import validate_ten_topic_release
         return validate_ten_topic_release(
             repo_root=repo_root, contract_document=dict(contract_document),

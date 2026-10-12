@@ -783,7 +783,7 @@ def test_v13_v14_authorization_and_fresh_readback_gates_precede_remote_writes() 
 
     authorization_gate = script.index("validate_abm_report_deployment.py")
     operation_output_gate = script.index(
-        "v14/v15/v16/v17 requires --operation-facts-output"
+        "v14/v15/v16/v17/v18 requires --operation-facts-output"
     )
     first_ssh = script.index('if ssh "${DEPLOY_HOST}"')
     readback_gate = script.index("verify-readback")
@@ -1081,6 +1081,8 @@ def test_v14_local_adapter_reports_rollback_failure_separately(
 @pytest.mark.parametrize("version,readiness_schema", [
     ("v15", "revised-four-model-v15-release-readiness-v1"),
     ("v16", "sensitivity-v16-release-readiness-v1"),
+    ("v17", "ten-topic-v17-release-readiness-v1"),
+    ("v18", "ten-topic-v18-release-readiness-v1"),
 ])
 def test_composite_authorization_is_separate_and_hash_bound(tmp_path: Path, version: str, readiness_schema: str) -> None:
     facts = _v13_facts()

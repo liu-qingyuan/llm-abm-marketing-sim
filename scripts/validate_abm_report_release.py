@@ -1850,7 +1850,7 @@ def _load_and_validate_release(
             source_dir=source_dir,
             snapshot_dir=snapshot_dir,
         )
-    elif schema_version in {"abm-report-release-contract-v15", "abm-report-release-contract-v16", "abm-report-release-contract-v17"}:
+    elif schema_version in {"abm-report-release-contract-v15", "abm-report-release-contract-v16", "abm-report-release-contract-v17", "abm-report-release-contract-v18"}:
         _safe_contract_file(repo_root, contract_path)
         try:
             result = validate_concurrent_robustness_production_release(
@@ -1913,6 +1913,7 @@ _DEPLOYMENT_REPORT_KINDS = {
     "abm-report-release-contract-v15": "full-pool",
     "abm-report-release-contract-v16": "full-pool",
     "abm-report-release-contract-v17": "full-pool",
+    "abm-report-release-contract-v18": "full-pool",
 }
 _DEPLOYMENT_RELEASE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,159}$")
 _DEPLOYMENT_DOMAIN = re.compile(r"^[A-Za-z0-9.-]+$")
@@ -2032,7 +2033,7 @@ def _build_deployment_facts(
         "approved_downloads": sorted(approved_downloads),
         "public_acceptance_artifacts": sorted(artifact_hashes),
     }
-    if schema_version == "abm-report-release-contract-v17":
+    if schema_version in {"abm-report-release-contract-v17", "abm-report-release-contract-v18"}:
         from llm_abm_sim.ten_topic_release import require_ten_topic_deployment_profile
         facts.update(require_ten_topic_deployment_profile(result))
     if schema_version == "abm-report-release-contract-v16":
@@ -2110,7 +2111,7 @@ def _build_deployment_facts(
 
 def _require_formal_production(result: dict[str, object]) -> None:
     schema_version = result.get("schema_version")
-    if schema_version == "abm-report-release-contract-v17":
+    if schema_version in {"abm-report-release-contract-v17", "abm-report-release-contract-v18"}:
         from llm_abm_sim.ten_topic_release import require_ten_topic_deployment_profile
         require_ten_topic_deployment_profile(result)
         return
